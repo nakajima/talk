@@ -1,0 +1,7 @@
+[package]
+name = "talk-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+unicode-segmentation = { version = "1.12.0", features = ["no_std"] }
