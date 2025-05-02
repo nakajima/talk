@@ -3,7 +3,6 @@ use core::str::Chars;
 
 use super::tokens::Token::*;
 use super::tokens::*;
-use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 pub enum LexerError {
@@ -18,7 +17,7 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn new(code: &'a str) -> Self {
+    pub fn new(code: &'a str) -> Self {
         Self {
             code,
             chars: code.chars().peekable(),
@@ -26,7 +25,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn next(&mut self) -> Result<Token, LexerError> {
+    pub fn next(&mut self) -> Result<Token, LexerError> {
         // Skip whitespaces
         loop {
             match self.chars.peek() {
@@ -75,13 +74,8 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let start_idx = self.code.grapheme_indices(true).nth(starting_at).unwrap().0;
-        let end_idx = self
-            .code
-            .grapheme_indices(true)
-            .nth(self.current - 1)
-            .unwrap()
-            .0;
+        let start_idx = self.code.char_indices().nth(starting_at).unwrap().0;
+        let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
         Identifier(&self.code[start_idx..=end_idx])
     }
