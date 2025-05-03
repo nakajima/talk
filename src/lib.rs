@@ -1,3 +1,4 @@
 #![no_std]
 
-pub mod lexer;
+pub mod lexing;
+pub use lexing::*;
