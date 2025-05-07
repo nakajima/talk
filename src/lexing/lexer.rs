@@ -10,14 +10,14 @@ pub enum LexerError {
 }
 
 #[derive(Debug)]
-pub struct Lexer<'a> {
-    code: &'a str,
-    chars: Peekable<Chars<'a>>,
+pub struct Lexer {
+    code: &'static str,
+    chars: Peekable<Chars<'static>>,
     current: usize,
 }
 
-impl<'a> Lexer<'a> {
-    pub fn new(code: &'a str) -> Self {
+impl Lexer {
+    pub fn new(code: &'static str) -> Self {
         Self {
             code,
             chars: code.chars().peekable(),
@@ -31,7 +31,16 @@ impl<'a> Lexer<'a> {
         loop {
             match self.chars.peek() {
                 Some(ch) => {
-                    if !ch.is_whitespace() {
+                    if !ch.is_whitespace() || *ch == '\n' {
+                        if *ch == '\n' {
+                            while self.chars.peek() == Some(&'\n') {
+                                self.chars.next();
+                                self.current += 1;
+                            }
+
+                            return Ok(Newline);
+                        }
+
                         break;
                     }
                 }
@@ -46,7 +55,7 @@ impl<'a> Lexer<'a> {
 
         match self.chars.next() {
             Some(char) => self.consume(char),
-            None => Ok(Token::EOF),
+            None => Ok(EOF),
         }
     }
 
@@ -71,6 +80,7 @@ impl<'a> Lexer<'a> {
             '}' => Ok(RightBrace),
             '(' => Ok(LeftParen),
             ')' => Ok(RightParen),
+            '\n' => Ok(Newline),
             'a'..='z' | 'A'..='Z' | '_' => Ok(self.identifier(self.current - 1)),
             '0'..='9' => Ok(self.number(self.current - 1)),
             _ => Err(LexerError::UnexpectedInput(char)),
@@ -79,7 +89,7 @@ impl<'a> Lexer<'a> {
         result
     }
 
-    fn compound(&mut self, expecting: char, found: Token<'a>, not_found: Token<'a>) -> Token<'a> {
+    fn compound(&mut self, expecting: char, found: Token, not_found: Token) -> Token {
         if self.chars.peek() == Some(&expecting) {
             self.chars.next();
             self.current += 1;
@@ -89,7 +99,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn identifier<'b>(&'b mut self, starting_at: usize) -> Token<'a> {
+    fn identifier<'b>(&'b mut self, starting_at: usize) -> Token {
         while let Some(ch) = self.chars.peek() {
             if ch.is_alphanumeric() {
                 self.chars.next();
@@ -105,7 +115,7 @@ impl<'a> Lexer<'a> {
         Identifier(&self.code[start_idx..=end_idx])
     }
 
-    fn number(&mut self, starting_at: usize) -> Token<'a> {
+    fn number(&mut self, starting_at: usize) -> Token {
         let mut is_float = false;
 
         while let Some(ch) = self.chars.peek() {
@@ -218,6 +228,18 @@ mod tests {
         assert_eq!(lexer.next().unwrap(), AmpEquals);
         assert_eq!(lexer.next().unwrap(), LessEquals);
         assert_eq!(lexer.next().unwrap(), GreaterEquals);
+        assert_eq!(lexer.next().unwrap(), EOF);
+    }
+
+    #[test]
+    fn newlines() {
+        let mut lexer = Lexer::new("\n");
+        assert_eq!(lexer.next().unwrap(), Newline);
+        assert_eq!(lexer.next().unwrap(), EOF);
+
+        // Collapses multiple newlines into 1
+        let mut lexer = Lexer::new("\n\n\n");
+        assert_eq!(lexer.next().unwrap(), Newline);
         assert_eq!(lexer.next().unwrap(), EOF);
     }
 }

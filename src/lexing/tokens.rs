@@ -1,5 +1,6 @@
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub enum Token<'a> {
+pub enum Token {
+    Newline,
     Dot,
     Plus,
     Minus,
@@ -29,9 +30,9 @@ pub enum Token<'a> {
     RightBrace,
     LeftParen,
     RightParen,
-    Int(&'a str),
-    Float(&'a str),
-    Identifier(&'a str),
+    Int(&'static str),
+    Float(&'static str),
+    Identifier(&'static str),
     Keyword,
 
     EOF,
