@@ -30,6 +30,7 @@ impl Precedence {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub struct ParseHandler {
     pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<Expr, ParserError>>,
     pub(crate) infix: Option<fn(&mut Parser, bool, Expr) -> Result<Expr, ParserError>>,

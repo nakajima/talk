@@ -69,7 +69,7 @@ impl Parser {
             id: 0,
             start: self.current.unwrap(),
             end: self.current.unwrap(),
-            kind: kind,
+            kind,
         };
         expr.id = self.parse_tree.add(expr);
         expr

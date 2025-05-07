@@ -1,5 +1,6 @@
 use super::expr::Expr;
 
+#[derive(Default)]
 pub struct ParseTree {
     pub root: usize,
     nodes: Vec<Expr>,

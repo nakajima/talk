@@ -62,7 +62,7 @@ impl Lexer {
     fn consume(&mut self, char: char) -> Result<Token, LexerError> {
         self.current += 1;
 
-        let result = match char {
+        match char {
             '.' => Ok(Dot),
             '+' => Ok(self.compound('=', PlusEquals, Plus)),
             '-' => Ok(self.compound('=', MinusEquals, Minus)),
@@ -84,9 +84,7 @@ impl Lexer {
             'a'..='z' | 'A'..='Z' | '_' => Ok(self.identifier(self.current - 1)),
             '0'..='9' => Ok(self.number(self.current - 1)),
             _ => Err(LexerError::UnexpectedInput(char)),
-        };
-
-        result
+        }
     }
 
     fn compound(&mut self, expecting: char, found: Token, not_found: Token) -> Token {
@@ -99,7 +97,7 @@ impl Lexer {
         }
     }
 
-    fn identifier<'b>(&'b mut self, starting_at: usize) -> Token {
+    fn identifier(&mut self, starting_at: usize) -> Token {
         while let Some(ch) = self.chars.peek() {
             if ch.is_alphanumeric() {
                 self.chars.next();

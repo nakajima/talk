@@ -1,4 +1,0 @@
-{
-  "rust-analyzer.runnables.extraTestBinaryArgs": ["--show-output"],
-  "rust-analyzer.testExplorer": true
-}
