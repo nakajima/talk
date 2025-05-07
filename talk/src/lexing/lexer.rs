@@ -10,7 +10,7 @@ pub enum LexerError {
 }
 
 #[derive(Debug)]
-struct Lexer<'a> {
+pub struct Lexer<'a> {
     code: &'a str,
     chars: Peekable<Chars<'a>>,
     current: usize,
@@ -25,6 +25,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Token, LexerError> {
         // Skip whitespaces
         loop {
