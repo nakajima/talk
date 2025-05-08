@@ -18,28 +18,29 @@ impl ParseTree {
     }
 
     pub fn accept<C, R>(&self, expr: &Expr, visitor: &impl Visitor<R, C>, context: C) -> R {
-        match expr.kind {
+        match &expr.kind {
             ExprKind::Binary(lhs, op, rhs) => visitor.visit_binary_expr(
-                self.get(lhs).expect("index not in parse tree"),
-                self.get(rhs).expect("index not in parse tree"),
-                op,
+                self.get(*lhs).expect("index not in parse tree"),
+                self.get(*rhs).expect("index not in parse tree"),
+                *op,
                 context,
                 &self,
             ),
             ExprKind::Unary(op, rhs) => visitor.visit_unary_expr(
-                self.get(rhs).expect("index not in parse tree"),
-                op,
+                self.get(*rhs).expect("index not in parse tree"),
+                *op,
                 context,
                 &self,
             ),
             ExprKind::LiteralInt(val) => visitor.visit_literal_int(val, context, &self),
             ExprKind::LiteralFloat(val) => visitor.visit_literal_float(val, context, &self),
             ExprKind::Grouping(expr) => {
-                let expr = self.get(expr).unwrap();
+                let expr = self.get(*expr).unwrap();
                 self.accept(expr, visitor, context)
             }
             ExprKind::Variable(val) => visitor.visit_variable(val, context, &self),
-            ExprKind::Tuple(_items) => todo!(),
+            ExprKind::Tuple(items) => visitor.visit_tuple(items.clone(), context, &self),
+            ExprKind::EmptyTuple => visitor.visit_tuple(vec![], context, &self),
         }
     }
 

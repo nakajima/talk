@@ -95,11 +95,30 @@ impl Parser {
 
     // MARK: Expr parsers
 
-    pub(crate) fn grouping(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
+    pub(crate) fn left_paren(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
         self.consume_any(vec![TokenKind::LeftParen])?;
+
+        if self.did_match(TokenKind::RightParen)? {
+            return self.add_expr(EmptyTuple);
+        }
+
         let child = self.parse_with_precedence(Precedence::Assignment)?;
-        self.consume_any(vec![TokenKind::RightParen])?;
-        self.add_expr(Grouping(child))
+
+        if self.did_match(TokenKind::RightParen)? {
+            return self.add_expr(Grouping(child));
+        }
+
+        self.consume(TokenKind::Comma)?;
+
+        let mut items = vec![child];
+        while {
+            items.push(self.parse_with_precedence(Precedence::Assignment)?);
+            self.did_match(TokenKind::Comma)?
+        } {}
+
+        self.consume(TokenKind::RightParen)?;
+
+        self.add_expr(Tuple(items))
     }
 
     pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
@@ -190,6 +209,17 @@ impl Parser {
     }
 
     // MARK: Helpers
+
+    fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
+        if let Some(current) = self.current {
+            if current.kind == expected {
+                self.advance();
+                return Ok(true);
+            };
+        }
+
+        Ok(false)
+    }
 
     fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
         if let Some(current) = self.current {
@@ -361,5 +391,24 @@ mod tests {
 
         assert_eq!(expr.kind, ExprKind::Unary(TokenKind::Minus, 0));
         assert_eq!(parsed.get(0).unwrap().kind, ExprKind::LiteralInt("1"));
+    }
+
+    #[test]
+    fn parses_tuple() {
+        let parsed = parse("(1, 2, fizz)").unwrap();
+        let expr = parsed.root().unwrap();
+
+        assert_eq!(expr.kind, ExprKind::Tuple(vec![0, 1, 2]));
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::LiteralInt("1"));
+        assert_eq!(parsed.get(1).unwrap().kind, ExprKind::LiteralInt("2"));
+        assert_eq!(parsed.get(2).unwrap().kind, ExprKind::Variable("fizz"));
+    }
+
+    #[test]
+    fn parses_empty_tuple() {
+        let parsed = parse("( )").unwrap();
+        let expr = parsed.root().unwrap();
+
+        assert_eq!(expr.kind, ExprKind::EmptyTuple);
     }
 }

@@ -68,6 +68,7 @@ impl Lexer {
 
         match char {
             '.' => self.make(Dot),
+            ',' => self.make(Comma),
             '+' => self.compound('=', PlusEquals, Plus),
             '-' => self.compound('=', MinusEquals, Minus),
             '*' => self.compound('=', StarEquals, Star),
@@ -218,7 +219,7 @@ mod tests {
 
     #[test]
     fn specials() {
-        let mut lexer = Lexer::new("+ - / * = ! ~ ^ | & < >");
+        let mut lexer = Lexer::new("+ - / * = ! ~ ^ | & < > ,");
         assert_eq!(lexer.next().unwrap().kind, Plus);
         assert_eq!(lexer.next().unwrap().kind, Minus);
         assert_eq!(lexer.next().unwrap().kind, Slash);
@@ -231,6 +232,7 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, Amp);
         assert_eq!(lexer.next().unwrap().kind, Less);
         assert_eq!(lexer.next().unwrap().kind, Greater);
+        assert_eq!(lexer.next().unwrap().kind, Comma);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

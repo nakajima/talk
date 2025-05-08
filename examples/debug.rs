@@ -59,10 +59,23 @@ impl Visitor<String, usize> for DebugPrinter {
     fn visit_variable(&self, name: &'static str, context: usize, _: &ParseTree) -> String {
         indent(&format!("${}", name), context)
     }
+
+    fn visit_tuple(&self, items: Vec<usize>, context: usize, parse_tree: &ParseTree) -> String {
+        indent(
+            &format!(
+                "({:?})",
+                items
+                    .into_iter()
+                    .map(|i| parse_tree.accept(parse_tree.get(i).unwrap(), self, 0))
+                    .collect::<Vec<String>>()
+            ),
+            context,
+        )
+    }
 }
 
 fn main() {
-    let code = "(1 + 2) * (-3 / (buzz - fizz))";
+    let code = "(1 + 2) * (-3 / (buzz - fizz)) * (1, 2, foo)";
     println!("Parsing: {}", code);
     let parse_tree = parse(code).unwrap();
     let mut visitor = DebugPrinter {};

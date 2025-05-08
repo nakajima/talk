@@ -9,12 +9,14 @@ pub trait Visitor<Returning, Context> {
         context: Context,
         parse_tree: &ParseTree,
     ) -> Returning;
+
     fn visit_literal_float(
         &self,
         literal: &'static str,
         context: Context,
         parse_tree: &ParseTree,
     ) -> Returning;
+
     fn visit_binary_expr(
         &self,
         lhs: &Expr,
@@ -23,6 +25,7 @@ pub trait Visitor<Returning, Context> {
         context: Context,
         parse_tree: &ParseTree,
     ) -> Returning;
+
     fn visit_unary_expr(
         &self,
         rhs: &Expr,
@@ -30,10 +33,14 @@ pub trait Visitor<Returning, Context> {
         context: Context,
         parse_tree: &ParseTree,
     ) -> Returning;
+
     fn visit_variable(
         &self,
         name: &'static str,
         context: Context,
         parse_tree: &ParseTree,
     ) -> Returning;
+
+    fn visit_tuple(&self, items: Vec<usize>, context: Context, parse_tree: &ParseTree)
+    -> Returning;
 }

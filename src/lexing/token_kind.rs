@@ -37,6 +37,7 @@ pub enum TokenKind {
     RightBrace,
     LeftParen,
     RightParen,
+    Comma,
     Int(&'static str),
     Float(&'static str),
     Identifier(&'static str),

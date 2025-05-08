@@ -15,6 +15,7 @@ pub enum ExprKind {
     Unary(TokenKind, usize),
     Binary(usize, TokenKind, usize),
     Grouping(usize),
-    Tuple(&'static Vec<usize>),
+    Tuple(Vec<usize>),
+    EmptyTuple,
     Variable(&'static str),
 }

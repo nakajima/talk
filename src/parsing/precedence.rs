@@ -56,9 +56,9 @@ impl Precedence {
             }
         };
 
-        Ok(match token.kind {
+        Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {
-                prefix: Some(Parser::grouping),
+                prefix: Some(Parser::left_paren),
                 infix: None,
                 precedence: Precedence::Call,
             },
@@ -173,6 +173,7 @@ impl Precedence {
             TokenKind::LeftBrace => ParseHandler::NONE,
             TokenKind::RightBrace => ParseHandler::NONE,
             TokenKind::RightParen => ParseHandler::NONE,
+            TokenKind::Comma => ParseHandler::NONE,
             TokenKind::EOF => ParseHandler::NONE,
         })
     }
