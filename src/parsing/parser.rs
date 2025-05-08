@@ -389,7 +389,10 @@ mod tests {
         let expr = parsed.root().unwrap();
 
         assert_eq!(expr.kind, ExprKind::Binary(2, TokenKind::Star, 3));
-        assert_eq!(parsed.get(2).unwrap().kind, ExprKind::Binary(0, TokenKind::Plus, 1));
+        assert_eq!(
+            parsed.get(2).unwrap().kind,
+            ExprKind::Binary(0, TokenKind::Plus, 1)
+        );
     }
 
     #[test]
