@@ -1,5 +1,5 @@
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub enum Token {
+pub enum TokenKind {
     Newline,
     Dot,
     Plus,

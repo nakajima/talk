@@ -1,8 +1,8 @@
 use core::iter::Peekable;
 use core::str::Chars;
 
-use super::tokens::Token::*;
-use super::tokens::*;
+use super::token::Token;
+use super::token_kind::TokenKind::{self, *};
 
 #[derive(Debug)]
 pub enum LexerError {
@@ -14,6 +14,7 @@ pub struct Lexer {
     code: &'static str,
     chars: Peekable<Chars<'static>>,
     current: usize,
+    started: usize,
 }
 
 impl Lexer {
@@ -22,6 +23,7 @@ impl Lexer {
             code,
             chars: code.chars().peekable(),
             current: 0,
+            started: 0,
         }
     }
 
@@ -32,20 +34,21 @@ impl Lexer {
             match self.chars.peek() {
                 Some(ch) => {
                     if !ch.is_whitespace() || *ch == '\n' {
+                        // Collapse multiple newlines into one
                         if *ch == '\n' {
                             while self.chars.peek() == Some(&'\n') {
                                 self.chars.next();
                                 self.current += 1;
                             }
 
-                            return Ok(Newline);
+                            return self.make(Newline);
                         }
 
                         break;
                     }
                 }
                 None => {
-                    return Ok(EOF);
+                    return self.make(EOF);
                 }
             }
 
@@ -55,49 +58,61 @@ impl Lexer {
 
         match self.chars.next() {
             Some(char) => self.consume(char),
-            None => Ok(EOF),
+            None => self.make(EOF),
         }
     }
 
     fn consume(&mut self, char: char) -> Result<Token, LexerError> {
         self.current += 1;
+        self.started = self.current;
 
         match char {
-            '.' => Ok(Dot),
-            '+' => Ok(self.compound('=', PlusEquals, Plus)),
-            '-' => Ok(self.compound('=', MinusEquals, Minus)),
-            '*' => Ok(self.compound('=', StarEquals, Star)),
-            '/' => Ok(self.compound('=', SlashEquals, Slash)),
-            '=' => Ok(self.compound('=', EqualsEquals, Equals)),
-            '~' => Ok(self.compound('=', TildeEquals, Tilde)),
-            '!' => Ok(self.compound('=', BangEquals, Bang)),
-            '^' => Ok(self.compound('=', CaretEquals, Caret)),
-            '|' => Ok(self.compound('|', PipePipe, Pipe)),
-            '&' => Ok(self.compound('=', AmpEquals, Amp)),
-            '<' => Ok(self.compound('=', LessEquals, Less)),
-            '>' => Ok(self.compound('=', GreaterEquals, Greater)),
-            '{' => Ok(LeftBrace),
-            '}' => Ok(RightBrace),
-            '(' => Ok(LeftParen),
-            ')' => Ok(RightParen),
-            '\n' => Ok(Newline),
-            'a'..='z' | 'A'..='Z' | '_' => Ok(self.identifier(self.current - 1)),
-            '0'..='9' => Ok(self.number(self.current - 1)),
+            '.' => self.make(Dot),
+            '+' => self.compound('=', PlusEquals, Plus),
+            '-' => self.compound('=', MinusEquals, Minus),
+            '*' => self.compound('=', StarEquals, Star),
+            '/' => self.compound('=', SlashEquals, Slash),
+            '=' => self.compound('=', EqualsEquals, Equals),
+            '~' => self.compound('=', TildeEquals, Tilde),
+            '!' => self.compound('=', BangEquals, Bang),
+            '^' => self.compound('=', CaretEquals, Caret),
+            '|' => self.compound('|', PipePipe, Pipe),
+            '&' => self.compound('=', AmpEquals, Amp),
+            '<' => self.compound('=', LessEquals, Less),
+            '>' => self.compound('=', GreaterEquals, Greater),
+            '{' => self.make(LeftBrace),
+            '}' => self.make(RightBrace),
+            '(' => self.make(LeftParen),
+            ')' => self.make(RightParen),
+            '\n' => self.make(Newline),
+            'a'..='z' | 'A'..='Z' | '_' => {
+                let ident = self.identifier(self.current - 1);
+                self.make(ident)
+            }
+            '0'..='9' => {
+                let number = self.number(self.current - 1);
+                self.make(number)
+            }
             _ => Err(LexerError::UnexpectedInput(char)),
         }
     }
 
-    fn compound(&mut self, expecting: char, found: Token, not_found: Token) -> Token {
+    fn compound(
+        &mut self,
+        expecting: char,
+        found: TokenKind,
+        not_found: TokenKind,
+    ) -> Result<Token, LexerError> {
         if self.chars.peek() == Some(&expecting) {
             self.chars.next();
             self.current += 1;
-            found
+            self.make(found)
         } else {
-            not_found
+            self.make(not_found)
         }
     }
 
-    fn identifier(&mut self, starting_at: usize) -> Token {
+    fn identifier(&mut self, starting_at: usize) -> TokenKind {
         while let Some(ch) = self.chars.peek() {
             if ch.is_alphanumeric() {
                 self.chars.next();
@@ -113,7 +128,7 @@ impl Lexer {
         Identifier(&self.code[start_idx..=end_idx])
     }
 
-    fn number(&mut self, starting_at: usize) -> Token {
+    fn number(&mut self, starting_at: usize) -> TokenKind {
         let mut is_float = false;
 
         while let Some(ch) = self.chars.peek() {
@@ -138,6 +153,14 @@ impl Lexer {
             Int(&self.code[start_idx..=end_idx])
         }
     }
+
+    fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {
+        Ok(Token {
+            kind,
+            start: self.started,
+            end: self.current,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -147,97 +170,97 @@ mod tests {
     #[test]
     fn braces() {
         let mut lexer = Lexer::new("{}");
-        assert_eq!(lexer.next().unwrap(), LeftBrace);
-        assert_eq!(lexer.next().unwrap(), RightBrace);
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, LeftBrace);
+        assert_eq!(lexer.next().unwrap().kind, RightBrace);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn parens() {
         let mut lexer = Lexer::new("()");
-        assert_eq!(lexer.next().unwrap(), LeftParen);
-        assert_eq!(lexer.next().unwrap(), RightParen);
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, LeftParen);
+        assert_eq!(lexer.next().unwrap().kind, RightParen);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn dot() {
         let mut lexer = Lexer::new("fizz.buzz");
-        assert_eq!(lexer.next().unwrap(), Identifier("fizz"));
-        assert_eq!(lexer.next().unwrap(), Dot);
-        assert_eq!(lexer.next().unwrap(), Identifier("buzz"));
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("fizz"));
+        assert_eq!(lexer.next().unwrap().kind, Dot);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("buzz"));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn identifier() {
         let mut lexer = Lexer::new("hello world");
-        assert_eq!(lexer.next().unwrap(), Identifier("hello"));
-        assert_eq!(lexer.next().unwrap(), Identifier("world"));
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("hello"));
+        assert_eq!(lexer.next().unwrap().kind, Identifier("world"));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn ints() {
         let mut lexer = Lexer::new("123 4_56");
-        assert_eq!(lexer.next().unwrap(), Int("123"));
-        assert_eq!(lexer.next().unwrap(), Int("4_56"));
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Int("123"));
+        assert_eq!(lexer.next().unwrap().kind, Int("4_56"));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn floats() {
         let mut lexer = Lexer::new("12.3 4.56");
-        assert_eq!(lexer.next().unwrap(), Float("12.3"));
-        assert_eq!(lexer.next().unwrap(), Float("4.56"));
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Float("12.3"));
+        assert_eq!(lexer.next().unwrap().kind, Float("4.56"));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn specials() {
         let mut lexer = Lexer::new("+ - / * = ! ~ ^ | & < >");
-        assert_eq!(lexer.next().unwrap(), Plus);
-        assert_eq!(lexer.next().unwrap(), Minus);
-        assert_eq!(lexer.next().unwrap(), Slash);
-        assert_eq!(lexer.next().unwrap(), Star);
-        assert_eq!(lexer.next().unwrap(), Equals);
-        assert_eq!(lexer.next().unwrap(), Bang);
-        assert_eq!(lexer.next().unwrap(), Tilde);
-        assert_eq!(lexer.next().unwrap(), Caret);
-        assert_eq!(lexer.next().unwrap(), Pipe);
-        assert_eq!(lexer.next().unwrap(), Amp);
-        assert_eq!(lexer.next().unwrap(), Less);
-        assert_eq!(lexer.next().unwrap(), Greater);
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Plus);
+        assert_eq!(lexer.next().unwrap().kind, Minus);
+        assert_eq!(lexer.next().unwrap().kind, Slash);
+        assert_eq!(lexer.next().unwrap().kind, Star);
+        assert_eq!(lexer.next().unwrap().kind, Equals);
+        assert_eq!(lexer.next().unwrap().kind, Bang);
+        assert_eq!(lexer.next().unwrap().kind, Tilde);
+        assert_eq!(lexer.next().unwrap().kind, Caret);
+        assert_eq!(lexer.next().unwrap().kind, Pipe);
+        assert_eq!(lexer.next().unwrap().kind, Amp);
+        assert_eq!(lexer.next().unwrap().kind, Less);
+        assert_eq!(lexer.next().unwrap().kind, Greater);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn double_specials() {
         let mut lexer = Lexer::new("+= -= *= /= == != ~= ^= ||  &= <= >=");
-        assert_eq!(lexer.next().unwrap(), PlusEquals);
-        assert_eq!(lexer.next().unwrap(), MinusEquals);
-        assert_eq!(lexer.next().unwrap(), StarEquals);
-        assert_eq!(lexer.next().unwrap(), SlashEquals);
-        assert_eq!(lexer.next().unwrap(), EqualsEquals);
-        assert_eq!(lexer.next().unwrap(), BangEquals);
-        assert_eq!(lexer.next().unwrap(), TildeEquals);
-        assert_eq!(lexer.next().unwrap(), CaretEquals);
-        assert_eq!(lexer.next().unwrap(), PipePipe);
-        assert_eq!(lexer.next().unwrap(), AmpEquals);
-        assert_eq!(lexer.next().unwrap(), LessEquals);
-        assert_eq!(lexer.next().unwrap(), GreaterEquals);
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, PlusEquals);
+        assert_eq!(lexer.next().unwrap().kind, MinusEquals);
+        assert_eq!(lexer.next().unwrap().kind, StarEquals);
+        assert_eq!(lexer.next().unwrap().kind, SlashEquals);
+        assert_eq!(lexer.next().unwrap().kind, EqualsEquals);
+        assert_eq!(lexer.next().unwrap().kind, BangEquals);
+        assert_eq!(lexer.next().unwrap().kind, TildeEquals);
+        assert_eq!(lexer.next().unwrap().kind, CaretEquals);
+        assert_eq!(lexer.next().unwrap().kind, PipePipe);
+        assert_eq!(lexer.next().unwrap().kind, AmpEquals);
+        assert_eq!(lexer.next().unwrap().kind, LessEquals);
+        assert_eq!(lexer.next().unwrap().kind, GreaterEquals);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn newlines() {
         let mut lexer = Lexer::new("\n");
-        assert_eq!(lexer.next().unwrap(), Newline);
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
 
         // Collapses multiple newlines into 1
         let mut lexer = Lexer::new("\n\n\n");
-        assert_eq!(lexer.next().unwrap(), Newline);
-        assert_eq!(lexer.next().unwrap(), EOF);
+        assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }

@@ -1,6 +1,6 @@
 use std::{mem::transmute, ops::Add};
 
-use crate::tokens::Token;
+use crate::{token::Token, token_kind::TokenKind};
 
 use super::{
     expr::Expr,
@@ -46,67 +46,123 @@ impl ParseHandler {
 }
 
 impl Precedence {
-    pub fn handler(token: Token) -> ParseHandler {
-        match token {
-            Token::LeftParen => ParseHandler {
+    pub const fn handler(token: Option<Token>) -> Result<ParseHandler, ParserError> {
+        let token = match token {
+            Some(t) => t,
+            None => {
+                return Err(ParserError::UnknownError(
+                    "did not get token for parser handler",
+                ));
+            }
+        };
+
+        Ok(match token.kind {
+            TokenKind::LeftParen => ParseHandler {
                 prefix: Some(Parser::grouping),
                 infix: None,
                 precedence: Precedence::Call,
             },
 
-            Token::Int(_) => ParseHandler {
+            TokenKind::Int(_) => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::None,
             },
 
-            Token::Float(_) => ParseHandler {
+            TokenKind::Float(_) => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::None,
             },
 
-            Token::Plus => ParseHandler {
+            TokenKind::Plus => ParseHandler {
                 prefix: None,
                 infix: Some(Parser::binary),
                 precedence: Precedence::Term,
             },
 
-            Token::Newline => ParseHandler::NONE,
-            Token::Dot => todo!(),
+            TokenKind::Minus => ParseHandler {
+                prefix: Some(Parser::unary),
+                infix: Some(Parser::binary),
+                precedence: Precedence::Term,
+            },
 
-            Token::Minus => todo!(),
-            Token::Slash => todo!(),
-            Token::Star => todo!(),
-            Token::Equals => todo!(),
-            Token::Bang => todo!(),
-            Token::Less => todo!(),
-            Token::LessEquals => todo!(),
-            Token::Greater => todo!(),
-            Token::GreaterEquals => todo!(),
-            Token::Tilde => todo!(),
-            Token::PlusEquals => todo!(),
-            Token::MinusEquals => todo!(),
-            Token::StarEquals => todo!(),
-            Token::SlashEquals => todo!(),
-            Token::EqualsEquals => todo!(),
-            Token::BangEquals => todo!(),
-            Token::TildeEquals => todo!(),
-            Token::Caret => todo!(),
-            Token::CaretEquals => todo!(),
-            Token::Pipe => todo!(),
-            Token::PipePipe => todo!(),
-            Token::Amp => todo!(),
-            Token::AmpEquals => todo!(),
-            Token::LeftBrace => todo!(),
-            Token::RightBrace => todo!(),
+            TokenKind::Star => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Factor,
+            },
 
-            Token::RightParen => todo!(),
+            TokenKind::Slash => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Factor,
+            },
 
-            Token::Identifier(_) => todo!(),
-            Token::Keyword => todo!(),
-            Token::EOF => ParseHandler::NONE,
-        }
+            TokenKind::Less => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Comparison,
+            },
+
+            TokenKind::LessEquals => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Comparison,
+            },
+
+            TokenKind::Greater => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Comparison,
+            },
+
+            TokenKind::GreaterEquals => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Comparison,
+            },
+
+            TokenKind::Caret => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Factor,
+            },
+
+            TokenKind::Pipe => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Factor,
+            },
+
+            TokenKind::Newline => ParseHandler::NONE,
+            TokenKind::Dot => todo!(),
+            TokenKind::Equals => todo!(),
+            TokenKind::Bang => todo!(),
+
+            TokenKind::Tilde => todo!(),
+            TokenKind::PlusEquals => todo!(),
+            TokenKind::MinusEquals => todo!(),
+            TokenKind::StarEquals => todo!(),
+            TokenKind::SlashEquals => todo!(),
+            TokenKind::EqualsEquals => todo!(),
+            TokenKind::BangEquals => todo!(),
+            TokenKind::TildeEquals => todo!(),
+
+            TokenKind::CaretEquals => todo!(),
+
+            TokenKind::PipePipe => todo!(),
+            TokenKind::Amp => todo!(),
+            TokenKind::AmpEquals => todo!(),
+            TokenKind::LeftBrace => todo!(),
+            TokenKind::RightBrace => todo!(),
+
+            TokenKind::RightParen => ParseHandler::NONE,
+
+            TokenKind::Identifier(_) => todo!("identifier"),
+            TokenKind::Keyword => todo!("keyword"),
+            TokenKind::EOF => ParseHandler::NONE,
+        })
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::tokens::Token;
+use crate::{token::Token, token_kind::TokenKind};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Expr {
@@ -12,6 +12,6 @@ pub struct Expr {
 pub enum ExprKind {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
-    Binary(usize, usize, Token),
+    Binary(usize, usize, TokenKind),
     Grouping(usize),
 }

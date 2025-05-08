@@ -14,18 +14,28 @@ impl ParseTree {
         }
     }
 
-    pub fn add(&mut self, expr: Expr) -> usize {
+    // Adds the expr to the parse tree and sets its ID
+    pub fn add(&mut self, mut expr: Expr) -> usize {
+        expr.id = self.nodes.len();
         self.nodes.push(expr);
-        self.nodes.len() - 1
+        expr.id
     }
 
+    // Gets the root expr of the tree
     pub fn root(&self) -> Option<&Expr> {
-        println!("self.root = {}", self.root);
-        println!("nodes = {:?}", self.nodes);
         if self.nodes.len() <= self.root {
             None
         } else {
             Some(&self.nodes[self.root])
+        }
+    }
+
+    // Gets the expr at a given index
+    pub fn get(&self, index: usize) -> Option<&Expr> {
+        if self.nodes.len() <= index {
+            None
+        } else {
+            Some(&self.nodes[index])
         }
     }
 }
