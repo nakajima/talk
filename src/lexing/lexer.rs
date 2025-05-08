@@ -2,6 +2,7 @@ use core::iter::Peekable;
 use core::str::Chars;
 
 use super::token::Token;
+use super::token_kind::Keyword;
 use super::token_kind::TokenKind::{self, *};
 
 #[derive(Debug)]
@@ -126,7 +127,10 @@ impl Lexer {
         let start_idx = self.code.char_indices().nth(starting_at).unwrap().0;
         let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
-        Identifier(&self.code[start_idx..=end_idx])
+        match &self.code[start_idx..=end_idx] {
+            "func" => Keyword(Keyword::Func),
+            _ => Identifier(&self.code[start_idx..=end_idx]),
+        }
     }
 
     fn number(&mut self, starting_at: usize) -> TokenKind {
@@ -166,6 +170,8 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
+    use crate::token_kind::Keyword;
+
     use super::*;
 
     #[test]
@@ -263,6 +269,13 @@ mod tests {
         // Collapses multiple newlines into 1
         let mut lexer = Lexer::new("\n\n\n");
         assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn keywords() {
+        let mut lexer = Lexer::new("func");
+        assert_eq!(lexer.next().unwrap().kind, Keyword(Keyword::Func));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }

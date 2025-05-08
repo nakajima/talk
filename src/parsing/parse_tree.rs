@@ -24,23 +24,21 @@ impl ParseTree {
                 self.get(*rhs).expect("index not in parse tree"),
                 *op,
                 context,
-                &self,
+                self,
             ),
             ExprKind::Unary(op, rhs) => visitor.visit_unary_expr(
                 self.get(*rhs).expect("index not in parse tree"),
                 *op,
                 context,
-                &self,
+                self,
             ),
-            ExprKind::LiteralInt(val) => visitor.visit_literal_int(val, context, &self),
-            ExprKind::LiteralFloat(val) => visitor.visit_literal_float(val, context, &self),
-            ExprKind::Grouping(expr) => {
-                let expr = self.get(*expr).unwrap();
-                self.accept(expr, visitor, context)
-            }
-            ExprKind::Variable(val) => visitor.visit_variable(val, context, &self),
-            ExprKind::Tuple(items) => visitor.visit_tuple(items.clone(), context, &self),
-            ExprKind::EmptyTuple => visitor.visit_tuple(vec![], context, &self),
+            ExprKind::LiteralInt(val) => visitor.visit_literal_int(val, context, self),
+            ExprKind::LiteralFloat(val) => visitor.visit_literal_float(val, context, self),
+            ExprKind::Variable(val) => visitor.visit_variable(val, context, self),
+            ExprKind::Tuple(items) => visitor.visit_tuple(items.clone(), context, self),
+            ExprKind::EmptyTuple => visitor.visit_tuple(vec![], context, self),
+            ExprKind::Block(_exprs) => todo!(),
+            ExprKind::Func(_args, _body) => todo!(),
         }
     }
 

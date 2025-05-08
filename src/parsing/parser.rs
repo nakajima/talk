@@ -1,4 +1,8 @@
-use crate::{lexer::Lexer, token::Token, token_kind::TokenKind};
+use crate::{
+    lexer::Lexer,
+    token::Token,
+    token_kind::{Keyword, TokenKind},
+};
 
 use super::{
     expr::{
@@ -105,7 +109,8 @@ impl Parser {
         let child = self.parse_with_precedence(Precedence::Assignment)?;
 
         if self.did_match(TokenKind::RightParen)? {
-            return self.add_expr(Grouping(child));
+            // Single item tuples are just exprs
+            return Ok(child);
         }
 
         self.consume(TokenKind::Comma)?;
@@ -131,8 +136,28 @@ impl Parser {
         {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val)),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val)),
+            TokenKind::Keyword(Keyword::Func) => self.func(),
             _ => unreachable!("didn't get a literal"),
         }
+    }
+
+    pub(crate) fn func(&mut self) -> Result<ID, ParserError> {
+        let args = self.left_paren(false)?;
+        println!("args: {:?}", args);
+        let body = self.block()?;
+        println!("body: {:?}", body);
+
+        self.add_expr(ExprKind::Func(args, body))
+    }
+
+    pub(crate) fn block(&mut self) -> Result<ID, ParserError> {
+        self.consume(TokenKind::LeftBrace)?;
+        let mut items: Vec<usize> = vec![];
+        while !self.did_match(TokenKind::RightBrace)? {
+            items.push(self.parse_with_precedence(Precedence::Assignment)?)
+        }
+
+        self.add_expr(ExprKind::Block(items))
     }
 
     pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
@@ -229,10 +254,10 @@ impl Parser {
             };
         }
 
-        return Err(ParserError::UnexpectedToken(
+        Err(ParserError::UnexpectedToken(
             vec![expected],
             self.current.unwrap().kind,
-        ));
+        ))
     }
 
     fn consume_any(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
@@ -363,8 +388,8 @@ mod tests {
         let parsed = parse("(1 + 2) * 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(3, TokenKind::Star, 4));
-        assert_eq!(parsed.get(3).unwrap().kind, ExprKind::Grouping(2));
+        assert_eq!(expr.kind, ExprKind::Binary(2, TokenKind::Star, 3));
+        assert_eq!(parsed.get(2).unwrap().kind, ExprKind::Binary(0, TokenKind::Plus, 1));
     }
 
     #[test]
@@ -410,5 +435,13 @@ mod tests {
         let expr = parsed.root().unwrap();
 
         assert_eq!(expr.kind, ExprKind::EmptyTuple);
+    }
+
+    #[test]
+    fn parses_func_literal_no_name_no_args() {
+        let parsed = parse("func() { }").unwrap();
+        let expr = parsed.root().unwrap();
+
+        assert_eq!(expr.kind, ExprKind::Func(0, 1));
     }
 }

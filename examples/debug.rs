@@ -78,11 +78,11 @@ fn main() {
     let code = "(1 + 2) * (-3 / (buzz - fizz)) * (1, 2, foo)";
     println!("Parsing: {}", code);
     let parse_tree = parse(code).unwrap();
-    let mut visitor = DebugPrinter {};
+    let visitor = DebugPrinter {};
 
     let context = 0;
     println!(
         "{}",
-        parse_tree.accept(parse_tree.root().unwrap(), &mut visitor, context)
+        parse_tree.accept(parse_tree.root().unwrap(), &visitor, context)
     );
 }

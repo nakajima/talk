@@ -14,8 +14,9 @@ pub enum ExprKind {
     LiteralFloat(&'static str),
     Unary(TokenKind, usize),
     Binary(usize, TokenKind, usize),
-    Grouping(usize),
     Tuple(Vec<usize>),
     EmptyTuple,
+    Block(Vec<usize>),
+    Func(usize /* args tuple */, usize /* block body */),
     Variable(&'static str),
 }
