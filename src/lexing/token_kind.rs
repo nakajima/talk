@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum TokenKind {
     Newline,
@@ -36,4 +38,10 @@ pub enum TokenKind {
     Keyword,
 
     EOF,
+}
+
+impl Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format!("{:?}", self))
+    }
 }

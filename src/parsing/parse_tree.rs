@@ -1,6 +1,9 @@
-use super::expr::Expr;
+use super::{
+    expr::{Expr, ExprKind},
+    visitor::Visitor,
+};
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct ParseTree {
     pub root: usize,
     nodes: Vec<Expr>,
@@ -11,6 +14,23 @@ impl ParseTree {
         Self {
             root: 0,
             nodes: vec![],
+        }
+    }
+
+    pub fn accept<C, R>(&self, expr: &Expr, visitor: &impl Visitor<R, C>, context: C) -> R {
+        match expr.kind {
+            ExprKind::Binary(lhs, rhs, op) => visitor.visit_binary_expr(
+                self.get(lhs).expect("index not in parse tree"),
+                self.get(rhs).expect("index not in parse tree"),
+                op,
+                context,
+            ),
+            ExprKind::LiteralInt(val) => visitor.visit_literal_int(val, context),
+            ExprKind::LiteralFloat(val) => visitor.visit_literal_float(val, context),
+            ExprKind::Grouping(expr) => {
+                let expr = self.get(expr).unwrap();
+                self.accept(expr, visitor, context)
+            }
         }
     }
 
