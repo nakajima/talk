@@ -1,6 +1,6 @@
 use crate::token_kind::TokenKind;
 
-use super::{expr::Expr, parse_tree::ParseTree};
+use super::{expr::Expr, func_expr::FuncExpr, parse_tree::ParseTree};
 
 pub trait Visitor<Returning, Context> {
     fn visit_literal_int(
@@ -43,4 +43,6 @@ pub trait Visitor<Returning, Context> {
 
     fn visit_tuple(&self, items: Vec<usize>, context: Context, parse_tree: &ParseTree)
     -> Returning;
+
+    fn visit_func(&self, func: FuncExpr, context: Context, parse_tree: &ParseTree) -> Returning;
 }

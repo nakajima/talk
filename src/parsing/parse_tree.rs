@@ -38,7 +38,7 @@ impl ParseTree {
             ExprKind::Tuple(items) => visitor.visit_tuple(items.clone(), context, self),
             ExprKind::EmptyTuple => visitor.visit_tuple(vec![], context, self),
             ExprKind::Block(_exprs) => todo!(),
-            ExprKind::Func(_args, _body) => todo!(),
+            ExprKind::Func(func) => visitor.visit_func(func.clone(), context, self),
         }
     }
 

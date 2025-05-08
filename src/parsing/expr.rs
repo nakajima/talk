@@ -1,5 +1,7 @@
 use crate::{token::Token, token_kind::TokenKind};
 
+use super::func_expr::FuncExpr;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
     pub id: usize,
@@ -17,6 +19,6 @@ pub enum ExprKind {
     Tuple(Vec<usize>),
     EmptyTuple,
     Block(Vec<usize>),
-    Func(usize /* args tuple */, usize /* block body */),
+    Func(FuncExpr),
     Variable(&'static str),
 }

@@ -9,6 +9,7 @@ use super::{
         Expr,
         ExprKind::{self, *},
     },
+    func_expr::FuncExpr,
     parse_tree::ParseTree,
     precedence::Precedence,
 };
@@ -142,12 +143,10 @@ impl Parser {
     }
 
     pub(crate) fn func(&mut self) -> Result<ID, ParserError> {
-        let args = self.left_paren(false)?;
-        println!("args: {:?}", args);
-        let body = self.block()?;
-        println!("body: {:?}", body);
+        let name = self.try_identifier();
+        let func = FuncExpr::new(name, self.left_paren(false)?, self.block()?);
 
-        self.add_expr(ExprKind::Func(args, body))
+        self.add_expr(ExprKind::Func(func))
     }
 
     pub(crate) fn block(&mut self) -> Result<ID, ParserError> {
@@ -235,6 +234,19 @@ impl Parser {
 
     // MARK: Helpers
 
+    // Try to get an identifier. If it's a match, return it, otherwise return None
+    fn try_identifier(&mut self) -> Option<Token> {
+        if let Some(current) = self.current {
+            if let TokenKind::Identifier(_) = current.kind {
+                self.advance();
+                return Some(current);
+            };
+        }
+
+        None
+    }
+
+    // Try to get a specific token. If it's a match, return true.
     fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
         if let Some(current) = self.current {
             if current.kind == expected {
@@ -246,6 +258,7 @@ impl Parser {
         Ok(false)
     }
 
+    // Try to get a specific token. If it's not a match, return an error.
     fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
         if let Some(current) = self.current {
             if current.kind == expected {
@@ -278,8 +291,10 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
+        func_expr::FuncExpr,
         parser::parse,
         parsing::expr::ExprKind::{self, *},
+        token::Token,
         token_kind::TokenKind,
     };
 
@@ -445,6 +460,30 @@ mod tests {
         let parsed = parse("func() { }").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Func(0, 1));
+        let func = FuncExpr::new(None, 0, 1);
+
+        assert_eq!(expr.kind, ExprKind::Func(func));
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::EmptyTuple);
+        assert_eq!(parsed.get(1).unwrap().kind, ExprKind::Block(vec![]));
+    }
+
+    #[test]
+    fn parses_func_literal_name_no_args() {
+        let parsed = parse("func greet() { }").unwrap();
+        let expr = parsed.root().unwrap();
+
+        let func = FuncExpr::new(
+            Some(Token {
+                kind: TokenKind::Identifier("greet"),
+                start: 6,
+                end: 10,
+            }),
+            0,
+            1,
+        );
+
+        assert_eq!(expr.kind, ExprKind::Func(func));
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::EmptyTuple);
+        assert_eq!(parsed.get(1).unwrap().kind, ExprKind::Block(vec![]));
     }
 }
