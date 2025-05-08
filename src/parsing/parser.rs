@@ -124,7 +124,13 @@ impl Parser {
     }
 
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
-        todo!()
+        let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
+        let current_precedence = Precedence::handler(Some(op))?.precedence;
+        let rhs = self
+            .parse_with_precedence(current_precedence + 1)
+            .expect("did not get binop rhs");
+
+        self.add_expr(Unary(rhs.id, op.kind))
     }
 
     pub(crate) fn binary(&mut self, _can_assign: bool, lhs: Expr) -> Result<Expr, ParserError> {
@@ -333,5 +339,23 @@ mod tests {
         let expr = parsed.root().unwrap();
 
         assert_eq!(expr.kind, ExprKind::Variable("hello"));
+    }
+
+    #[test]
+    fn parses_unary_bang() {
+        let parsed = parse("!hello").unwrap();
+        let expr = parsed.root().unwrap();
+
+        assert_eq!(expr.kind, ExprKind::Unary(0, TokenKind::Bang));
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::Variable("hello"));
+    }
+
+    #[test]
+    fn parses_unary_minus() {
+        let parsed = parse("-1").unwrap();
+        let expr = parsed.root().unwrap();
+
+        assert_eq!(expr.kind, ExprKind::Unary(0, TokenKind::Minus));
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::LiteralInt("1"));
     }
 }

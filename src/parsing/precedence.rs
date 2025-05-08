@@ -144,7 +144,11 @@ impl Precedence {
             TokenKind::Newline => ParseHandler::NONE,
             TokenKind::Dot => todo!(),
             TokenKind::Equals => todo!(),
-            TokenKind::Bang => todo!(),
+            TokenKind::Bang => ParseHandler {
+                prefix: Some(Parser::unary),
+                infix: None,
+                precedence: Precedence::Factor,
+            },
 
             TokenKind::Tilde => todo!(),
             TokenKind::PlusEquals => todo!(),

@@ -12,6 +12,7 @@ pub struct Expr {
 pub enum ExprKind {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
+    Unary(usize, TokenKind),
     Binary(usize, usize, TokenKind),
     Grouping(usize),
     Variable(&'static str),
