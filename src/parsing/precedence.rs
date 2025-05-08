@@ -135,6 +135,12 @@ impl Precedence {
                 precedence: Precedence::Factor,
             },
 
+            TokenKind::Identifier(_) => ParseHandler {
+                prefix: Some(Parser::variable),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
             TokenKind::Newline => ParseHandler::NONE,
             TokenKind::Dot => todo!(),
             TokenKind::Equals => todo!(),
@@ -159,7 +165,6 @@ impl Precedence {
 
             TokenKind::RightParen => ParseHandler::NONE,
 
-            TokenKind::Identifier(_) => todo!("identifier"),
             TokenKind::Keyword => todo!("keyword"),
             TokenKind::EOF => ParseHandler::NONE,
         })

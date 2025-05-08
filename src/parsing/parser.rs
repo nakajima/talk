@@ -72,9 +72,10 @@ impl Parser {
         }
     }
 
-    fn advance(&mut self) {
+    fn advance(&mut self) -> Option<Token> {
         self.previous = self.current;
         self.current = self.lexer.next().ok();
+        self.previous
     }
 
     fn add_expr(&mut self, kind: ExprKind) -> Result<Expr, ParserError> {
@@ -88,10 +89,12 @@ impl Parser {
         Ok(expr)
     }
 
+    // MARK: Expr parsers
+
     pub(crate) fn grouping(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
-        self.consume(vec![TokenKind::LeftParen])?;
+        self.consume_any(vec![TokenKind::LeftParen])?;
         let child = self.parse_with_precedence(Precedence::Assignment)?;
-        self.consume(vec![TokenKind::RightParen])?;
+        self.consume_any(vec![TokenKind::RightParen])?;
         self.add_expr(Grouping(child.id))
     }
 
@@ -109,12 +112,23 @@ impl Parser {
         }
     }
 
+    pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
+        if let Some(token) = self.current {
+            if let TokenKind::Identifier(name) = token.kind {
+                self.consume(TokenKind::Identifier(name))?;
+                return self.add_expr(Variable(name));
+            }
+        }
+
+        unreachable!()
+    }
+
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
         todo!()
     }
 
     pub(crate) fn binary(&mut self, _can_assign: bool, lhs: Expr) -> Result<Expr, ParserError> {
-        let op = self.consume(vec![
+        let op = self.consume_any(vec![
             TokenKind::Plus,
             TokenKind::Minus,
             TokenKind::Star,
@@ -165,7 +179,23 @@ impl Parser {
         Ok(lhs.expect("did not get lhs"))
     }
 
-    fn consume(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
+    // MARK: Helpers
+
+    fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
+        if let Some(current) = self.current {
+            if current.kind == expected {
+                self.advance();
+                return Ok(current);
+            };
+        }
+
+        return Err(ParserError::UnexpectedToken(
+            vec![expected],
+            self.current.unwrap().kind,
+        ));
+    }
+
+    fn consume_any(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
         match self.current {
             Some(current) => {
                 if possible_tokens.contains(&current.kind) {

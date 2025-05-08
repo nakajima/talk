@@ -41,10 +41,15 @@ impl<'a> Visitor<String, usize> for DebugPrinter<'a> {
             self.parse_tree.accept(rhs, self, context + 1)
         )
     }
+
+    fn visit_variable(&self, name: &'static str, context: usize) -> String {
+        indent(&format!("${}", name), context)
+    }
 }
 
 fn main() {
-    let code = "(1 + 2) * (3 / (4 - 5))";
+    let code = "(1 + 2) * (3 / (buzz - fizz))";
+    println!("Parsing: {}", code);
     let parse_tree = parse(code).unwrap();
     let mut visitor = DebugPrinter {
         parse_tree: &parse_tree,

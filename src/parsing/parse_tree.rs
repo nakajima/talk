@@ -31,6 +31,7 @@ impl ParseTree {
                 let expr = self.get(expr).unwrap();
                 self.accept(expr, visitor, context)
             }
+            ExprKind::Variable(val) => visitor.visit_variable(val, context),
         }
     }
 

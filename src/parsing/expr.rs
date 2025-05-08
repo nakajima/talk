@@ -1,7 +1,5 @@
 use crate::{token::Token, token_kind::TokenKind};
 
-use super::{parse_tree::ParseTree, visitor::Visitor};
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Expr {
     pub id: usize,
@@ -16,4 +14,5 @@ pub enum ExprKind {
     LiteralFloat(&'static str),
     Binary(usize, usize, TokenKind),
     Grouping(usize),
+    Variable(&'static str),
 }
