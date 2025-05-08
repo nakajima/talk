@@ -326,4 +326,12 @@ mod tests {
         assert_eq!(expr.kind, ExprKind::Binary(3, 4, TokenKind::Star));
         assert_eq!(parsed.get(3).unwrap().kind, ExprKind::Grouping(2));
     }
+
+    #[test]
+    fn parses_var() {
+        let parsed = parse("hello").unwrap();
+        let expr = parsed.root().unwrap();
+
+        assert_eq!(expr.kind, ExprKind::Variable("hello"));
+    }
 }
