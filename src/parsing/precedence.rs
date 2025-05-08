@@ -1,11 +1,11 @@
 use std::{mem::transmute, ops::Add};
 
-use crate::{token::Token, token_kind::TokenKind};
-
-use super::{
-    expr::Expr,
-    parser::{Parser, ParserError},
+use crate::{
+    token::Token,
+    token_kind::{Keyword, TokenKind},
 };
+
+use super::parser::{Parser, ParserError};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -32,8 +32,8 @@ impl Precedence {
 
 #[allow(clippy::type_complexity)]
 pub struct ParseHandler {
-    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<Expr, ParserError>>,
-    pub(crate) infix: Option<fn(&mut Parser, bool, Expr) -> Result<Expr, ParserError>>,
+    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<usize, ParserError>>,
+    pub(crate) infix: Option<fn(&mut Parser, bool, usize) -> Result<usize, ParserError>>,
     pub(crate) precedence: Precedence,
 }
 
@@ -141,35 +141,38 @@ impl Precedence {
                 precedence: Precedence::None,
             },
 
+            TokenKind::Keyword(Keyword::Func) => ParseHandler {
+                prefix: Some(Parser::literal),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
             TokenKind::Newline => ParseHandler::NONE,
-            TokenKind::Dot => todo!(),
-            TokenKind::Equals => todo!(),
+            TokenKind::Dot => ParseHandler::NONE,
+            TokenKind::Equals => ParseHandler::NONE,
             TokenKind::Bang => ParseHandler {
                 prefix: Some(Parser::unary),
                 infix: None,
                 precedence: Precedence::Factor,
             },
 
-            TokenKind::Tilde => todo!(),
-            TokenKind::PlusEquals => todo!(),
-            TokenKind::MinusEquals => todo!(),
-            TokenKind::StarEquals => todo!(),
-            TokenKind::SlashEquals => todo!(),
-            TokenKind::EqualsEquals => todo!(),
-            TokenKind::BangEquals => todo!(),
-            TokenKind::TildeEquals => todo!(),
+            TokenKind::Tilde => ParseHandler::NONE,
+            TokenKind::PlusEquals => ParseHandler::NONE,
+            TokenKind::MinusEquals => ParseHandler::NONE,
+            TokenKind::StarEquals => ParseHandler::NONE,
+            TokenKind::SlashEquals => ParseHandler::NONE,
+            TokenKind::EqualsEquals => ParseHandler::NONE,
+            TokenKind::BangEquals => ParseHandler::NONE,
+            TokenKind::TildeEquals => ParseHandler::NONE,
 
-            TokenKind::CaretEquals => todo!(),
+            TokenKind::CaretEquals => ParseHandler::NONE,
 
-            TokenKind::PipePipe => todo!(),
-            TokenKind::Amp => todo!(),
-            TokenKind::AmpEquals => todo!(),
-            TokenKind::LeftBrace => todo!(),
-            TokenKind::RightBrace => todo!(),
-
+            TokenKind::PipePipe => ParseHandler::NONE,
+            TokenKind::Amp => ParseHandler::NONE,
+            TokenKind::AmpEquals => ParseHandler::NONE,
+            TokenKind::LeftBrace => ParseHandler::NONE,
+            TokenKind::RightBrace => ParseHandler::NONE,
             TokenKind::RightParen => ParseHandler::NONE,
-
-            TokenKind::Keyword => todo!("keyword"),
             TokenKind::EOF => ParseHandler::NONE,
         })
     }

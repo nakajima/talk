@@ -1,6 +1,6 @@
 use crate::{token::Token, token_kind::TokenKind};
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
     pub id: usize,
     pub start: Token,
@@ -8,12 +8,13 @@ pub struct Expr {
     pub kind: ExprKind,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ExprKind {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
-    Unary(usize, TokenKind),
-    Binary(usize, usize, TokenKind),
+    Unary(TokenKind, usize),
+    Binary(usize, TokenKind, usize),
     Grouping(usize),
+    Tuple(&'static Vec<usize>),
     Variable(&'static str),
 }

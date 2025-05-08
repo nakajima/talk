@@ -1,10 +1,15 @@
 use crate::{lexer::Lexer, token::Token, token_kind::TokenKind};
 
 use super::{
-    expr::{Expr, ExprKind, ExprKind::*},
+    expr::{
+        Expr,
+        ExprKind::{self, *},
+    },
     parse_tree::ParseTree,
     precedence::Precedence,
 };
+
+pub type ID = usize;
 
 #[allow(unused)]
 pub struct Parser {
@@ -56,7 +61,7 @@ impl Parser {
                 .parse_with_precedence(Precedence::Assignment)
                 .expect("did not get an expr");
 
-            self.parse_tree.root = expr.id;
+            self.parse_tree.root = expr;
         }
     }
 
@@ -78,27 +83,26 @@ impl Parser {
         self.previous
     }
 
-    fn add_expr(&mut self, kind: ExprKind) -> Result<Expr, ParserError> {
-        let mut expr = Expr {
+    fn add_expr(&mut self, kind: ExprKind) -> Result<ID, ParserError> {
+        let expr = Expr {
             id: 0,
             start: self.current.unwrap(),
             end: self.current.unwrap(),
             kind,
         };
-        expr.id = self.parse_tree.add(expr);
-        Ok(expr)
+        Ok(self.parse_tree.add(expr))
     }
 
     // MARK: Expr parsers
 
-    pub(crate) fn grouping(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
+    pub(crate) fn grouping(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
         self.consume_any(vec![TokenKind::LeftParen])?;
         let child = self.parse_with_precedence(Precedence::Assignment)?;
         self.consume_any(vec![TokenKind::RightParen])?;
-        self.add_expr(Grouping(child.id))
+        self.add_expr(Grouping(child))
     }
 
-    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
+    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
         self.advance();
 
         match self
@@ -112,7 +116,7 @@ impl Parser {
         }
     }
 
-    pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
+    pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
         if let Some(token) = self.current {
             if let TokenKind::Identifier(name) = token.kind {
                 self.consume(TokenKind::Identifier(name))?;
@@ -123,17 +127,17 @@ impl Parser {
         unreachable!()
     }
 
-    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<Expr, ParserError> {
+    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
         let current_precedence = Precedence::handler(Some(op))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
 
-        self.add_expr(Unary(rhs.id, op.kind))
+        self.add_expr(Unary(op.kind, rhs))
     }
 
-    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: Expr) -> Result<Expr, ParserError> {
+    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: ID) -> Result<ID, ParserError> {
         let op = self.consume_any(vec![
             TokenKind::Plus,
             TokenKind::Minus,
@@ -152,11 +156,11 @@ impl Parser {
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
 
-        self.add_expr(Binary(lhs.id, rhs.id, op.kind))
+        self.add_expr(Binary(lhs, op.kind, rhs))
     }
 
-    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<Expr, ParserError> {
-        let mut lhs: Option<Expr> = None;
+    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ID, ParserError> {
+        let mut lhs: Option<usize> = None;
         let mut handler = Precedence::handler(self.current)?;
 
         if let Some(prefix) = handler.prefix {
@@ -237,7 +241,7 @@ mod tests {
         let parsed = parse("1 + 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Plus));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Plus, 1,));
     }
 
     #[test]
@@ -245,7 +249,7 @@ mod tests {
         let parsed = parse("1 - 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Minus));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Minus, 1));
     }
 
     #[test]
@@ -253,7 +257,7 @@ mod tests {
         let parsed = parse("1 / 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Slash));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Slash, 1));
     }
 
     #[test]
@@ -261,7 +265,7 @@ mod tests {
         let parsed = parse("1 * 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Star));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Star, 1));
     }
 
     #[test]
@@ -269,7 +273,7 @@ mod tests {
         let parsed = parse("1 < 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Less));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Less, 1));
     }
 
     #[test]
@@ -277,7 +281,7 @@ mod tests {
         let parsed = parse("1 <= 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::LessEquals));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::LessEquals, 1));
     }
 
     #[test]
@@ -285,7 +289,7 @@ mod tests {
         let parsed = parse("1 > 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Greater));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Greater, 1));
     }
 
     #[test]
@@ -293,7 +297,7 @@ mod tests {
         let parsed = parse("1 >= 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::GreaterEquals));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::GreaterEquals, 1));
     }
 
     #[test]
@@ -301,7 +305,7 @@ mod tests {
         let parsed = parse("1 ^ 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Caret));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Caret, 1));
     }
 
     #[test]
@@ -309,7 +313,7 @@ mod tests {
         let parsed = parse("1 | 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(0, 1, TokenKind::Pipe));
+        assert_eq!(expr.kind, ExprKind::Binary(0, TokenKind::Pipe, 1));
     }
 
     #[test]
@@ -317,10 +321,10 @@ mod tests {
         let parsed = parse("1 + 2 * 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(2, 3, TokenKind::Star));
+        assert_eq!(expr.kind, ExprKind::Binary(2, TokenKind::Star, 3));
         assert_eq!(
             parsed.get(2).unwrap().kind,
-            ExprKind::Binary(0, 1, TokenKind::Plus)
+            ExprKind::Binary(0, TokenKind::Plus, 1)
         );
     }
 
@@ -329,7 +333,7 @@ mod tests {
         let parsed = parse("(1 + 2) * 2").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Binary(3, 4, TokenKind::Star));
+        assert_eq!(expr.kind, ExprKind::Binary(3, TokenKind::Star, 4));
         assert_eq!(parsed.get(3).unwrap().kind, ExprKind::Grouping(2));
     }
 
@@ -346,7 +350,7 @@ mod tests {
         let parsed = parse("!hello").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Unary(0, TokenKind::Bang));
+        assert_eq!(expr.kind, ExprKind::Unary(TokenKind::Bang, 0));
         assert_eq!(parsed.get(0).unwrap().kind, ExprKind::Variable("hello"));
     }
 
@@ -355,7 +359,7 @@ mod tests {
         let parsed = parse("-1").unwrap();
         let expr = parsed.root().unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Unary(0, TokenKind::Minus));
+        assert_eq!(expr.kind, ExprKind::Unary(TokenKind::Minus, 0));
         assert_eq!(parsed.get(0).unwrap().kind, ExprKind::LiteralInt("1"));
     }
 }

@@ -19,14 +19,14 @@ impl ParseTree {
 
     pub fn accept<C, R>(&self, expr: &Expr, visitor: &impl Visitor<R, C>, context: C) -> R {
         match expr.kind {
-            ExprKind::Binary(lhs, rhs, op) => visitor.visit_binary_expr(
+            ExprKind::Binary(lhs, op, rhs) => visitor.visit_binary_expr(
                 self.get(lhs).expect("index not in parse tree"),
                 self.get(rhs).expect("index not in parse tree"),
                 op,
                 context,
                 &self,
             ),
-            ExprKind::Unary(rhs, op) => visitor.visit_unary_expr(
+            ExprKind::Unary(op, rhs) => visitor.visit_unary_expr(
                 self.get(rhs).expect("index not in parse tree"),
                 op,
                 context,
@@ -39,14 +39,16 @@ impl ParseTree {
                 self.accept(expr, visitor, context)
             }
             ExprKind::Variable(val) => visitor.visit_variable(val, context, &self),
+            ExprKind::Tuple(_items) => todo!(),
         }
     }
 
     // Adds the expr to the parse tree and sets its ID
     pub fn add(&mut self, mut expr: Expr) -> usize {
-        expr.id = self.nodes.len();
+        let id = self.nodes.len();
+        expr.id = id;
         self.nodes.push(expr);
-        expr.id
+        id
     }
 
     // Gets the root expr of the tree
