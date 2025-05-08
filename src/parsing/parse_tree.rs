@@ -5,19 +5,27 @@ use super::{
 
 #[derive(Default, Debug, Clone)]
 pub struct ParseTree {
-    pub root: usize,
-    nodes: Vec<Expr>,
+    roots: Vec<usize>,
+    pub(crate) nodes: Vec<Expr>,
 }
 
 impl ParseTree {
     pub fn new() -> Self {
         Self {
-            root: 0,
+            roots: vec![],
             nodes: vec![],
         }
     }
 
-    pub fn accept<C, R>(&self, expr: &Expr, visitor: &impl Visitor<R, C>, context: C) -> R {
+    pub fn visit<C, R>(&self, visitor: &impl Visitor<R, C>, context: &C) -> Vec<R> {
+        self.roots()
+            .iter()
+            .filter_map(|root| *root)
+            .map(|root| self.accept(root, visitor, context))
+            .collect()
+    }
+
+    pub fn accept<C, R>(&self, expr: &Expr, visitor: &impl Visitor<R, C>, context: &C) -> R {
         match &expr.kind {
             ExprKind::Binary(lhs, op, rhs) => visitor.visit_binary_expr(
                 self.get(*lhs).expect("index not in parse tree"),
@@ -50,13 +58,13 @@ impl ParseTree {
         id
     }
 
+    pub fn push_root(&mut self, root: usize) {
+        self.roots.push(root);
+    }
+
     // Gets the root expr of the tree
-    pub fn root(&self) -> Option<&Expr> {
-        if self.nodes.len() <= self.root {
-            None
-        } else {
-            Some(&self.nodes[self.root])
-        }
+    pub fn roots(&self) -> Vec<Option<&Expr>> {
+        self.roots.iter().map(|r| self.get(*r)).collect()
     }
 
     // Gets the expr at a given index

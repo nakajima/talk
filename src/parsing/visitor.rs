@@ -6,14 +6,14 @@ pub trait Visitor<Returning, Context> {
     fn visit_literal_int(
         &self,
         literal: &'static str,
-        context: Context,
+        context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
 
     fn visit_literal_float(
         &self,
         literal: &'static str,
-        context: Context,
+        context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
 
@@ -22,7 +22,7 @@ pub trait Visitor<Returning, Context> {
         lhs: &Expr,
         rhs: &Expr,
         op: TokenKind,
-        context: Context,
+        context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
 
@@ -30,19 +30,23 @@ pub trait Visitor<Returning, Context> {
         &self,
         rhs: &Expr,
         op: TokenKind,
-        context: Context,
+        context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
 
     fn visit_variable(
         &self,
         name: &'static str,
-        context: Context,
+        context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
 
-    fn visit_tuple(&self, items: Vec<usize>, context: Context, parse_tree: &ParseTree)
-    -> Returning;
+    fn visit_tuple(
+        &self,
+        items: Vec<usize>,
+        context: &Context,
+        parse_tree: &ParseTree,
+    ) -> Returning;
 
-    fn visit_func(&self, func: FuncExpr, context: Context, parse_tree: &ParseTree) -> Returning;
+    fn visit_func(&self, func: FuncExpr, context: &Context, parse_tree: &ParseTree) -> Returning;
 }
