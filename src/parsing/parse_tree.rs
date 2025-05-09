@@ -1,11 +1,12 @@
 use super::{
     expr::{Expr, ExprKind},
+    parser::NodeID,
     visitor::Visitor,
 };
 
 #[derive(Default, Debug, Clone)]
 pub struct ParseTree {
-    roots: Vec<usize>,
+    roots: Vec<NodeID>,
     pub(crate) nodes: Vec<Expr>,
 }
 
@@ -40,25 +41,28 @@ impl ParseTree {
                 context,
                 self,
             ),
-            ExprKind::LiteralInt(val) => visitor.visit_literal_int(val, context, self),
-            ExprKind::LiteralFloat(val) => visitor.visit_literal_float(val, context, self),
-            ExprKind::Variable(val) => visitor.visit_variable(val, context, self),
+            ExprKind::LiteralInt(lexeme) => visitor.visit_literal_int(lexeme, context, self),
+            ExprKind::LiteralFloat(lexeme) => visitor.visit_literal_float(lexeme, context, self),
+            ExprKind::Variable(id) => visitor.visit_variable(*id, context, self),
             ExprKind::Tuple(items) => visitor.visit_tuple(items.clone(), context, self),
             ExprKind::EmptyTuple => visitor.visit_tuple(vec![], context, self),
             ExprKind::Block(_exprs) => todo!(),
-            ExprKind::Func(func) => visitor.visit_func(func.clone(), context, self),
+            ExprKind::Func(name, params, body) => {
+                visitor.visit_func(name, *params, *body, context, self)
+            }
+            ExprKind::ResolvedVariable(_id) => todo!(),
         }
     }
 
     // Adds the expr to the parse tree and sets its ID
-    pub fn add(&mut self, mut expr: Expr) -> usize {
-        let id = self.nodes.len();
+    pub fn add(&mut self, mut expr: Expr) -> NodeID {
+        let id = self.nodes.len() as NodeID;
         expr.id = id;
         self.nodes.push(expr);
         id
     }
 
-    pub fn push_root(&mut self, root: usize) {
+    pub fn push_root(&mut self, root: NodeID) {
         self.roots.push(root);
     }
 
@@ -67,12 +71,30 @@ impl ParseTree {
         self.roots.iter().map(|r| self.get(*r)).collect()
     }
 
+    // Gets the root expr of the tree
+    pub fn root_ids(&self) -> Vec<NodeID> {
+        self.roots.clone()
+    }
+
     // Gets the expr at a given index
-    pub fn get(&self, index: usize) -> Option<&Expr> {
+    pub fn get(&self, index: NodeID) -> Option<&Expr> {
+        let index = index as usize;
+
         if self.nodes.len() <= index {
             None
         } else {
             Some(&self.nodes[index])
+        }
+    }
+
+    // Gets the expr at a given index
+    pub fn get_mut(&mut self, index: NodeID) -> Option<&mut Expr> {
+        let index = index as usize;
+
+        if self.nodes.len() <= index {
+            None
+        } else {
+            Some(&mut self.nodes[index])
         }
     }
 }

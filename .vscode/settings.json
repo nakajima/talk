@@ -1,4 +1,4 @@
 {
-  "rust-analyzer.runnables.extraTestBinaryArgs": ["--show-output"],
+  "rust-analyzer.runnables.extraTestBinaryArgs": ["--show-output", "--nocapture"],
   "rust-analyzer.testExplorer": true
 }

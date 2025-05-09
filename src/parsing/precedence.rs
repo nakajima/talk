@@ -5,7 +5,7 @@ use crate::{
     token_kind::{Keyword, TokenKind},
 };
 
-use super::parser::{Parser, ParserError};
+use super::parser::{NodeID, Parser, ParserError};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -32,8 +32,8 @@ impl Precedence {
 
 #[allow(clippy::type_complexity)]
 pub struct ParseHandler {
-    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<usize, ParserError>>,
-    pub(crate) infix: Option<fn(&mut Parser, bool, usize) -> Result<usize, ParserError>>,
+    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<NodeID, ParserError>>,
+    pub(crate) infix: Option<fn(&mut Parser, bool, NodeID) -> Result<NodeID, ParserError>>,
     pub(crate) precedence: Precedence,
 }
 
@@ -58,7 +58,7 @@ impl Precedence {
 
         Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {
-                prefix: Some(Parser::left_paren),
+                prefix: Some(Parser::tuple),
                 infix: None,
                 precedence: Precedence::Call,
             },

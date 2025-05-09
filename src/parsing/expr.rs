@@ -1,10 +1,12 @@
 use crate::{token::Token, token_kind::TokenKind};
 
-use super::func_expr::FuncExpr;
+use super::parser::NodeID;
+
+pub type VarDepth = u32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
-    pub id: usize,
+    pub id: NodeID,
     pub start: Token,
     pub end: Token,
     pub kind: ExprKind,
@@ -14,11 +16,16 @@ pub struct Expr {
 pub enum ExprKind {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
-    Unary(TokenKind, usize),
-    Binary(usize, TokenKind, usize),
-    Tuple(Vec<usize>),
+    Unary(TokenKind, NodeID),
+    Binary(NodeID, TokenKind, NodeID),
+    Tuple(Vec<NodeID>),
     EmptyTuple,
-    Block(Vec<usize>),
-    Func(FuncExpr),
+    Block(Vec<NodeID>),
+    Func(
+        Option<Token>,
+        NodeID, /* params tuple */
+        NodeID, /* body */
+    ),
     Variable(&'static str),
+    ResolvedVariable(VarDepth),
 }

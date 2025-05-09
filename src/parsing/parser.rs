@@ -9,12 +9,12 @@ use super::{
         Expr,
         ExprKind::{self, *},
     },
-    func_expr::FuncExpr,
     parse_tree::ParseTree,
     precedence::Precedence,
 };
 
-pub type ID = usize;
+pub type NodeID = u32;
+pub type VariableID = u32;
 
 #[allow(unused)]
 pub struct Parser {
@@ -59,6 +59,7 @@ impl Parser {
 
         while let Some(current) = self.current {
             self.skip_newlines();
+
             if current.kind == TokenKind::EOF {
                 return;
             }
@@ -68,6 +69,8 @@ impl Parser {
                 .expect("did not get an expr");
 
             self.parse_tree.push_root(expr);
+
+            self.skip_newlines();
         }
     }
 
@@ -89,7 +92,7 @@ impl Parser {
         self.previous
     }
 
-    fn add_expr(&mut self, kind: ExprKind) -> Result<ID, ParserError> {
+    fn add_expr(&mut self, kind: ExprKind) -> Result<NodeID, ParserError> {
         let expr = Expr {
             id: 0,
             start: self.current.unwrap(),
@@ -101,7 +104,7 @@ impl Parser {
 
     // MARK: Expr parsers
 
-    pub(crate) fn left_paren(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
+    pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
         self.consume(TokenKind::LeftParen)?;
 
         if self.did_match(TokenKind::RightParen)? {
@@ -127,7 +130,7 @@ impl Parser {
         self.add_expr(Tuple(items))
     }
 
-    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
+    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
         self.advance();
 
         match self
@@ -142,16 +145,38 @@ impl Parser {
         }
     }
 
-    pub(crate) fn func(&mut self) -> Result<ID, ParserError> {
+    pub(crate) fn func(&mut self) -> Result<NodeID, ParserError> {
         let name = self.try_identifier();
-        let func = FuncExpr::new(name, self.left_paren(false)?, self.block()?);
 
-        self.add_expr(ExprKind::Func(func))
+        self.consume(TokenKind::LeftParen)?;
+        let mut params: Vec<NodeID> = vec![];
+        while let Some(identifier) = self.try_identifier() {
+            let TokenKind::Identifier(name) = identifier.kind else {
+                unreachable!()
+            };
+
+            params.push(self.add_expr(Variable(name))?);
+
+            if self.did_match(TokenKind::Comma)? {
+                continue;
+            }
+
+            break;
+        }
+
+        let params_id = self.add_expr(Tuple(params))?;
+
+        self.consume(TokenKind::RightParen)?;
+
+        let body = self.block()?;
+
+        self.add_expr(ExprKind::Func(name, params_id, body))
     }
 
-    pub(crate) fn block(&mut self) -> Result<ID, ParserError> {
+    pub(crate) fn block(&mut self) -> Result<NodeID, ParserError> {
         self.consume(TokenKind::LeftBrace)?;
-        let mut items: Vec<usize> = vec![];
+
+        let mut items: Vec<NodeID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             items.push(self.parse_with_precedence(Precedence::Assignment)?)
         }
@@ -159,7 +184,7 @@ impl Parser {
         self.add_expr(ExprKind::Block(items))
     }
 
-    pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
+    pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
         if let Some(token) = self.current {
             if let TokenKind::Identifier(name) = token.kind {
                 self.consume(TokenKind::Identifier(name))?;
@@ -170,7 +195,7 @@ impl Parser {
         unreachable!()
     }
 
-    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ID, ParserError> {
+    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
         let current_precedence = Precedence::handler(Some(op))?.precedence;
         let rhs = self
@@ -180,7 +205,7 @@ impl Parser {
         self.add_expr(Unary(op.kind, rhs))
     }
 
-    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: ID) -> Result<ID, ParserError> {
+    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: NodeID) -> Result<NodeID, ParserError> {
         let op = self.consume_any(vec![
             TokenKind::Plus,
             TokenKind::Minus,
@@ -202,8 +227,8 @@ impl Parser {
         self.add_expr(Binary(lhs, op.kind, rhs))
     }
 
-    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ID, ParserError> {
-        let mut lhs: Option<usize> = None;
+    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<NodeID, ParserError> {
+        let mut lhs: Option<NodeID> = None;
         let mut handler = Precedence::handler(self.current)?;
 
         if let Some(prefix) = handler.prefix {
@@ -213,6 +238,7 @@ impl Parser {
         let mut i = 0;
 
         while {
+            self.skip_newlines();
             handler = Precedence::handler(self.current)?;
             precedence < handler.precedence
         } {
@@ -229,7 +255,7 @@ impl Parser {
             }
         }
 
-        Ok(lhs.expect("did not get lhs"))
+        Ok(lhs.expect(&format!("did not get lhs: {:?}", self.current)))
     }
 
     // MARK: Helpers
@@ -291,7 +317,6 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
-        func_expr::FuncExpr,
         parser::parse,
         parsing::expr::ExprKind::{self, *},
         token::Token,
@@ -418,10 +443,12 @@ mod tests {
 
     #[test]
     fn parses_var() {
-        let parsed = parse("hello").unwrap();
-        let expr = parsed.roots()[0].unwrap();
+        let parsed = parse("hello\nworld").unwrap();
+        let hello = parsed.roots()[0].unwrap();
+        let world = parsed.roots()[1].unwrap();
 
-        assert_eq!(expr.kind, ExprKind::Variable("hello"));
+        assert_eq!(hello.kind, ExprKind::Variable("hello"));
+        assert_eq!(world.kind, ExprKind::Variable("world"));
     }
 
     #[test]
@@ -466,10 +493,8 @@ mod tests {
         let parsed = parse("func() { }").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        let func = FuncExpr::new(None, 0, 1);
-
-        assert_eq!(expr.kind, ExprKind::Func(func));
-        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::EmptyTuple);
+        assert_eq!(expr.kind, ExprKind::Func(None, 0, 1));
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::Tuple(vec![]));
         assert_eq!(parsed.get(1).unwrap().kind, ExprKind::Block(vec![]));
     }
 
@@ -478,18 +503,19 @@ mod tests {
         let parsed = parse("func greet() { }").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        let func = FuncExpr::new(
-            Some(Token {
-                kind: TokenKind::Identifier("greet"),
-                start: 6,
-                end: 10,
-            }),
-            0,
-            1,
+        assert_eq!(
+            expr.kind,
+            ExprKind::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("greet"),
+                    start: 6,
+                    end: 10,
+                }),
+                0,
+                1
+            )
         );
-
-        assert_eq!(expr.kind, ExprKind::Func(func));
-        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::EmptyTuple);
+        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::Tuple(vec![]));
         assert_eq!(parsed.get(1).unwrap().kind, ExprKind::Block(vec![]));
     }
 
@@ -497,33 +523,53 @@ mod tests {
     fn parses_multiple_roots() {
         let parsed = parse("func hello() {}\nfunc world() {}").unwrap();
         assert_eq!(2, parsed.roots().len());
-
-        let func1 = FuncExpr::new(
-            Some(Token {
-                kind: TokenKind::Identifier("hello"),
-                start: 6,
-                end: 10,
-            }),
-            0,
-            1,
+        assert_eq!(
+            parsed.roots()[0].unwrap().kind,
+            ExprKind::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("hello"),
+                    start: 6,
+                    end: 10,
+                }),
+                0,
+                1
+            )
         );
 
-        let func2 = FuncExpr::new(
-            Some(Token {
-                kind: TokenKind::Identifier("world"),
-                start: 22,
-                end: 26,
-            }),
-            3,
-            4,
-        );
-
-        assert_eq!(parsed.roots()[0].unwrap().kind, ExprKind::Func(func1));
-        assert_eq!(parsed.get(0).unwrap().kind, ExprKind::EmptyTuple);
         assert_eq!(parsed.get(1).unwrap().kind, ExprKind::Block(vec![]));
-
-        assert_eq!(parsed.roots()[1].unwrap().kind, ExprKind::Func(func2));
-        assert_eq!(parsed.get(3).unwrap().kind, ExprKind::EmptyTuple);
+        assert_eq!(
+            parsed.roots()[1].unwrap().kind,
+            ExprKind::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("world"),
+                    start: 22,
+                    end: 26,
+                }),
+                3,
+                4
+            )
+        );
         assert_eq!(parsed.get(4).unwrap().kind, ExprKind::Block(vec![]));
+    }
+
+    #[test]
+    fn parses_func_literal_name_with_args() {
+        let parsed = parse("func greet(one, two) { }").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(
+            expr.kind,
+            ExprKind::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("greet"),
+                    start: 6,
+                    end: 10,
+                }),
+                2,
+                3
+            )
+        );
+
+        assert_eq!(parsed.get(2).unwrap().kind, Tuple(vec![0, 1]));
     }
 }

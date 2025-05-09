@@ -1,4 +1,8 @@
-use talk_rs::{parse_tree::ParseTree, parser::parse, visitor::Visitor};
+use talk_rs::{
+    parse_tree::ParseTree,
+    parser::{NodeID, parse},
+    visitor::Visitor,
+};
 
 struct DebugPrinter {}
 
@@ -60,7 +64,7 @@ impl Visitor<String, usize> for DebugPrinter {
         indent(&format!("${}", name), context)
     }
 
-    fn visit_tuple(&self, items: Vec<usize>, context: &usize, parse_tree: &ParseTree) -> String {
+    fn visit_tuple(&self, items: Vec<NodeID>, context: &usize, parse_tree: &ParseTree) -> String {
         indent(
             &format!(
                 "({:?})",
@@ -75,11 +79,30 @@ impl Visitor<String, usize> for DebugPrinter {
 
     fn visit_func(
         &self,
-        func: talk_rs::func_expr::FuncExpr,
+        name: &Option<talk_rs::token::Token>,
+        params: NodeID,
+        body: NodeID,
         context: &usize,
-        _parse_tree: &ParseTree,
+        parse_tree: &ParseTree,
     ) -> String {
-        indent(&format!("fn {:?}", func), context)
+        format!(
+            "{}\n{}\n{}",
+            indent(&format!("func {:?}", name), context),
+            indent(
+                &format!(
+                    "{:?}",
+                    parse_tree.accept(parse_tree.get(params).unwrap(), self, context)
+                ),
+                &(context + 1)
+            ),
+            indent(
+                &format!(
+                    "{:?}",
+                    parse_tree.accept(parse_tree.get(body).unwrap(), self, context)
+                ),
+                &(context + 1)
+            )
+        )
     }
 }
 
@@ -88,7 +111,9 @@ fn main() {
     (1 + 2) * (-3 / (buzz - fizz)) * (1, 2, foo)
     func fizz() {}
     ";
+
     println!("Parsing: {}", code);
+
     let parse_tree = parse(code).unwrap();
     let visitor = DebugPrinter {};
 
