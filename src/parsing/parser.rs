@@ -255,6 +255,7 @@ impl Parser {
             }
         }
 
+        #[allow(clippy::expect_fun_call)]
         Ok(lhs.expect(&format!("did not get lhs: {:?}", self.current)))
     }
 

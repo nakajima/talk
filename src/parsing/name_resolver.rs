@@ -4,16 +4,23 @@ use super::expr::{ExprKind::*, VarDepth};
 use super::parse_tree::ParseTree;
 use super::parser::NodeID;
 
-pub struct NameResolver<'a> {
-    parse_tree: &'a mut ParseTree,
+#[derive(Default)]
+pub struct NameResolver {
     // https://en.wikipedia.org/wiki/De_Bruijn_index
     names_stack: Vec<&'static str>,
 }
 
-impl<'a> NameResolver<'a> {
-    pub fn resolve(&mut self) {
-        let ids: Vec<NodeID> = self.parse_tree.root_ids();
-        Self::resolve_nodes(ids, self.parse_tree, &mut self.names_stack);
+impl NameResolver {
+    pub fn new() -> Self {
+        NameResolver {
+            names_stack: vec![]
+        }
+    }
+
+    pub fn resolve(&mut self, mut parse_tree: ParseTree) -> ParseTree {
+        let ids: Vec<NodeID> = parse_tree.root_ids();
+        Self::resolve_nodes(ids, &mut parse_tree, &mut self.names_stack);
+        parse_tree
     }
 
     fn resolve_nodes(
@@ -27,11 +34,15 @@ impl<'a> NameResolver<'a> {
             match &node.kind {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
-                Unary(_, expr_id) => Self::resolve_nodes(vec![*expr_id], parse_tree, names_stack),
+                Unary(_, expr_id) => {
+                    Self::resolve_nodes(vec![*expr_id], parse_tree, names_stack);
+                }
                 Binary(lhs, _, rhs) => {
                     Self::resolve_nodes(vec![*lhs, *rhs], parse_tree, names_stack);
                 }
-                Tuple(items) => Self::resolve_nodes(items.to_vec(), parse_tree, names_stack),
+                Tuple(items) => {
+                    Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
+                }
                 EmptyTuple => continue,
                 Block(items) => {
                     Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
@@ -84,13 +95,9 @@ mod tests {
     use crate::parser::parse;
 
     fn resolve(code: &'static str) -> ParseTree {
-        let mut tree = parse(code).expect("parse failed");
-        let mut resolver = NameResolver {
-            parse_tree: &mut tree,
-            names_stack: vec![],
-        };
-        resolver.resolve();
-        tree
+        let tree = parse(code).expect("parse failed");
+        let mut resolver = NameResolver::default();
+        resolver.resolve(tree)
     }
 
     #[test]
@@ -162,3 +169,11 @@ mod tests {
         assert_eq!(outer_x.kind, ResolvedVariable(1));
     }
 }
+
+// TODO:
+
+// named recursive binds
+// parameter ordering
+// captured vs. shadowed vs. free
+// arbitrary nesting depth
+//   non‐statement AST nodes (tuples, blocks)
