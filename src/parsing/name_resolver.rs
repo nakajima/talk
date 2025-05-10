@@ -1,6 +1,6 @@
 use crate::token_kind::TokenKind;
 
-use super::expr::{ExprKind::*, VarDepth};
+use super::expr::{Expr::*, VarDepth};
 use super::parse_tree::ParseTree;
 use super::parser::NodeID;
 
@@ -13,7 +13,7 @@ pub struct NameResolver {
 impl NameResolver {
     pub fn new() -> Self {
         NameResolver {
-            names_stack: vec![]
+            names_stack: vec![],
         }
     }
 
@@ -31,7 +31,7 @@ impl NameResolver {
         for node_id in node_ids {
             let node = parse_tree.get(node_id).unwrap();
 
-            match &node.kind {
+            match &node {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
                 Unary(_, expr_id) => {
@@ -43,12 +43,11 @@ impl NameResolver {
                 Tuple(items) => {
                     Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
                 }
-                EmptyTuple => continue,
                 Block(items) => {
                     Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
                 }
                 Func(name, params, body) => {
-                    let Tuple(params_tuple) = &parse_tree.get(*params).unwrap().kind else {
+                    let Tuple(params_tuple) = &parse_tree.get(*params).unwrap() else {
                         unreachable!()
                     };
 
@@ -63,7 +62,7 @@ impl NameResolver {
                     }
 
                     for param in params_tuple {
-                        if let Variable(name) = parse_tree.get(*param).unwrap().kind {
+                        if let Variable(name) = parse_tree.get(*param).unwrap() {
                             names_stack.push(name);
                         }
                     }
@@ -81,7 +80,7 @@ impl NameResolver {
                         .rev()
                         .position(|n| n == name)
                         .unwrap_or(0); // free names 
-                    parse_tree.nodes[node_id as usize].kind = ResolvedVariable(depth as VarDepth);
+                    parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth);
                 }
                 ResolvedVariable(_) => continue,
             }
@@ -104,35 +103,35 @@ mod tests {
     fn resolves_literal_int_unchanged() {
         let tree = resolve("123");
         let root = tree.roots()[0].unwrap();
-        assert_eq!(root.kind, LiteralInt("123"));
+        assert_eq!(root, &LiteralInt("123"));
     }
 
     #[test]
     fn resolves_literal_float_unchanged() {
         let tree = resolve("3.14");
         let root = tree.roots()[0].unwrap();
-        assert_eq!(root.kind, LiteralFloat("3.14"));
+        assert_eq!(root, &LiteralFloat("3.14"));
     }
 
     #[test]
     fn resolves_simple_variable_to_depth_0() {
         let tree = resolve("hello");
         let root = tree.roots()[0].unwrap();
-        assert_eq!(root.kind, ResolvedVariable(0));
+        assert_eq!(root, &ResolvedVariable(0));
     }
 
     #[test]
     fn resolves_shadowed_variable_in_lambda() {
         let tree = resolve("func(x) { x }\n");
         let root = tree.roots()[0].unwrap();
-        if let Func(_, _, body_id) = root.kind {
-            let Block(exprs) = &tree.get(body_id).unwrap().kind else {
+        if let Func(_, _, body_id) = root {
+            let Block(exprs) = &tree.get(*body_id).unwrap() else {
                 panic!("didn't get a block")
             };
 
             assert_eq!(exprs.len(), 1);
             let x = tree.get(exprs[0]).unwrap();
-            assert_eq!(x.kind, ResolvedVariable(0));
+            assert_eq!(x, &ResolvedVariable(0));
         } else {
             panic!("expected Func node");
         }
@@ -143,30 +142,30 @@ mod tests {
         let tree = resolve("func(x, y) { func(x) { x \n y }\nx }\n");
         let outer = tree.roots()[0].unwrap();
         // outer Func has its body as an inner Func
-        let Func(_, _, outer_body_id) = outer.kind else {
+        let Func(_, _, outer_body_id) = outer else {
             panic!("did not get outer func")
         };
-        let Block(outer_body) = &tree.get(outer_body_id).unwrap().kind else {
+        let Block(outer_body) = &tree.get(*outer_body_id).unwrap() else {
             panic!("outer body not a block")
         };
 
         let inner = tree.get(outer_body[0]).unwrap();
-        let Func(_, _, inner_body_id) = inner.kind else {
+        let Func(_, _, inner_body_id) = inner else {
             panic!("didn't get inner func")
         };
 
-        let Block(inner_body) = &tree.get(inner_body_id).unwrap().kind else {
+        let Block(inner_body) = &tree.get(*inner_body_id).unwrap() else {
             panic!("outer body not a block")
         };
 
         let inner = tree.get(inner_body[0]).unwrap();
-        assert_eq!(inner.kind, ResolvedVariable(0));
+        assert_eq!(inner, &ResolvedVariable(0));
 
         let inner = tree.get(inner_body[1]).unwrap();
-        assert_eq!(inner.kind, ResolvedVariable(1));
+        assert_eq!(inner, &ResolvedVariable(1));
 
         let outer_x = tree.get(outer_body[1]).unwrap();
-        assert_eq!(outer_x.kind, ResolvedVariable(1));
+        assert_eq!(outer_x, &ResolvedVariable(1));
     }
 }
 

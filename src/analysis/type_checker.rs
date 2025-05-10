@@ -1,117 +1,106 @@
+use std::collections::HashMap;
+
 use crate::{
-    expr::{Expr, ExprKind},
+    expr::Expr,
     parse_tree::ParseTree,
     parser::NodeID,
 };
 
-type TypeID = u32;
-type TypeVarID = u32;
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct TypeVarID(u32);
 
 #[derive(Debug)]
 pub enum Constraint {
     Equality(NodeID, Ty, Ty),
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Ty {
     Int,
     Float,
-    Func(TypeID /* params */, TypeID /* returning */),
+    Func(NodeID /* params */, NodeID /* returning */),
     TypeVar(TypeVarID),
-}
-
-pub struct InferenceResult {
-    constraints: Vec<Constraint>,
-    typed: Option<Ty>,
-}
-
-impl InferenceResult {
-    fn new(constraints: Vec<Constraint>, typed: Option<Ty>) -> Self {
-        Self { constraints, typed }
-    }
+    Tuple(Vec<usize>),
 }
 
 pub struct TypeChecker {
     pub parse_tree: ParseTree,
-    pub environment: Option<Environment>
+    pub environment: Option<Environment>,
 }
 
+#[derive(Default)]
 pub struct Environment {
-    pub types: Vec<Option<Ty>>,
+    pub types: HashMap<NodeID, Ty>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
+    pub type_stack: Vec<Ty>
 }
 
 impl Environment {
-    pub fn new(size: usize) -> Self {
-        let mut env = Self {
-            types: Vec::with_capacity(size),
-            type_var_id: 0,
+    pub fn new() -> Self {
+        Self {
+            types: HashMap::new(),
+            type_var_id: TypeVarID(0),
             constraints: vec![],
-        };
-
-        for _ in 0..size {
-            env.types.push(None);
+            type_stack: vec![]
         }
-
-        env
     }
 
-    fn new_type_variable(&mut self) -> (TypeVarID, Ty) {
-        self.type_var_id += 1;
-        (self.type_var_id, Ty::TypeVar(self.type_var_id))
+    fn new_type_variable(&mut self) -> Ty {
+        self.type_var_id = TypeVarID(self.type_var_id.0 + 1);
+        Ty::TypeVar(self.type_var_id.clone())
     }
 }
 
 impl TypeChecker {
     pub fn new(parse_tree: ParseTree) -> Self {
-        Self { parse_tree, environment: None }
+        Self {
+            parse_tree,
+            environment: None,
+        }
     }
 
     pub fn infer(&mut self) {
-        let mut env = Environment::new(self.parse_tree.nodes.len());
+        let mut env = Environment::new();
 
-        for node in self.parse_tree.nodes.iter() {
-            let mut result = self.infer_node(node, &mut env);
-            env.types[node.id as usize] = result.typed;
-            env.constraints.append(&mut result.constraints);
+        for node in self.parse_tree.root_ids() {
+            self.infer_node(node, &mut env);
         }
 
         self.environment = Some(env);
     }
 
-    pub fn infer_node(&self, node: &Expr, env: &mut Environment) -> InferenceResult {
-        match &self.parse_tree.get(node.id).unwrap().kind {
-            ExprKind::LiteralInt(_) => InferenceResult::new(vec![], Some(Ty::Int)),
-            ExprKind::LiteralFloat(_) => InferenceResult::new(vec![], Some(Ty::Float)),
-            ExprKind::Func(_, params, body) => self.func(*params, *body, env),
+    pub fn infer_node(&self, id: NodeID, env: &mut Environment) {
+        match &self.parse_tree.get(id).unwrap(){
+            Expr::LiteralInt(_) => {
+                env.types.insert(id, Ty::Int);
+            }
+            Expr::LiteralFloat(_) => {
+                env.types.insert(id, Ty::Float);
+            }
+            Expr::Func(name, params, body) => {
+                self.infer_node(*params, env);
+                self.infer_node(*body, env);
+                env.types.insert(id, Ty::Func(*params, *body));
+            }
+            Expr::ResolvedVariable(_) => todo!("ResolvedVariable"),
+            Expr::Variable(_) => todo!(
+                "unresolved variable: {:?}",
+                self.parse_tree.get(id).unwrap()
+            ),
             _ => todo!(
                 "not handling this yet: {:?}",
-                &self.parse_tree.get(node.id).unwrap().kind
+                &self.parse_tree.get(id).unwrap()
             ),
         }
     }
 
-    fn func(&self, params: NodeID, body: NodeID, env: &mut Environment) -> InferenceResult {
-        let (params_id, params_type) = env.new_type_variable();
-        env.types[params as usize] = Some(params_type);
-
-        let (return_id, return_type) = env.new_type_variable();
-        env.types[body as usize] = Some(return_type);
-
-        InferenceResult::new(vec![], Some(Ty::Func(params_id, return_id)))
-    }
-
     pub fn type_for(&self, node_id: NodeID) -> Option<Ty> {
-        let Some(env) = &self.environment else { panic!("no inference performed"); };
+        let Some(env) = &self.environment else {
+            panic!("no inference performed");
+        };
 
-        let node_id = node_id as usize;
-
-        if env.types.len() <= node_id {
-            None
-        } else {
-            env.types[node_id]
-        }
+        env.types.get(&node_id).cloned()
     }
 }
 
@@ -149,8 +138,18 @@ mod tests {
     #[test]
     fn checks_a_func() {
         let checker = check("func sup(name) { name }");
+        let root_id = checker.parse_tree.root_ids()[0];
 
-        let root_id = checker.parse_tree.roots()[0].unwrap().id;
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Float);
+        let Some(Ty::Func(params, returning)) = checker.type_for(root_id) else {
+            panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
+        };
+
+        let params_type = checker.type_for(params);
+        let return_type = checker.type_for(returning);
+
+        assert_eq!(return_type, params_type);
+
+        // assert_eq!(params_types[0], Ty::TypeVar(1));
+        // assert_eq!(return_type, Ty::Float);
     }
 }

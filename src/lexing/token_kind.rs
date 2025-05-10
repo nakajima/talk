@@ -1,11 +1,6 @@
 use std::fmt::Display;
 
-#[derive(PartialEq, Debug, Copy, Clone)]
-pub enum Keyword {
-    Func,
-}
-
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum TokenKind {
     Newline,
     Dot,
@@ -41,8 +36,7 @@ pub enum TokenKind {
     Int(&'static str),
     Float(&'static str),
     Identifier(&'static str),
-    Keyword(Keyword),
-
+    Func,
     EOF,
 }
 

@@ -1,9 +1,6 @@
 use std::{mem::transmute, ops::Add};
 
-use crate::{
-    token::Token,
-    token_kind::{Keyword, TokenKind},
-};
+use crate::{token::Token, token_kind::TokenKind};
 
 use super::parser::{NodeID, Parser, ParserError};
 
@@ -141,7 +138,7 @@ impl Precedence {
                 precedence: Precedence::None,
             },
 
-            TokenKind::Keyword(Keyword::Func) => ParseHandler {
+            TokenKind::Func => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::None,

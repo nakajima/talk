@@ -1,5 +1,5 @@
 use super::{
-    expr::{Expr, ExprKind},
+    expr::{Expr, ExprMeta},
     parser::NodeID,
     visitor::Visitor,
 };
@@ -8,6 +8,7 @@ use super::{
 pub struct ParseTree {
     roots: Vec<NodeID>,
     pub(crate) nodes: Vec<Expr>,
+    pub(crate) meta: Vec<ExprMeta>
 }
 
 impl ParseTree {
@@ -15,6 +16,7 @@ impl ParseTree {
         Self {
             roots: vec![],
             nodes: vec![],
+            meta: vec![]
         }
     }
 
@@ -27,38 +29,37 @@ impl ParseTree {
     }
 
     pub fn accept<C, R>(&self, expr: &Expr, visitor: &impl Visitor<R, C>, context: &C) -> R {
-        match &expr.kind {
-            ExprKind::Binary(lhs, op, rhs) => visitor.visit_binary_expr(
+        match &expr {
+            Expr::Binary(lhs, op, rhs) => visitor.visit_binary_expr(
                 self.get(*lhs).expect("index not in parse tree"),
                 self.get(*rhs).expect("index not in parse tree"),
                 *op,
                 context,
                 self,
             ),
-            ExprKind::Unary(op, rhs) => visitor.visit_unary_expr(
+            Expr::Unary(op, rhs) => visitor.visit_unary_expr(
                 self.get(*rhs).expect("index not in parse tree"),
                 *op,
                 context,
                 self,
             ),
-            ExprKind::LiteralInt(lexeme) => visitor.visit_literal_int(lexeme, context, self),
-            ExprKind::LiteralFloat(lexeme) => visitor.visit_literal_float(lexeme, context, self),
-            ExprKind::Variable(id) => visitor.visit_variable(id, context, self),
-            ExprKind::Tuple(items) => visitor.visit_tuple(items.clone(), context, self),
-            ExprKind::EmptyTuple => visitor.visit_tuple(vec![], context, self),
-            ExprKind::Block(_exprs) => todo!(),
-            ExprKind::Func(name, params, body) => {
+            Expr::LiteralInt(lexeme) => visitor.visit_literal_int(lexeme, context, self),
+            Expr::LiteralFloat(lexeme) => visitor.visit_literal_float(lexeme, context, self),
+            Expr::Variable(id) => visitor.visit_variable(id, context, self),
+            Expr::Tuple(items) => visitor.visit_tuple(items.clone(), context, self),
+            Expr::Block(_exprs) => todo!(),
+            Expr::Func(name, params, body) => {
                 visitor.visit_func(name, *params, *body, context, self)
             }
-            ExprKind::ResolvedVariable(_id) => todo!(),
+            Expr::ResolvedVariable(_id) => todo!(),
         }
     }
 
     // Adds the expr to the parse tree and sets its ID
-    pub fn add(&mut self, mut expr: Expr) -> NodeID {
+    pub fn add(&mut self, expr: Expr, meta: ExprMeta) -> NodeID {
         let id = self.nodes.len() as NodeID;
-        expr.id = id;
         self.nodes.push(expr);
+        self.meta.push(meta);
         id
     }
 

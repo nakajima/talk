@@ -2,7 +2,6 @@ use core::iter::Peekable;
 use core::str::Chars;
 
 use super::token::Token;
-use super::token_kind::Keyword;
 use super::token_kind::TokenKind::{self, *};
 
 #[derive(Debug)]
@@ -128,7 +127,7 @@ impl Lexer {
         let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
         match &self.code[start_idx..=end_idx] {
-            "func" => Keyword(Keyword::Func),
+            "func" => Func,
             _ => Identifier(&self.code[start_idx..=end_idx]),
         }
     }
@@ -170,8 +169,6 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
-    use crate::token_kind::Keyword;
-
     use super::*;
 
     #[test]
@@ -275,7 +272,7 @@ mod tests {
     #[test]
     fn keywords() {
         let mut lexer = Lexer::new("func");
-        assert_eq!(lexer.next().unwrap().kind, Keyword(Keyword::Func));
+        assert_eq!(lexer.next().unwrap().kind, Func);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }
