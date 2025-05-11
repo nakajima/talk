@@ -31,7 +31,7 @@ impl NameResolver {
         for node_id in node_ids {
             let node = parse_tree.get(node_id).unwrap();
 
-            match &node {
+            match node {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
                 Unary(_, expr_id) => {
@@ -47,11 +47,7 @@ impl NameResolver {
                     Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
                 }
                 Func(name, params, body) => {
-                    let Tuple(params_tuple) = &parse_tree.get(*params).unwrap() else {
-                        unreachable!()
-                    };
-
-                    let mut locals_count = params_tuple.len();
+                    let mut locals_count = params.len();
 
                     // If it's a named function, we want the name so we can recur.
                     if let Some(name) = name {
@@ -61,17 +57,31 @@ impl NameResolver {
                         }
                     }
 
-                    for param in params_tuple {
-                        if let Variable(name) = parse_tree.get(*param).unwrap() {
-                            names_stack.push(name);
-                        }
+                    for param in params {
+                        let Parameter(name) = parse_tree.get(*param).unwrap() else {
+                            panic!("got a non variable param")
+                        };
+                        names_stack.push(name);
                     }
 
-                    Self::resolve_nodes(vec![*body], parse_tree, names_stack);
+                    let mut to_resolve = params.clone();
+                    to_resolve.push(*body);
+                    Self::resolve_nodes(to_resolve, parse_tree, names_stack);
+
+                    // Self::resolve_nodes(vec![*body], parse_tree, names_stack);
 
                     for _ in 0..locals_count {
                         names_stack.pop();
                     }
+                }
+
+                Parameter(name) => {
+                    let depth = names_stack
+                        .iter()
+                        .rev()
+                        .position(|n| n == name)
+                        .unwrap_or(0); // free names 
+                    parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth);
                 }
 
                 Variable(name) => {
@@ -124,7 +134,11 @@ mod tests {
     fn resolves_shadowed_variable_in_lambda() {
         let tree = resolve("func(x) { x }\n");
         let root = tree.roots()[0].unwrap();
-        if let Func(_, _, body_id) = root {
+        if let Func(_, params, body_id) = root {
+            assert_eq!(params.len(), 1);
+            let x_param = tree.get(params[0]).unwrap();
+            assert_eq!(x_param, &ResolvedVariable(0));
+
             let Block(exprs) = &tree.get(*body_id).unwrap() else {
                 panic!("didn't get a block")
             };
@@ -158,11 +172,11 @@ mod tests {
             panic!("outer body not a block")
         };
 
-        let inner = tree.get(inner_body[0]).unwrap();
-        assert_eq!(inner, &ResolvedVariable(0));
+        let inner_x = tree.get(inner_body[0]).unwrap();
+        assert_eq!(inner_x, &ResolvedVariable(0));
 
-        let inner = tree.get(inner_body[1]).unwrap();
-        assert_eq!(inner, &ResolvedVariable(1));
+        let inner_y = tree.get(inner_body[1]).unwrap();
+        assert_eq!(inner_y, &ResolvedVariable(1));
 
         let outer_x = tree.get(outer_body[1]).unwrap();
         assert_eq!(outer_x, &ResolvedVariable(1));

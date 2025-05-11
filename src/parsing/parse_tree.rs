@@ -8,7 +8,7 @@ use super::{
 pub struct ParseTree {
     roots: Vec<NodeID>,
     pub(crate) nodes: Vec<Expr>,
-    pub(crate) meta: Vec<ExprMeta>
+    pub(crate) meta: Vec<ExprMeta>,
 }
 
 impl ParseTree {
@@ -16,7 +16,7 @@ impl ParseTree {
         Self {
             roots: vec![],
             nodes: vec![],
-            meta: vec![]
+            meta: vec![],
         }
     }
 
@@ -49,9 +49,10 @@ impl ParseTree {
             Expr::Tuple(items) => visitor.visit_tuple(items.clone(), context, self),
             Expr::Block(_exprs) => todo!(),
             Expr::Func(name, params, body) => {
-                visitor.visit_func(name, *params, *body, context, self)
+                visitor.visit_func(name, params, *body, context, self)
             }
             Expr::ResolvedVariable(_id) => todo!(),
+            Expr::Parameter(_id) => todo!(),
         }
     }
 

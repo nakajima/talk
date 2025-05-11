@@ -20,9 +20,10 @@ pub enum Expr {
     Block(Vec<NodeID>),
     Func(
         Option<Token>,
-        NodeID, /* params tuple */
+        Vec<NodeID>, /* params tuple */
         NodeID, /* body */
     ),
+    Parameter(&'static str),
     Variable(&'static str),
     ResolvedVariable(VarDepth),
 }

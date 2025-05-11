@@ -130,8 +130,8 @@ impl Parser {
 
         match self
             .previous
-            .expect("got into #literal without having a token").kind
-            
+            .expect("got into #literal without having a token")
+            .kind
         {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val)),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val)),
@@ -150,7 +150,7 @@ impl Parser {
                 unreachable!()
             };
 
-            params.push(self.add_expr(Variable(name))?);
+            params.push(self.add_expr(Parameter(name))?);
 
             if self.did_match(TokenKind::Comma)? {
                 continue;
@@ -159,13 +159,11 @@ impl Parser {
             break;
         }
 
-        let params_id = self.add_expr(Tuple(params))?;
-
         self.consume(TokenKind::RightParen)?;
 
         let body = self.block()?;
 
-        self.add_expr(Expr::Func(name, params_id, body))
+        self.add_expr(Expr::Func(name, params, body))
     }
 
     pub(crate) fn block(&mut self) -> Result<NodeID, ParserError> {
@@ -413,10 +411,7 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Binary(2, TokenKind::Star, 3));
-        assert_eq!(
-            *parsed.get(2).unwrap(),
-            Expr::Binary(0, TokenKind::Plus, 1)
-        );
+        assert_eq!(*parsed.get(2).unwrap(), Expr::Binary(0, TokenKind::Plus, 1));
     }
 
     #[test]
@@ -431,10 +426,7 @@ mod tests {
         let expr = parsed.get(tup[0]).unwrap();
 
         assert_eq!(*expr, Expr::Binary(0, TokenKind::Plus, 1));
-        assert_eq!(
-            *parsed.get(2).unwrap(),
-            Expr::Binary(0, TokenKind::Plus, 1)
-        );
+        assert_eq!(*parsed.get(2).unwrap(), Expr::Binary(0, TokenKind::Plus, 1));
     }
 
     #[test]
@@ -489,9 +481,8 @@ mod tests {
         let parsed = parse("func() { }").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::Func(None, 0, 1));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::Tuple(vec![]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*expr, Expr::Func(None, vec![], 0));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
 
     #[test]
@@ -507,12 +498,11 @@ mod tests {
                     start: 6,
                     end: 10,
                 }),
-                0,
-                1
+                vec![],
+                0
             )
         );
-        assert_eq!(*parsed.get(0).unwrap(), Expr::Tuple(vec![]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
 
     #[test]
@@ -527,12 +517,12 @@ mod tests {
                     start: 6,
                     end: 10,
                 }),
-                0,
-                1
+                vec![],
+                0
             )
         );
 
-        assert_eq!(*parsed.get(1).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
             Expr::Func(
@@ -541,11 +531,11 @@ mod tests {
                     start: 22,
                     end: 26,
                 }),
-                3,
-                4
+                vec![],
+                2
             )
         );
-        assert_eq!(*parsed.get(4).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
     }
 
     #[test]
@@ -561,11 +551,9 @@ mod tests {
                     start: 6,
                     end: 10,
                 }),
-                2,
-                3
+                vec![0, 1],
+                2
             )
         );
-
-        assert_eq!(*parsed.get(2).unwrap(), Tuple(vec![0, 1]));
     }
 }

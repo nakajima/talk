@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{
-    expr::Expr,
-    parse_tree::ParseTree,
-    parser::NodeID,
-};
+use crate::{expr::Expr, parse_tree::ParseTree, parser::NodeID, token::Token};
 
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct TypeVarID(u32);
@@ -18,9 +14,9 @@ pub enum Constraint {
 pub enum Ty {
     Int,
     Float,
-    Func(NodeID /* params */, NodeID /* returning */),
+    Func(Vec<NodeID> /* params */, NodeID /* returning */),
     TypeVar(TypeVarID),
-    Tuple(Vec<usize>),
+    Tuple(Vec<NodeID>),
 }
 
 pub struct TypeChecker {
@@ -28,12 +24,13 @@ pub struct TypeChecker {
     pub environment: Option<Environment>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Environment {
     pub types: HashMap<NodeID, Ty>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
-    pub type_stack: Vec<Ty>
+    pub type_stack: Vec<Ty>,
+    pub type_counter_stack: Vec<u8>,
 }
 
 impl Environment {
@@ -42,10 +39,12 @@ impl Environment {
             types: HashMap::new(),
             type_var_id: TypeVarID(0),
             constraints: vec![],
-            type_stack: vec![]
+            type_stack: vec![],
+            type_counter_stack: vec![],
         }
     }
 
+    #[allow(dead_code)]
     fn new_type_variable(&mut self) -> Ty {
         self.type_var_id = TypeVarID(self.type_var_id.0 + 1);
         Ty::TypeVar(self.type_var_id.clone())
@@ -70,28 +69,76 @@ impl TypeChecker {
         self.environment = Some(env);
     }
 
-    pub fn infer_node(&self, id: NodeID, env: &mut Environment) {
-        match &self.parse_tree.get(id).unwrap(){
+    pub fn infer_node(&self, id: NodeID, env: &mut Environment) -> Ty {
+        match &self.parse_tree.get(id).unwrap() {
             Expr::LiteralInt(_) => {
                 env.types.insert(id, Ty::Int);
+                Ty::Int
             }
             Expr::LiteralFloat(_) => {
                 env.types.insert(id, Ty::Float);
+                Ty::Float
             }
             Expr::Func(name, params, body) => {
-                self.infer_node(*params, env);
+                self.start_func(*name, params, *body, env);
                 self.infer_node(*body, env);
-                env.types.insert(id, Ty::Func(*params, *body));
+                env.types.insert(id, Ty::Func(params.clone(), *body));
+                Ty::Func(params.clone(), *body)
             }
-            Expr::ResolvedVariable(_) => todo!("ResolvedVariable"),
+            Expr::ResolvedVariable(depth) => {
+                let ty = &env.type_stack[env.type_stack.len() - 1 - *depth as usize];
+                env.types.insert(id, ty.clone());
+                ty.clone()
+            }
+            Expr::Parameter(_) => todo!(
+                "unresolved parameter: {:?}",
+                self.parse_tree.get(id).unwrap()
+            ),
             Expr::Variable(_) => todo!(
                 "unresolved variable: {:?}",
                 self.parse_tree.get(id).unwrap()
             ),
-            _ => todo!(
-                "not handling this yet: {:?}",
-                &self.parse_tree.get(id).unwrap()
-            ),
+            Expr::Tuple(items) => Ty::Tuple(items.clone()),
+            Expr::Unary(_token_kind, _) => todo!(),
+            Expr::Binary(_, _token_kind, _) => todo!(),
+            Expr::Block(items) => {
+                for item in items {
+                    self.infer_node(*item, env);
+                }
+
+                let return_ty = if let Some(last_id) = items.last() {
+                    env.types.get(last_id).unwrap().clone()
+                } else {
+                    Ty::Tuple(vec![])
+                };
+
+                env.types.insert(id, return_ty.clone());
+                return_ty
+            }
+        }
+    }
+
+    pub fn start_func(
+        &self,
+        name: Option<Token>,
+        param_ids: &Vec<NodeID>,
+        body: NodeID,
+        env: &mut Environment,
+    ) {
+        let mut type_counter = param_ids.len() as u8;
+
+        if name.is_some() {
+            type_counter += 1;
+            let name_type = Ty::Func(param_ids.clone(), body);
+            env.type_stack.push(name_type);
+        }
+
+        env.type_counter_stack.push(type_counter);
+
+        for param_id in param_ids {
+            let param_type = self.infer_node(*param_id, env);
+            env.types.insert(*param_id, param_type.clone());
+            env.type_stack.push(param_type);
         }
     }
 
@@ -106,7 +153,11 @@ impl TypeChecker {
 
 #[cfg(test)]
 mod tests {
-    use crate::{name_resolver::NameResolver, parser::parse, type_checker::Ty};
+    use crate::{
+        name_resolver::NameResolver,
+        parser::parse,
+        type_checker::{Ty, TypeVarID},
+    };
 
     use super::TypeChecker;
 
@@ -144,12 +195,11 @@ mod tests {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
-        let params_type = checker.type_for(params);
+        let param_type = checker.type_for(params[0]);
         let return_type = checker.type_for(returning);
 
-        assert_eq!(return_type, params_type);
-
-        // assert_eq!(params_types[0], Ty::TypeVar(1));
+        assert_eq!(return_type, param_type);
+        assert_eq!(return_type.unwrap(), Ty::TypeVar(TypeVarID(0)));
         // assert_eq!(return_type, Ty::Float);
     }
 }

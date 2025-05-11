@@ -80,21 +80,14 @@ impl Visitor<String, usize> for DebugPrinter {
     fn visit_func(
         &self,
         name: &Option<talk_rs::token::Token>,
-        params: NodeID,
+        params: &Vec<NodeID>,
         body: NodeID,
         context: &usize,
         parse_tree: &ParseTree,
     ) -> String {
         format!(
-            "{}\n{}\n{}",
+            "{}\n{}",
             indent(&format!("func {:?}", name), context),
-            indent(
-                &format!(
-                    "{:?}",
-                    parse_tree.accept(parse_tree.get(params).unwrap(), self, context)
-                ),
-                &(context + 1)
-            ),
             indent(
                 &format!(
                     "{:?}",
