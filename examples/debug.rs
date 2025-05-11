@@ -80,7 +80,7 @@ impl Visitor<String, usize> for DebugPrinter {
     fn visit_func(
         &self,
         name: &Option<talk_rs::token::Token>,
-        params: &Vec<NodeID>,
+        _params: &Vec<NodeID>,
         body: NodeID,
         context: &usize,
         parse_tree: &ParseTree,

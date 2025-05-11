@@ -82,6 +82,7 @@ impl TypeChecker {
             Expr::Func(name, params, body) => {
                 self.start_func(*name, params, *body, env);
                 self.infer_node(*body, env);
+                self.end_func(env);
                 env.types.insert(id, Ty::Func(params.clone(), *body));
                 Ty::Func(params.clone(), *body)
             }
@@ -136,9 +137,20 @@ impl TypeChecker {
         env.type_counter_stack.push(type_counter);
 
         for param_id in param_ids {
-            let param_type = self.infer_node(*param_id, env);
-            env.types.insert(*param_id, param_type.clone());
-            env.type_stack.push(param_type);
+            let param_var = env.new_type_variable();
+            env.types.insert(*param_id, param_var.clone());
+            env.type_stack.push(param_var);
+        }
+    }
+
+    fn end_func(&self, env: &mut Environment) {
+        let depth = env
+            .type_counter_stack
+            .pop()
+            .expect("trying to pop empty type counter?");
+
+        for _ in 0..depth {
+            env.type_stack.pop();
         }
     }
 
@@ -199,7 +211,7 @@ mod tests {
         let return_type = checker.type_for(returning);
 
         assert_eq!(return_type, param_type);
-        assert_eq!(return_type.unwrap(), Ty::TypeVar(TypeVarID(0)));
+        assert_eq!(return_type.unwrap(), Ty::TypeVar(TypeVarID(1)));
         // assert_eq!(return_type, Ty::Float);
     }
 }
