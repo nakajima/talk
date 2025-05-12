@@ -47,15 +47,14 @@ impl NameResolver {
                     Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
                 }
                 Func(name, params, body) => {
-                    let mut locals_count = params.len();
-
                     // If it's a named function, we want the name so we can recur.
                     if let Some(name) = name {
                         if let TokenKind::Identifier(name) = name.kind {
-                            locals_count += 1;
                             names_stack.push(name);
                         }
                     }
+
+                    let locals_count = params.len();
 
                     for param in params {
                         let Parameter(name) = parse_tree.get(*param).unwrap() else {

@@ -126,13 +126,12 @@ impl TypeChecker {
         body: NodeID,
         env: &mut Environment,
     ) {
-        let mut type_counter = param_ids.len() as u8;
-
         if name.is_some() {
-            type_counter += 1;
             let name_type = Ty::Func(param_ids.clone(), body);
             env.type_stack.push(name_type);
         }
+
+        let type_counter = param_ids.len() as u8;
 
         env.type_counter_stack.push(type_counter);
 
@@ -200,7 +199,7 @@ mod tests {
 
     #[test]
     fn checks_a_func() {
-        let checker = check("func sup(name) { name }");
+        let checker = check("func sup(name) { name }\nsup");
         let root_id = checker.parse_tree.root_ids()[0];
 
         let Some(Ty::Func(params, returning)) = checker.type_for(root_id) else {
@@ -213,5 +212,10 @@ mod tests {
         assert_eq!(return_type, param_type);
         assert_eq!(return_type.unwrap(), Ty::TypeVar(TypeVarID(1)));
         // assert_eq!(return_type, Ty::Float);
+
+        assert_eq!(
+            checker.type_for(checker.parse_tree.root_ids()[1]),
+            Some(Ty::Func(params, returning))
+        );
     }
 }
