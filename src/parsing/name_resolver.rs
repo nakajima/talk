@@ -237,8 +237,6 @@ mod tests {
             panic!("didnt get assignment")
         };
 
-        println!("{:?}", tree.nodes);
-
         assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123"));
 
         assert_eq!(*tree.get(tree.root_ids()[2]).unwrap(), ResolvedVariable(1));
