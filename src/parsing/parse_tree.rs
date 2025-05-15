@@ -53,6 +53,7 @@ impl ParseTree {
             }
             Expr::ResolvedVariable(_id) => todo!(),
             Expr::Parameter(_id) => todo!(),
+            _ => todo!() 
         }
     }
 

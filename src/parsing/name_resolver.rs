@@ -19,7 +19,13 @@ impl NameResolver {
 
     pub fn resolve(&mut self, mut parse_tree: ParseTree) -> ParseTree {
         let ids: Vec<NodeID> = parse_tree.root_ids();
-        Self::resolve_nodes(ids, &mut parse_tree, &mut self.names_stack);
+        let mut name_counter_stack: Vec<u8> = vec![0];
+        Self::resolve_nodes(
+            ids,
+            &mut parse_tree,
+            &mut self.names_stack,
+            &mut name_counter_stack,
+        );
         parse_tree
     }
 
@@ -27,6 +33,7 @@ impl NameResolver {
         node_ids: Vec<NodeID>,
         parse_tree: &mut ParseTree,
         names_stack: &mut Vec<&'static str>,
+        name_counter_stack: &mut Vec<u8>,
     ) {
         for node_id in node_ids {
             let node = parse_tree.get(node_id).unwrap();
@@ -34,27 +41,63 @@ impl NameResolver {
             match node {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
+                Let(name) => {
+                    names_stack.push(name);
+
+                    if let Some(counter) = name_counter_stack.last_mut() {
+                        *counter += 1;
+                    }
+               }
+                Assignment(lhs, rhs) => {
+                    Self::resolve_nodes(
+                        vec![*lhs, *rhs],
+                        parse_tree,
+                        names_stack,
+                        name_counter_stack,
+                    );
+                }
                 Unary(_, expr_id) => {
-                    Self::resolve_nodes(vec![*expr_id], parse_tree, names_stack);
+                    Self::resolve_nodes(
+                        vec![*expr_id],
+                        parse_tree,
+                        names_stack,
+                        name_counter_stack,
+                    );
                 }
                 Binary(lhs, _, rhs) => {
-                    Self::resolve_nodes(vec![*lhs, *rhs], parse_tree, names_stack);
+                    Self::resolve_nodes(
+                        vec![*lhs, *rhs],
+                        parse_tree,
+                        names_stack,
+                        name_counter_stack,
+                    );
                 }
                 Tuple(items) => {
-                    Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
+                    Self::resolve_nodes(
+                        items.to_vec(),
+                        parse_tree,
+                        names_stack,
+                        name_counter_stack,
+                    );
                 }
                 Block(items) => {
-                    Self::resolve_nodes(items.to_vec(), parse_tree, names_stack);
+                    Self::resolve_nodes(
+                        items.to_vec(),
+                        parse_tree,
+                        names_stack,
+                        name_counter_stack,
+                    );
                 }
                 Func(name, params, body) => {
                     // If it's a named function, we want the name so we can recur.
                     if let Some(name) = name {
                         if let TokenKind::Identifier(name) = name.kind {
                             names_stack.push(name);
+                            *name_counter_stack.last_mut().unwrap() += 1;
                         }
                     }
 
-                    let locals_count = params.len();
+                    name_counter_stack.push(params.len() as u8);
 
                     for param in params {
                         let Parameter(name) = parse_tree.get(*param).unwrap() else {
@@ -65,11 +108,9 @@ impl NameResolver {
 
                     let mut to_resolve = params.clone();
                     to_resolve.push(*body);
-                    Self::resolve_nodes(to_resolve, parse_tree, names_stack);
+                    Self::resolve_nodes(to_resolve, parse_tree, names_stack, name_counter_stack);
 
-                    // Self::resolve_nodes(vec![*body], parse_tree, names_stack);
-
-                    for _ in 0..locals_count {
+                    for _ in 0..name_counter_stack.pop().unwrap() {
                         names_stack.pop();
                     }
                 }
@@ -100,7 +141,7 @@ impl NameResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::{expr::Expr, parser::parse};
 
     fn resolve(code: &'static str) -> ParseTree {
         let tree = parse(code).expect("parse failed");
@@ -179,6 +220,31 @@ mod tests {
 
         let outer_x = tree.get(outer_body[1]).unwrap();
         assert_eq!(outer_x, &ResolvedVariable(1));
+    }
+
+    #[test]
+    fn resolves_let_expr() {
+        let tree = resolve(
+            "
+        let x = 123
+        let y = 345
+        x
+        y
+        ",
+        );
+
+        let Expr::Assignment(let_expr, int) = tree.get(tree.root_ids()[0]).unwrap() else {
+            panic!("didnt get assignment")
+        };
+
+        println!("{:?}", tree.nodes);
+
+        assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123"));
+
+        assert_eq!(*tree.get(tree.root_ids()[2]).unwrap(), ResolvedVariable(1));
+        assert_eq!(*tree.get(*let_expr).unwrap(), ResolvedVariable(1));
+
+        assert_eq!(*tree.get(tree.root_ids()[3]).unwrap(), ResolvedVariable(0));
     }
 }
 

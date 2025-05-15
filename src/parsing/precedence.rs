@@ -144,6 +144,12 @@ impl Precedence {
                 precedence: Precedence::None,
             },
 
+            TokenKind::Let => ParseHandler {
+                prefix: Some(Parser::let_expr),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
             TokenKind::Newline => ParseHandler::NONE,
             TokenKind::Dot => ParseHandler::NONE,
             TokenKind::Equals => ParseHandler::NONE,

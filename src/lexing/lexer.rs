@@ -128,6 +128,7 @@ impl Lexer {
 
         match &self.code[start_idx..=end_idx] {
             "func" => Func,
+            "let" => Let,
             _ => Identifier(&self.code[start_idx..=end_idx]),
         }
     }

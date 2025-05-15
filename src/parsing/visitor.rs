@@ -51,7 +51,7 @@ pub trait Visitor<Returning, Context> {
     fn visit_func(
         &self,
         name: &Option<Token>,
-        params: &Vec<NodeID>,
+        params: &[NodeID],
         body: NodeID,
         context: &Context,
         parse_tree: &ParseTree,

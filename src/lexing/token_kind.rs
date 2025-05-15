@@ -37,6 +37,7 @@ pub enum TokenKind {
     Float(&'static str),
     Identifier(&'static str),
     Func,
+    Let,
     EOF,
 }
 

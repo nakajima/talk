@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use crate::{expr::Expr, parse_tree::ParseTree, parser::NodeID, token::Token};
 
-#[derive(Clone, Default, PartialEq, Debug)]
+use super::constraint_solver::ConstraintSolver;
+
+#[derive(Clone, Copy, Default, PartialEq, Debug, Eq, Hash)]
 pub struct TypeVarID(u32);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Constraint {
     Equality(NodeID, Ty, Ty),
 }
@@ -44,7 +46,6 @@ impl Environment {
         }
     }
 
-    #[allow(dead_code)]
     fn new_type_variable(&mut self) -> Ty {
         self.type_var_id = TypeVarID(self.type_var_id.0 + 1);
         Ty::TypeVar(self.type_var_id.clone())
@@ -59,6 +60,14 @@ impl TypeChecker {
         }
     }
 
+    pub fn define(&mut self, node_id: NodeID, ty: Ty) {
+        self.environment
+            .as_mut()
+            .expect("type inference not performed")
+            .types
+            .insert(node_id, ty);
+    }
+
     pub fn infer(&mut self) {
         let mut env = Environment::new();
 
@@ -67,6 +76,12 @@ impl TypeChecker {
         }
 
         self.environment = Some(env);
+    }
+
+    pub fn resolve(&mut self) {
+        let mut constraints = self.environment.as_ref().unwrap().constraints.clone();
+        let mut resolver = ConstraintSolver::new(self, &mut constraints);
+        resolver.solve();
     }
 
     pub fn infer_node(&self, id: NodeID, env: &mut Environment) -> Ty {
@@ -78,6 +93,21 @@ impl TypeChecker {
             Expr::LiteralFloat(_) => {
                 env.types.insert(id, Ty::Float);
                 Ty::Float
+            }
+            Expr::Assignment(lhs, rhs) => {
+                let lhs_ty = self.infer_node(*lhs, env);
+                let rhs_ty = self.infer_node(*rhs, env);
+
+                env.constraints
+                    .push(Constraint::Equality(*lhs, lhs_ty.clone(), rhs_ty));
+
+                lhs_ty
+            }
+            Expr::Let(name) => {
+                let ty = env.new_type_variable();
+                env.types.insert(id, ty.clone());
+                env.type_stack.push(ty.clone());
+                ty
             }
             Expr::Func(name, params, body) => {
                 self.start_func(*name, params, *body, env);
@@ -178,6 +208,7 @@ mod tests {
         let resolved = resolver.resolve(parsed);
         let mut checker = TypeChecker::new(resolved);
         checker.infer();
+        checker.resolve();
         checker
     }
 
@@ -217,5 +248,12 @@ mod tests {
             checker.type_for(checker.parse_tree.root_ids()[1]),
             Some(Ty::Func(params, returning))
         );
+    }
+
+    #[test]
+    fn checks_a_let_assignment() {
+        let checker = check("let count = 123\ncount");
+        let root_id = checker.parse_tree.root_ids()[1];
+        assert_eq!(checker.type_for(root_id), Some(Ty::Int));
     }
 }

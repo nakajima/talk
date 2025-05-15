@@ -26,5 +26,7 @@ pub enum Expr {
     Parameter(&'static str),
     Variable(&'static str),
     ResolvedVariable(VarDepth),
+    Assignment(NodeID /* LHS */, NodeID /* RHS */),
+    Let(&'static str),
 }
 

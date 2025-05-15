@@ -125,6 +125,31 @@ impl Parser {
         self.add_expr(Tuple(items))
     }
 
+    pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
+        // Consume the `let` keyword
+        self.advance();
+
+        let Some(ident) = self.try_identifier() else {
+            return Err(ParserError::UnexpectedToken(
+                vec![TokenKind::Identifier("_")],
+                self.current.unwrap().kind,
+            ));
+        };
+
+        let TokenKind::Identifier(name) = ident.kind else {
+            unreachable!()
+        };
+
+        let let_expr = self.add_expr(Let(name));
+
+        if self.did_match(TokenKind::Equals)? {
+            let rhs = self.parse_with_precedence(Precedence::None)?;
+            self.add_expr(Expr::Assignment(let_expr?, rhs))
+        } else {
+            let_expr
+        }
+    }
+
     pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
         self.advance();
 
@@ -555,5 +580,12 @@ mod tests {
                 2
             )
         );
+    }
+
+    #[test]
+    fn parses_let() {
+        let parsed = parse("let fizz").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(*expr, Expr::Let("fizz"));
     }
 }
