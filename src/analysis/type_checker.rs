@@ -48,7 +48,7 @@ impl Environment {
 
     fn new_type_variable(&mut self) -> Ty {
         self.type_var_id = TypeVarID(self.type_var_id.0 + 1);
-        Ty::TypeVar(self.type_var_id.clone())
+        Ty::TypeVar(self.type_var_id)
     }
 }
 
