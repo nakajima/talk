@@ -47,7 +47,7 @@ impl NameResolver {
                     if let Some(counter) = name_counter_stack.last_mut() {
                         *counter += 1;
                     }
-               }
+                }
                 Assignment(lhs, rhs) => {
                     Self::resolve_nodes(
                         vec![*lhs, *rhs],
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123"));
 
         assert_eq!(*tree.get(tree.root_ids()[2]).unwrap(), ResolvedVariable(1));
-        assert_eq!(*tree.get(*let_expr).unwrap(), ResolvedVariable(1));
+        assert_eq!(*tree.get(*let_expr).unwrap(), Let("x"));
 
         assert_eq!(*tree.get(tree.root_ids()[3]).unwrap(), ResolvedVariable(0));
     }

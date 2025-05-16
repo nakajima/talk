@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use crate::{expr::Expr, parse_tree::ParseTree, parser::NodeID, token::Token};
+use crate::{expr::Expr, parse_tree::ParseTree, parser::NodeID};
 
-use super::constraint_solver::ConstraintSolver;
+use super::constraint_solver::{ConstraintError, ConstraintSolver};
+
+pub type FuncParams = Vec<Ty>;
+pub type FuncReturning = Box<Ty>;
 
 #[derive(Clone, Copy, Default, PartialEq, Debug, Eq, Hash)]
 pub struct TypeVarID(u32);
@@ -16,7 +19,10 @@ pub enum Constraint {
 pub enum Ty {
     Int,
     Float,
-    Func(Vec<NodeID> /* params */, NodeID /* returning */),
+    Func(
+        FuncParams,    /* params */
+        FuncReturning, /* returning */
+    ),
     TypeVar(TypeVarID),
     Tuple(Vec<NodeID>),
 }
@@ -43,6 +49,18 @@ impl Environment {
             constraints: vec![],
             type_stack: vec![],
             type_counter_stack: vec![],
+        }
+    }
+
+    pub fn start_scope(&mut self) {
+        self.type_counter_stack.push(self.type_stack.len() as u8);
+    }
+
+    fn end_scope(&mut self) {
+        let previous = self.type_counter_stack.pop().expect("no scope to end");
+
+        while self.type_stack.len() as u8 > previous {
+            self.type_stack.pop();
         }
     }
 
@@ -78,13 +96,15 @@ impl TypeChecker {
         self.environment = Some(env);
     }
 
-    pub fn resolve(&mut self) {
+    pub fn resolve(&mut self) -> Result<(), ConstraintError> {
         let mut constraints = self.environment.as_ref().unwrap().constraints.clone();
         let mut resolver = ConstraintSolver::new(self, &mut constraints);
-        resolver.solve();
+        resolver.solve()
     }
 
     pub fn infer_node(&self, id: NodeID, env: &mut Environment) -> Ty {
+        println!("inferring {:?}", self.parse_tree.get(id));
+
         match &self.parse_tree.get(id).unwrap() {
             Expr::LiteralInt(_) => {
                 env.types.insert(id, Ty::Int);
@@ -103,18 +123,41 @@ impl TypeChecker {
 
                 lhs_ty
             }
-            Expr::Let(name) => {
+            Expr::Let(_name) => {
                 let ty = env.new_type_variable();
                 env.types.insert(id, ty.clone());
                 env.type_stack.push(ty.clone());
                 ty
             }
             Expr::Func(name, params, body) => {
-                self.start_func(*name, params, *body, env);
-                self.infer_node(*body, env);
-                self.end_func(env);
-                env.types.insert(id, Ty::Func(params.clone(), *body));
-                Ty::Func(params.clone(), *body)
+                let param_vars: Vec<Ty> = params.iter().map(|_| env.new_type_variable()).collect();
+                let body_var = env.new_type_variable();
+
+                env.start_scope();
+
+                for (param, ty) in params.iter().zip(&param_vars) {
+                    env.types.insert(*param, ty.clone());
+                    env.type_stack.push(ty.clone());
+
+                    let param_ty = self.infer_node(*param, env);
+                    env.constraints
+                        .push(Constraint::Equality(*param, ty.clone(), param_ty));
+                }
+
+                let body_ty = self.infer_node(*body, env);
+                env.constraints
+                    .push(Constraint::Equality(*body, body_var.clone(), body_ty));
+
+                env.end_scope();
+
+                let func_ty = Ty::Func(param_vars.clone(), FuncReturning::new(body_var.clone()));
+
+                if name.is_some() {
+                    env.type_stack.push(func_ty.clone());
+                }
+
+                env.types.insert(id, func_ty.clone());
+                func_ty
             }
             Expr::ResolvedVariable(depth) => {
                 let ty = &env.type_stack[env.type_stack.len() - 1 - *depth as usize];
@@ -149,40 +192,6 @@ impl TypeChecker {
         }
     }
 
-    pub fn start_func(
-        &self,
-        name: Option<Token>,
-        param_ids: &Vec<NodeID>,
-        body: NodeID,
-        env: &mut Environment,
-    ) {
-        if name.is_some() {
-            let name_type = Ty::Func(param_ids.clone(), body);
-            env.type_stack.push(name_type);
-        }
-
-        let type_counter = param_ids.len() as u8;
-
-        env.type_counter_stack.push(type_counter);
-
-        for param_id in param_ids {
-            let param_var = env.new_type_variable();
-            env.types.insert(*param_id, param_var.clone());
-            env.type_stack.push(param_var);
-        }
-    }
-
-    fn end_func(&self, env: &mut Environment) {
-        let depth = env
-            .type_counter_stack
-            .pop()
-            .expect("trying to pop empty type counter?");
-
-        for _ in 0..depth {
-            env.type_stack.pop();
-        }
-    }
-
     pub fn type_for(&self, node_id: NodeID) -> Option<Ty> {
         let Some(env) = &self.environment else {
             panic!("no inference performed");
@@ -208,7 +217,7 @@ mod tests {
         let resolved = resolver.resolve(parsed);
         let mut checker = TypeChecker::new(resolved);
         checker.infer();
-        checker.resolve();
+        checker.resolve().expect("did not resolve");
         checker
     }
 
@@ -233,20 +242,18 @@ mod tests {
         let checker = check("func sup(name) { name }\nsup");
         let root_id = checker.parse_tree.root_ids()[0];
 
-        let Some(Ty::Func(params, returning)) = checker.type_for(root_id) else {
+        let Some(Ty::Func(params, return_type)) = checker.type_for(root_id) else {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
-        let param_type = checker.type_for(params[0]);
-        let return_type = checker.type_for(returning);
+        let param_type = params[0].clone();
 
-        assert_eq!(return_type, param_type);
-        assert_eq!(return_type.unwrap(), Ty::TypeVar(TypeVarID(1)));
-        // assert_eq!(return_type, Ty::Float);
+        assert_eq!(return_type, param_type.into());
+        assert_eq!(return_type, Ty::TypeVar(TypeVarID(1)).into());
 
         assert_eq!(
             checker.type_for(checker.parse_tree.root_ids()[1]),
-            Some(Ty::Func(params, returning))
+            Some(Ty::Func(params, return_type))
         );
     }
 

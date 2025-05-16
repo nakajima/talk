@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::type_checker::{Constraint, Environment, Ty, TypeChecker, TypeVarID};
 
+#[derive(Debug)]
 pub enum ConstraintError {
     TypeConflict(Ty, Ty),
     OccursConflict,
@@ -59,7 +60,16 @@ impl<'a> ConstraintSolver<'a> {
         match ty {
             Ty::Int => ty,
             Ty::Float => ty,
-            Ty::Func(_items, _) => todo!(),
+            Ty::Func(params, returning) => {
+                let applied_params = params
+                    .iter()
+                    .map(|param| Self::apply(param.clone(), substitutions))
+                    .collect();
+
+                let applied_return = Self::apply(*returning, substitutions);
+
+                Ty::Func(applied_params, applied_return.into())
+            }
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(&type_var) {
                     Self::apply(ty.clone(), substitutions)
@@ -102,12 +112,12 @@ impl<'a> ConstraintSolver<'a> {
         let ty = Self::apply(ty.clone(), substitutions);
         match ty {
             Ty::TypeVar(ref tv) => tv == v,
-            Ty::Func(param_ids, ret_id) => {
+            Ty::Func(params, returning) => {
                 // check each parameter and the return type
-                param_ids
+                params
                     .iter()
-                    .any(|&nid| Self::occurs_check(v, &env.types[&nid], substitutions, env))
-                    || Self::occurs_check(v, &env.types[&ret_id], substitutions, env)
+                    .any(|param| Self::occurs_check(v, &param, substitutions, env))
+                    || Self::occurs_check(v, &returning, substitutions, env)
             }
 
             Ty::Tuple(elem_ids) => elem_ids
