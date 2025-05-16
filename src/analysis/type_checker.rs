@@ -27,11 +27,6 @@ pub enum Ty {
     Tuple(Vec<NodeID>),
 }
 
-pub struct TypeChecker {
-    pub parse_tree: ParseTree,
-    pub environment: Option<Environment>,
-}
-
 #[derive(Default, Debug)]
 pub struct Environment {
     pub types: HashMap<NodeID, Ty>,
@@ -70,6 +65,12 @@ impl Environment {
     }
 }
 
+#[derive(Debug)]
+pub struct TypeChecker {
+    pub parse_tree: ParseTree,
+    pub environment: Option<Environment>,
+}
+
 impl TypeChecker {
     pub fn new(parse_tree: ParseTree) -> Self {
         Self {
@@ -103,9 +104,38 @@ impl TypeChecker {
     }
 
     pub fn infer_node(&self, id: NodeID, env: &mut Environment) -> Ty {
-        println!("inferring {:?}", self.parse_tree.get(id));
+        // println!("inferring {:?}", self.parse_tree.get(id));
 
         match &self.parse_tree.get(id).unwrap() {
+            Expr::Call(callee, args) => {
+                // 1) infer the callee
+                let callee_ty = self.infer_node(*callee, env);
+
+                // 2) make one fresh var per arg + one for the return
+                let param_vars: Vec<Ty> = args.iter().map(|_| env.new_type_variable()).collect();
+                let ret_var = env.new_type_variable();
+
+                // 3) record that the callee's type = Func(param_vars, ret_var)
+                env.constraints.push(Constraint::Equality(
+                    *callee,
+                    callee_ty.clone(),
+                    Ty::Func(param_vars.clone(), Box::new(ret_var.clone())),
+                ));
+
+                // 4) for each argument, infer it & constrain against its var
+                for (arg_id, param_ty) in args.iter().zip(&param_vars) {
+                    let actual = self.infer_node(*arg_id, env);
+                    env.constraints
+                        .push(Constraint::Equality(*arg_id, param_ty.clone(), actual));
+                }
+
+                println!("call retvar: {:?}", ret_var);
+
+                env.types.insert(id, ret_var.clone());
+
+                // 5) the call‐expression as a whole has the return‐var as its type
+                ret_var
+            }
             Expr::LiteralInt(_) => {
                 env.types.insert(id, Ty::Int);
                 Ty::Int
@@ -261,6 +291,19 @@ mod tests {
             checker.type_for(checker.parse_tree.root_ids()[1]),
             Some(Ty::Func(params, return_type))
         );
+    }
+
+    #[test]
+    fn checks_call() {
+        let checker = check(
+            "
+        func fizz(c) { c }
+        fizz(123)
+        ",
+        );
+
+        let root_id = checker.parse_tree.root_ids()[1];
+        assert_eq!(checker.type_for(root_id), Some(Ty::Int));
     }
 
     #[test]

@@ -202,15 +202,44 @@ impl Parser {
         self.add_expr(Expr::Block(items))
     }
 
-    pub(crate) fn variable(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
-        if let Some(token) = self.current {
-            if let TokenKind::Identifier(name) = token.kind {
-                self.consume(TokenKind::Identifier(name))?;
-                return self.add_expr(Variable(name));
-            }
+    pub(crate) fn variable(&mut self, can_assign: bool) -> Result<NodeID, ParserError> {
+        let Some(token) = self.current else {
+            unreachable!()
+        };
+        let TokenKind::Identifier(name) = token.kind else {
+            unreachable!()
+        };
+
+        self.consume(TokenKind::Identifier(name))?;
+        let variable = self.add_expr(Variable(name))?;
+
+        self.skip_newlines();
+
+        if self.did_match(TokenKind::LeftParen)? {
+            self.skip_newlines();
+            self.call(variable, can_assign)
+        } else {
+            Ok(variable)
+        }
+    }
+
+    pub(crate) fn call(
+        &mut self,
+        callee: NodeID,
+        _can_assign: bool,
+    ) -> Result<NodeID, ParserError> {
+        let mut args: Vec<NodeID> = vec![];
+
+        if !self.did_match(TokenKind::RightParen)? {
+            while {
+                args.push(self.parse_with_precedence(Precedence::Assignment)?);
+                self.did_match(TokenKind::Comma)?
+            } {}
+
+            self.consume(TokenKind::RightParen)?;
         }
 
-        unreachable!()
+        self.add_expr(Expr::Call(callee, args))
     }
 
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
@@ -580,6 +609,21 @@ mod tests {
                 2
             )
         );
+    }
+
+    #[test]
+    fn parses_call_no_args() {
+        let parsed = parse("fizz()").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        let Expr::Call(callee_id, args_ids) = expr else {
+            panic!("no call found")
+        };
+
+        let callee = parsed.get(*callee_id).unwrap();
+        let args_id: Vec<_> = args_ids.iter().map(|id| parsed.get(*id).unwrap()).collect();
+        assert_eq!(*callee, Expr::Variable("fizz"));
+        assert_eq!(args_id.len(), 0);
     }
 
     #[test]

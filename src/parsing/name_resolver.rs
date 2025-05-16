@@ -48,6 +48,12 @@ impl NameResolver {
                         *counter += 1;
                     }
                 }
+                Call(callee, args) => {
+                    let mut to_resolve = args.clone();
+                    to_resolve.push(*callee);
+
+                    Self::resolve_nodes(to_resolve, parse_tree, names_stack, name_counter_stack);
+                }
                 Assignment(lhs, rhs) => {
                     Self::resolve_nodes(
                         vec![*lhs, *rhs],

@@ -18,10 +18,11 @@ pub enum Expr {
     Binary(NodeID, TokenKind, NodeID),
     Tuple(Vec<NodeID>),
     Block(Vec<NodeID>),
+    Call(NodeID, Vec<NodeID>),
     Func(
         Option<Token>,
         Vec<NodeID>, /* params tuple */
-        NodeID, /* body */
+        NodeID,      /* body */
     ),
     Parameter(&'static str),
     Variable(&'static str),
@@ -29,4 +30,3 @@ pub enum Expr {
     Assignment(NodeID /* LHS */, NodeID /* RHS */),
     Let(&'static str),
 }
-

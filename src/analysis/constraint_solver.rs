@@ -98,7 +98,19 @@ impl<'a> ConstraintSolver<'a> {
                     Ok(())
                 }
             }
-            _ => todo!(),
+            (Ty::Func(lhs_params, lhs_returning), Ty::Func(rhs_params, rhs_returning))
+                if lhs_params.len() == rhs_params.len() =>
+            {
+                for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
+                    println!("Unifying {:?} and {:?}", lhs, rhs);
+                    Self::unify(lhs, rhs, substitutions, env)?;
+                }
+
+                Self::unify(&lhs_returning, &rhs_returning, substitutions, env)?;
+
+                Ok(())
+            }
+            _ => todo!("{:?} / {:?}", lhs, rhs),
         }
     }
 
