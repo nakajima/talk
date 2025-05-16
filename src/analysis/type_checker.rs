@@ -130,20 +130,26 @@ impl TypeChecker {
                 ty
             }
             Expr::Func(name, params, body) => {
-                let param_vars: Vec<Ty> = params.iter().map(|_| env.new_type_variable()).collect();
-                let body_var = env.new_type_variable();
-
                 env.start_scope();
 
-                for (param, ty) in params.iter().zip(&param_vars) {
-                    env.types.insert(*param, ty.clone());
-                    env.type_stack.push(ty.clone());
+                let param_vars: Vec<Ty> = params
+                    .iter()
+                    .map(|&param_id| {
+                        let var_ty = env.new_type_variable();
+                        env.types.insert(param_id, var_ty.clone());
+                        env.type_stack.push(var_ty.clone());
 
-                    let param_ty = self.infer_node(*param, env);
-                    env.constraints
-                        .push(Constraint::Equality(*param, ty.clone(), param_ty));
-                }
+                        let actual = self.infer_node(param_id, env);
+                        env.constraints.push(Constraint::Equality(
+                            param_id,
+                            var_ty.clone(),
+                            actual,
+                        ));
+                        var_ty
+                    })
+                    .collect();
 
+                let body_var = env.new_type_variable();
                 let body_ty = self.infer_node(*body, env);
                 env.constraints
                     .push(Constraint::Equality(*body, body_var.clone(), body_ty));
