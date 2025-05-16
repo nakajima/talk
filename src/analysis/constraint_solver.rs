@@ -23,6 +23,7 @@ impl<'a> ConstraintSolver<'a> {
 
     pub fn solve(&mut self) -> Result<(), ConstraintError> {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
+        log::info!("solving {:#?}", substitutions);
 
         while let Some(constraint) = self.constraints.pop() {
             match constraint {
@@ -77,7 +78,7 @@ impl<'a> ConstraintSolver<'a> {
                     ty
                 }
             }
-            Ty::Tuple(_items) => todo!(),
+            Ty::Void => todo!(),
         }
     }
 
@@ -102,7 +103,7 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_params.len() == rhs_params.len() =>
             {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    println!("Unifying {:?} and {:?}", lhs, rhs);
+                    log::debug!("Unifying {:?} and {:?}", lhs, rhs);
                     Self::unify(lhs, rhs, substitutions, env)?;
                 }
 
@@ -131,11 +132,6 @@ impl<'a> ConstraintSolver<'a> {
                     .any(|param| Self::occurs_check(v, &param, substitutions, env))
                     || Self::occurs_check(v, &returning, substitutions, env)
             }
-
-            Ty::Tuple(elem_ids) => elem_ids
-                .iter()
-                .any(|&nid| Self::occurs_check(v, &env.types[&nid], substitutions, env)),
-
             _ => false,
         }
     }

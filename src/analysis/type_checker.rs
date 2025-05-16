@@ -15,8 +15,12 @@ pub enum Constraint {
     Equality(NodeID, Ty, Ty),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum TypeError {}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Ty {
+    Void,
     Int,
     Float,
     Func(
@@ -24,7 +28,6 @@ pub enum Ty {
         FuncReturning, /* returning */
     ),
     TypeVar(TypeVarID),
-    Tuple(Vec<NodeID>),
 }
 
 #[derive(Default, Debug)]
@@ -87,14 +90,19 @@ impl TypeChecker {
             .insert(node_id, ty);
     }
 
-    pub fn infer(&mut self) {
+    pub fn infer(&mut self) -> Result<Vec<Ty>, TypeError> {
         let mut env = Environment::new();
 
-        for node in self.parse_tree.root_ids() {
-            self.infer_node(node, &mut env);
-        }
+        let typed_roots = self
+            .parse_tree
+            .root_ids()
+            .iter()
+            .map(|id| self.infer_node(*id, &mut env))
+            .collect::<Result<Vec<_>, _>>()?;
 
         self.environment = Some(env);
+
+        Ok(typed_roots)
     }
 
     pub fn resolve(&mut self) -> Result<(), ConstraintError> {
@@ -103,84 +111,70 @@ impl TypeChecker {
         resolver.solve()
     }
 
-    pub fn infer_node(&self, id: NodeID, env: &mut Environment) -> Ty {
-        // println!("inferring {:?}", self.parse_tree.get(id));
-
+    pub fn infer_node(&self, id: NodeID, env: &mut Environment) -> Result<Ty, TypeError> {
         match &self.parse_tree.get(id).unwrap() {
             Expr::Call(callee, args) => {
-                // 1) infer the callee
-                let callee_ty = self.infer_node(*callee, env);
-
-                // 2) make one fresh var per arg + one for the return
+                let callee_ty = self.infer_node(*callee, env)?;
                 let param_vars: Vec<Ty> = args.iter().map(|_| env.new_type_variable()).collect();
                 let ret_var = env.new_type_variable();
 
-                // 3) record that the callee's type = Func(param_vars, ret_var)
                 env.constraints.push(Constraint::Equality(
                     *callee,
                     callee_ty.clone(),
                     Ty::Func(param_vars.clone(), Box::new(ret_var.clone())),
                 ));
 
-                // 4) for each argument, infer it & constrain against its var
                 for (arg_id, param_ty) in args.iter().zip(&param_vars) {
-                    let actual = self.infer_node(*arg_id, env);
+                    let actual = self.infer_node(*arg_id, env)?;
                     env.constraints
                         .push(Constraint::Equality(*arg_id, param_ty.clone(), actual));
                 }
 
-                println!("call retvar: {:?}", ret_var);
-
                 env.types.insert(id, ret_var.clone());
 
-                // 5) the call‐expression as a whole has the return‐var as its type
-                ret_var
+                Ok(ret_var)
             }
             Expr::LiteralInt(_) => {
                 env.types.insert(id, Ty::Int);
-                Ty::Int
+                Ok(Ty::Int)
             }
             Expr::LiteralFloat(_) => {
                 env.types.insert(id, Ty::Float);
-                Ty::Float
+                Ok(Ty::Float)
             }
             Expr::Assignment(lhs, rhs) => {
-                let lhs_ty = self.infer_node(*lhs, env);
-                let rhs_ty = self.infer_node(*rhs, env);
+                let lhs_ty = self.infer_node(*lhs, env)?;
+                let rhs_ty = self.infer_node(*rhs, env)?;
 
                 env.constraints
                     .push(Constraint::Equality(*lhs, lhs_ty.clone(), rhs_ty));
 
-                lhs_ty
+                Ok(lhs_ty)
             }
             Expr::Let(_name) => {
                 let ty = env.new_type_variable();
                 env.types.insert(id, ty.clone());
                 env.type_stack.push(ty.clone());
-                ty
+                Ok(ty)
             }
             Expr::Func(name, params, body) => {
                 env.start_scope();
 
-                let param_vars: Vec<Ty> = params
-                    .iter()
-                    .map(|&param_id| {
-                        let var_ty = env.new_type_variable();
-                        env.types.insert(param_id, var_ty.clone());
-                        env.type_stack.push(var_ty.clone());
+                let mut param_vars: Vec<Ty> = vec![];
+                for param_id in params {
+                    let var_ty = env.new_type_variable();
+                    env.types.insert(*param_id, var_ty.clone());
+                    env.type_stack.push(var_ty.clone());
 
-                        let actual = self.infer_node(param_id, env);
-                        env.constraints.push(Constraint::Equality(
-                            param_id,
-                            var_ty.clone(),
-                            actual,
-                        ));
-                        var_ty
-                    })
-                    .collect();
+                    let actual = self.infer_node(*param_id, env)?;
+                    env.constraints
+                        .push(Constraint::Equality(*param_id, var_ty.clone(), actual));
+
+                    param_vars.push(var_ty)
+                }
 
                 let body_var = env.new_type_variable();
-                let body_ty = self.infer_node(*body, env);
+                let body_ty = self.infer_node(*body, env)?;
                 env.constraints
                     .push(Constraint::Equality(*body, body_var.clone(), body_ty));
 
@@ -193,12 +187,12 @@ impl TypeChecker {
                 }
 
                 env.types.insert(id, func_ty.clone());
-                func_ty
+                Ok(func_ty)
             }
             Expr::ResolvedVariable(depth) => {
                 let ty = &env.type_stack[env.type_stack.len() - 1 - *depth as usize];
                 env.types.insert(id, ty.clone());
-                ty.clone()
+                Ok(ty.clone())
             }
             Expr::Parameter(_) => todo!(
                 "unresolved parameter: {:?}",
@@ -208,22 +202,22 @@ impl TypeChecker {
                 "unresolved variable: {:?}",
                 self.parse_tree.get(id).unwrap()
             ),
-            Expr::Tuple(items) => Ty::Tuple(items.clone()),
+            Expr::Tuple(_) => todo!(),
             Expr::Unary(_token_kind, _) => todo!(),
             Expr::Binary(_, _token_kind, _) => todo!(),
             Expr::Block(items) => {
                 for item in items {
-                    self.infer_node(*item, env);
+                    self.infer_node(*item, env)?;
                 }
 
                 let return_ty = if let Some(last_id) = items.last() {
                     env.types.get(last_id).unwrap().clone()
                 } else {
-                    Ty::Tuple(vec![])
+                    Ty::Void
                 };
 
                 env.types.insert(id, return_ty.clone());
-                return_ty
+                Ok(return_ty)
             }
         }
     }
@@ -252,24 +246,20 @@ mod tests {
         let mut resolver = NameResolver::new();
         let resolved = resolver.resolve(parsed);
         let mut checker = TypeChecker::new(resolved);
-        checker.infer();
+        checker.infer().unwrap();
         checker.resolve().expect("did not resolve");
         checker
     }
 
     #[test]
     fn checks_an_int() {
-        let parsed = parse("123").unwrap();
-        let mut checker = TypeChecker::new(parsed);
-        checker.infer();
+        let checker = check("123");
         assert_eq!(checker.type_for(0).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_a_float() {
-        let parsed = parse("123.").unwrap();
-        let mut checker = TypeChecker::new(parsed);
-        checker.infer();
+        let checker = check("123.");
         assert_eq!(checker.type_for(0).unwrap(), Ty::Float);
     }
 
