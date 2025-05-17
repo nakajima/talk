@@ -23,7 +23,7 @@ impl<'a> ConstraintSolver<'a> {
 
     pub fn solve(&mut self) -> Result<(), ConstraintError> {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
-        log::info!("solving {:#?}", substitutions);
+        log::info!("solving {:#?}", self.constraints);
 
         while let Some(constraint) = self.constraints.pop() {
             match constraint {
@@ -88,6 +88,8 @@ impl<'a> ConstraintSolver<'a> {
         substitutions: &mut HashMap<TypeVarID, Ty>,
         env: &Environment,
     ) -> Result<(), ConstraintError> {
+        log::trace!("Unifying: {:?} and {:?}", lhs, rhs);
+
         match (lhs, rhs) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
@@ -103,7 +105,6 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_params.len() == rhs_params.len() =>
             {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    log::debug!("Unifying {:?} and {:?}", lhs, rhs);
                     Self::unify(lhs, rhs, substitutions, env)?;
                 }
 
@@ -111,7 +112,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 Ok(())
             }
-            _ => todo!("{:?} / {:?}", lhs, rhs),
+            _ => todo!("{:#?} / {:#?}", lhs, rhs),
         }
     }
 

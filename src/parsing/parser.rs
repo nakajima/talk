@@ -275,6 +275,8 @@ impl Parser {
     }
 
     pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<NodeID, ParserError> {
+        self.skip_newlines();
+
         let mut lhs: Option<NodeID> = None;
         let mut handler = Precedence::handler(self.current)?;
 
@@ -310,6 +312,8 @@ impl Parser {
 
     // Try to get an identifier. If it's a match, return it, otherwise return None
     fn try_identifier(&mut self) -> Option<Token> {
+        self.skip_newlines();
+
         if let Some(current) = self.current {
             if let TokenKind::Identifier(_) = current.kind {
                 self.advance();
@@ -322,6 +326,8 @@ impl Parser {
 
     // Try to get a specific token. If it's a match, return true.
     fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
+        self.skip_newlines();
+
         if let Some(current) = self.current {
             if current.kind == expected {
                 self.advance();
@@ -334,6 +340,8 @@ impl Parser {
 
     // Try to get a specific token. If it's not a match, return an error.
     fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
+        self.skip_newlines();
+
         if let Some(current) = self.current {
             if current.kind == expected {
                 self.advance();
@@ -348,6 +356,8 @@ impl Parser {
     }
 
     fn consume_any(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
+        self.skip_newlines();
+
         match self.current {
             Some(current) => {
                 if possible_tokens.contains(&current.kind) {
@@ -537,6 +547,31 @@ mod tests {
 
         assert_eq!(*expr, Expr::Func(None, vec![], 0));
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
+    }
+
+    #[test]
+    fn parses_func_literal_with_newlines() {
+        let parsed = parse(
+            "func greet(a) {
+                a
+            }",
+        )
+        .unwrap();
+
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(
+            *expr,
+            Expr::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("greet"),
+                    start: 6,
+                    end: 10,
+                }),
+                vec![0],
+                2
+            )
+        );
     }
 
     #[test]

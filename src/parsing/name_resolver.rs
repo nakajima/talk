@@ -43,10 +43,6 @@ impl NameResolver {
                 LiteralFloat(_) => continue,
                 Let(name) => {
                     names_stack.push(name);
-
-                    if let Some(counter) = name_counter_stack.last_mut() {
-                        *counter += 1;
-                    }
                 }
                 Call(callee, args) => {
                     let mut to_resolve = args.clone();
@@ -98,17 +94,19 @@ impl NameResolver {
                     // If it's a named function, we want the name so we can recur.
                     if let Some(name) = name {
                         if let TokenKind::Identifier(name) = name.kind {
+                            log::trace!("Pushing named func {}", name);
                             names_stack.push(name);
-                            *name_counter_stack.last_mut().unwrap() += 1;
                         }
                     }
 
-                    name_counter_stack.push(params.len() as u8);
+                    Self::start_scope(names_stack, name_counter_stack);
 
                     for param in params {
-                        let Parameter(name) = parse_tree.get(*param).unwrap() else {
+                        let Some(Parameter(name)) = parse_tree.get(*param) else {
                             panic!("got a non variable param")
                         };
+
+                        log::trace!("Pushing param func {}", name);
                         names_stack.push(name);
                     }
 
@@ -116,9 +114,7 @@ impl NameResolver {
                     to_resolve.push(*body);
                     Self::resolve_nodes(to_resolve, parse_tree, names_stack, name_counter_stack);
 
-                    for _ in 0..name_counter_stack.pop().unwrap() {
-                        names_stack.pop();
-                    }
+                    Self::end_scope(names_stack, name_counter_stack);
                 }
 
                 Parameter(name) => {
@@ -127,6 +123,7 @@ impl NameResolver {
                         .rev()
                         .position(|n| n == name)
                         .unwrap_or(0); // free names 
+                    log::trace!("Replacing param {} with {}", name, depth);
                     parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth);
                 }
 
@@ -136,10 +133,29 @@ impl NameResolver {
                         .rev()
                         .position(|n| n == name)
                         .unwrap_or(0); // free names 
+                    log::trace!("Replacing variable {} with {}", name, depth);
                     parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth);
                 }
                 ResolvedVariable(_) => continue,
             }
+        }
+    }
+
+    fn start_scope(names_stack: &mut Vec<&'static str>, name_counter_stack: &mut Vec<u8>) {
+        log::trace!("scope started: {:?}", names_stack);
+        name_counter_stack.push(names_stack.len() as u8);
+    }
+
+    fn end_scope(names_stack: &mut Vec<&'static str>, name_counter_stack: &mut Vec<u8>) {
+        let previous = name_counter_stack.pop().expect("no scope to end");
+        log::trace!(
+            "scope ended: {:?}, popping: {}",
+            names_stack,
+            names_stack.len() - previous as usize
+        );
+
+        while names_stack.len() as u8 > previous {
+            names_stack.pop();
         }
     }
 }
