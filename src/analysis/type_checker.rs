@@ -432,4 +432,51 @@ mod tests {
         assert_eq!(inner_params[0], g_args[0].clone()); // inner’s x : A
         assert_eq!(*inner_ret, *f_ret.clone()); // inner returns C
     }
+
+    #[test]
+    fn checks_simple_recursion() {
+        let checker = check(
+            "
+        func rec(n) {
+            rec(n)
+        }
+        rec
+        ",
+        );
+
+        // the bare `rec` at the top level should be a Func([α], α)
+        let root_id = checker.parse_tree.root_ids()[0];
+        let ty = checker.type_for(root_id).unwrap();
+        let Ty::Func(params, ret) = ty else { panic!() };
+        // exactly one parameter
+        assert_eq!(params.len(), 1);
+        // return type equals the parameter type
+        assert_eq!(*ret, Ty::TypeVar(TypeVarID(5, TypeVarKind::CallReturn)));
+    }
+
+    #[test]
+    fn checks_mutual_recursion() {
+        let checker = check(
+            "
+        func even(n) {
+            odd(n)
+        }
+        func odd(n) {
+            even(n)
+        }
+        even
+        ",
+        );
+
+        let root_id = checker.parse_tree.root_ids()[0];
+        let ty = checker.type_for(root_id).unwrap();
+        match ty {
+            Ty::Func(params, ret) => {
+                assert_eq!(params.len(), 1);
+                // both even and odd must have the same input and output type
+                assert_eq!(*ret, params[0].clone());
+            }
+            other => panic!("expected a function, got {:?}", other),
+        }
+    }
 }
