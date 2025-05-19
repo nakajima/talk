@@ -178,6 +178,8 @@ impl Precedence {
             TokenKind::RightParen => ParseHandler::NONE,
             TokenKind::Comma => ParseHandler::NONE,
             TokenKind::EOF => ParseHandler::NONE,
+            TokenKind::Colon => ParseHandler::NONE,
+            TokenKind::Arrow => ParseHandler::NONE
         })
     }
 }

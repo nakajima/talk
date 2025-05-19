@@ -69,8 +69,9 @@ impl Lexer {
         match char {
             '.' => self.make(Dot),
             ',' => self.make(Comma),
+            ':' => self.make(Colon),
             '+' => self.compound('=', PlusEquals, Plus),
-            '-' => self.compound('=', MinusEquals, Minus),
+            '-' => self.dash(),
             '*' => self.compound('=', StarEquals, Star),
             '/' => self.compound('=', SlashEquals, Slash),
             '=' => self.compound('=', EqualsEquals, Equals),
@@ -133,6 +134,18 @@ impl Lexer {
         }
     }
 
+    fn dash(&mut self) -> Result<Token, LexerError> {
+        if self.did_match(&'>') {
+            return self.make(Arrow);
+        }
+
+        if self.did_match(&'=') {
+            return self.make(MinusEquals);
+        }
+
+        self.make(Minus)
+    }
+
     fn number(&mut self, starting_at: usize) -> TokenKind {
         let mut is_float = false;
 
@@ -166,6 +179,19 @@ impl Lexer {
             end: self.current,
         })
     }
+
+    fn did_match(&mut self, ch: &char) -> bool {
+        if Some(ch) == self.chars.peek() {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn advance(&mut self) {
+        self.chars.next();
+    }
 }
 
 #[cfg(test)]
@@ -180,6 +206,21 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
+    #[test]
+    fn arrow() {
+        let mut lexer = Lexer::new("->");
+        assert_eq!(lexer.next().unwrap().kind, Arrow);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn colon() {
+        let mut lexer = Lexer::new(":");
+        assert_eq!(lexer.next().unwrap().kind, Colon);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+ 
     #[test]
     fn parens() {
         let mut lexer = Lexer::new("()");

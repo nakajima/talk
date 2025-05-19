@@ -2,6 +2,8 @@ use std::fmt::Display;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum TokenKind {
+    Arrow,
+    Colon,
     Newline,
     Dot,
     Plus,
