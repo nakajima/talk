@@ -1,6 +1,6 @@
 use crate::{token::Token, token_kind::TokenKind};
 
-use super::parser::NodeID;
+use super::parser::ExprID;
 
 pub type VarDepth = u32;
 
@@ -14,19 +14,24 @@ pub struct ExprMeta {
 pub enum Expr {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
-    Unary(TokenKind, NodeID),
-    Binary(NodeID, TokenKind, NodeID),
-    Tuple(Vec<NodeID>),
-    Block(Vec<NodeID>),
-    Call(NodeID, Vec<NodeID>),
+    Unary(TokenKind, ExprID),
+    Binary(ExprID, TokenKind, ExprID),
+    Tuple(Vec<ExprID>),
+    Block(Vec<ExprID>),
+    Call(ExprID, Vec<ExprID>),
+    TypeRepr(&'static str),
     Func(
         Option<Token>,
-        Vec<NodeID>, /* params tuple */
-        NodeID,      /* body */
+        Vec<ExprID>,    /* params tuple */
+        ExprID,         /* body */
+        Option<ExprID>, /* return type */
     ),
-    Parameter(&'static str),
+    Parameter(
+        &'static str,   /* name */
+        Option<ExprID>, /* TypeRepr */
+    ),
     Variable(&'static str),
-    ResolvedVariable(VarDepth),
-    Assignment(NodeID /* LHS */, NodeID /* RHS */),
+    ResolvedVariable(VarDepth, Option<ExprID>),
+    Assignment(ExprID /* LHS */, ExprID /* RHS */),
     Let(&'static str),
 }

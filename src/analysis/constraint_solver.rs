@@ -36,7 +36,15 @@ impl<'a> ConstraintSolver<'a> {
                         &rhs,
                         &mut substitutions,
                         self.type_checker.environment.as_ref().unwrap(),
-                    )?;
+                    )
+                    .map_err(|err| {
+                        log::error!(
+                            "Type error: {:?}",
+                            self.type_checker.parse_tree.meta.get(node_id as usize)
+                        );
+                        log::error!("{:?}", err);
+                        err
+                    })?;
 
                     self.type_checker.define(node_id, lhs);
                 }
@@ -124,14 +132,20 @@ impl<'a> ConstraintSolver<'a> {
         env: &Environment,
     ) -> bool {
         let ty = Self::apply(ty.clone(), substitutions);
-        match ty {
-            Ty::TypeVar(ref tv) => tv == v,
+        match &ty {
+            Ty::TypeVar(tv) => tv == v,
             Ty::Func(params, returning) => {
                 // check each parameter and the return type
-                params
+                let oh = params
                     .iter()
                     .any(|param| Self::occurs_check(v, &param, substitutions, env))
-                    || Self::occurs_check(v, &returning, substitutions, env)
+                    || Self::occurs_check(v, &returning, substitutions, env);
+
+                if oh {
+                    log::error!("occur check failed: {:?}", ty);
+                }
+
+                oh
             }
             _ => false,
         }

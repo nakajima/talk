@@ -2,7 +2,7 @@ use std::{mem::transmute, ops::Add};
 
 use crate::{token::Token, token_kind::TokenKind};
 
-use super::parser::{NodeID, Parser, ParserError};
+use super::parser::{ExprID, Parser, ParserError};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -29,8 +29,8 @@ impl Precedence {
 
 #[allow(clippy::type_complexity)]
 pub struct ParseHandler {
-    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<NodeID, ParserError>>,
-    pub(crate) infix: Option<fn(&mut Parser, bool, NodeID) -> Result<NodeID, ParserError>>,
+    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<ExprID, ParserError>>,
+    pub(crate) infix: Option<fn(&mut Parser, bool, ExprID) -> Result<ExprID, ParserError>>,
     pub(crate) precedence: Precedence,
 }
 
@@ -42,7 +42,7 @@ impl ParseHandler {
     };
 }
 
-impl Precedence {
+impl<'a> Precedence {
     pub const fn handler(token: Option<Token>) -> Result<ParseHandler, ParserError> {
         let token = match token {
             Some(t) => t,
@@ -179,7 +179,7 @@ impl Precedence {
             TokenKind::Comma => ParseHandler::NONE,
             TokenKind::EOF => ParseHandler::NONE,
             TokenKind::Colon => ParseHandler::NONE,
-            TokenKind::Arrow => ParseHandler::NONE
+            TokenKind::Arrow => ParseHandler::NONE,
         })
     }
 }

@@ -11,7 +11,7 @@ pub enum LexerError {
 
 #[derive(Debug)]
 pub struct Lexer {
-    code: &'static str,
+    pub code: &'static str,
     chars: Peekable<Chars<'static>>,
     current: usize,
     started: usize,
@@ -71,7 +71,7 @@ impl Lexer {
             ',' => self.make(Comma),
             ':' => self.make(Colon),
             '+' => self.compound('=', PlusEquals, Plus),
-            '-' => self.dash(),
+            '-' => self.minus(),
             '*' => self.compound('=', StarEquals, Star),
             '/' => self.compound('=', SlashEquals, Slash),
             '=' => self.compound('=', EqualsEquals, Equals),
@@ -134,7 +134,7 @@ impl Lexer {
         }
     }
 
-    fn dash(&mut self) -> Result<Token, LexerError> {
+    fn minus(&mut self) -> Result<Token, LexerError> {
         if self.did_match(&'>') {
             return self.make(Arrow);
         }
@@ -190,6 +190,7 @@ impl Lexer {
     }
 
     fn advance(&mut self) {
+        self.current += 1;
         self.chars.next();
     }
 }
@@ -208,8 +209,9 @@ mod tests {
 
     #[test]
     fn arrow() {
-        let mut lexer = Lexer::new("->");
+        let mut lexer = Lexer::new("-> Int");
         assert_eq!(lexer.next().unwrap().kind, Arrow);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("Int"));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
@@ -220,7 +222,6 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
- 
     #[test]
     fn parens() {
         let mut lexer = Lexer::new("()");

@@ -9,10 +9,9 @@ use super::{
     precedence::Precedence,
 };
 
-pub type NodeID = u32;
+pub type ExprID = u32;
 pub type VariableID = u32;
 
-#[allow(unused)]
 pub struct Parser {
     pub(crate) lexer: Lexer,
     pub(crate) previous: Option<Token>,
@@ -72,7 +71,7 @@ impl Parser {
 
     fn skip_newlines(&mut self) {
         while {
-            if let Some(token) = self.current {
+            if let Some(token) = &self.current {
                 token.kind == TokenKind::Newline
             } else {
                 false
@@ -85,13 +84,15 @@ impl Parser {
     fn advance(&mut self) -> Option<Token> {
         self.previous = self.current;
         self.current = self.lexer.next().ok();
-        self.previous
+        self.previous.clone()
     }
 
-    fn add_expr(&mut self, expr: Expr) -> Result<NodeID, ParserError> {
+    fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
+        let token = self.current.clone().unwrap();
+
         let expr_meta = ExprMeta {
-            start: self.current.unwrap(),
-            end: self.current.unwrap(),
+            start: token.clone(),
+            end: token,
         };
 
         Ok(self.parse_tree.add(expr, expr_meta))
@@ -99,7 +100,7 @@ impl Parser {
 
     // MARK: Expr parsers
 
-    pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
+    pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::LeftParen)?;
 
         if self.did_match(TokenKind::RightParen)? {
@@ -125,7 +126,7 @@ impl Parser {
         self.add_expr(Tuple(items))
     }
 
-    pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
+    pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         // Consume the `let` keyword
         self.advance();
 
@@ -150,7 +151,7 @@ impl Parser {
         }
     }
 
-    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
+    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.advance();
 
         match self
@@ -165,17 +166,36 @@ impl Parser {
         }
     }
 
-    pub(crate) fn func(&mut self) -> Result<NodeID, ParserError> {
+    pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
         let name = self.try_identifier();
 
         self.consume(TokenKind::LeftParen)?;
-        let mut params: Vec<NodeID> = vec![];
-        while let Some(identifier) = self.try_identifier() {
-            let TokenKind::Identifier(name) = identifier.kind else {
-                unreachable!()
-            };
 
-            params.push(self.add_expr(Parameter(name))?);
+        let mut params: Vec<ExprID> = vec![];
+        while let Some(Token {
+            kind: TokenKind::Identifier(name),
+            ..
+        }) = self.try_identifier()
+        {
+            let ty_repr = if self.did_match(TokenKind::Colon)? {
+                if let Some(Token {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                }) = self.try_identifier()
+                {
+                    let type_repr = TypeRepr(name);
+                    Ok(Some(self.add_expr(type_repr)?))
+                } else {
+                    Err(ParserError::UnexpectedToken(
+                        vec![TokenKind::Identifier("_")],
+                        self.current.unwrap().kind,
+                    ))
+                }
+            } else {
+                Ok(None)
+            }?;
+
+            params.push(self.add_expr(Parameter(name, ty_repr))?);
 
             if self.did_match(TokenKind::Comma)? {
                 continue;
@@ -186,15 +206,32 @@ impl Parser {
 
         self.consume(TokenKind::RightParen)?;
 
+        let ret = if self.did_match(TokenKind::Arrow)? {
+            if let Some(Token {
+                kind: TokenKind::Identifier(ret_name),
+                ..
+            }) = self.try_identifier()
+            {
+                let ret_id = self.add_expr(TypeRepr(ret_name))?;
+                Some(ret_id)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let body = self.block()?;
 
-        self.add_expr(Expr::Func(name, params, body))
+        self.add_expr(Expr::Func(name, params, body, ret))
     }
 
-    pub(crate) fn block(&mut self) -> Result<NodeID, ParserError> {
+    pub(crate) fn block(&mut self) -> Result<ExprID, ParserError> {
+        self.skip_newlines();
+
         self.consume(TokenKind::LeftBrace)?;
 
-        let mut items: Vec<NodeID> = vec![];
+        let mut items: Vec<ExprID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             items.push(self.parse_with_precedence(Precedence::Assignment)?)
         }
@@ -202,11 +239,12 @@ impl Parser {
         self.add_expr(Expr::Block(items))
     }
 
-    pub(crate) fn variable(&mut self, can_assign: bool) -> Result<NodeID, ParserError> {
-        let Some(token) = self.current else {
-            unreachable!()
-        };
-        let TokenKind::Identifier(name) = token.kind else {
+    pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        let Some(Token {
+            kind: TokenKind::Identifier(name),
+            ..
+        }) = self.current
+        else {
             unreachable!()
         };
 
@@ -225,10 +263,10 @@ impl Parser {
 
     pub(crate) fn call(
         &mut self,
-        callee: NodeID,
+        callee: ExprID,
         _can_assign: bool,
-    ) -> Result<NodeID, ParserError> {
-        let mut args: Vec<NodeID> = vec![];
+    ) -> Result<ExprID, ParserError> {
+        let mut args: Vec<ExprID> = vec![];
 
         if !self.did_match(TokenKind::RightParen)? {
             while {
@@ -242,9 +280,9 @@ impl Parser {
         self.add_expr(Expr::Call(callee, args))
     }
 
-    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<NodeID, ParserError> {
+    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
-        let current_precedence = Precedence::handler(Some(op))?.precedence;
+        let current_precedence = Precedence::handler(Some(op.clone()))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
@@ -252,7 +290,7 @@ impl Parser {
         self.add_expr(Unary(op.kind, rhs))
     }
 
-    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: NodeID) -> Result<NodeID, ParserError> {
+    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: ExprID) -> Result<ExprID, ParserError> {
         let op = self.consume_any(vec![
             TokenKind::Plus,
             TokenKind::Minus,
@@ -266,7 +304,7 @@ impl Parser {
             TokenKind::Pipe,
         ])?;
 
-        let current_precedence = Precedence::handler(Some(op))?.precedence;
+        let current_precedence = Precedence::handler(Some(op.clone()))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
@@ -274,10 +312,10 @@ impl Parser {
         self.add_expr(Binary(lhs, op.kind, rhs))
     }
 
-    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<NodeID, ParserError> {
+    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
         self.skip_newlines();
 
-        let mut lhs: Option<NodeID> = None;
+        let mut lhs: Option<ExprID> = None;
         let mut handler = Precedence::handler(self.current)?;
 
         if let Some(prefix) = handler.prefix {
@@ -345,7 +383,7 @@ impl Parser {
         if let Some(current) = self.current {
             if current.kind == expected {
                 self.advance();
-                return Ok(current);
+                return Ok(current.clone());
             };
         }
 
@@ -362,9 +400,12 @@ impl Parser {
             Some(current) => {
                 if possible_tokens.contains(&current.kind) {
                     self.advance();
-                    Ok(current)
+                    Ok(current.clone())
                 } else {
-                    Err(ParserError::UnexpectedToken(possible_tokens, current.kind))
+                    Err(ParserError::UnexpectedToken(
+                        possible_tokens,
+                        current.clone().kind,
+                    ))
                 }
             }
             None => Err(ParserError::UnexpectedEndOfInput(possible_tokens)),
@@ -545,7 +586,7 @@ mod tests {
         let parsed = parse("func() { }").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::Func(None, vec![], 0));
+        assert_eq!(*expr, Expr::Func(None, vec![], 0, None));
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
 
@@ -569,7 +610,8 @@ mod tests {
                     end: 10,
                 }),
                 vec![0],
-                2
+                2,
+                None
             )
         );
     }
@@ -588,7 +630,8 @@ mod tests {
                     end: 10,
                 }),
                 vec![],
-                0
+                0,
+                None
             )
         );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
@@ -607,7 +650,8 @@ mod tests {
                     end: 10,
                 }),
                 vec![],
-                0
+                0,
+                None
             )
         );
 
@@ -621,7 +665,8 @@ mod tests {
                     end: 26,
                 }),
                 vec![],
-                2
+                2,
+                None
             )
         );
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
@@ -641,9 +686,32 @@ mod tests {
                     end: 10,
                 }),
                 vec![0, 1],
-                2
+                2,
+                None
             )
         );
+    }
+
+    #[test]
+    fn parses_param_type() {
+        let parsed = parse("func greet(name: Int) {}").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(
+            *expr,
+            Expr::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("greet"),
+                    start: 6,
+                    end: 10,
+                }),
+                vec![1],
+                2,
+                None
+            )
+        );
+
+        assert_eq!(*parsed.get(1).unwrap(), Parameter("name", Some(0)));
+        assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int"));
     }
 
     #[test]
@@ -666,5 +734,25 @@ mod tests {
         let parsed = parse("let fizz").unwrap();
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(*expr, Expr::Let("fizz"));
+    }
+
+    #[test]
+    fn parses_return_type_annotation() {
+        let parsed = parse("func fizz() -> Int { 123 }").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(
+            *expr,
+            Expr::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier("fizz"),
+                    start: 6,
+                    end: 9,
+                }),
+                vec![],
+                2,
+                Some(0)
+            )
+        );
     }
 }

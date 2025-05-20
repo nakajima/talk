@@ -1,8 +1,11 @@
-use crate::token_kind::TokenKind;
+use crate::{token::Token, token_kind::TokenKind};
 
-use super::expr::{Expr::*, VarDepth};
+use super::expr::{
+    Expr::{self, *},
+    VarDepth,
+};
 use super::parse_tree::ParseTree;
-use super::parser::NodeID;
+use super::parser::ExprID;
 
 #[derive(Default)]
 pub struct NameResolver {
@@ -18,7 +21,7 @@ impl NameResolver {
     }
 
     pub fn resolve(&mut self, mut parse_tree: ParseTree) -> ParseTree {
-        let ids: Vec<NodeID> = parse_tree.root_ids();
+        let ids: Vec<ExprID> = parse_tree.root_ids();
         let mut name_counter_stack: Vec<u8> = vec![0];
         Self::resolve_nodes(
             ids,
@@ -30,11 +33,29 @@ impl NameResolver {
     }
 
     fn resolve_nodes(
-        node_ids: Vec<NodeID>,
+        node_ids: Vec<ExprID>,
         parse_tree: &mut ParseTree,
         names_stack: &mut Vec<&'static str>,
         name_counter_stack: &mut Vec<u8>,
     ) {
+        // 1) Hoist all funcs in this block before any recursion
+        for &id in &node_ids {
+            if let Expr::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier(n),
+                    ..
+                }),
+                _params,
+                _body,
+                _ret,
+            ) = parse_tree.get(id).unwrap()
+            {
+                names_stack.push(n);
+            }
+        }
+
+        Self::start_scope(names_stack, name_counter_stack);
+
         for node_id in node_ids {
             let node = parse_tree.get(node_id).unwrap();
 
@@ -90,19 +111,19 @@ impl NameResolver {
                         name_counter_stack,
                     );
                 }
-                Func(name, params, body) => {
+                Func(name, params, body, _ret) => {
                     // If it's a named function, we want the name so we can recur.
                     if let Some(name) = name {
                         if let TokenKind::Identifier(name) = name.kind {
                             log::trace!("Pushing named func {}", name);
-                            names_stack.push(name);
+                            names_stack.push(&name);
                         }
                     }
 
                     Self::start_scope(names_stack, name_counter_stack);
 
                     for param in params {
-                        let Some(Parameter(name)) = parse_tree.get(*param) else {
+                        let Some(Parameter(name, _)) = parse_tree.get(*param) else {
                             panic!("got a non variable param")
                         };
 
@@ -116,17 +137,16 @@ impl NameResolver {
 
                     Self::end_scope(names_stack, name_counter_stack);
                 }
-
-                Parameter(name) => {
+                Parameter(name, ty_repr) => {
                     let depth = names_stack
                         .iter()
                         .rev()
                         .position(|n| n == name)
                         .unwrap_or(0); // free names 
                     log::trace!("Replacing param {} with {}", name, depth);
-                    parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth);
+                    parse_tree.nodes[node_id as usize] =
+                        ResolvedVariable(depth as VarDepth, *ty_repr);
                 }
-
                 Variable(name) => {
                     let depth = names_stack
                         .iter()
@@ -134,11 +154,14 @@ impl NameResolver {
                         .position(|n| n == name)
                         .unwrap_or(0); // free names 
                     log::trace!("Replacing variable {} with {}", name, depth);
-                    parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth);
+                    parse_tree.nodes[node_id as usize] = ResolvedVariable(depth as VarDepth, None);
                 }
-                ResolvedVariable(_) => continue,
+                ResolvedVariable(_, _) => continue,
+                TypeRepr(_) => todo!(),
             }
         }
+
+        Self::end_scope(names_stack, name_counter_stack);
     }
 
     fn start_scope(names_stack: &mut Vec<&'static str>, name_counter_stack: &mut Vec<u8>) {
@@ -189,17 +212,17 @@ mod tests {
     fn resolves_simple_variable_to_depth_0() {
         let tree = resolve("hello");
         let root = tree.roots()[0].unwrap();
-        assert_eq!(root, &ResolvedVariable(0));
+        assert_eq!(root, &ResolvedVariable(0, None));
     }
 
     #[test]
     fn resolves_shadowed_variable_in_lambda() {
         let tree = resolve("func(x) { x }\n");
         let root = tree.roots()[0].unwrap();
-        if let Func(_, params, body_id) = root {
+        if let Func(_, params, body_id, _ret) = root {
             assert_eq!(params.len(), 1);
             let x_param = tree.get(params[0]).unwrap();
-            assert_eq!(x_param, &ResolvedVariable(0));
+            assert_eq!(x_param, &ResolvedVariable(0, None));
 
             let Block(exprs) = &tree.get(*body_id).unwrap() else {
                 panic!("didn't get a block")
@@ -207,7 +230,7 @@ mod tests {
 
             assert_eq!(exprs.len(), 1);
             let x = tree.get(exprs[0]).unwrap();
-            assert_eq!(x, &ResolvedVariable(0));
+            assert_eq!(x, &ResolvedVariable(0, None));
         } else {
             panic!("expected Func node");
         }
@@ -218,7 +241,7 @@ mod tests {
         let tree = resolve("func(x, y) { func(x) { x \n y }\nx }\n");
         let outer = tree.roots()[0].unwrap();
         // outer Func has its body as an inner Func
-        let Func(_, _, outer_body_id) = outer else {
+        let Func(_, _, outer_body_id, _ret) = outer else {
             panic!("did not get outer func")
         };
         let Block(outer_body) = &tree.get(*outer_body_id).unwrap() else {
@@ -226,7 +249,7 @@ mod tests {
         };
 
         let inner = tree.get(outer_body[0]).unwrap();
-        let Func(_, _, inner_body_id) = inner else {
+        let Func(_, _, inner_body_id, _ret) = inner else {
             panic!("didn't get inner func")
         };
 
@@ -235,13 +258,13 @@ mod tests {
         };
 
         let inner_x = tree.get(inner_body[0]).unwrap();
-        assert_eq!(inner_x, &ResolvedVariable(0));
+        assert_eq!(inner_x, &ResolvedVariable(0, None));
 
         let inner_y = tree.get(inner_body[1]).unwrap();
-        assert_eq!(inner_y, &ResolvedVariable(1));
+        assert_eq!(inner_y, &ResolvedVariable(1, None));
 
         let outer_x = tree.get(outer_body[1]).unwrap();
-        assert_eq!(outer_x, &ResolvedVariable(1));
+        assert_eq!(outer_x, &ResolvedVariable(1, None));
     }
 
     #[test]
@@ -261,10 +284,16 @@ mod tests {
 
         assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123"));
 
-        assert_eq!(*tree.get(tree.root_ids()[2]).unwrap(), ResolvedVariable(1));
+        assert_eq!(
+            *tree.get(tree.root_ids()[2]).unwrap(),
+            ResolvedVariable(0, None)
+        );
         assert_eq!(*tree.get(*let_expr).unwrap(), Let("x"));
 
-        assert_eq!(*tree.get(tree.root_ids()[3]).unwrap(), ResolvedVariable(0));
+        assert_eq!(
+            *tree.get(tree.root_ids()[3]).unwrap(),
+            ResolvedVariable(0, None)
+        );
     }
 }
 
