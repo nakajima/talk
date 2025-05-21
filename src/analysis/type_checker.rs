@@ -6,12 +6,18 @@ use crate::{
 
 use super::{
     builtins::match_builtin,
-    constraint_solver::{ConstraintError, ConstraintSolver},
+    constraint_solver::{Constraint, ConstraintError, ConstraintSolver},
     typed_expr::TypedExpr,
 };
 
-pub type FuncParams = Vec<Ty>;
-pub type FuncReturning = Box<Ty>;
+pub type FuncParams = Vec<TypeDesc>;
+pub type FuncReturning = Box<TypeDesc>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypeDesc {
+    pub ty: Ty,
+    pub unbound: Option<Vec<TypeVarID>>,
+}
 
 #[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
 pub struct TypeVarID(u32, TypeVarKind);
@@ -26,11 +32,6 @@ pub enum TypeVarKind {
     FuncBody,
     Let,
     TypeRepr(&'static str),
-}
-
-#[derive(Debug, Clone)]
-pub enum Constraint {
-    Equality(ExprID, Ty, Ty),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -48,12 +49,30 @@ pub enum Ty {
     TypeVar(TypeVarID),
 }
 
+impl Into<TypeDesc> for Ty {
+    fn into(self) -> TypeDesc {
+        TypeDesc {
+            ty: self,
+            unbound: None,
+        }
+    }
+}
+
+impl Into<TypeDesc> for &Ty {
+    fn into(self) -> TypeDesc {
+        TypeDesc {
+            ty: self.clone(),
+            unbound: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Environment {
     pub types: HashMap<ExprID, Ty>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
-    pub type_stack: Vec<Ty>,
+    pub type_stack: Vec<TypeDesc>,
     pub type_counter_stack: Vec<u8>,
 }
 
@@ -132,23 +151,7 @@ impl TypeChecker {
     pub fn infer(&mut self) -> Result<Vec<TypedExpr>, TypeError> {
         let mut env = Environment::new();
 
-        // 1) _Hoist_ all nested funcs in this block:
-        for &item in self.parse_tree.root_ids().iter() {
-            if let Expr::Func(
-                Some(Token {
-                    kind: TokenKind::Identifier(name),
-                    ..
-                }),
-                _params,
-                _body,
-                _ret,
-            ) = self.parse_tree.get(item).unwrap()
-            {
-                let fn_var = env.new_type_variable(TypeVarKind::FuncNameVar(name));
-                env.types.insert(item, fn_var.clone());
-                env.type_stack.push(fn_var);
-            }
-        }
+        self.hoist_functions(&self.parse_tree.root_ids(), &mut env);
 
         let typed_roots = self
             .parse_tree
@@ -172,25 +175,28 @@ impl TypeChecker {
         &self,
         id: ExprID,
         env: &mut Environment,
-        expected: &Option<Ty>,
+        expected: &Option<TypeDesc>,
     ) -> Result<TypedExpr, TypeError> {
-        match &self.parse_tree.get(id).unwrap() {
+        let result = match &self.parse_tree.get(id).unwrap() {
             Expr::Call(callee, args) => {
                 let ret_var = if let Some(expected) = expected {
                     log::debug!("Expr::Call expectation: {:?}", expected);
                     expected.clone()
                 } else {
                     log::debug!("CallReturn type variable instantiated");
-                    env.new_type_variable(TypeVarKind::CallReturn)
+                    env.new_type_variable(TypeVarKind::CallReturn).into()
                 };
 
-                let mut arg_tys: Vec<Ty> = vec![];
+                let mut arg_tys: Vec<TypeDesc> = vec![];
                 for arg in args {
                     let ty = self.infer_node(*arg, env, &None).unwrap().ty;
                     arg_tys.push(ty);
                 }
 
-                let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()));
+                let expected_callee_ty = TypeDesc {
+                    ty: Ty::Func(arg_tys, Box::new(ret_var.clone())),
+                    unbound: None,
+                };
 
                 let callee_ty = self.infer_node(*callee, env, &None)?;
 
@@ -200,17 +206,17 @@ impl TypeChecker {
                     callee_ty.ty,
                 ));
 
-                env.types.insert(id, ret_var.clone());
+                env.types.insert(id, ret_var.clone().ty);
 
                 Ok(TypedExpr::new(id, ret_var))
             }
             Expr::LiteralInt(_) => {
                 env.types.insert(id, Ty::Int);
-                Ok(TypedExpr::new(id, Ty::Int))
+                Ok(TypedExpr::new(id, Ty::Int.into()))
             }
             Expr::LiteralFloat(_) => {
                 env.types.insert(id, Ty::Float);
-                Ok(TypedExpr::new(id, Ty::Float))
+                Ok(TypedExpr::new(id, Ty::Float.into()))
             }
             Expr::Assignment(lhs, rhs) => {
                 let lhs_ty = self.infer_node(*lhs, env, &None)?;
@@ -219,19 +225,28 @@ impl TypeChecker {
                 env.constraints
                     .push(Constraint::Equality(*lhs, lhs_ty.ty.clone(), rhs_ty.ty));
 
+                env.types.insert(id, lhs_ty.clone().ty.ty);
+
                 Ok(lhs_ty)
             }
             Expr::Let(_name) => {
                 let ty = env.new_type_variable(TypeVarKind::Let);
                 env.types.insert(id, ty.clone());
-                env.type_stack.push(ty.clone());
-                Ok(TypedExpr::new(id, ty))
+                env.type_stack.push(ty.clone().into());
+                Ok(TypedExpr::new(id, ty.into()))
             }
-            Expr::TypeRepr(name) => Ok(TypedExpr {
-                expr: id,
-                ty: match_builtin(name)
-                    .unwrap_or_else(|| env.new_type_variable(TypeVarKind::TypeRepr(name))),
-            }),
+            Expr::TypeRepr(name) => {
+                let typed_expr = TypedExpr {
+                    expr: id,
+                    ty: (match_builtin(name)
+                        .unwrap_or_else(|| env.new_type_variable(TypeVarKind::TypeRepr(name))))
+                    .into(),
+                };
+
+                env.types.insert(id, typed_expr.clone().ty.ty.clone());
+
+                Ok(typed_expr)
+            }
             Expr::Func(name, params, body, ret) => {
                 let mut func_var = None;
 
@@ -245,21 +260,19 @@ impl TypeChecker {
                 }) = name
                 {
                     func_var = Some(env.new_type_variable(TypeVarKind::FuncNameVar(name)));
-                    env.type_stack.push(func_var.clone().unwrap());
+                    env.type_stack.push(func_var.as_ref().unwrap().into());
                 }
 
                 env.start_scope();
 
-                let mut param_vars: Vec<Ty> = vec![];
-                for (i, expr_opt) in params.iter().map(|id| (*id, self.parse_tree.get(*id))) {
+                let mut param_vars: Vec<TypeDesc> = vec![];
+                for (_i, expr_opt) in params.iter().map(|id| (*id, self.parse_tree.get(*id))) {
                     if let Some(Expr::ResolvedVariable(_depth, ty)) = expr_opt {
                         let var_ty = if let Some(ty_id) = ty {
                             self.infer_node(*ty_id, env, expected)?.ty
                         } else {
-                            env.new_type_variable(TypeVarKind::FuncParam)
+                            env.new_type_variable(TypeVarKind::FuncParam).into()
                         };
-
-                        env.types.insert(i, var_ty.clone());
 
                         log::debug!("Pushing {:?}", var_ty);
                         env.type_stack.push(var_ty.clone());
@@ -274,14 +287,17 @@ impl TypeChecker {
 
                 let func_ty = Ty::Func(param_vars.clone(), FuncReturning::new(body_ty.ty));
 
-                if let Some(func_var) = func_var {
-                    env.constraints
-                        .push(Constraint::Equality(id, func_var, func_ty.clone()));
+                if let Some(func_var) = &func_var {
+                    env.constraints.push(Constraint::Equality(
+                        id,
+                        func_var.into(),
+                        func_ty.clone().into(),
+                    ));
                 }
 
                 env.types.insert(id, func_ty.clone());
 
-                Ok(TypedExpr::new(id, func_ty))
+                Ok(TypedExpr::new(id, func_ty.into()))
             }
             Expr::ResolvedVariable(depth, _) => {
                 log::trace!(
@@ -290,7 +306,7 @@ impl TypeChecker {
                     env.type_stack
                 );
                 let ty = &env.type_stack[env.type_stack.len() - 1 - *depth as usize];
-                env.types.insert(id, ty.clone());
+                env.types.insert(id, ty.clone().ty);
 
                 Ok(TypedExpr::new(id, ty.clone()))
             }
@@ -306,36 +322,20 @@ impl TypeChecker {
             Expr::Unary(_token_kind, _) => todo!(),
             Expr::Binary(_, _token_kind, _) => todo!(),
             Expr::Block(items) => {
-                // 1) _Hoist_ all nested funcs in this block:
-                for &item in items.iter() {
-                    if let Expr::Func(
-                        Some(Token {
-                            kind: TokenKind::Identifier(name),
-                            ..
-                        }),
-                        _params,
-                        _body,
-                        _ret,
-                    ) = self.parse_tree.get(item).unwrap()
-                    {
-                        let fn_var = env.new_type_variable(TypeVarKind::FuncNameVar(name));
-                        env.types.insert(item, fn_var.clone());
-                        env.type_stack.push(fn_var);
-                    }
-                }
+                self.hoist_functions(items, env);
 
-                for (i, item) in items.iter().enumerate() {
-                    if i == items.len() - 1 {
-                        self.infer_node(*item, env, &expected)?;
-                    } else {
-                        self.infer_node(*item, env, &None)?;
-                    }
-                }
+                let return_ty: TypeDesc = {
+                    let mut return_ty: TypeDesc = Ty::Void.into();
 
-                let return_ty = if let Some(last_id) = items.last() {
-                    env.types.get(last_id).unwrap().clone()
-                } else {
-                    Ty::Void
+                    for (i, item) in items.iter().enumerate() {
+                        if i == items.len() - 1 {
+                            return_ty = self.infer_node(*item, env, &expected)?.ty;
+                        } else {
+                            self.infer_node(*item, env, &None)?;
+                        }
+                    }
+
+                    return_ty
                 };
 
                 let return_ty = if let Some(expected) = expected {
@@ -352,9 +352,19 @@ impl TypeChecker {
                     return_ty.clone()
                 };
 
+                env.types.insert(id, return_ty.clone().ty);
+
                 Ok(TypedExpr::new(id, return_ty))
             }
-        }
+        };
+
+        assert!(
+            env.types.get(&id).is_some(),
+            "did not set type for {:?}",
+            result
+        );
+
+        result
     }
 
     pub fn type_for(&self, node_id: ExprID) -> Option<Ty> {
@@ -364,6 +374,25 @@ impl TypeChecker {
 
         env.types.get(&node_id).cloned()
     }
+
+    fn hoist_functions(&self, node_ids: &Vec<ExprID>, env: &mut Environment) {
+        for &item in node_ids.iter() {
+            if let Expr::Func(
+                Some(Token {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                }),
+                _params,
+                _body,
+                _ret,
+            ) = self.parse_tree.get(item).unwrap()
+            {
+                let fn_var = env.new_type_variable(TypeVarKind::FuncNameVar(name));
+                env.types.insert(item, fn_var.clone());
+                env.type_stack.push(fn_var.into());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -371,7 +400,7 @@ mod tests {
     use crate::{
         name_resolver::NameResolver,
         parser::parse,
-        type_checker::{Ty, TypeVarID, TypeVarKind},
+        type_checker::{Ty, TypeDesc, TypeVarID, TypeVarKind},
     };
 
     use super::TypeChecker;
@@ -411,7 +440,7 @@ mod tests {
 
         assert_eq!(return_type, param_type.into());
         assert_eq!(
-            return_type,
+            *return_type,
             Ty::TypeVar(TypeVarID(3, TypeVarKind::FuncParam)).into()
         );
 
@@ -429,8 +458,8 @@ mod tests {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
-        assert_eq!(params, vec![Ty::Int]);
-        assert_eq!(return_type, Ty::Int.into());
+        assert_eq!(params, vec![Ty::Int.into()]);
+        assert_eq!(*return_type, Ty::Int.into());
     }
 
     #[test]
@@ -473,7 +502,7 @@ mod tests {
         assert_eq!(params.len(), 2);
 
         // f : A -> A
-        match &params[0] {
+        match &params[0].ty {
             Ty::Func(arg_tys, ret_ty) => {
                 assert_eq!(arg_tys.len(), 1);
                 // the return of f must be the same type as x
@@ -511,23 +540,23 @@ mod tests {
         let g_ty = &params[1];
 
         // f : B -> C
-        let Ty::Func(f_args, f_ret) = f_ty else {
+        let Ty::Func(f_args, f_ret) = f_ty.ty.clone() else {
             panic!("did not get func: {:?}", f_ty);
         };
         assert_eq!(f_args.len(), 1);
 
         // g : A -> B
-        let Ty::Func(g_args, g_ret) = g_ty else {
+        let Ty::Func(g_args, g_ret) = g_ty.ty.clone() else {
             panic!("did not get func")
         };
 
         assert_eq!(g_args.len(), 1);
 
         // g’s return type (B) must match f’s argument type
-        assert_eq!(**g_ret, f_args[0].clone());
+        assert_eq!(*g_ret, f_args[0].clone());
 
         // the inner function’s return (and thus compose’s return) is f’s return type C
-        let Ty::Func(inner_params, inner_ret) = *return_type else {
+        let Ty::Func(inner_params, inner_ret) = return_type.ty else {
             panic!(
                 "expected compose to return a function, got {:?}",
                 return_type
@@ -556,7 +585,10 @@ mod tests {
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
-        assert_eq!(*ret, Ty::TypeVar(TypeVarID(4, TypeVarKind::CallReturn)));
+        assert_eq!(
+            *ret,
+            Ty::TypeVar(TypeVarID(4, TypeVarKind::CallReturn)).into()
+        );
     }
 
     #[test]
@@ -579,10 +611,30 @@ mod tests {
             Ty::Func(params, ret) => {
                 assert_eq!(params.len(), 1);
                 // both even and odd must have the same input and output type
-                assert_eq!(*ret, Ty::Int);
-                assert_eq!(params[0].clone(), Ty::Int);
+                assert_eq!(*ret, Ty::Int.into());
+                assert_eq!(params[0].clone(), Ty::Int.into());
             }
             other => panic!("expected a function, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn infers_identity() {
+        let checker = check(
+            "
+            func identity(arg) { arg }
+            identity(1)
+            identity(2.0)
+        ",
+        );
+
+        assert_eq!(
+            checker.type_for(checker.parse_tree.root_ids()[1]).unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            checker.type_for(checker.parse_tree.root_ids()[2]).unwrap(),
+            Ty::Float
+        );
     }
 }
