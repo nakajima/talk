@@ -12,8 +12,14 @@ pub struct ExprMeta {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FuncName {
-    Token(Token),
+    Token(&'static str),
     Resolved(SymbolID),
+}
+
+impl FuncName {
+    pub fn replace(&mut self, func_name: FuncName) {
+        *self = func_name
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

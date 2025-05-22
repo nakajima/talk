@@ -173,7 +173,15 @@ impl Parser {
     }
 
     pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
-        let name = self.try_identifier();
+        let name = if let Some(Token {
+            kind: TokenKind::Identifier(name),
+            ..
+        }) = self.try_identifier()
+        {
+            Some(name)
+        } else {
+            None
+        };
 
         self.consume(TokenKind::LeftParen)?;
 
@@ -229,12 +237,7 @@ impl Parser {
 
         let body = self.block()?;
 
-        self.add_expr(Expr::Func(
-            name.map(FuncName::Token),
-            params,
-            body,
-            ret,
-        ))
+        self.add_expr(Expr::Func(name.map(FuncName::Token), params, body, ret))
     }
 
     pub(crate) fn block(&mut self) -> Result<ExprID, ParserError> {
@@ -413,10 +416,7 @@ impl Parser {
                     self.advance();
                     Ok(current)
                 } else {
-                    Err(ParserError::UnexpectedToken(
-                        possible_tokens,
-                        current.kind,
-                    ))
+                    Err(ParserError::UnexpectedToken(possible_tokens, current.kind))
                 }
             }
             None => Err(ParserError::UnexpectedEndOfInput(possible_tokens)),
@@ -430,7 +430,6 @@ mod tests {
         expr::FuncName,
         parser::parse,
         parsing::expr::Expr::{self, *},
-        token::Token,
         token_kind::TokenKind,
     };
 
@@ -615,16 +614,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("greet"),
-                    start: 6,
-                    end: 10,
-                })),
-                vec![0],
-                2,
-                None
-            )
+            Expr::Func(Some(FuncName::Token("greet").into()), vec![0], 2, None)
         );
     }
 
@@ -635,16 +625,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("greet"),
-                    start: 6,
-                    end: 10,
-                })),
-                vec![],
-                0,
-                None
-            )
+            Expr::Func(Some(FuncName::Token("greet").into()), vec![], 0, None)
         );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
@@ -655,31 +636,13 @@ mod tests {
         assert_eq!(2, parsed.roots().len());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("hello"),
-                    start: 6,
-                    end: 10,
-                })),
-                vec![],
-                0,
-                None
-            )
+            Expr::Func(Some(FuncName::Token("hello").into()), vec![], 0, None)
         );
 
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("world"),
-                    start: 22,
-                    end: 26,
-                })),
-                vec![],
-                2,
-                None
-            )
+            Expr::Func(Some(FuncName::Token("world").into()), vec![], 2, None)
         );
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
     }
@@ -691,16 +654,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("greet"),
-                    start: 6,
-                    end: 10,
-                })),
-                vec![0, 1],
-                2,
-                None
-            )
+            Expr::Func(Some(FuncName::Token("greet").into()), vec![0, 1], 2, None)
         );
     }
 
@@ -710,16 +664,7 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("greet"),
-                    start: 6,
-                    end: 10,
-                })),
-                vec![1],
-                2,
-                None
-            )
+            Expr::Func(Some(FuncName::Token("greet").into()), vec![1], 2, None)
         );
 
         assert_eq!(*parsed.get(1).unwrap(), Parameter("name", Some(0)));
@@ -755,16 +700,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier("fizz"),
-                    start: 6,
-                    end: 9,
-                })),
-                vec![],
-                2,
-                Some(0)
-            )
+            Expr::Func(Some(FuncName::Token("fizz").into()), vec![], 2, Some(0))
         );
     }
 }

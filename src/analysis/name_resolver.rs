@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::expr::Expr::*;
+use crate::expr::FuncName;
 use crate::parse_tree::ParseTree;
 use crate::parser::ExprID;
 
@@ -28,47 +29,46 @@ impl<'a> NameResolver<'a> {
     }
 
     fn resolve_nodes(&mut self, node_ids: Vec<ExprID>, parse_tree: &mut ParseTree) {
-        // // 1) Hoist all funcs in this block before any recursion
-        // for &id in &node_ids {
-        //     if let Expr::Func(
-        //         Some(Token {
-        //             kind: TokenKind::Identifier(n),
-        //             ..
-        //         }),
-        //         _params,
-        //         _body,
-        //         _ret,
-        //     ) = parse_tree.get(id).unwrap()
-        //     {
-        //         self.declare(n, SymbolKind::Func);
-        //     }
-        // }
+        // 1) Hoist all funcs in this block before any recursion
+        for &id in &node_ids {
+            if let Func(Some(FuncName::Token(name)), params, body, ret) =
+                parse_tree.get(id).unwrap()
+            {
+                let symbol_id = self.declare(name, SymbolKind::Func);
+                parse_tree.nodes[id as usize] = Func(
+                    Some(FuncName::Resolved(symbol_id)),
+                    params.to_vec(),
+                    *body,
+                    ret.clone(),
+                );
+            }
+        }
 
         for node_id in node_ids {
-            let node = parse_tree.get(node_id).unwrap();
+            let node = &mut parse_tree.get_mut(node_id).unwrap();
 
-            match node {
+            match node.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
                 Let(name, rhs) => {
                     let symbol_id = self.declare(name, SymbolKind::Local);
-                    parse_tree.nodes[node_id as usize] = ResolvedLet(symbol_id, *rhs);
+                    parse_tree.nodes[node_id as usize] = ResolvedLet(symbol_id, rhs);
                     log::warn!("resolved let: {:?}", self.scopes);
                 }
                 Call(callee, args) => {
                     let mut to_resolve = args.clone();
-                    to_resolve.push(*callee);
+                    to_resolve.push(callee);
 
                     self.resolve_nodes(to_resolve, parse_tree);
                 }
                 Assignment(lhs, rhs) => {
-                    self.resolve_nodes(vec![*lhs, *rhs], parse_tree);
+                    self.resolve_nodes(vec![lhs, rhs], parse_tree);
                 }
                 Unary(_, expr_id) => {
-                    self.resolve_nodes(vec![*expr_id], parse_tree);
+                    self.resolve_nodes(vec![expr_id], parse_tree);
                 }
                 Binary(lhs, _, rhs) => {
-                    self.resolve_nodes(vec![*lhs, *rhs], parse_tree);
+                    self.resolve_nodes(vec![lhs, rhs], parse_tree);
                 }
                 Tuple(items) => {
                     self.resolve_nodes(items.to_vec(), parse_tree);
@@ -77,17 +77,25 @@ impl<'a> NameResolver<'a> {
                     self.resolve_nodes(items.to_vec(), parse_tree);
                 }
                 Func(_name, params, body, _ret) => {
-                    // If it's a named function, we want the name so we can recur.
+                    // If it's a named function, we want the name early so we can recur.
                     // if let Some(name) = name {
-                    //     if let TokenKind::Identifier(name) = name.kind {
-                    //         names_stack.push(&name);
+                    //     if let FuncName::Token(name) = name {
+                    //         let symbol_id = self.declare(name, SymbolKind::Func);
+
+                    //         // Swap out of the name field
+                    //         **node = Func(
+                    //             Some(FuncName::Resolved(symbol_id)),
+                    //             params.to_vec(),
+                    //             body,
+                    //             ret.clone(),
+                    //         );
                     //     }
                     // }
 
                     self.start_scope();
 
-                    for param in params {
-                        let Some(Parameter(name, _)) = parse_tree.get(*param) else {
+                    for param in params.clone() {
+                        let Some(Parameter(name, _)) = parse_tree.get(param) else {
                             panic!("got a non variable param")
                         };
 
@@ -95,7 +103,7 @@ impl<'a> NameResolver<'a> {
                     }
 
                     let mut to_resolve = params.clone();
-                    to_resolve.push(*body);
+                    to_resolve.push(body);
                     self.resolve_nodes(to_resolve, parse_tree);
 
                     self.end_scope();
@@ -103,11 +111,11 @@ impl<'a> NameResolver<'a> {
                 Parameter(name, ty_repr) => {
                     let symbol_id = self.lookup(name);
                     log::trace!("Replacing param {} with {:?}", name, symbol_id);
-                    parse_tree.nodes[node_id as usize] = ResolvedVariable(symbol_id, *ty_repr);
+                    parse_tree.nodes[node_id as usize] = ResolvedVariable(symbol_id, ty_repr);
                 }
                 Variable(name) => {
                     let symbol_id = self.lookup(name);
-                    log::trace!("Replacing param {} with {:?}", name, symbol_id);
+                    log::trace!("Replacing variable {} with {:?}", name, symbol_id);
                     parse_tree.nodes[node_id as usize] = ResolvedVariable(symbol_id, None);
                 }
                 ResolvedLet(_, _) => continue,
@@ -121,6 +129,7 @@ impl<'a> NameResolver<'a> {
         log::trace!("declaring {} in {:?}", name, self.scopes);
         let symbol_id = self.symbol_table.add(name, kind);
         self.scopes.last_mut().unwrap().insert(name, symbol_id);
+        log::trace!("new symbol table: {:?}", self.symbol_table);
         symbol_id
     }
 

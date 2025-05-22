@@ -1,16 +1,13 @@
-use std::collections::{HashMap, HashSet};
-
 use crate::{
     expr::{Expr, FuncName},
     parse_tree::ParseTree,
     parser::ExprID,
-    token::Token,
-    token_kind::TokenKind,
 };
 
 use super::{
     builtins::match_builtin,
     constraint_solver::{Constraint, ConstraintError, ConstraintSolver},
+    environment::Environment,
     symbol_table::{SymbolID, SymbolTable},
     typed_expr::TypedExpr,
 };
@@ -19,7 +16,7 @@ pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
 
 #[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
-pub struct TypeVarID(u32, TypeVarKind);
+pub struct TypeVarID(pub u32, pub TypeVarKind);
 
 #[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
 pub enum TypeVarKind {
@@ -27,7 +24,7 @@ pub enum TypeVarKind {
     CallArg,
     CallReturn,
     FuncParam,
-    FuncNameVar(&'static str),
+    FuncNameVar(SymbolID),
     FuncBody,
     Let,
     TypeRepr(&'static str),
@@ -61,112 +58,7 @@ impl Scheme {
 }
 
 #[derive(Debug)]
-pub struct Environment {
-    pub types: HashMap<ExprID, Ty>,
-    pub type_var_id: TypeVarID,
-    pub constraints: Vec<Constraint>,
-    pub symbol_table: SymbolTable,
-    pub scopes: Vec<HashMap<SymbolID, Scheme>>,
-}
-
-#[allow(clippy::new_without_default)]
-impl Environment {
-    pub fn new() -> Self {
-        Self {
-            types: HashMap::new(),
-            type_var_id: TypeVarID(0, TypeVarKind::Blank),
-            constraints: vec![],
-            symbol_table: Default::default(),
-            scopes: vec![Default::default()],
-        }
-    }
-
-    /// Look up the scheme for `sym`, then immediately instantiate it.
-    pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Ty {
-        let scheme = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|frame| frame.get(&symbol_id).cloned())
-            .unwrap_or_else(|| panic!("missing symbol {:?} in {:?}",
-                symbol_id, self.scopes));
-        self.instantiate(&scheme)
-    }
-
-    pub fn start_scope(&mut self) {
-        self.scopes.push(Default::default());
-    }
-
-    /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
-    /// quantifying exactly those vars not free elsewhere in the env.
-    pub fn generalize(&self, t: &Ty) -> Scheme {
-        let ftv_t = free_type_vars(t);
-        let ftv_env = free_type_vars_in_env(&self.scopes);
-        let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
-
-        Scheme {
-            unbound_vars,
-            ty: t.clone(),
-        }
-    }
-
-    /// Instantiate a polymorphic scheme into a fresh monotype:
-    /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
-    /// and substitute α ↦ β throughout scheme.ty.
-    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
-        // 1) build a map old_var → fresh_var
-        let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
-        for &old in &scheme.unbound_vars {
-            // preserve the original kind when making a fresh one
-            let fresh = self.new_type_variable(old.1);
-            var_map.insert(old, fresh);
-        }
-        // 2) walk the type, replacing each old with its fresh
-        fn walk(ty: &Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
-            match ty {
-                Ty::TypeVar(tv) => {
-                    if let Some(&new_tv) = map.get(tv) {
-                        Ty::TypeVar(new_tv)
-                    } else {
-                        Ty::TypeVar(*tv)
-                    }
-                }
-                Ty::Func(params, ret) => {
-                    let new_params = params.iter().map(|p| walk(p, map)).collect();
-                    let new_ret = Box::new(walk(ret, map));
-                    Ty::Func(new_params, new_ret)
-                }
-                Ty::Void | Ty::Int | Ty::Float => ty.clone(),
-            }
-        }
-        walk(&scheme.ty, &var_map)
-    }
-
-    fn end_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    #[track_caller]
-    fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
-        self.type_var_id = TypeVarID(self.type_var_id.0 + 1, kind);
-
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            log::warn!(
-                "new_type_variable {:?} from {}:{}",
-                Ty::TypeVar(self.type_var_id),
-                loc.file(),
-                loc.line()
-            );
-        }
-
-        self.type_var_id
-    }
-}
-
-#[derive(Debug)]
 pub struct TypeChecker {
-    pub symbol_table: SymbolTable,
     pub parse_tree: ParseTree,
     pub environment: Option<Environment>,
 }
@@ -174,9 +66,8 @@ pub struct TypeChecker {
 impl TypeChecker {
     pub fn new(symbol_table: SymbolTable, parse_tree: ParseTree) -> Self {
         Self {
-            symbol_table,
             parse_tree,
-            environment: None,
+            environment: Some(Environment::new(symbol_table)),
         }
     }
 
@@ -189,9 +80,9 @@ impl TypeChecker {
     }
 
     pub fn infer(&mut self) -> Result<Vec<TypedExpr>, TypeError> {
-        let mut env = Environment::new();
+        let mut env = self.environment.take().unwrap();
 
-        // self.hoist_functions(&self.parse_tree.root_ids(), &mut env);
+        self.hoist_functions(&self.parse_tree.root_ids(), &mut env);
 
         let typed_roots = self
             .parse_tree
@@ -208,6 +99,7 @@ impl TypeChecker {
     pub fn resolve(&mut self) -> Result<(), ConstraintError> {
         let mut constraints = self.environment.as_ref().unwrap().constraints.clone();
         let mut resolver = ConstraintSolver::new(self, &mut constraints);
+
         resolver.solve()
     }
 
@@ -234,6 +126,10 @@ impl TypeChecker {
                 let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()));
                 let callee_ty = self.infer_node(*callee, env, &None)?;
 
+                log::debug!("callee: {:?}", callee);
+                log::debug!("Expected callee_ty: {:?}", expected_callee_ty);
+                log::debug!("callee_ty: {:?}", callee_ty);
+
                 env.constraints.push(Constraint::Equality(
                     *callee,
                     expected_callee_ty,
@@ -241,8 +137,6 @@ impl TypeChecker {
                 ));
 
                 env.types.insert(id, ret_var.clone());
-
-                log::error!("Call return_ty: {:?}, callee: {:?}", ret_var, callee_ty);
 
                 Ok(TypedExpr::new(id, ret_var))
             }
@@ -287,26 +181,29 @@ impl TypeChecker {
                     .as_ref()
                     .map(|repr| self.infer_node(*repr, env, &None).unwrap().ty);
 
-                if let Some(FuncName::Token(Token {
-                    kind: TokenKind::Identifier(name),
-                    ..
-                })) = name
-                {
-                    func_var = Some(env.new_type_variable(TypeVarKind::FuncNameVar(name)));
+                if let Some(FuncName::Resolved(symbol_id)) = name {
+                    let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
+                    func_var = Some(type_var.clone());
+                    let scheme = env.generalize(&Ty::TypeVar(type_var));
+                    env.declare(*symbol_id, scheme);
+                    log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
                 }
 
                 env.start_scope();
 
                 let mut param_vars: Vec<Ty> = vec![];
-                for (_i, expr_opt) in params.iter().map(|id| (*id, self.parse_tree.get(*id))) {
-                    if let Some(Expr::ResolvedVariable(_depth, ty)) = expr_opt {
+                for expr_opt in params.iter().map(|id| self.parse_tree.get(*id)) {
+                    if let Some(Expr::ResolvedVariable(symbol_id, ty)) = expr_opt {
                         let var_ty = if let Some(ty_id) = ty {
                             self.infer_node(*ty_id, env, expected)?.ty
                         } else {
                             Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam))
                         };
 
-                        param_vars.push(var_ty)
+                        // Parameters are monomorphic inside the function body
+                        let scheme = Scheme::new(var_ty.clone(), vec![]);
+                        env.declare(*symbol_id, scheme);
+                        param_vars.push(var_ty);
                     }
                 }
 
@@ -316,15 +213,24 @@ impl TypeChecker {
 
                 let func_ty = Ty::Func(param_vars.clone(), FuncReturning::new(body_ty.ty));
 
-                if let Some(func_var) = &func_var {
+                env.types.insert(id, func_ty.clone());
+
+                if let Some(func_var) = func_var {
                     env.constraints.push(Constraint::Equality(
                         id,
-                        Ty::TypeVar(*func_var),
+                        Ty::TypeVar(func_var),
                         func_ty.clone(),
                     ));
-                }
 
-                env.types.insert(id, func_ty.clone());
+                    if let Some(FuncName::Resolved(symbol_id)) = name {
+                        let scheme = if env.scopes.len() > 1 {
+                            Scheme::new(func_ty.clone(), vec![])
+                        } else {
+                            env.generalize(&func_ty)
+                        };
+                        env.scopes.last_mut().unwrap().insert(*symbol_id, scheme);
+                    }
+                }
 
                 Ok(TypedExpr::new(id, func_ty))
             }
@@ -345,13 +251,18 @@ impl TypeChecker {
                     }
                 };
 
-                env.scopes.last_mut().unwrap().insert(*symbol_id, scheme);
+                env.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(*symbol_id, scheme.clone());
+
+                env.types.insert(id, scheme.ty);
 
                 Ok(TypedExpr::new(id, rhs_ty))
             }
             Expr::ResolvedVariable(symbol_id, _) => {
                 log::trace!(
-                    "ResolvedVariable id: {:?}, type stack: {:?}",
+                    "ResolvedVariable id: {:?}, symbol table: {:?}",
                     symbol_id,
                     env.symbol_table
                 );
@@ -373,7 +284,7 @@ impl TypeChecker {
             Expr::Unary(_token_kind, _) => todo!(),
             Expr::Binary(_, _token_kind, _) => todo!(),
             Expr::Block(items) => {
-                // self.hoist_functions(items, env);
+                self.hoist_functions(items, env);
 
                 let return_ty: Ty = {
                     let mut return_ty: Ty = Ty::Void;
@@ -418,23 +329,6 @@ impl TypeChecker {
         result
     }
 
-    // /// Instantiate a scheme by freshening its quantified vars.
-    // pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
-    //     let mut inst_sub = Substitution::new();
-    //     for &qvar in &scheme.vars {
-    //         inst_sub.insert(qvar, self.new_type_var().into());
-    //     }
-    //     inst_sub.apply(&scheme.ty)
-    // }
-
-    // /// After inferring a monotype `t`, generalize it w.r.t. the *rest* of the env.
-    // pub fn generalize(&self, t: Ty) -> Scheme {
-    //     let ftv_t = free_type_vars(&t);
-    //     let ftv_env = free_type_vars_in_env(&self.subs, &self.scopes);
-    //     let vars = ftv_t.difference(&ftv_env).cloned().collect();
-    //     Scheme { vars, ty: t }
-    // }
-
     pub fn type_for(&self, node_id: ExprID) -> Option<Ty> {
         let Some(env) = &self.environment else {
             panic!("no inference performed");
@@ -443,69 +337,20 @@ impl TypeChecker {
         env.types.get(&node_id).cloned()
     }
 
-    // fn hoist_functions(&self, node_ids: &Vec<ExprID>, env: &mut Environment) {
-    //     for &item in node_ids.iter() {
-    //         if let Expr::Func(
-    //             Some(Token {
-    //                 kind: TokenKind::Identifier(name),
-    //                 ..
-    //             }),
-    //             _params,
-    //             _body,
-    //             _ret,
-    //         ) = self.parse_tree.get(item).unwrap()
-    //         {
-    //             let fn_var = env.new_type_variable(TypeVarKind::FuncNameVar(name));
-    //             env.types.insert(item, fn_var.clone().into());
-    //             env.type_stack.push(fn_var.into());
-    //         }
-    //     }
-    // }
-}
+    fn hoist_functions(&self, node_ids: &Vec<ExprID>, env: &mut Environment) {
+        for &item in node_ids.iter() {
+            if let Expr::Func(Some(FuncName::Resolved(symbol_id)), _params, _body, _ret) =
+                self.parse_tree.get(item).unwrap()
+            {
+                let fn_var =
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id)));
+                env.types.insert(item, fn_var.clone().into());
 
-/// Collect all type-variables occurring free in a single monotype.
-pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
-    let mut s = HashSet::new();
-    match ty {
-        Ty::TypeVar(v) => {
-            s.insert(*v);
-        }
-        Ty::Func(params, ret) => {
-            for p in params {
-                s.extend(free_type_vars(p));
+                let scheme = env.generalize(&fn_var);
+                env.declare(*symbol_id, scheme);
             }
-            s.extend(free_type_vars(ret));
-        }
-        // add more Ty variants here as you grow them:
-        // Ty::Tuple(elems)  => for e in elems { s.extend(free_type_vars(e)); }
-        // Ty::ADT(name, args) => for a in args { s.extend(free_type_vars(a)); }
-        _ => {}
-    }
-    s
-}
-
-/// Collect all free type-vars in *every* in-scope Scheme,
-/// *after* applying the current substitutions.  We exclude
-/// each scheme’s own quantified vars.
-pub fn free_type_vars_in_env(scopes: &Vec<HashMap<SymbolID, Scheme>>) -> HashSet<TypeVarID> {
-    let mut s = HashSet::new();
-
-    for frame in scopes.iter() {
-        for scheme in frame.values() {
-            // collect its free vars
-            let mut ftv = free_type_vars(&scheme.ty);
-
-            // remove those vars that the scheme already quantifies
-            for q in &scheme.unbound_vars {
-                ftv.remove(q);
-            }
-
-            // everything remaining really is free in the env
-            s.extend(ftv);
         }
     }
-
-    s
 }
 
 #[cfg(test)]
@@ -541,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn checks_a_func() {
+    fn checks_a_named_func() {
         let checker = check("func sup(name) { name }\nsup");
         let root_id = checker.parse_tree.root_ids()[0];
 
@@ -557,10 +402,22 @@ mod tests {
             Ty::TypeVar(TypeVarID(3, TypeVarKind::FuncParam))
         );
 
-        assert_eq!(
-            checker.type_for(checker.parse_tree.root_ids()[1]),
-            Some(Ty::Func(params, return_type))
-        );
+        // The second root-expr is the *use* of `sup`.
+        let Some(Ty::Func(params2, return_type2)) =
+            checker.type_for(checker.parse_tree.root_ids()[1])
+        else {
+            panic!(
+                "expected `sup` to be a function, got: {:?}",
+                checker.type_for(checker.parse_tree.root_ids()[1])
+            );
+        };
+
+        // It must still be a one-parameter function …
+        assert_eq!(params2.len(), 1);
+        // … whose return type equals its parameter (α → α),
+        // even though this α is a fresh type-variable distinct
+        // from the one in the definition above.
+        assert_eq!(*return_type2, params2[0].clone());
     }
 
     #[test]
@@ -671,7 +528,7 @@ mod tests {
         // the inner function’s return (and thus compose’s return) is f’s return type C
         let Ty::Func(inner_params, inner_ret) = *return_type else {
             panic!(
-                "expected compose to return a function, got {:?}",
+                "expected `compose` to return a function, got {:?}",
                 return_type
             );
         };
@@ -698,10 +555,7 @@ mod tests {
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
-        assert_eq!(
-            *ret,
-            Ty::TypeVar(TypeVarID(4, TypeVarKind::CallReturn))
-        );
+        assert_eq!(*ret, Ty::TypeVar(TypeVarID(4, TypeVarKind::CallReturn)));
     }
 
     #[test]

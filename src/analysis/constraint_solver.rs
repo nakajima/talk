@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::parser::ExprID;
 
-use super::type_checker::{Environment, Ty, TypeChecker, TypeVarID};
+use super::{
+    environment::Environment,
+    type_checker::{Ty, TypeChecker, TypeVarID},
+};
 
 #[derive(Debug)]
 pub enum ConstraintError {
