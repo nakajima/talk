@@ -39,7 +39,7 @@ impl<'a> NameResolver<'a> {
                     Some(FuncName::Resolved(symbol_id)),
                     params.to_vec(),
                     *body,
-                    ret.clone(),
+                    *ret,
                 );
             }
         }

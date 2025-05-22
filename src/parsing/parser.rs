@@ -614,7 +614,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet").into()), vec![0], 2, None)
+            Expr::Func(Some(FuncName::Token("greet")), vec![0], 2, None)
         );
     }
 
@@ -625,7 +625,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet").into()), vec![], 0, None)
+            Expr::Func(Some(FuncName::Token("greet")), vec![], 0, None)
         );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
@@ -636,13 +636,13 @@ mod tests {
         assert_eq!(2, parsed.roots().len());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Func(Some(FuncName::Token("hello").into()), vec![], 0, None)
+            Expr::Func(Some(FuncName::Token("hello")), vec![], 0, None)
         );
 
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
-            Expr::Func(Some(FuncName::Token("world").into()), vec![], 2, None)
+            Expr::Func(Some(FuncName::Token("world")), vec![], 2, None)
         );
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
     }
@@ -654,7 +654,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet").into()), vec![0, 1], 2, None)
+            Expr::Func(Some(FuncName::Token("greet")), vec![0, 1], 2, None)
         );
     }
 
@@ -664,7 +664,7 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet").into()), vec![1], 2, None)
+            Expr::Func(Some(FuncName::Token("greet")), vec![1], 2, None)
         );
 
         assert_eq!(*parsed.get(1).unwrap(), Parameter("name", Some(0)));
@@ -700,7 +700,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("fizz").into()), vec![], 2, Some(0))
+            Expr::Func(Some(FuncName::Token("fizz")), vec![], 2, Some(0))
         );
     }
 }

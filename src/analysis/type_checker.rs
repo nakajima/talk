@@ -183,7 +183,7 @@ impl TypeChecker {
 
                 if let Some(FuncName::Resolved(symbol_id)) = name {
                     let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
-                    func_var = Some(type_var.clone());
+                    func_var = Some(type_var);
                     let scheme = env.generalize(&Ty::TypeVar(type_var));
                     env.declare(*symbol_id, scheme);
                     log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
@@ -344,7 +344,7 @@ impl TypeChecker {
             {
                 let fn_var =
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id)));
-                env.types.insert(item, fn_var.clone().into());
+                env.types.insert(item, fn_var.clone());
 
                 let scheme = env.generalize(&fn_var);
                 env.declare(*symbol_id, scheme);
