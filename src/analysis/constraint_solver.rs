@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::parser::ExprID;
 
-use super::type_checker::{Environment, Ty, TypeChecker, TypeDesc, TypeVarID};
+use super::type_checker::{Environment, Ty, TypeChecker, TypeVarID};
 
 #[derive(Debug)]
 pub enum ConstraintError {
@@ -18,7 +18,7 @@ pub enum ConstrainedExpr {
 
 #[derive(Debug, Clone)]
 pub enum Constraint {
-    Equality(ExprID, TypeDesc, TypeDesc),
+    Equality(ExprID, Ty, Ty),
 }
 
 pub struct ConstraintSolver<'a> {
@@ -50,7 +50,7 @@ impl<'a> ConstraintSolver<'a> {
             .types
             .values_mut()
         {
-            *ty = Self::apply(ty.clone(), &substitutions);
+            *ty = Self::apply(ty.clone(), &substitutions).into();
         }
 
         Ok(())
@@ -63,8 +63,8 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), ConstraintError> {
         match constraint {
             Constraint::Equality(node_id, lhs, rhs) => {
-                let lhs = Self::apply(lhs.ty, substitutions);
-                let rhs = Self::apply(rhs.ty, substitutions);
+                let lhs = Self::apply(lhs, substitutions);
+                let rhs = Self::apply(rhs, substitutions);
 
                 Self::unify(
                     &lhs,
@@ -95,10 +95,10 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Func(params, returning) => {
                 let applied_params = params
                     .iter()
-                    .map(|param| Self::apply(param.clone().ty, substitutions).into())
+                    .map(|param| Self::apply(param.clone(), substitutions).into())
                     .collect();
 
-                let applied_return = Self::apply(returning.ty, substitutions);
+                let applied_return = Self::apply(*returning, substitutions);
 
                 Ty::Func(applied_params, Box::new(applied_return.into()))
             }
@@ -136,10 +136,10 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_params.len() == rhs_params.len() =>
             {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    Self::unify(&lhs.ty, &rhs.ty, substitutions, env)?;
+                    Self::unify(&lhs, &rhs, substitutions, env)?;
                 }
 
-                Self::unify(&lhs_returning.ty, &rhs_returning.ty, substitutions, env)?;
+                Self::unify(&lhs_returning, &rhs_returning, substitutions, env)?;
 
                 Ok(())
             }
@@ -161,8 +161,8 @@ impl<'a> ConstraintSolver<'a> {
                 // check each parameter and the return type
                 let oh = params
                     .iter()
-                    .any(|param| Self::occurs_check(v, &param.ty, substitutions, env))
-                    || Self::occurs_check(v, &returning.ty, substitutions, env);
+                    .any(|param| Self::occurs_check(v, &param, substitutions, env))
+                    || Self::occurs_check(v, &returning, substitutions, env);
 
                 if oh {
                     log::error!("occur check failed: {:?}", ty);

@@ -1,4 +1,4 @@
-use crate::{token::Token, token_kind::TokenKind};
+use crate::{symbol_table::SymbolID, token::Token, token_kind::TokenKind};
 
 use super::parser::ExprID;
 
@@ -11,6 +11,12 @@ pub struct ExprMeta {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FuncName {
+    Token(Token),
+    Resolved(SymbolID),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
@@ -19,9 +25,13 @@ pub enum Expr {
     Tuple(Vec<ExprID>),
     Block(Vec<ExprID>),
     Call(ExprID, Vec<ExprID>),
+
+    // A type annotation
     TypeRepr(&'static str),
+
+    // Function stuff
     Func(
-        Option<Token>,
+        Option<FuncName>,
         Vec<ExprID>,    /* params tuple */
         ExprID,         /* body */
         Option<ExprID>, /* return type */
@@ -30,8 +40,13 @@ pub enum Expr {
         &'static str,   /* name */
         Option<ExprID>, /* TypeRepr */
     ),
-    Variable(&'static str),
-    ResolvedVariable(VarDepth, Option<ExprID>),
+
+    // Variables
+    Let(&'static str, Option<ExprID>),
     Assignment(ExprID /* LHS */, ExprID /* RHS */),
-    Let(&'static str),
+    Variable(&'static str),
+
+    // For name resolution
+    ResolvedVariable(SymbolID, Option<ExprID>),
+    ResolvedLet(SymbolID, Option<ExprID> /* RHS */),
 }

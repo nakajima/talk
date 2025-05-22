@@ -3,7 +3,7 @@ use crate::{lexer::Lexer, token::Token, token_kind::TokenKind};
 use super::{
     expr::{
         Expr::{self, *},
-        ExprMeta,
+        ExprMeta, FuncName,
     },
     parse_tree::ParseTree,
     precedence::Precedence,
@@ -141,7 +141,13 @@ impl Parser {
             unreachable!()
         };
 
-        let let_expr = self.add_expr(Let(name));
+        let rhs = if self.did_match(TokenKind::Equals)? {
+            Some(self.parse_with_precedence(Precedence::Assignment)?)
+        } else {
+            None
+        };
+
+        let let_expr = self.add_expr(Let(name, rhs));
 
         if self.did_match(TokenKind::Equals)? {
             let rhs = self.parse_with_precedence(Precedence::None)?;
@@ -223,7 +229,12 @@ impl Parser {
 
         let body = self.block()?;
 
-        self.add_expr(Expr::Func(name, params, body, ret))
+        self.add_expr(Expr::Func(
+            name.map(|n| FuncName::Token(n)),
+            params,
+            body,
+            ret,
+        ))
     }
 
     pub(crate) fn block(&mut self) -> Result<ExprID, ParserError> {
@@ -416,6 +427,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
+        expr::FuncName,
         parser::parse,
         parsing::expr::Expr::{self, *},
         token::Token,
@@ -604,11 +616,11 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("greet"),
                     start: 6,
                     end: 10,
-                }),
+                })),
                 vec![0],
                 2,
                 None
@@ -624,11 +636,11 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("greet"),
                     start: 6,
                     end: 10,
-                }),
+                })),
                 vec![],
                 0,
                 None
@@ -644,11 +656,11 @@ mod tests {
         assert_eq!(
             *parsed.roots()[0].unwrap(),
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("hello"),
                     start: 6,
                     end: 10,
-                }),
+                })),
                 vec![],
                 0,
                 None
@@ -659,11 +671,11 @@ mod tests {
         assert_eq!(
             *parsed.roots()[1].unwrap(),
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("world"),
                     start: 22,
                     end: 26,
-                }),
+                })),
                 vec![],
                 2,
                 None
@@ -680,11 +692,11 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("greet"),
                     start: 6,
                     end: 10,
-                }),
+                })),
                 vec![0, 1],
                 2,
                 None
@@ -699,11 +711,11 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("greet"),
                     start: 6,
                     end: 10,
-                }),
+                })),
                 vec![1],
                 2,
                 None
@@ -733,7 +745,7 @@ mod tests {
     fn parses_let() {
         let parsed = parse("let fizz").unwrap();
         let expr = parsed.roots()[0].unwrap();
-        assert_eq!(*expr, Expr::Let("fizz"));
+        assert_eq!(*expr, Expr::Let("fizz", None));
     }
 
     #[test]
@@ -744,11 +756,11 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(Token {
+                Some(FuncName::Token(Token {
                     kind: TokenKind::Identifier("fizz"),
                     start: 6,
                     end: 9,
-                }),
+                })),
                 vec![],
                 2,
                 Some(0)
