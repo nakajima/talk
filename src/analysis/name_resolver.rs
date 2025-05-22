@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{token::Token, token_kind::TokenKind};
-
-use crate::expr::Expr::{self, *};
+use crate::expr::Expr::*;
 use crate::parse_tree::ParseTree;
 use crate::parser::ExprID;
 
@@ -242,7 +240,7 @@ mod tests {
         ",
         );
 
-        let Expr::ResolvedLet(let_expr, Some(int)) = tree.get(tree.root_ids()[0]).unwrap() else {
+        let Expr::ResolvedLet(_, Some(int)) = tree.get(tree.root_ids()[0]).unwrap() else {
             panic!("didnt get assignment")
         };
 
