@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use crate::parser::ExprID;
 
-use super::{
-    environment::Environment,
-    type_checker::{Ty, TypeChecker, TypeVarID},
-};
+use super::type_checker::{Ty, TypeChecker, TypeVarID};
 
 #[derive(Debug)]
 pub enum ConstraintError {
@@ -69,13 +66,7 @@ impl<'a> ConstraintSolver<'a> {
                 let lhs = Self::apply(lhs, substitutions);
                 let rhs = Self::apply(rhs, substitutions);
 
-                Self::unify(
-                    &lhs,
-                    &rhs,
-                    substitutions,
-                    self.type_checker.environment.as_ref().unwrap(),
-                )
-                .map_err(|err| {
+                Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
                     log::error!(
                         "Type error: {:?}",
                         self.type_checker.parse_tree.meta.get(node_id as usize)
@@ -120,7 +111,6 @@ impl<'a> ConstraintSolver<'a> {
         lhs: &Ty,
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
-        env: &Environment,
     ) -> Result<(), ConstraintError> {
         log::trace!("Unifying: {:?} and {:?}", lhs, rhs);
 
@@ -128,7 +118,7 @@ impl<'a> ConstraintSolver<'a> {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
-                if Self::occurs_check(v, ty, substitutions, env) {
+                if Self::occurs_check(v, ty, substitutions) {
                     Err(ConstraintError::OccursConflict)
                 } else {
                     substitutions.insert(*v, ty.clone());
@@ -139,10 +129,10 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_params.len() == rhs_params.len() =>
             {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    Self::unify(lhs, rhs, substitutions, env)?;
+                    Self::unify(lhs, rhs, substitutions)?;
                 }
 
-                Self::unify(lhs_returning, rhs_returning, substitutions, env)?;
+                Self::unify(lhs_returning, rhs_returning, substitutions)?;
 
                 Ok(())
             }
@@ -151,12 +141,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Returns true if `v` occurs inside `ty` (after applying current `subs`).
-    fn occurs_check(
-        v: &TypeVarID,
-        ty: &Ty,
-        substitutions: &HashMap<TypeVarID, Ty>,
-        env: &Environment,
-    ) -> bool {
+    fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> bool {
         let ty = Self::apply(ty.clone(), substitutions);
         match &ty {
             Ty::TypeVar(tv) => tv == v,
@@ -164,8 +149,8 @@ impl<'a> ConstraintSolver<'a> {
                 // check each parameter and the return type
                 let oh = params
                     .iter()
-                    .any(|param| Self::occurs_check(v, param, substitutions, env))
-                    || Self::occurs_check(v, returning, substitutions, env);
+                    .any(|param| Self::occurs_check(v, param, substitutions))
+                    || Self::occurs_check(v, returning, substitutions);
 
                 if oh {
                     log::error!("occur check failed: {:?}", ty);

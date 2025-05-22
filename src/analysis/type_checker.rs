@@ -192,8 +192,8 @@ impl TypeChecker {
                 env.start_scope();
 
                 let mut param_vars: Vec<Ty> = vec![];
-                for expr_opt in params.iter().map(|id| self.parse_tree.get(*id)) {
-                    if let Some(Expr::ResolvedVariable(symbol_id, ty)) = expr_opt {
+                for expr_opt in params.iter().filter_map(|id| self.parse_tree.get(*id)) {
+                    if let Expr::ResolvedVariable(symbol_id, ty) = expr_opt {
                         let var_ty = if let Some(ty_id) = ty {
                             self.infer_node(*ty_id, env, expected)?.ty
                         } else {
@@ -321,7 +321,7 @@ impl TypeChecker {
         };
 
         assert!(
-            env.types.get(&id).is_some(),
+            env.types.contains_key(&id),
             "did not set type for {:?}",
             result
         );
@@ -337,7 +337,7 @@ impl TypeChecker {
         env.types.get(&node_id).cloned()
     }
 
-    fn hoist_functions(&self, node_ids: &Vec<ExprID>, env: &mut Environment) {
+    fn hoist_functions(&self, node_ids: &[ExprID], env: &mut Environment) {
         for &item in node_ids.iter() {
             if let Expr::Func(Some(FuncName::Resolved(symbol_id)), _params, _body, _ret) =
                 self.parse_tree.get(item).unwrap()

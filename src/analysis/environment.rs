@@ -141,7 +141,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
 /// Collect all free type-vars in *every* in-scope Scheme,
 /// *after* applying the current substitutions.  We exclude
 /// each scheme’s own quantified vars.
-pub fn free_type_vars_in_env(scopes: &Vec<HashMap<SymbolID, Scheme>>) -> HashSet<TypeVarID> {
+pub fn free_type_vars_in_env(scopes: &[HashMap<SymbolID, Scheme>]) -> HashSet<TypeVarID> {
     let mut s = HashSet::new();
 
     for frame in scopes.iter() {

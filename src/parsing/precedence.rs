@@ -42,7 +42,7 @@ impl ParseHandler {
     };
 }
 
-impl<'a> Precedence {
+impl Precedence {
     pub const fn handler(token: Option<Token>) -> Result<ParseHandler, ParserError> {
         let token = match token {
             Some(t) => t,
