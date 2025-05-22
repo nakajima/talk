@@ -50,7 +50,7 @@ impl<'a> ConstraintSolver<'a> {
             .types
             .values_mut()
         {
-            *ty = Self::apply(ty.clone(), &substitutions).into();
+            *ty = Self::apply(ty.clone(), &substitutions);
         }
 
         Ok(())
@@ -95,12 +95,12 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Func(params, returning) => {
                 let applied_params = params
                     .iter()
-                    .map(|param| Self::apply(param.clone(), substitutions).into())
+                    .map(|param| Self::apply(param.clone(), substitutions))
                     .collect();
 
                 let applied_return = Self::apply(*returning, substitutions);
 
-                Ty::Func(applied_params, Box::new(applied_return.into()))
+                Ty::Func(applied_params, Box::new(applied_return))
             }
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(&type_var) {
@@ -136,10 +136,10 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_params.len() == rhs_params.len() =>
             {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    Self::unify(&lhs, &rhs, substitutions, env)?;
+                    Self::unify(lhs, rhs, substitutions, env)?;
                 }
 
-                Self::unify(&lhs_returning, &rhs_returning, substitutions, env)?;
+                Self::unify(lhs_returning, rhs_returning, substitutions, env)?;
 
                 Ok(())
             }
@@ -161,8 +161,8 @@ impl<'a> ConstraintSolver<'a> {
                 // check each parameter and the return type
                 let oh = params
                     .iter()
-                    .any(|param| Self::occurs_check(v, &param, substitutions, env))
-                    || Self::occurs_check(v, &returning, substitutions, env);
+                    .any(|param| Self::occurs_check(v, param, substitutions, env))
+                    || Self::occurs_check(v, returning, substitutions, env);
 
                 if oh {
                     log::error!("occur check failed: {:?}", ty);

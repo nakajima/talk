@@ -84,14 +84,14 @@ impl Parser {
     fn advance(&mut self) -> Option<Token> {
         self.previous = self.current;
         self.current = self.lexer.next().ok();
-        self.previous.clone()
+        self.previous
     }
 
     fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
-        let token = self.current.clone().unwrap();
+        let token = self.current.unwrap();
 
         let expr_meta = ExprMeta {
-            start: token.clone(),
+            start: token,
             end: token,
         };
 
@@ -230,7 +230,7 @@ impl Parser {
         let body = self.block()?;
 
         self.add_expr(Expr::Func(
-            name.map(|n| FuncName::Token(n)),
+            name.map(FuncName::Token),
             params,
             body,
             ret,
@@ -293,7 +293,7 @@ impl Parser {
 
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
-        let current_precedence = Precedence::handler(Some(op.clone()))?.precedence;
+        let current_precedence = Precedence::handler(Some(op))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
@@ -315,7 +315,7 @@ impl Parser {
             TokenKind::Pipe,
         ])?;
 
-        let current_precedence = Precedence::handler(Some(op.clone()))?.precedence;
+        let current_precedence = Precedence::handler(Some(op))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
@@ -394,7 +394,7 @@ impl Parser {
         if let Some(current) = self.current {
             if current.kind == expected {
                 self.advance();
-                return Ok(current.clone());
+                return Ok(current);
             };
         }
 
@@ -411,11 +411,11 @@ impl Parser {
             Some(current) => {
                 if possible_tokens.contains(&current.kind) {
                     self.advance();
-                    Ok(current.clone())
+                    Ok(current)
                 } else {
                     Err(ParserError::UnexpectedToken(
                         possible_tokens,
-                        current.clone().kind,
+                        current.kind,
                     ))
                 }
             }

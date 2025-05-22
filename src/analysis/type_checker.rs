@@ -88,10 +88,8 @@ impl Environment {
             .iter()
             .rev()
             .find_map(|frame| frame.get(&symbol_id).cloned())
-            .expect(&format!(
-                "missing symbol {:?} in {:?}",
-                symbol_id, self.scopes
-            ));
+            .unwrap_or_else(|| panic!("missing symbol {:?} in {:?}",
+                symbol_id, self.scopes));
         self.instantiate(&scheme)
     }
 
@@ -102,7 +100,7 @@ impl Environment {
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
     pub fn generalize(&self, t: &Ty) -> Scheme {
-        let ftv_t = free_type_vars(&t);
+        let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes);
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
 
@@ -187,7 +185,7 @@ impl TypeChecker {
             .as_mut()
             .expect("type inference not performed")
             .types
-            .insert(node_id, ty.into());
+            .insert(node_id, ty);
     }
 
     pub fn infer(&mut self) -> Result<Vec<TypedExpr>, TypeError> {
@@ -249,12 +247,12 @@ impl TypeChecker {
                 Ok(TypedExpr::new(id, ret_var))
             }
             Expr::LiteralInt(_) => {
-                env.types.insert(id, Ty::Int.into());
-                Ok(TypedExpr::new(id, Ty::Int.into()))
+                env.types.insert(id, Ty::Int);
+                Ok(TypedExpr::new(id, Ty::Int))
             }
             Expr::LiteralFloat(_) => {
-                env.types.insert(id, Ty::Float.into());
-                Ok(TypedExpr::new(id, Ty::Float.into()))
+                env.types.insert(id, Ty::Float);
+                Ok(TypedExpr::new(id, Ty::Float))
             }
             Expr::Assignment(lhs, rhs) => {
                 let lhs_ty = self.infer_node(*lhs, env, &None)?;
@@ -275,8 +273,7 @@ impl TypeChecker {
                     expr: id,
                     ty: (match_builtin(name).unwrap_or_else(|| {
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
-                    }))
-                    .into(),
+                    })),
                 };
 
                 env.types.insert(id, typed_expr.clone().ty.clone());
@@ -323,13 +320,13 @@ impl TypeChecker {
                     env.constraints.push(Constraint::Equality(
                         id,
                         Ty::TypeVar(*func_var),
-                        func_ty.clone().into(),
+                        func_ty.clone(),
                     ));
                 }
 
                 env.types.insert(id, func_ty.clone());
 
-                Ok(TypedExpr::new(id, func_ty.into()))
+                Ok(TypedExpr::new(id, func_ty))
             }
             Expr::ResolvedLet(symbol_id, rhs) => {
                 let rhs_ty = if let Some(rhs) = rhs {
@@ -362,7 +359,7 @@ impl TypeChecker {
                 let ty = env.instantiate_symbol(*symbol_id);
 
                 env.types.insert(id, ty.clone());
-                Ok(TypedExpr { expr: id, ty: ty })
+                Ok(TypedExpr { expr: id, ty })
             }
             Expr::Parameter(_, _) => todo!(
                 "unresolved parameter: {:?}",
@@ -379,11 +376,11 @@ impl TypeChecker {
                 // self.hoist_functions(items, env);
 
                 let return_ty: Ty = {
-                    let mut return_ty: Ty = Ty::Void.into();
+                    let mut return_ty: Ty = Ty::Void;
 
                     for (i, item) in items.iter().enumerate() {
                         if i == items.len() - 1 {
-                            return_ty = self.infer_node(*item, env, &expected)?.ty;
+                            return_ty = self.infer_node(*item, env, expected)?.ty;
                         } else {
                             self.infer_node(*item, env, &None)?;
                         }
@@ -443,7 +440,7 @@ impl TypeChecker {
             panic!("no inference performed");
         };
 
-        env.types.get(&node_id).map(|t| t.clone())
+        env.types.get(&node_id).cloned()
     }
 
     // fn hoist_functions(&self, node_ids: &Vec<ExprID>, env: &mut Environment) {
@@ -557,7 +554,7 @@ mod tests {
         assert_eq!(return_type, param_type.into());
         assert_eq!(
             *return_type,
-            Ty::TypeVar(TypeVarID(3, TypeVarKind::FuncParam)).into()
+            Ty::TypeVar(TypeVarID(3, TypeVarKind::FuncParam))
         );
 
         assert_eq!(
@@ -574,8 +571,8 @@ mod tests {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
-        assert_eq!(params, vec![Ty::Int.into()]);
-        assert_eq!(*return_type, Ty::Int.into());
+        assert_eq!(params, vec![Ty::Int]);
+        assert_eq!(*return_type, Ty::Int);
     }
 
     #[test]
@@ -703,7 +700,7 @@ mod tests {
         // return type equals the parameter type
         assert_eq!(
             *ret,
-            Ty::TypeVar(TypeVarID(4, TypeVarKind::CallReturn)).into()
+            Ty::TypeVar(TypeVarID(4, TypeVarKind::CallReturn))
         );
     }
 
@@ -727,8 +724,8 @@ mod tests {
             Ty::Func(params, ret) => {
                 assert_eq!(params.len(), 1);
                 // both even and odd must have the same input and output type
-                assert_eq!(*ret, Ty::Int.into());
-                assert_eq!(params[0].clone(), Ty::Int.into());
+                assert_eq!(*ret, Ty::Int);
+                assert_eq!(params[0].clone(), Ty::Int);
             }
             other => panic!("expected a function, got {:?}", other),
         }

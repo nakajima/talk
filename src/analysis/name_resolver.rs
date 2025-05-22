@@ -130,7 +130,7 @@ impl<'a> NameResolver<'a> {
             .iter()
             .rev()
             .find_map(|frame| frame.get(&name).copied())
-            .unwrap_or_else(|| SymbolID(0))
+            .unwrap_or(SymbolID(0))
     }
 
     fn start_scope(&mut self) {

@@ -3,16 +3,16 @@ use crate::{token::Token, token_kind::TokenKind};
 use super::{expr::Expr, parse_tree::ParseTree, parser::ExprID};
 
 pub trait Visitor<Returning, Context> {
-    fn visit_literal_int<'a>(
+    fn visit_literal_int(
         &self,
-        literal: &'a str,
+        literal: &str,
         context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
 
-    fn visit_literal_float<'a>(
+    fn visit_literal_float(
         &self,
-        literal: &'a str,
+        literal: &str,
         context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
@@ -34,9 +34,9 @@ pub trait Visitor<Returning, Context> {
         parse_tree: &ParseTree,
     ) -> Returning;
 
-    fn visit_variable<'a>(
+    fn visit_variable(
         &self,
-        name: &'a str,
+        name: &str,
         context: &Context,
         parse_tree: &ParseTree,
     ) -> Returning;
