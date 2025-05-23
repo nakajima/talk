@@ -185,6 +185,8 @@ impl TypeChecker {
                     log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
                 }
 
+                env.start_scope();
+
                 let mut param_vars: Vec<Ty> = vec![];
                 for expr_opt in params.iter().filter_map(|id| self.parse_tree.get(*id)) {
                     if let Expr::ResolvedVariable(symbol_id, ty) = expr_opt {
@@ -202,6 +204,8 @@ impl TypeChecker {
                 }
 
                 let body_ty = self.infer_node(*body, env, &expected_body_ty)?;
+
+                env.end_scope();
 
                 let func_ty = Ty::Func(param_vars.clone(), FuncReturning::new(body_ty.ty));
 
