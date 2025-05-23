@@ -74,23 +74,12 @@ impl<'a> NameResolver<'a> {
                     self.resolve_nodes(items.to_vec(), parse_tree);
                 }
                 Block(items) => {
+                    self.start_scope();
                     self.resolve_nodes(items.to_vec(), parse_tree);
+                    self.end_scope();
                 }
                 Func(_name, params, body, _ret) => {
-                    // If it's a named function, we want the name early so we can recur.
-                    // if let Some(name) = name {
-                    //     if let FuncName::Token(name) = name {
-                    //         let symbol_id = self.declare(name, SymbolKind::Func);
-
-                    //         // Swap out of the name field
-                    //         **node = Func(
-                    //             Some(FuncName::Resolved(symbol_id)),
-                    //             params.to_vec(),
-                    //             body,
-                    //             ret.clone(),
-                    //         );
-                    //     }
-                    // }
+                    // Get set when hoisting
 
                     self.start_scope();
 
@@ -268,6 +257,23 @@ mod tests {
             *tree.get(tree.root_ids()[3]).unwrap(),
             ResolvedVariable(SymbolID(2), None)
         );
+    }
+
+    #[test]
+    fn block_scoping_prevents_let_leak() {
+        // parse a block with a single let,
+        // followed by a bare `x` at top level:
+        let mut tree = parse("{ let x = 123 } x").unwrap();
+        let resolver = NameResolver::new();
+        let (_symtab, tree) = resolver.resolve(&mut tree);
+
+        // The first root is the Block, the second is the Variable("x")
+        let roots = tree.root_ids();
+        // That `x` should resolve to the global‐fallback ID 0,
+        // not to the block’s own `x` (which would have been >0).
+        use crate::expr::Expr::*;
+        let second = tree.get(roots[1]).unwrap();
+        assert_eq!(second, &ResolvedVariable(SymbolID(0), None));
     }
 }
 

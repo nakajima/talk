@@ -235,12 +235,12 @@ impl Parser {
             None
         };
 
-        let body = self.block()?;
+        let body = self.block(false)?;
 
         self.add_expr(Expr::Func(name.map(FuncName::Token), params, body, ret))
     }
 
-    pub(crate) fn block(&mut self) -> Result<ExprID, ParserError> {
+    pub(crate) fn block(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.skip_newlines();
 
         self.consume(TokenKind::LeftBrace)?;

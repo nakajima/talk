@@ -60,6 +60,12 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
+            TokenKind::LeftBrace => ParseHandler {
+                prefix: Some(Parser::block),
+                infix: None,
+                precedence: Precedence::Call,
+            },
+
             TokenKind::Int(_) => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
@@ -173,7 +179,7 @@ impl Precedence {
             TokenKind::PipePipe => ParseHandler::NONE,
             TokenKind::Amp => ParseHandler::NONE,
             TokenKind::AmpEquals => ParseHandler::NONE,
-            TokenKind::LeftBrace => ParseHandler::NONE,
+
             TokenKind::RightBrace => ParseHandler::NONE,
             TokenKind::RightParen => ParseHandler::NONE,
             TokenKind::Comma => ParseHandler::NONE,

@@ -126,10 +126,6 @@ impl TypeChecker {
                 let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()));
                 let callee_ty = self.infer_node(*callee, env, &None)?;
 
-                log::debug!("callee: {:?}", callee);
-                log::debug!("Expected callee_ty: {:?}", expected_callee_ty);
-                log::debug!("callee_ty: {:?}", callee_ty);
-
                 env.constraints.push(Constraint::Equality(
                     *callee,
                     expected_callee_ty,
@@ -189,8 +185,6 @@ impl TypeChecker {
                     log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
                 }
 
-                env.start_scope();
-
                 let mut param_vars: Vec<Ty> = vec![];
                 for expr_opt in params.iter().filter_map(|id| self.parse_tree.get(*id)) {
                     if let Expr::ResolvedVariable(symbol_id, ty) = expr_opt {
@@ -208,8 +202,6 @@ impl TypeChecker {
                 }
 
                 let body_ty = self.infer_node(*body, env, &expected_body_ty)?;
-
-                env.end_scope();
 
                 let func_ty = Ty::Func(param_vars.clone(), FuncReturning::new(body_ty.ty));
 
@@ -284,6 +276,8 @@ impl TypeChecker {
             Expr::Unary(_token_kind, _) => todo!(),
             Expr::Binary(_, _token_kind, _) => todo!(),
             Expr::Block(items) => {
+                env.start_scope();
+
                 self.hoist_functions(items, env);
 
                 let return_ty: Ty = {
@@ -315,6 +309,8 @@ impl TypeChecker {
                 };
 
                 env.types.insert(id, return_ty.clone());
+
+                env.end_scope();
 
                 Ok(TypedExpr::new(id, return_ty))
             }
