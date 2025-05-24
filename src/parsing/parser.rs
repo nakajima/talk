@@ -9,7 +9,7 @@ use super::{
     precedence::Precedence,
 };
 
-pub type ExprID = u32;
+pub type ExprID = i32;
 pub type VariableID = u32;
 
 pub struct Parser {

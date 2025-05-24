@@ -12,6 +12,7 @@ pub struct ExprMeta {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FuncName {
+    Main,
     Token(&'static str),
     Resolved(SymbolID),
 }

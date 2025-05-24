@@ -109,7 +109,9 @@ impl TypeChecker {
         env: &mut Environment,
         expected: &Option<Ty>,
     ) -> Result<TypedExpr, TypeError> {
-        let result = match &self.parse_tree.get(id).unwrap() {
+        let expr = &self.parse_tree.get(id).unwrap().clone();
+
+        let result = match expr {
             Expr::Call(callee, args) => {
                 let ret_var = if let Some(expected) = expected {
                     expected.clone()
@@ -134,15 +136,15 @@ impl TypeChecker {
 
                 env.types.insert(id, ret_var.clone());
 
-                Ok(TypedExpr::new(id, ret_var))
+                Ok(TypedExpr::new(expr.clone(), ret_var))
             }
             Expr::LiteralInt(_) => {
                 env.types.insert(id, Ty::Int);
-                Ok(TypedExpr::new(id, Ty::Int))
+                Ok(TypedExpr::new(expr.clone(), Ty::Int))
             }
             Expr::LiteralFloat(_) => {
                 env.types.insert(id, Ty::Float);
-                Ok(TypedExpr::new(id, Ty::Float))
+                Ok(TypedExpr::new(expr.clone(), Ty::Float))
             }
             Expr::Assignment(lhs, rhs) => {
                 let lhs_ty = self.infer_node(*lhs, env, &None)?;
@@ -160,7 +162,7 @@ impl TypeChecker {
             }
             Expr::TypeRepr(name) => {
                 let typed_expr = TypedExpr {
-                    expr: id,
+                    expr: expr.clone(),
                     ty: (match_builtin(name).unwrap_or_else(|| {
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
                     })),
@@ -228,7 +230,7 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(TypedExpr::new(id, func_ty))
+                Ok(TypedExpr::new(expr.clone(), func_ty))
             }
             Expr::ResolvedLet(symbol_id, rhs) => {
                 let rhs_ty = if let Some(rhs) = rhs {
@@ -254,7 +256,7 @@ impl TypeChecker {
 
                 env.types.insert(id, scheme.ty);
 
-                Ok(TypedExpr::new(id, rhs_ty))
+                Ok(TypedExpr::new(expr.clone(), rhs_ty))
             }
             Expr::ResolvedVariable(symbol_id, _) => {
                 log::trace!(
@@ -266,7 +268,10 @@ impl TypeChecker {
                 let ty = env.instantiate_symbol(*symbol_id);
 
                 env.types.insert(id, ty.clone());
-                Ok(TypedExpr { expr: id, ty })
+                Ok(TypedExpr {
+                    expr: expr.clone(),
+                    ty,
+                })
             }
             Expr::Parameter(_, _) => todo!(
                 "unresolved parameter: {:?}",
@@ -316,7 +321,7 @@ impl TypeChecker {
 
                 env.end_scope();
 
-                Ok(TypedExpr::new(id, return_ty))
+                Ok(TypedExpr::new(expr.clone(), return_ty))
             }
         };
 
