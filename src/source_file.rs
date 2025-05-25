@@ -38,7 +38,7 @@ impl Phase for Typed {
 }
 
 #[derive(Debug, Clone)]
-pub struct Lowered; 
+pub struct Lowered;
 impl Phase for Lowered {
     type Data = ();
 }

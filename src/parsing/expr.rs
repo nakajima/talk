@@ -13,7 +13,7 @@ pub struct ExprMeta {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FuncName {
     Main,
-    Token(&'static str),
+    Token(String),
     Resolved(SymbolID),
 }
 
@@ -21,6 +21,12 @@ impl FuncName {
     pub fn replace(&mut self, func_name: FuncName) {
         *self = func_name
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Name {
+    Raw(String),
+    Resolved(SymbolID),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,19 +51,19 @@ pub enum Expr {
         ExprID,         /* body */
         Option<ExprID>, /* return type */
     ),
-    Parameter(
-        &'static str,   /* name */
-        Option<ExprID>, /* TypeRepr */
-    ),
+    Parameter(Name /* name */, Option<ExprID> /* TypeRepr */),
 
     // Variables
-    Let(&'static str, Option<ExprID>),
+    Let(
+        Name,           /* name */
+        Option<ExprID>, /* type annotation */
+    ),
     Assignment(ExprID /* LHS */, ExprID /* RHS */),
-    Variable(&'static str),
+    Variable(Name, Option<ExprID>),
 
     // For name resolution
-    ResolvedVariable(SymbolID, Option<ExprID>),
-    ResolvedLet(SymbolID, Option<ExprID> /* RHS */),
+    // ResolvedVariable(SymbolID, Option<ExprID>),
+    // ResolvedLet(SymbolID, Option<ExprID> /* RHS */),
 
     // Control flow
     If(
@@ -67,4 +73,42 @@ pub enum Expr {
     ),
 
     Loop(Option<ExprID> /* condition */, ExprID /* body */),
+
+    // Enum declaration
+    EnumDecl(
+        &'static str,      // name: "Option"
+        Vec<&'static str>, // generics: ["T"]
+        Vec<ExprID>,       // variants (each is an EnumVariant)
+    ),
+
+    // Individual enum variant in declaration
+    EnumVariant(
+        &'static str, // name: "some"
+        Vec<ExprID>,  // associated types: [TypeRepr("T")]
+    ),
+
+    // Match expression
+    Match(
+        ExprID,      // scrutinee: the value being matched
+        Vec<ExprID>, // arms (each is a MatchArm)
+    ),
+
+    // Individual match arm
+    MatchArm(
+        ExprID, // pattern
+        ExprID, // body (after ->)
+    ),
+
+    // Patterns (for match arms)
+    PatternVariant(
+        Option<&'static str>, // enum name (None for unqualified .some)
+        &'static str,         // variant name: "some"
+        Vec<ExprID>,          // bindings: ["wrapped"]
+    ),
+
+    // Member access for construction: Option.some(123)
+    MemberAccess(
+        ExprID,       // base: Variable("Option")
+        &'static str, // member: "some"
+    ),
 }

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{NameResolved, SourceFile, SymbolID, parser::ExprID, type_checker::Ty};
+use crate::{SymbolID, parser::ExprID, type_checker::Ty};
 
 use super::{
     constraint_solver::Constraint,
@@ -9,21 +9,19 @@ use super::{
 };
 
 #[derive(Debug)]
-pub struct Environment<'a> {
+pub struct Environment {
     pub types: HashMap<ExprID, TypedExpr>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<HashMap<SymbolID, Scheme>>,
-    pub source_file: &'a mut SourceFile<NameResolved>,
 }
 
-impl<'a> Environment<'a> {
-    pub fn new(source_file: &'a mut SourceFile<NameResolved>) -> Self {
+impl Environment {
+    pub fn new() -> Self {
         Self {
             types: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
-            source_file,
             scopes: vec![Default::default()],
         }
     }
@@ -50,7 +48,7 @@ impl<'a> Environment<'a> {
 
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
-    pub fn generalize(&self, t: &'a Ty) -> Scheme {
+    pub fn generalize(&self, t: &Ty) -> Scheme {
         let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes);
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();

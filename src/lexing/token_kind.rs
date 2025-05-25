@@ -10,6 +10,11 @@ pub enum TokenKind {
     True,
     False,
 
+    // Enums/pattern matching
+    Enum,
+    Case,
+    Match,
+
     // More
     Arrow,
     Colon,

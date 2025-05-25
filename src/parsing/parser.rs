@@ -3,7 +3,7 @@ use crate::{SourceFile, lexer::Lexer, token::Token, token_kind::TokenKind};
 use super::{
     expr::{
         Expr::{self, *},
-        ExprMeta, FuncName,
+        ExprMeta, FuncName, Name,
     },
     precedence::Precedence,
 };
@@ -191,7 +191,7 @@ impl Parser {
             None
         };
 
-        let let_expr = self.add_expr(Let(name, rhs));
+        let let_expr = self.add_expr(Let(Name::Raw(name.to_string()), rhs));
 
         if self.did_match(TokenKind::Equals)? {
             let rhs = self.parse_with_precedence(Precedence::None)?;
@@ -253,7 +253,7 @@ impl Parser {
                 Ok(None)
             }?;
 
-            params.push(self.add_expr(Parameter(name, ty_repr))?);
+            params.push(self.add_expr(Parameter(Name::Raw(name.to_string()), ty_repr))?);
 
             if self.did_match(TokenKind::Comma)? {
                 continue;
@@ -281,7 +281,12 @@ impl Parser {
 
         let body = self.block(false)?;
 
-        self.add_expr(Expr::Func(name.map(FuncName::Token), params, body, ret))
+        self.add_expr(Expr::Func(
+            name.map(|s| s.to_string()).map(FuncName::Token),
+            params,
+            body,
+            ret,
+        ))
     }
 
     pub(crate) fn block(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -307,7 +312,7 @@ impl Parser {
         };
 
         self.consume(TokenKind::Identifier(name))?;
-        let variable = self.add_expr(Variable(name))?;
+        let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None))?;
 
         self.skip_newlines();
 
@@ -474,7 +479,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
-        expr::FuncName,
+        expr::{FuncName, Name},
         parser::parse,
         parsing::expr::Expr::{self, *},
         token_kind::TokenKind,
@@ -598,8 +603,8 @@ mod tests {
         let hello = parsed.roots()[0].unwrap();
         let world = parsed.roots()[1].unwrap();
 
-        assert_eq!(*hello, Expr::Variable("hello"));
-        assert_eq!(*world, Expr::Variable("world"));
+        assert_eq!(*hello, Expr::Variable(Name::Raw("hello".to_string()), None));
+        assert_eq!(*world, Expr::Variable(Name::Raw("world".to_string()), None));
     }
 
     #[test]
@@ -608,7 +613,10 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Unary(TokenKind::Bang, 0));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::Variable("hello"));
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::Variable(Name::Raw("hello".to_string()), None)
+        );
     }
 
     #[test]
@@ -628,7 +636,10 @@ mod tests {
         assert_eq!(*expr, Expr::Tuple(vec![0, 1, 2]));
         assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1"));
         assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("2"));
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Variable("fizz"));
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::Variable(Name::Raw("fizz".to_string()), None)
+        );
     }
 
     #[test]
@@ -661,7 +672,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet")), vec![0], 2, None)
+            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![0], 2, None)
         );
     }
 
@@ -672,7 +683,7 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet")), vec![], 0, None)
+            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![], 0, None)
         );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
@@ -683,13 +694,13 @@ mod tests {
         assert_eq!(2, parsed.roots().len());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Func(Some(FuncName::Token("hello")), vec![], 0, None)
+            Expr::Func(Some(FuncName::Token("hello".to_string())), vec![], 0, None)
         );
 
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
-            Expr::Func(Some(FuncName::Token("world")), vec![], 2, None)
+            Expr::Func(Some(FuncName::Token("world".to_string())), vec![], 2, None)
         );
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
     }
@@ -701,7 +712,12 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet")), vec![0, 1], 2, None)
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![0, 1],
+                2,
+                None
+            )
         );
     }
 
@@ -711,10 +727,13 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet")), vec![1], 2, None)
+            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![1], 2, None)
         );
 
-        assert_eq!(*parsed.get(1).unwrap(), Parameter("name", Some(0)));
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            Parameter(Name::Raw("name".to_string()), Some(0))
+        );
         assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int"));
     }
 
@@ -729,7 +748,7 @@ mod tests {
 
         let callee = parsed.get(*callee_id).unwrap();
         let args_id: Vec<_> = args_ids.iter().map(|id| parsed.get(*id).unwrap()).collect();
-        assert_eq!(*callee, Expr::Variable("fizz"));
+        assert_eq!(*callee, Expr::Variable(Name::Raw("fizz".to_string()), None));
         assert_eq!(args_id.len(), 0);
     }
 
@@ -737,7 +756,7 @@ mod tests {
     fn parses_let() {
         let parsed = parse("let fizz").unwrap();
         let expr = parsed.roots()[0].unwrap();
-        assert_eq!(*expr, Expr::Let("fizz", None));
+        assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), None));
     }
 
     #[test]
@@ -747,7 +766,12 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("fizz")), vec![], 2, Some(0))
+            Expr::Func(
+                Some(FuncName::Token("fizz".to_string())),
+                vec![],
+                2,
+                Some(0)
+            )
         );
     }
 
