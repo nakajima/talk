@@ -87,7 +87,7 @@ impl<'a> Environment<'a> {
                     let new_ret = Box::new(walk(*ret, map));
                     Ty::Func(new_params, new_ret)
                 }
-                Ty::Void | Ty::Int | Ty::Float => ty.clone(),
+                Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
             }
         }
 

@@ -99,6 +99,51 @@ impl Parser {
 
     // MARK: Expr parsers
 
+    pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        if self.did_match(TokenKind::True)? {
+            return self.add_expr(Expr::LiteralTrue);
+        }
+
+        if self.did_match(TokenKind::False)? {
+            return self.add_expr(Expr::LiteralFalse);
+        }
+
+        unreachable!()
+    }
+
+    pub(crate) fn if_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::If)?;
+
+        let condition = self.parse_with_precedence(Precedence::Any)?;
+        let body = self.block(can_assign)?;
+
+        if self.did_match(TokenKind::Else)? {
+            let else_body = self.block(can_assign)?;
+            self.add_expr(If(condition, body, Some(else_body)))
+        } else {
+            self.add_expr(If(condition, body, None))
+        }
+    }
+
+    pub(crate) fn loop_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Loop)?;
+
+        let mut condition = None;
+        if let Some(Token {
+            kind: TokenKind::LeftBrace,
+            ..
+        }) = self.current
+        {
+            ()
+        } else {
+            condition = Some(self.parse_with_precedence(Precedence::Any)?)
+        }
+
+        let body = self.block(can_assign)?;
+
+        self.add_expr(Loop(condition, body))
+    }
+
     pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::LeftParen)?;
 
@@ -351,7 +396,10 @@ impl Parser {
             }
 
             if i > 100 {
-                panic!("we've got a problem");
+                panic!(
+                    "we've got a problem: {:?}, parsed: {:?}",
+                    self.current, self.parse_tree
+                );
             }
         }
 
@@ -701,5 +749,49 @@ mod tests {
             *expr,
             Expr::Func(Some(FuncName::Token("fizz")), vec![], 2, Some(0))
         );
+    }
+
+    #[test]
+    fn parses_bools() {
+        let parsed = parse("true\nfalse").unwrap();
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.roots()[1].unwrap(), Expr::LiteralFalse);
+    }
+
+    #[test]
+    fn parses_if() {
+        let parsed = parse("if true { 123 }").unwrap();
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, None));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
+    }
+
+    #[test]
+    fn parses_if_else() {
+        let parsed = parse("if true { 123 } else { 456 }").unwrap();
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, Some(4)));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
+        assert_eq!(*parsed.get(4).unwrap(), Expr::Block(vec![3]));
+        assert_eq!(*parsed.get(3).unwrap(), Expr::LiteralInt("456"));
+    }
+
+    #[test]
+    fn parses_loop() {
+        let parsed = parse("loop { 123 }").unwrap();
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(None, 1));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::Block(vec![0]));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("123"));
+    }
+
+    #[test]
+    fn parses_loop_with_condition() {
+        let parsed = parse("loop true { 123 }").unwrap();
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(0), 2));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
     }
 }

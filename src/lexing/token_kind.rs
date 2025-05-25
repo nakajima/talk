@@ -2,6 +2,15 @@ use std::fmt::Display;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum TokenKind {
+    // Control flow
+    If,
+    Else,
+    Loop,
+
+    True,
+    False,
+
+    // More
     Arrow,
     Colon,
     Newline,

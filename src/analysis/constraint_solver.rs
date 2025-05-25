@@ -75,6 +75,7 @@ impl<'a> ConstraintSolver<'a> {
         match ty {
             Ty::Int => ty,
             Ty::Float => ty,
+            Ty::Bool => ty,
             Ty::Func(params, returning) => {
                 let applied_params = params
                     .iter()

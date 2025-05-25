@@ -1,8 +1,5 @@
 use crate::{
-    expr::{Expr, FuncName},
-    symbol_table::SymbolID,
-    type_checker::Ty,
-    typed_expr::TypedExpr,
+    expr::{Expr, FuncName}, symbol_table::SymbolID, type_checker::Ty, typed_expr::TypedExpr, SourceFile, Typed
 };
 
 /// A minimal IR for our language
@@ -25,8 +22,9 @@ pub struct Lowerer {
 
 #[allow(dead_code)]
 impl Lowerer {
-    pub fn lower(exprs: &[TypedExpr]) -> Vec<Instr> {
-        let _entry = if let Some(typed_expr) = exprs.iter().find(|expr| {
+    pub fn lower(source_file: SourceFile<Typed>) -> Vec<Instr> {
+        // Generate a main func if one doesn't exist
+        let _entry = if let Some(typed_expr) = source_file.typed_roots().iter().find(|expr| {
             matches!(
                 expr,
                 TypedExpr {
@@ -46,3 +44,13 @@ impl Lowerer {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn lowers() {
+
+    }
+}
+
+

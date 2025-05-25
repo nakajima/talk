@@ -27,6 +27,8 @@ impl FuncName {
 pub enum Expr {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
+    LiteralTrue,
+    LiteralFalse,
     Unary(TokenKind, ExprID),
     Binary(ExprID, TokenKind, ExprID),
     Tuple(Vec<ExprID>),
@@ -56,4 +58,13 @@ pub enum Expr {
     // For name resolution
     ResolvedVariable(SymbolID, Option<ExprID>),
     ResolvedLet(SymbolID, Option<ExprID> /* RHS */),
+
+    // Control flow
+    If(
+        ExprID,         /* condition */
+        ExprID,         /* condition block */
+        Option<ExprID>, /* else block */
+    ),
+
+    Loop(Option<ExprID> /* condition */, ExprID /* body */),
 }

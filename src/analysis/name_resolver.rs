@@ -52,6 +52,9 @@ impl<'a> NameResolver<'a> {
             match node.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
+                LiteralTrue | LiteralFalse => continue,
+                If(_, _, _) => todo!(),
+                Loop(_, _) => todo!(),
                 Let(name, rhs) => {
                     let symbol_id = self.declare(name, SymbolKind::Local);
                     parse_tree.nodes[node_id as usize] = ResolvedLet(symbol_id, rhs);

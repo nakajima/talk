@@ -37,6 +37,12 @@ impl Phase for Typed {
     type Data = TypedInfo;
 }
 
+#[derive(Debug, Clone)]
+pub struct Lowered; 
+impl Phase for Lowered {
+    type Data = ();
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
     roots: Vec<ExprID>,
@@ -87,6 +93,10 @@ impl SourceFile<NameResolved> {
 }
 
 impl SourceFile<Typed> {
+    pub fn typed_roots(&self) -> &[TypedExpr] {
+        &self.phase_data.roots
+    }
+
     pub fn types(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
         &mut self.phase_data.types
     }

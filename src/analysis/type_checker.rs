@@ -35,6 +35,7 @@ pub enum TypeError {}
 pub enum Ty {
     Void,
     Int,
+    Bool,
     Float,
     Func(
         FuncParams,    /* params */
@@ -88,6 +89,9 @@ impl TypeChecker {
         let expr = env.source_file.get(id).unwrap().clone();
 
         let result = match expr {
+            Expr::LiteralTrue | Expr::LiteralFalse => todo!(),
+            Expr::Loop(_, _) => todo!(),
+            Expr::If(_, _, _) => todo!(),
             Expr::Call(callee, ref args) => {
                 let ret_var = if let Some(expected) = expected {
                     expected.clone()

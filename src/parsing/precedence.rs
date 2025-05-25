@@ -60,6 +60,30 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
+            TokenKind::If => ParseHandler {
+                prefix: Some(Parser::if_expr),
+                infix: None,
+                precedence: Precedence::None,
+            },
+            TokenKind::Else => ParseHandler::NONE,
+            TokenKind::Loop => ParseHandler {
+                prefix: Some(Parser::loop_expr),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
+            TokenKind::True => ParseHandler {
+                prefix: Some(Parser::boolean),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
+            TokenKind::False => ParseHandler {
+                prefix: Some(Parser::boolean),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
             TokenKind::LeftBrace => ParseHandler {
                 prefix: Some(Parser::block),
                 infix: None,
