@@ -26,8 +26,15 @@ impl Phase for NameResolved {
 #[derive(Debug, Clone)]
 pub struct Typed;
 
+#[derive(Debug, Clone)]
+pub struct TypedInfo {
+    pub symbol_table: SymbolTable,
+    pub roots: Vec<TypedExpr>,
+    pub types: HashMap<ExprID, TypedExpr>,
+}
+
 impl Phase for Typed {
-    type Data = (SymbolTable, Vec<TypedExpr>, HashMap<ExprID, TypedExpr>); // Both symbol table and types
+    type Data = TypedInfo;
 }
 
 #[derive(Default, Debug, Clone)]
@@ -70,22 +77,26 @@ impl SourceFile<NameResolved> {
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: (self.phase_data, roots, types),
+            phase_data: TypedInfo {
+                symbol_table: self.phase_data,
+                roots,
+                types,
+            },
         }
     }
 }
 
 impl SourceFile<Typed> {
     pub fn types(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
-        &mut self.phase_data.2
+        &mut self.phase_data.types
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {
-        self.phase_data.2.get_mut(&id).unwrap().ty = ty;
+        self.phase_data.types.get_mut(&id).unwrap().ty = ty;
     }
 
     pub fn type_for(&self, id: ExprID) -> Ty {
-        self.phase_data.2.get(&id).unwrap().ty.clone()
+        self.phase_data.types.get(&id).unwrap().ty.clone()
     }
 }
 
