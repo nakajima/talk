@@ -3,20 +3,20 @@ use std::collections::HashMap;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub u32);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SymbolKind {
     Func,
     Param,
     Local,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
     symbols: HashMap<SymbolID, SymbolInfo>,
     next_id: u32,

@@ -1,29 +1,29 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{parser::ExprID, type_checker::Ty};
+use crate::{NameResolved, SourceFile, SymbolID, parser::ExprID, type_checker::Ty};
 
 use super::{
     constraint_solver::Constraint,
-    symbol_table::{SymbolID, SymbolTable},
     type_checker::{Scheme, TypeVarID, TypeVarKind},
+    typed_expr::TypedExpr,
 };
 
 #[derive(Debug)]
-pub struct Environment {
-    pub types: HashMap<ExprID, Ty>,
+pub struct Environment<'a> {
+    pub types: HashMap<ExprID, TypedExpr>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
-    pub symbol_table: SymbolTable,
     pub scopes: Vec<HashMap<SymbolID, Scheme>>,
+    pub source_file: &'a mut SourceFile<NameResolved>,
 }
 
-impl Environment {
-    pub fn new(symbol_table: SymbolTable) -> Self {
+impl<'a> Environment<'a> {
+    pub fn new(source_file: &'a mut SourceFile<NameResolved>) -> Self {
         Self {
             types: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
-            symbol_table,
+            source_file,
             scopes: vec![Default::default()],
         }
     }
@@ -37,9 +37,7 @@ impl Environment {
             .find_map(|frame| frame.get(&symbol_id).cloned())
             .unwrap_or_else(|| panic!("missing symbol {:?} in {:?}", symbol_id, self.scopes));
 
-        let result = self.instantiate(&scheme);
-        log::trace!("Instantiating symbol {:?}: {:?}", symbol_id, result);
-        result
+        self.instantiate(scheme)
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
@@ -52,7 +50,7 @@ impl Environment {
 
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
-    pub fn generalize(&self, t: &Ty) -> Scheme {
+    pub fn generalize(&self, t: &'a Ty) -> Scheme {
         let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes);
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
@@ -66,7 +64,7 @@ impl Environment {
     /// Instantiate a polymorphic scheme into a fresh monotype:
     /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
     /// and substitute α ↦ β throughout scheme.ty.
-    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+    pub fn instantiate(&mut self, scheme: Scheme) -> Ty {
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
         for &old in &scheme.unbound_vars {
@@ -75,24 +73,25 @@ impl Environment {
             var_map.insert(old, fresh);
         }
         // 2) walk the type, replacing each old with its fresh
-        fn walk(ty: &Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
+        fn walk<'a>(ty: Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
-                    if let Some(&new_tv) = map.get(tv) {
+                    if let Some(&new_tv) = map.get(&tv) {
                         Ty::TypeVar(new_tv)
                     } else {
-                        Ty::TypeVar(*tv)
+                        Ty::TypeVar(tv)
                     }
                 }
                 Ty::Func(params, ret) => {
-                    let new_params = params.iter().map(|p| walk(p, map)).collect();
-                    let new_ret = Box::new(walk(ret, map));
+                    let new_params = params.iter().map(|p| walk(p.clone(), map)).collect();
+                    let new_ret = Box::new(walk(*ret, map));
                     Ty::Func(new_params, new_ret)
                 }
                 Ty::Void | Ty::Int | Ty::Float => ty.clone(),
             }
         }
-        walk(&scheme.ty, &var_map)
+
+        walk(scheme.ty, &var_map)
     }
 
     pub fn end_scope(&mut self) {

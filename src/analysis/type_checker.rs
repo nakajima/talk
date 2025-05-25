@@ -1,14 +1,14 @@
+use std::marker::PhantomData;
+
 use crate::{
+    NameResolved, SymbolID, SymbolTable, Typed,
     expr::{Expr, FuncName},
-    parse_tree::ParseTree,
     parser::ExprID,
+    source_file::SourceFile,
 };
 
 use super::{
-    builtins::match_builtin,
-    constraint_solver::{Constraint, ConstraintError, ConstraintSolver},
-    environment::Environment,
-    symbol_table::{SymbolID, SymbolTable},
+    builtins::match_builtin, constraint_solver::Constraint, environment::Environment,
     typed_expr::TypedExpr,
 };
 
@@ -57,50 +57,28 @@ impl Scheme {
     }
 }
 
-#[derive(Debug)]
-pub struct TypeChecker {
-    pub parse_tree: ParseTree,
-    pub environment: Option<Environment>,
-}
+#[derive(Default, Debug)]
+pub struct TypeChecker {}
 
 impl TypeChecker {
-    pub fn new(symbol_table: SymbolTable, parse_tree: ParseTree) -> Self {
-        Self {
-            parse_tree,
-            environment: Some(Environment::new(symbol_table)),
-        }
-    }
+    pub fn infer(
+        &self,
+        mut source_file: SourceFile<NameResolved>,
+    ) -> Result<(SourceFile<Typed>, Vec<Constraint>), TypeError> {
+        let root_ids = source_file.root_ids();
+        let mut env = Environment::new(&mut source_file);
 
-    pub fn define(&mut self, node_id: ExprID, ty: Ty) {
-        self.environment
-            .as_mut()
-            .expect("type inference not performed")
-            .types
-            .insert(node_id, ty);
-    }
+        self.hoist_functions(&root_ids, &mut env);
 
-    pub fn infer(&mut self) -> Result<Vec<TypedExpr>, TypeError> {
-        let mut env = self.environment.take().unwrap();
-
-        self.hoist_functions(&self.parse_tree.root_ids(), &mut env);
-
-        let typed_roots = self
-            .parse_tree
-            .root_ids()
+        let typed_roots = root_ids
             .iter()
             .map(|id| self.infer_node(*id, &mut env, &None))
             .collect::<Result<Vec<_>, _>>()?;
 
-        self.environment = Some(env);
+        let types = env.types;
+        let constraints = env.constraints;
 
-        Ok(typed_roots)
-    }
-
-    pub fn resolve(&mut self) -> Result<(), ConstraintError> {
-        let mut constraints = self.environment.as_ref().unwrap().constraints.clone();
-        let mut resolver = ConstraintSolver::new(self, &mut constraints);
-
-        resolver.solve()
+        Ok((source_file.to_typed(typed_roots, types), constraints))
     }
 
     pub fn infer_node(
@@ -109,10 +87,10 @@ impl TypeChecker {
         env: &mut Environment,
         expected: &Option<Ty>,
     ) -> Result<TypedExpr, TypeError> {
-        let expr = &self.parse_tree.get(id).unwrap().clone();
+        let expr = env.source_file.get(id).unwrap().clone();
 
         let result = match expr {
-            Expr::Call(callee, args) => {
+            Expr::Call(callee, ref args) => {
                 let ret_var = if let Some(expected) = expected {
                     expected.clone()
                 } else {
@@ -126,34 +104,37 @@ impl TypeChecker {
                 }
 
                 let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()));
-                let callee_ty = self.infer_node(*callee, env, &None)?;
+                let callee_ty = self.infer_node(callee, env, &None)?;
 
                 env.constraints.push(Constraint::Equality(
-                    *callee,
+                    callee,
                     expected_callee_ty,
                     callee_ty.clone().ty,
                 ));
 
-                env.types.insert(id, ret_var.clone());
+                let typed_expr = TypedExpr::new(expr, ret_var);
+                env.types.insert(id, typed_expr.clone());
 
-                Ok(TypedExpr::new(expr.clone(), ret_var))
+                Ok(typed_expr)
             }
             Expr::LiteralInt(_) => {
-                env.types.insert(id, Ty::Int);
-                Ok(TypedExpr::new(expr.clone(), Ty::Int))
+                let typed_expr = TypedExpr::new(expr, Ty::Int);
+                env.types.insert(id, typed_expr.clone());
+                Ok(typed_expr)
             }
             Expr::LiteralFloat(_) => {
-                env.types.insert(id, Ty::Float);
-                Ok(TypedExpr::new(expr.clone(), Ty::Float))
+                let typed_expr = TypedExpr::new(expr, Ty::Float);
+                env.types.insert(id, typed_expr.clone());
+                Ok(typed_expr)
             }
             Expr::Assignment(lhs, rhs) => {
-                let lhs_ty = self.infer_node(*lhs, env, &None)?;
-                let rhs_ty = self.infer_node(*rhs, env, &None)?;
+                let lhs_ty = self.infer_node(lhs, env, &None)?;
+                let rhs_ty = self.infer_node(rhs, env, &None)?;
 
                 env.constraints
-                    .push(Constraint::Equality(*lhs, lhs_ty.ty.clone(), rhs_ty.ty));
+                    .push(Constraint::Equality(lhs, lhs_ty.clone().ty, rhs_ty.ty));
 
-                env.types.insert(id, lhs_ty.clone().ty);
+                env.types.insert(id, lhs_ty.clone());
 
                 Ok(lhs_ty)
             }
@@ -162,22 +143,22 @@ impl TypeChecker {
             }
             Expr::TypeRepr(name) => {
                 let typed_expr = TypedExpr {
-                    expr: expr.clone(),
-                    ty: (match_builtin(name).unwrap_or_else(|| {
+                    expr,
+                    ty: match_builtin(name).unwrap_or_else(|| {
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
-                    })),
+                    }),
                 };
 
-                env.types.insert(id, typed_expr.clone().ty.clone());
+                env.types.insert(id, typed_expr.clone());
 
                 Ok(typed_expr)
             }
-            Expr::Func(name, params, body, ret) => {
+            Expr::Func(ref name, ref params, body, ret) => {
                 let mut func_var = None;
 
                 let expected_body_ty = ret
                     .as_ref()
-                    .map(|repr| self.infer_node(*repr, env, &None).unwrap().ty);
+                    .map(|repr| self.infer_node(*repr, env, &None).unwrap().ty.clone());
 
                 if let Some(FuncName::Resolved(symbol_id)) = name {
                     let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
@@ -190,28 +171,33 @@ impl TypeChecker {
                 env.start_scope();
 
                 let mut param_vars: Vec<Ty> = vec![];
-                for expr_opt in params.iter().filter_map(|id| self.parse_tree.get(*id)) {
-                    if let Expr::ResolvedVariable(symbol_id, ty) = expr_opt {
+                for expr_opt in params.into_iter() {
+                    let expr = env.source_file.get(*expr_opt).cloned();
+                    if let Some(Expr::ResolvedVariable(symbol_id, ty)) = expr {
                         let var_ty = if let Some(ty_id) = ty {
-                            self.infer_node(*ty_id, env, expected)?.ty
+                            self.infer_node(ty_id, env, expected)?.ty
                         } else {
                             Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam))
                         };
 
                         // Parameters are monomorphic inside the function body
                         let scheme = Scheme::new(var_ty.clone(), vec![]);
-                        env.declare(*symbol_id, scheme);
+                        env.declare(symbol_id, scheme);
                         param_vars.push(var_ty);
                     }
                 }
 
-                let body_ty = self.infer_node(*body, env, &expected_body_ty)?;
+                let body_ty = self.infer_node(body, env, &expected_body_ty)?;
 
                 env.end_scope();
 
-                let func_ty = Ty::Func(param_vars.clone(), FuncReturning::new(body_ty.ty));
+                let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty.ty));
+                let func_typed_expr = TypedExpr {
+                    expr: expr.clone(),
+                    ty: func_ty.clone(),
+                };
 
-                env.types.insert(id, func_ty.clone());
+                env.types.insert(id, func_typed_expr.clone());
 
                 if let Some(func_var) = func_var {
                     env.constraints.push(Constraint::Equality(
@@ -230,11 +216,11 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(TypedExpr::new(expr.clone(), func_ty))
+                Ok(func_typed_expr)
             }
             Expr::ResolvedLet(symbol_id, rhs) => {
                 let rhs_ty = if let Some(rhs) = rhs {
-                    self.infer_node(*rhs, env, &None)?.ty
+                    self.infer_node(rhs, env, &None)?.ty
                 } else {
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
                 };
@@ -252,42 +238,35 @@ impl TypeChecker {
                 env.scopes
                     .last_mut()
                     .unwrap()
-                    .insert(*symbol_id, scheme.clone());
+                    .insert(symbol_id, scheme.clone());
 
-                env.types.insert(id, scheme.ty);
+                let typed_expr = TypedExpr::new(expr, rhs_ty);
+                env.types.insert(id, typed_expr.clone());
 
-                Ok(TypedExpr::new(expr.clone(), rhs_ty))
+                Ok(typed_expr)
             }
             Expr::ResolvedVariable(symbol_id, _) => {
-                log::trace!(
-                    "ResolvedVariable id: {:?}, symbol table: {:?}",
-                    symbol_id,
-                    env.symbol_table
-                );
+                let ty = env.instantiate_symbol(symbol_id);
+                let typed_expr = TypedExpr { expr, ty: ty };
 
-                let ty = env.instantiate_symbol(*symbol_id);
-
-                env.types.insert(id, ty.clone());
-                Ok(TypedExpr {
-                    expr: expr.clone(),
-                    ty,
-                })
+                env.types.insert(id, typed_expr.clone());
+                Ok(typed_expr)
             }
             Expr::Parameter(_, _) => todo!(
                 "unresolved parameter: {:?}",
-                self.parse_tree.get(id).unwrap()
+                env.source_file.get(id).unwrap()
             ),
             Expr::Variable(_) => todo!(
                 "unresolved variable: {:?}",
-                self.parse_tree.get(id).unwrap()
+                env.source_file.get(id).unwrap()
             ),
             Expr::Tuple(_) => todo!(),
             Expr::Unary(_token_kind, _) => todo!(),
             Expr::Binary(_, _token_kind, _) => todo!(),
-            Expr::Block(items) => {
+            Expr::Block(ref items) => {
                 env.start_scope();
 
-                self.hoist_functions(items, env);
+                self.hoist_functions(&items, env);
 
                 let return_ty: Ty = {
                     let mut return_ty: Ty = Ty::Void;
@@ -304,12 +283,9 @@ impl TypeChecker {
                 };
 
                 let return_ty = if let Some(expected) = expected {
-                    if &return_ty != expected {
-                        env.constraints.push(Constraint::Equality(
-                            id,
-                            return_ty.clone(),
-                            expected.clone(),
-                        ));
+                    if return_ty != *expected {
+                        env.constraints
+                            .push(Constraint::Equality(id, return_ty, expected.clone()));
                     }
 
                     expected.clone()
@@ -317,11 +293,12 @@ impl TypeChecker {
                     return_ty.clone()
                 };
 
-                env.types.insert(id, return_ty.clone());
+                let typed_expr = TypedExpr::new(expr.clone(), return_ty);
+                env.types.insert(id, typed_expr.clone());
 
                 env.end_scope();
 
-                Ok(TypedExpr::new(expr.clone(), return_ty))
+                Ok(typed_expr)
             }
         };
 
@@ -334,25 +311,20 @@ impl TypeChecker {
         result
     }
 
-    pub fn type_for(&self, node_id: ExprID) -> Option<Ty> {
-        let Some(env) = &self.environment else {
-            panic!("no inference performed");
-        };
-
-        env.types.get(&node_id).cloned()
-    }
-
     fn hoist_functions(&self, node_ids: &[ExprID], env: &mut Environment) {
-        for &item in node_ids.iter() {
-            if let Expr::Func(Some(FuncName::Resolved(symbol_id)), _params, _body, _ret) =
-                self.parse_tree.get(item).unwrap()
+        for item in node_ids.iter() {
+            let expr = env.source_file.get(*item).unwrap().clone();
+
+            if let Expr::Func(Some(FuncName::Resolved(symbol_id)), ref _params, _body, _ret) = expr
             {
                 let fn_var =
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id)));
-                env.types.insert(item, fn_var.clone());
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
+
+                let typed_expr = TypedExpr::new(expr, fn_var.clone());
+                env.types.insert(*item, typed_expr);
 
                 let scheme = env.generalize(&fn_var);
-                env.declare(*symbol_id, scheme);
+                env.declare(symbol_id, scheme);
             }
         }
     }
@@ -361,6 +333,8 @@ impl TypeChecker {
 #[cfg(test)]
 mod tests {
     use crate::{
+        SourceFile, Typed,
+        constraint_solver::ConstraintSolver,
         name_resolver::NameResolver,
         parser::parse,
         type_checker::{Ty, TypeVarID, TypeVarKind},
@@ -368,34 +342,35 @@ mod tests {
 
     use super::TypeChecker;
 
-    fn check(code: &'static str) -> TypeChecker {
-        let mut parsed = parse(code).unwrap();
+    fn check(code: &'static str) -> SourceFile<Typed> {
+        let parsed = parse(code).unwrap();
         let resolver = NameResolver::new();
-        let (symbol_table, resolved) = resolver.resolve(&mut parsed);
-        let mut checker = TypeChecker::new(symbol_table, resolved.clone());
-        checker.infer().unwrap();
-        checker.resolve().expect("did not resolve");
-        checker
+        let resolved = resolver.resolve(parsed);
+        let checker = TypeChecker::default();
+        let (mut typed, constraints) = checker.infer(resolved).unwrap();
+        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints);
+        constraint_solver.solve();
+        typed
     }
 
     #[test]
     fn checks_an_int() {
         let checker = check("123");
-        assert_eq!(checker.type_for(0).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(0), Ty::Int);
     }
 
     #[test]
     fn checks_a_float() {
         let checker = check("123.");
-        assert_eq!(checker.type_for(0).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(0), Ty::Float);
     }
 
     #[test]
     fn checks_a_named_func() {
         let checker = check("func sup(name) { name }\nsup");
-        let root_id = checker.parse_tree.root_ids()[0];
+        let root_id = checker.root_ids()[0];
 
-        let Some(Ty::Func(params, return_type)) = checker.type_for(root_id) else {
+        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
@@ -408,12 +383,10 @@ mod tests {
         );
 
         // The second root-expr is the *use* of `sup`.
-        let Some(Ty::Func(params2, return_type2)) =
-            checker.type_for(checker.parse_tree.root_ids()[1])
-        else {
+        let Ty::Func(params2, return_type2) = checker.type_for(checker.root_ids()[1]) else {
             panic!(
                 "expected `sup` to be a function, got: {:?}",
-                checker.type_for(checker.parse_tree.root_ids()[1])
+                checker.type_for(checker.root_ids()[1])
             );
         };
 
@@ -428,8 +401,8 @@ mod tests {
     #[test]
     fn checks_a_func_with_return_type() {
         let checker = check("func sup(name) -> Int { name }\n");
-        let root_id = checker.parse_tree.root_ids()[0];
-        let Some(Ty::Func(params, return_type)) = checker.type_for(root_id) else {
+        let root_id = checker.root_ids()[0];
+        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
@@ -446,15 +419,15 @@ mod tests {
         ",
         );
 
-        let root_id = checker.parse_tree.root_ids()[1];
-        assert_eq!(checker.type_for(root_id), Some(Ty::Int));
+        let root_id = checker.root_ids()[1];
+        assert_eq!(checker.type_for(root_id), Ty::Int);
     }
 
     #[test]
     fn checks_a_let_assignment() {
         let checker = check("let count = 123\ncount");
-        let root_id = checker.parse_tree.root_ids()[1];
-        assert_eq!(checker.type_for(root_id), Some(Ty::Int));
+        let root_id = checker.root_ids()[1];
+        assert_eq!(checker.type_for(root_id), Ty::Int);
     }
 
     #[test]
@@ -465,8 +438,8 @@ mod tests {
         applyTwice
         ",
         );
-        let root_id = checker.parse_tree.root_ids()[0];
-        let Some(Ty::Func(params, return_type)) = checker.type_for(root_id) else {
+        let root_id = checker.root_ids()[0];
+        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
             panic!(
                 "expected `applyTwice` to be a function, got: {:?}",
                 checker.type_for(root_id)
@@ -501,8 +474,8 @@ mod tests {
         compose
         ",
         );
-        let root_id = checker.parse_tree.root_ids()[0];
-        let Some(Ty::Func(params, return_type)) = checker.type_for(root_id) else {
+        let root_id = checker.root_ids()[0];
+        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
             panic!(
                 "expected `compose` to be a function, got: {:?}",
                 checker.type_for(root_id)
@@ -554,8 +527,8 @@ mod tests {
         );
 
         // the bare `rec` at the top level should be a Func([α], α)
-        let root_id = checker.parse_tree.root_ids()[0];
-        let ty = checker.type_for(root_id).unwrap();
+        let root_id = checker.root_ids()[0];
+        let ty = checker.type_for(root_id);
         let Ty::Func(params, ret) = ty else { panic!() };
         // exactly one parameter
         assert_eq!(params.len(), 1);
@@ -577,8 +550,8 @@ mod tests {
         ",
         );
 
-        let root_id = checker.parse_tree.root_ids()[0];
-        let ty = checker.type_for(root_id).unwrap();
+        let root_id = checker.root_ids()[0];
+        let ty = checker.type_for(root_id);
         match ty {
             Ty::Func(params, ret) => {
                 assert_eq!(params.len(), 1);
@@ -600,13 +573,7 @@ mod tests {
         ",
         );
 
-        assert_eq!(
-            checker.type_for(checker.parse_tree.root_ids()[1]).unwrap(),
-            Ty::Int
-        );
-        assert_eq!(
-            checker.type_for(checker.parse_tree.root_ids()[2]).unwrap(),
-            Ty::Float
-        );
+        assert_eq!(checker.type_for(checker.root_ids()[1]), Ty::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[2]), Ty::Float);
     }
 }

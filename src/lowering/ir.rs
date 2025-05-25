@@ -35,8 +35,8 @@ impl Lowerer {
             typed_expr
         } else {
             &TypedExpr::new(
-                Expr::Func(FuncName::Main, (), (), ()),
-                Box::new(Ty::Func(vec![], Ty::Void)),
+                Expr::Func(Some(FuncName::Main), vec![], -1, None),
+                Ty::Func(vec![], Box::new(Ty::Void)),
             )
         };
 

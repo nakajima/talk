@@ -1,20 +1,20 @@
-use crate::{token::Token, token_kind::TokenKind};
+use crate::{SourceFile, token::Token, token_kind::TokenKind};
 
-use super::{expr::Expr, parse_tree::ParseTree, parser::ExprID};
+use super::{expr::Expr, parser::ExprID};
 
 pub trait Visitor<Returning, Context> {
     fn visit_literal_int(
         &self,
         literal: &str,
         context: &Context,
-        parse_tree: &ParseTree,
+        parse_tree: &SourceFile,
     ) -> Returning;
 
     fn visit_literal_float(
         &self,
         literal: &str,
         context: &Context,
-        parse_tree: &ParseTree,
+        parse_tree: &SourceFile,
     ) -> Returning;
 
     fn visit_binary_expr(
@@ -23,7 +23,7 @@ pub trait Visitor<Returning, Context> {
         rhs: &Expr,
         op: TokenKind,
         context: &Context,
-        parse_tree: &ParseTree,
+        parse_tree: &SourceFile,
     ) -> Returning;
 
     fn visit_unary_expr(
@@ -31,21 +31,16 @@ pub trait Visitor<Returning, Context> {
         rhs: &Expr,
         op: TokenKind,
         context: &Context,
-        parse_tree: &ParseTree,
+        parse_tree: &SourceFile,
     ) -> Returning;
 
-    fn visit_variable(
-        &self,
-        name: &str,
-        context: &Context,
-        parse_tree: &ParseTree,
-    ) -> Returning;
+    fn visit_variable(&self, name: &str, context: &Context, parse_tree: &SourceFile) -> Returning;
 
     fn visit_tuple(
         &self,
         items: Vec<ExprID>,
         context: &Context,
-        parse_tree: &ParseTree,
+        parse_tree: &SourceFile,
     ) -> Returning;
 
     fn visit_func(
@@ -54,6 +49,6 @@ pub trait Visitor<Returning, Context> {
         params: &[ExprID],
         body: ExprID,
         context: &Context,
-        parse_tree: &ParseTree,
+        parse_tree: &SourceFile,
     ) -> Returning;
 }

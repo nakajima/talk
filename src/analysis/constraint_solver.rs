@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::parser::ExprID;
+use crate::{SourceFile, Typed, parser::ExprID};
 
 use super::type_checker::{Ty, TypeChecker, TypeVarID};
 
@@ -22,14 +22,14 @@ pub enum Constraint {
 }
 
 pub struct ConstraintSolver<'a> {
-    type_checker: &'a mut TypeChecker,
-    constraints: &'a mut Vec<Constraint>,
+    source_file: &'a mut SourceFile<Typed>,
+    constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(type_checker: &'a mut TypeChecker, constraints: &'a mut Vec<Constraint>) -> Self {
+    pub fn new(source_file: &'a mut SourceFile<Typed>, constraints: Vec<Constraint>) -> Self {
         Self {
-            type_checker,
+            source_file,
             constraints,
         }
     }
@@ -42,15 +42,8 @@ impl<'a> ConstraintSolver<'a> {
             self.solve_constraint(constraint, &mut substitutions)?
         }
 
-        for ty in &mut self
-            .type_checker
-            .environment
-            .as_mut()
-            .unwrap()
-            .types
-            .values_mut()
-        {
-            *ty = Self::apply(ty.clone(), &substitutions);
+        for typed_expr in &mut self.source_file.types().values_mut() {
+            typed_expr.ty = Self::apply(typed_expr.ty.clone(), &substitutions);
         }
 
         Ok(())
@@ -67,15 +60,11 @@ impl<'a> ConstraintSolver<'a> {
                 let rhs = Self::apply(rhs, substitutions);
 
                 Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
-                    log::error!(
-                        "Type error: {:?}",
-                        self.type_checker.parse_tree.meta.get(node_id as usize)
-                    );
                     log::error!("{:?}", err);
                     err
                 })?;
 
-                self.type_checker.define(node_id, lhs);
+                self.source_file.define(node_id, lhs);
             }
         };
 

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
+use crate::NameResolved;
+use crate::SymbolID;
+use crate::SymbolKind;
+use crate::SymbolTable;
 use crate::expr::Expr::*;
 use crate::expr::FuncName;
-use crate::parse_tree::ParseTree;
 use crate::parser::ExprID;
-
-use super::symbol_table::{SymbolID, SymbolKind, SymbolTable};
+use crate::source_file::SourceFile;
 
 #[derive(Default)]
 pub struct NameResolver<'a> {
@@ -21,14 +23,14 @@ impl<'a> NameResolver<'a> {
         }
     }
 
-    pub fn resolve(mut self, parse_tree: &mut ParseTree) -> (SymbolTable, &mut ParseTree) {
+    pub fn resolve(mut self, mut parse_tree: SourceFile) -> SourceFile<NameResolved> {
         self.start_scope(); // Push global scope
         let ids: Vec<ExprID> = parse_tree.root_ids();
-        self.resolve_nodes(ids, parse_tree);
-        (self.symbol_table, parse_tree)
+        self.resolve_nodes(ids, &mut parse_tree);
+        parse_tree.to_resolved(self.symbol_table)
     }
 
-    fn resolve_nodes(&mut self, node_ids: Vec<ExprID>, parse_tree: &mut ParseTree) {
+    fn resolve_nodes(&mut self, node_ids: Vec<ExprID>, parse_tree: &mut SourceFile) {
         // 1) Hoist all funcs in this block before any recursion
         for &id in &node_ids {
             if let Func(Some(FuncName::Token(name)), params, body, ret) =
@@ -146,12 +148,10 @@ mod tests {
     use super::*;
     use crate::{expr::Expr, parser::parse};
 
-    fn resolve(code: &'static str) -> ParseTree {
-        let mut tree = parse(code).expect("parse failed");
+    fn resolve(code: &'static str) -> SourceFile<NameResolved> {
+        let tree = parse(code).expect("parse failed");
         let resolver = NameResolver::default();
-        resolver.resolve(&mut tree);
-
-        tree
+        resolver.resolve(tree)
     }
 
     #[test]
@@ -263,9 +263,9 @@ mod tests {
     fn block_scoping_prevents_let_leak() {
         // parse a block with a single let,
         // followed by a bare `x` at top level:
-        let mut tree = parse("{ let x = 123 } x").unwrap();
+        let tree = parse("{ let x = 123 } x").unwrap();
         let resolver = NameResolver::new();
-        let (_symtab, tree) = resolver.resolve(&mut tree);
+        let tree = resolver.resolve(tree);
 
         // The first root is the Block, the second is the Variable("x")
         let roots = tree.root_ids();

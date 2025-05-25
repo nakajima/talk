@@ -1,11 +1,10 @@
-use crate::{lexer::Lexer, token::Token, token_kind::TokenKind};
+use crate::{SourceFile, lexer::Lexer, token::Token, token_kind::TokenKind};
 
 use super::{
     expr::{
         Expr::{self, *},
         ExprMeta, FuncName,
     },
-    parse_tree::ParseTree,
     precedence::Precedence,
 };
 
@@ -16,7 +15,7 @@ pub struct Parser {
     pub(crate) lexer: Lexer,
     pub(crate) previous: Option<Token>,
     pub(crate) current: Option<Token>,
-    pub(crate) parse_tree: ParseTree,
+    pub(crate) parse_tree: SourceFile,
 }
 
 #[derive(Debug)]
@@ -29,7 +28,7 @@ pub enum ParserError {
     UnknownError(&'static str),
 }
 
-pub fn parse(code: &'static str) -> Result<ParseTree, ParserError> {
+pub fn parse(code: &'static str) -> Result<SourceFile, ParserError> {
     let lexer = Lexer::new(code);
     let mut parser = Parser::new(lexer);
 
@@ -44,7 +43,7 @@ impl Parser {
             lexer,
             previous: None,
             current: None,
-            parse_tree: ParseTree::new(),
+            parse_tree: SourceFile::new(),
         }
     }
 

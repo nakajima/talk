@@ -1,10 +1,10 @@
-use crate::{expr::Expr, parser::ExprID};
+use crate::expr::Expr;
 
 use super::type_checker::Ty;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
-    pub id: ExprID,
+    pub expr: Expr,
     pub ty: Ty,
 }
 

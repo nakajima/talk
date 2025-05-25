@@ -1,5 +1,7 @@
-pub mod program;
-pub use program::*;
+pub mod source_file;
+pub use source_file::*;
+pub mod symbol_table;
+pub use symbol_table::*;
 pub mod lexing;
 pub use lexing::*;
 pub mod analysis;
