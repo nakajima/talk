@@ -169,7 +169,7 @@ impl TypeChecker {
                 env.start_scope();
 
                 let mut param_vars: Vec<Ty> = vec![];
-                for expr_opt in params.into_iter() {
+                for expr_opt in params.iter() {
                     let expr = env.source_file.get(*expr_opt).cloned();
                     if let Some(Expr::ResolvedVariable(symbol_id, ty)) = expr {
                         let var_ty = if let Some(ty_id) = ty {
@@ -245,7 +245,7 @@ impl TypeChecker {
             }
             Expr::ResolvedVariable(symbol_id, _) => {
                 let ty = env.instantiate_symbol(symbol_id);
-                let typed_expr = TypedExpr { expr, ty: ty };
+                let typed_expr = TypedExpr { expr, ty };
 
                 env.types.insert(id, typed_expr.clone());
                 Ok(typed_expr)
@@ -264,7 +264,7 @@ impl TypeChecker {
             Expr::Block(ref items) => {
                 env.start_scope();
 
-                self.hoist_functions(&items, env);
+                self.hoist_functions(items, env);
 
                 let return_ty: Ty = {
                     let mut return_ty: Ty = Ty::Void;
