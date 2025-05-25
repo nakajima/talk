@@ -1,13 +1,14 @@
 use crate::{
     expr::{Expr, FuncName},
     symbol_table::SymbolID,
-    type_checker::{FuncParams, Ty},
+    type_checker::Ty,
     typed_expr::TypedExpr,
 };
 
 /// A minimal IR for our language
 #[derive(Debug)]
-enum Instr {
+#[allow(dead_code)]
+pub enum Instr {
     LoadInt(i64),          // push integer constant
     LoadFloat(f64),        // push float constant
     LoadLocal(u32),        // push value of local slot
@@ -17,13 +18,15 @@ enum Instr {
 }
 
 /// Lowers AST expressions into IR for a single function
+#[allow(dead_code)]
 pub struct Lowerer {
     instrs: Vec<Instr>,
 }
 
+#[allow(dead_code)]
 impl Lowerer {
     pub fn lower(exprs: &[TypedExpr]) -> Vec<Instr> {
-        let entry = if let Some(typed_expr) = exprs.iter().find(|expr| {
+        let _entry = if let Some(typed_expr) = exprs.iter().find(|expr| {
             matches!(
                 expr,
                 TypedExpr {

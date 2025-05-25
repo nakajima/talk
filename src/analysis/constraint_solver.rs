@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{SourceFile, Typed, parser::ExprID};
 
-use super::type_checker::{Ty, TypeChecker, TypeVarID};
+use super::type_checker::{Ty, TypeVarID};
 
 #[derive(Debug)]
 pub enum ConstraintError {

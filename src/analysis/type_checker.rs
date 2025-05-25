@@ -1,7 +1,5 @@
-use std::marker::PhantomData;
-
 use crate::{
-    NameResolved, SymbolID, SymbolTable, Typed,
+    NameResolved, SymbolID, Typed,
     expr::{Expr, FuncName},
     parser::ExprID,
     source_file::SourceFile,
@@ -349,7 +347,7 @@ mod tests {
         let checker = TypeChecker::default();
         let (mut typed, constraints) = checker.infer(resolved).unwrap();
         let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints);
-        constraint_solver.solve();
+        constraint_solver.solve().unwrap();
         typed
     }
 
