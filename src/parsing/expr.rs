@@ -78,7 +78,7 @@ pub enum Expr {
     EnumDecl(
         Name,              // name: "Option"
         Vec<&'static str>, // generics: ["T"]
-        Vec<ExprID>,       // variants (each is an EnumVariant)
+        ExprID,            // Body
     ),
 
     // Individual enum variant in declaration

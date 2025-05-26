@@ -106,13 +106,9 @@ impl Parser {
         let (name, _) = self.try_identifier().expect("did not get enum name");
 
         // Consume the block
-        self.skip_newlines();
-        self.consume(TokenKind::LeftBrace)?;
-        self.skip_newlines();
-        // TODO: Body
-        self.consume(TokenKind::RightBrace)?;
+        let body = self.enum_body()?;
 
-        self.add_expr(EnumDecl(Name::Raw(name), vec![], vec![]))
+        self.add_expr(EnumDecl(Name::Raw(name), vec![], body))
     }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -249,25 +245,10 @@ impl Parser {
         )) = self.try_identifier()
         {
             let ty_repr = if self.did_match(TokenKind::Colon)? {
-                if let Some((
-                    _,
-                    Token {
-                        kind: TokenKind::Identifier(name),
-                        ..
-                    },
-                )) = self.try_identifier()
-                {
-                    let type_repr = TypeRepr(name);
-                    Ok(Some(self.add_expr(type_repr)?))
-                } else {
-                    Err(ParserError::UnexpectedToken(
-                        vec![TokenKind::Identifier("_".to_string())],
-                        self.current.clone().unwrap().kind,
-                    ))
-                }
+                Some(self.type_repr()?)
             } else {
-                Ok(None)
-            }?;
+                None
+            };
 
             params.push(self.add_expr(Parameter(Name::Raw(name.to_string()), ty_repr))?);
 
@@ -306,6 +287,49 @@ impl Parser {
             body,
             ret,
         ))
+    }
+
+    fn type_repr(&mut self) -> Result<ExprID, ParserError> {
+        let Some((name, _)) = self.try_identifier() else {
+            return Err(ParserError::UnexpectedToken(
+                vec![TokenKind::Identifier("_".to_string())],
+                self.current.clone().unwrap().kind,
+            ));
+        };
+
+        let type_repr = TypeRepr(name);
+        self.add_expr(type_repr)
+    }
+
+    fn enum_body(&mut self) -> Result<ExprID, ParserError> {
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace)?;
+
+        let mut items: Vec<ExprID> = vec![];
+        while !self.did_match(TokenKind::RightBrace)? {
+            if self.did_match(TokenKind::Case)? {
+                while {
+                    let (name, _) = self.try_identifier().expect("did not get enum case name");
+                    let mut types = vec![];
+
+                    if self.did_match(TokenKind::LeftParen)? {
+                        while !self.did_match(TokenKind::RightParen)? {
+                            types.push(self.type_repr()?);
+                            self.consume(TokenKind::Comma).ok();
+                        }
+                    }
+
+                    let item = self.add_expr(Expr::EnumVariant(Name::Raw(name), types))?;
+                    items.push(item);
+                    self.did_match(TokenKind::Comma)?
+                } {}
+            } else {
+                let item = self.parse_with_precedence(Precedence::Assignment)?;
+                items.push(item);
+            };
+        }
+
+        self.add_expr(Expr::Block(items))
     }
 
     pub(crate) fn block(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -836,7 +860,75 @@ mod tests {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl(Name::Raw("Fizz".to_string()), vec![], vec![])
+            Expr::EnumDecl(Name::Raw("Fizz".to_string()), vec![], 0)
         );
+    }
+
+    #[test]
+    fn parses_enum_cases() {
+        let parsed = parse(
+            "enum Fizz {
+                case foo, bar
+                case fizz
+            }",
+        )
+        .unwrap();
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl(Name::Raw("Fizz".to_string()), vec![], 3)
+        );
+
+        let Expr::Block(exprs) = parsed.get(3).unwrap() else {
+            panic!("didn't get body")
+        };
+
+        assert_eq!(exprs.len(), 3);
+        assert_eq!(
+            *parsed.get(exprs[0]).unwrap(),
+            Expr::EnumVariant(Name::Raw("foo".to_string()), vec![])
+        );
+        assert_eq!(
+            *parsed.get(exprs[1]).unwrap(),
+            Expr::EnumVariant(Name::Raw("bar".to_string()), vec![])
+        );
+        assert_eq!(
+            *parsed.get(exprs[2]).unwrap(),
+            Expr::EnumVariant(Name::Raw("fizz".to_string()), vec![])
+        );
+    }
+
+    #[test]
+    fn parses_enum_cases_with_associated_values() {
+        let parsed = parse(
+            "enum Fizz {
+                case foo(Int, Float), bar(Float, Int)
+            }",
+        )
+        .unwrap();
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl(Name::Raw("Fizz".to_string()), vec![], 6)
+        );
+
+        let Expr::Block(exprs) = parsed.get(6).unwrap() else {
+            panic!("didn't get body")
+        };
+
+        assert_eq!(exprs.len(), 2);
+        assert_eq!(
+            *parsed.get(exprs[0]).unwrap(),
+            Expr::EnumVariant(Name::Raw("foo".to_string()), vec![0, 1])
+        );
+        assert_eq!(*parsed.get(0).unwrap(), Expr::TypeRepr("Int".to_string()));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::TypeRepr("Float".to_string()));
+
+        assert_eq!(
+            *parsed.get(exprs[1]).unwrap(),
+            Expr::EnumVariant(Name::Raw("bar".to_string()), vec![3, 4])
+        );
+        assert_eq!(*parsed.get(3).unwrap(), Expr::TypeRepr("Float".to_string()));
+        assert_eq!(*parsed.get(4).unwrap(), Expr::TypeRepr("Int".to_string()));
     }
 }
