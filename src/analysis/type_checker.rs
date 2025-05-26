@@ -13,10 +13,10 @@ use super::{
 pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
 
-#[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct TypeVarID(pub u32, pub TypeVarKind);
 
-#[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum TypeVarKind {
     Blank,
     CallArg,
@@ -25,7 +25,7 @@ pub enum TypeVarKind {
     FuncNameVar(SymbolID),
     FuncBody,
     Let,
-    TypeRepr(&'static str),
+    TypeRepr(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,11 +91,11 @@ impl TypeChecker {
     ) -> Result<TypedExpr, TypeError> {
         let expr = source_file.get(id).unwrap().clone();
 
-        let result = match expr {
+        let result = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => todo!(),
             Expr::Loop(_, _) => todo!(),
             Expr::If(_, _, _) => todo!(),
-            Expr::Call(callee, ref args) => {
+            Expr::Call(callee, args) => {
                 let ret_var = if let Some(expected) = expected {
                     expected.clone()
                 } else {
@@ -111,10 +111,10 @@ impl TypeChecker {
                 }
 
                 let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()));
-                let callee_ty = self.infer_node(callee, env, &None, source_file)?;
+                let callee_ty = self.infer_node(*callee, env, &None, source_file)?;
 
                 env.constraints.push(Constraint::Equality(
-                    callee,
+                    *callee,
                     expected_callee_ty,
                     callee_ty.clone().ty,
                 ));
@@ -135,33 +135,37 @@ impl TypeChecker {
                 Ok(typed_expr)
             }
             Expr::Assignment(lhs, rhs) => {
-                let lhs_ty = self.infer_node(lhs, env, &None, source_file)?;
-                let rhs_ty = self.infer_node(rhs, env, &None, source_file)?;
+                let lhs_ty = self.infer_node(*lhs, env, &None, source_file)?;
+                let rhs_ty = self.infer_node(*rhs, env, &None, source_file)?;
 
                 env.constraints
-                    .push(Constraint::Equality(lhs, lhs_ty.clone().ty, rhs_ty.ty));
+                    .push(Constraint::Equality(*lhs, lhs_ty.clone().ty, rhs_ty.ty));
 
                 env.types.insert(id, lhs_ty.clone());
 
                 Ok(lhs_ty)
             }
             Expr::TypeRepr(name) => {
+                let name = name.clone();
+
+                let ty = match_builtin(name.clone()).unwrap_or_else(|| {
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
+                });
+
                 let typed_expr = TypedExpr {
-                    expr,
-                    ty: match_builtin(name).unwrap_or_else(|| {
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
-                    }),
+                    expr: expr.clone(),
+                    ty,
                 };
 
                 env.types.insert(id, typed_expr.clone());
 
                 Ok(typed_expr)
             }
-            Expr::Func(ref name, ref params, body, ret) => {
+            Expr::Func(name, params, body, ret) => {
                 let mut func_var = None;
 
                 let expected_body_ty = if let Some(ret) = ret {
-                    Some(self.infer_node(ret, env, &None, source_file)?.ty)
+                    Some(self.infer_node(*ret, env, &None, source_file)?.ty)
                 } else {
                     None
                 };
@@ -174,7 +178,7 @@ impl TypeChecker {
 
                 if let Some(FuncName::Resolved(symbol_id)) = name {
                     let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
-                    func_var = Some(type_var);
+                    func_var = Some(type_var.clone());
                     let scheme = env.generalize(&Ty::TypeVar(type_var));
                     env.declare(*symbol_id, scheme);
                     log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
@@ -199,7 +203,7 @@ impl TypeChecker {
                     }
                 }
 
-                let body_ty = self.infer_node(body, env, &expected_body_ty, source_file)?;
+                let body_ty = self.infer_node(*body, env, &expected_body_ty, source_file)?;
 
                 env.end_scope();
 
@@ -232,7 +236,7 @@ impl TypeChecker {
             }
             Expr::Let(Name::Resolved(symbol_id), rhs) => {
                 let rhs_ty = if let Some(rhs) = rhs {
-                    self.infer_node(rhs, env, &None, source_file)?.ty
+                    self.infer_node(*rhs, env, &None, source_file)?.ty
                 } else {
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
                 };
@@ -250,7 +254,7 @@ impl TypeChecker {
                 env.scopes
                     .last_mut()
                     .unwrap()
-                    .insert(symbol_id, scheme.clone());
+                    .insert(*symbol_id, scheme.clone());
 
                 let typed_expr = TypedExpr::new(expr, rhs_ty);
                 env.types.insert(id, typed_expr.clone());
@@ -258,7 +262,7 @@ impl TypeChecker {
                 Ok(typed_expr)
             }
             Expr::Variable(Name::Resolved(symbol_id), _) => {
-                let ty = env.instantiate_symbol(symbol_id);
+                let ty = env.instantiate_symbol(*symbol_id);
                 let typed_expr = TypedExpr { expr, ty };
 
                 env.types.insert(id, typed_expr.clone());
@@ -270,7 +274,7 @@ impl TypeChecker {
             Expr::Tuple(_) => todo!(),
             Expr::Unary(_token_kind, _) => todo!(),
             Expr::Binary(_, _token_kind, _) => todo!(),
-            Expr::Block(ref items) => {
+            Expr::Block(items) => {
                 env.start_scope();
 
                 self.hoist_functions(items, env, source_file);

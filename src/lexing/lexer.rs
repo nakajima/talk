@@ -135,7 +135,10 @@ impl Lexer {
             "true" => True,
             "false" => False,
             "loop" => Loop,
-            _ => Identifier(&self.code[start_idx..=end_idx]),
+            "enum" => Enum,
+            "case" => Case,
+            "match" => Match,
+            _ => Identifier(self.code[start_idx..=end_idx].to_string()),
         }
     }
 
@@ -216,7 +219,7 @@ mod tests {
     fn arrow() {
         let mut lexer = Lexer::new("-> Int");
         assert_eq!(lexer.next().unwrap().kind, Arrow);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("Int"));
+        assert_eq!(lexer.next().unwrap().kind, Identifier("Int".to_string()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
@@ -238,17 +241,17 @@ mod tests {
     #[test]
     fn dot() {
         let mut lexer = Lexer::new("fizz.buzz");
-        assert_eq!(lexer.next().unwrap().kind, Identifier("fizz"));
+        assert_eq!(lexer.next().unwrap().kind, Identifier("fizz".to_string()));
         assert_eq!(lexer.next().unwrap().kind, Dot);
-        assert_eq!(lexer.next().unwrap().kind, Identifier("buzz"));
+        assert_eq!(lexer.next().unwrap().kind, Identifier("buzz".to_string()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn identifier() {
         let mut lexer = Lexer::new("hello world");
-        assert_eq!(lexer.next().unwrap().kind, Identifier("hello"));
-        assert_eq!(lexer.next().unwrap().kind, Identifier("world"));
+        assert_eq!(lexer.next().unwrap().kind, Identifier("hello".to_string()));
+        assert_eq!(lexer.next().unwrap().kind, Identifier("world".to_string()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

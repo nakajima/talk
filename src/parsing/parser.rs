@@ -51,7 +51,7 @@ impl Parser {
         self.advance();
         self.skip_newlines();
 
-        while let Some(current) = self.current {
+        while let Some(current) = self.current.clone() {
             self.skip_newlines();
 
             if current.kind == TokenKind::EOF {
@@ -81,16 +81,16 @@ impl Parser {
     }
 
     fn advance(&mut self) -> Option<Token> {
-        self.previous = self.current;
+        self.previous = self.current.clone();
         self.current = self.lexer.next().ok();
-        self.previous
+        self.previous.clone()
     }
 
     fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
-        let token = self.current.unwrap();
+        let token = self.current.clone().unwrap();
 
         let expr_meta = ExprMeta {
-            start: token,
+            start: token.clone(),
             end: token,
         };
 
@@ -98,6 +98,22 @@ impl Parser {
     }
 
     // MARK: Expr parsers
+
+    pub(crate) fn enum_decl(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Enum)?;
+        self.skip_newlines();
+
+        let (name, _) = self.try_identifier().expect("did not get enum name");
+
+        // Consume the block
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace)?;
+        self.skip_newlines();
+        // TODO: Body
+        self.consume(TokenKind::RightBrace)?;
+
+        self.add_expr(EnumDecl(Name::Raw(name), vec![], vec![]))
+    }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         if self.did_match(TokenKind::True)? {
@@ -173,17 +189,7 @@ impl Parser {
     pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         // Consume the `let` keyword
         self.advance();
-
-        let Some(ident) = self.try_identifier() else {
-            return Err(ParserError::UnexpectedToken(
-                vec![TokenKind::Identifier("_")],
-                self.current.unwrap().kind,
-            ));
-        };
-
-        let TokenKind::Identifier(name) = ident.kind else {
-            unreachable!()
-        };
+        let (name, _) = self.try_identifier().expect("did not get identifier");
 
         let rhs = if self.did_match(TokenKind::Equals)? {
             Some(self.parse_with_precedence(Precedence::Assignment)?)
@@ -206,6 +212,7 @@ impl Parser {
 
         match self
             .previous
+            .clone()
             .expect("got into #literal without having a token")
             .kind
         {
@@ -217,10 +224,13 @@ impl Parser {
     }
 
     pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
-        let name = if let Some(Token {
-            kind: TokenKind::Identifier(name),
-            ..
-        }) = self.try_identifier()
+        let name = if let Some((
+            _,
+            Token {
+                kind: TokenKind::Identifier(name),
+                ..
+            },
+        )) = self.try_identifier()
         {
             Some(name)
         } else {
@@ -230,23 +240,29 @@ impl Parser {
         self.consume(TokenKind::LeftParen)?;
 
         let mut params: Vec<ExprID> = vec![];
-        while let Some(Token {
-            kind: TokenKind::Identifier(name),
-            ..
-        }) = self.try_identifier()
+        while let Some((
+            _,
+            Token {
+                kind: TokenKind::Identifier(name),
+                ..
+            },
+        )) = self.try_identifier()
         {
             let ty_repr = if self.did_match(TokenKind::Colon)? {
-                if let Some(Token {
-                    kind: TokenKind::Identifier(name),
-                    ..
-                }) = self.try_identifier()
+                if let Some((
+                    _,
+                    Token {
+                        kind: TokenKind::Identifier(name),
+                        ..
+                    },
+                )) = self.try_identifier()
                 {
                     let type_repr = TypeRepr(name);
                     Ok(Some(self.add_expr(type_repr)?))
                 } else {
                     Err(ParserError::UnexpectedToken(
-                        vec![TokenKind::Identifier("_")],
-                        self.current.unwrap().kind,
+                        vec![TokenKind::Identifier("_".to_string())],
+                        self.current.clone().unwrap().kind,
                     ))
                 }
             } else {
@@ -265,10 +281,13 @@ impl Parser {
         self.consume(TokenKind::RightParen)?;
 
         let ret = if self.did_match(TokenKind::Arrow)? {
-            if let Some(Token {
-                kind: TokenKind::Identifier(ret_name),
-                ..
-            }) = self.try_identifier()
+            if let Some((
+                _,
+                Token {
+                    kind: TokenKind::Identifier(ret_name),
+                    ..
+                },
+            )) = self.try_identifier()
             {
                 let ret_id = self.add_expr(TypeRepr(ret_name))?;
                 Some(ret_id)
@@ -303,15 +322,7 @@ impl Parser {
     }
 
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
-        let Some(Token {
-            kind: TokenKind::Identifier(name),
-            ..
-        }) = self.current
-        else {
-            unreachable!()
-        };
-
-        self.consume(TokenKind::Identifier(name))?;
+        let (name, _) = self.try_identifier().unwrap();
         let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None))?;
 
         self.skip_newlines();
@@ -345,7 +356,7 @@ impl Parser {
 
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
-        let current_precedence = Precedence::handler(Some(op))?.precedence;
+        let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
@@ -367,7 +378,7 @@ impl Parser {
             TokenKind::Pipe,
         ])?;
 
-        let current_precedence = Precedence::handler(Some(op))?.precedence;
+        let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
@@ -379,7 +390,7 @@ impl Parser {
         self.skip_newlines();
 
         let mut lhs: Option<ExprID> = None;
-        let mut handler = Precedence::handler(self.current)?;
+        let mut handler = Precedence::handler(&self.current)?;
 
         if let Some(prefix) = handler.prefix {
             lhs = Some(prefix(self, precedence.can_assign())?);
@@ -389,7 +400,7 @@ impl Parser {
 
         while {
             self.skip_newlines();
-            handler = Precedence::handler(self.current)?;
+            handler = Precedence::handler(&self.current)?;
             precedence < handler.precedence
         } {
             i += 1;
@@ -415,13 +426,13 @@ impl Parser {
     // MARK: Helpers
 
     // Try to get an identifier. If it's a match, return it, otherwise return None
-    fn try_identifier(&mut self) -> Option<Token> {
+    fn try_identifier(&mut self) -> Option<(String, Token)> {
         self.skip_newlines();
 
-        if let Some(current) = self.current {
-            if let TokenKind::Identifier(_) = current.kind {
+        if let Some(current) = self.current.clone() {
+            if let TokenKind::Identifier(ref name) = current.kind {
                 self.advance();
-                return Some(current);
+                return Some((name.to_string(), current));
             };
         }
 
@@ -432,7 +443,7 @@ impl Parser {
     fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
         self.skip_newlines();
 
-        if let Some(current) = self.current {
+        if let Some(current) = self.current.clone() {
             if current.kind == expected {
                 self.advance();
                 return Ok(true);
@@ -446,7 +457,7 @@ impl Parser {
     fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
         self.skip_newlines();
 
-        if let Some(current) = self.current {
+        if let Some(current) = self.current.clone() {
             if current.kind == expected {
                 self.advance();
                 return Ok(current);
@@ -455,14 +466,14 @@ impl Parser {
 
         Err(ParserError::UnexpectedToken(
             vec![expected],
-            self.current.unwrap().kind,
+            self.current.clone().unwrap().kind,
         ))
     }
 
     fn consume_any(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
         self.skip_newlines();
 
-        match self.current {
+        match self.current.clone() {
             Some(current) => {
                 if possible_tokens.contains(&current.kind) {
                     self.advance();
@@ -734,7 +745,7 @@ mod tests {
             *parsed.get(1).unwrap(),
             Parameter(Name::Raw("name".to_string()), Some(0))
         );
-        assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int"));
+        assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int".to_string()));
     }
 
     #[test]
@@ -817,5 +828,15 @@ mod tests {
         assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
         assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
+    }
+
+    #[test]
+    fn parses_empty_enum_decl() {
+        let parsed = parse("enum Fizz {}").unwrap();
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl(Name::Raw("Fizz".to_string()), vec![], vec![])
+        );
     }
 }

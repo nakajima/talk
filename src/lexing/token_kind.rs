@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum TokenKind {
     // Control flow
     If,
@@ -51,7 +51,7 @@ pub enum TokenKind {
     Comma,
     Int(&'static str),
     Float(&'static str),
-    Identifier(&'static str),
+    Identifier(String),
     Func,
     Let,
     EOF,

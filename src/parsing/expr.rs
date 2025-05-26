@@ -42,7 +42,7 @@ pub enum Expr {
     Call(ExprID, Vec<ExprID>),
 
     // A type annotation
-    TypeRepr(&'static str),
+    TypeRepr(String),
 
     // Function stuff
     Func(
@@ -76,15 +76,15 @@ pub enum Expr {
 
     // Enum declaration
     EnumDecl(
-        &'static str,      // name: "Option"
+        Name,              // name: "Option"
         Vec<&'static str>, // generics: ["T"]
         Vec<ExprID>,       // variants (each is an EnumVariant)
     ),
 
     // Individual enum variant in declaration
     EnumVariant(
-        &'static str, // name: "some"
-        Vec<ExprID>,  // associated types: [TypeRepr("T")]
+        Name,        // name: "some"
+        Vec<ExprID>, // associated types: [TypeRepr("T")]
     ),
 
     // Match expression
@@ -101,14 +101,14 @@ pub enum Expr {
 
     // Patterns (for match arms)
     PatternVariant(
-        Option<&'static str>, // enum name (None for unqualified .some)
-        &'static str,         // variant name: "some"
-        Vec<ExprID>,          // bindings: ["wrapped"]
+        Option<Name>, // enum name (None for unqualified .some)
+        Name,         // variant name: "some"
+        Vec<ExprID>,  // bindings: ["wrapped"]
     ),
 
     // Member access for construction: Option.some(123)
     MemberAccess(
-        ExprID,       // base: Variable("Option")
-        &'static str, // member: "some"
+        ExprID, // base: Variable("Option")
+        Name,   // member: "some"
     ),
 }

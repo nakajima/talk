@@ -1,7 +1,7 @@
 use super::type_checker::Ty;
 
-pub fn match_builtin(name: &'static str) -> Option<Ty> {
-    let res = match name {
+pub fn match_builtin(name: String) -> Option<Ty> {
+    let res = match name.as_str() {
         "Int" => Some(Ty::Int),
         "Float" => Some(Ty::Float),
         _ => None,

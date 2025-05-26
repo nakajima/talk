@@ -43,7 +43,7 @@ impl ParseHandler {
 }
 
 impl Precedence {
-    pub const fn handler(token: Option<Token>) -> Result<ParseHandler, ParserError> {
+    pub const fn handler(token: &Option<Token>) -> Result<ParseHandler, ParserError> {
         let token = match token {
             Some(t) => t,
             None => {
@@ -82,6 +82,12 @@ impl Precedence {
                 prefix: Some(Parser::boolean),
                 infix: None,
                 precedence: Precedence::None,
+            },
+
+            TokenKind::Enum => ParseHandler {
+                prefix: Some(Parser::enum_decl),
+                infix: None,
+                precedence: Precedence::Primary,
             },
 
             TokenKind::LeftBrace => ParseHandler {

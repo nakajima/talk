@@ -86,7 +86,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 Ty::Func(applied_params, Box::new(applied_return))
             }
-            Ty::TypeVar(type_var) => {
+            Ty::TypeVar(ref type_var) => {
                 if let Some(ty) = substitutions.get(&type_var) {
                     Self::apply(ty.clone(), substitutions)
                 } else {
@@ -107,11 +107,11 @@ impl<'a> ConstraintSolver<'a> {
         match (lhs, rhs) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
-            (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
+            (Ty::TypeVar(v), ref ty) | (ref ty, Ty::TypeVar(v)) => {
                 if Self::occurs_check(v, ty, substitutions) {
                     Err(ConstraintError::OccursConflict)
                 } else {
-                    substitutions.insert(*v, ty.clone());
+                    substitutions.insert(v.clone(), (*ty).clone());
                     Ok(())
                 }
             }

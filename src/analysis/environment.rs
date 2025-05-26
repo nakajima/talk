@@ -65,16 +65,16 @@ impl Environment {
     pub fn instantiate(&mut self, scheme: Scheme) -> Ty {
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
-        for &old in &scheme.unbound_vars {
+        for old in scheme.unbound_vars {
             // preserve the original kind when making a fresh one
-            let fresh = self.new_type_variable(old.1);
+            let fresh = self.new_type_variable(old.1.clone());
             var_map.insert(old, fresh);
         }
         // 2) walk the type, replacing each old with its fresh
         fn walk<'a>(ty: Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
-                    if let Some(&new_tv) = map.get(&tv) {
+                    if let Some(new_tv) = map.get(&tv).cloned() {
                         Ty::TypeVar(new_tv)
                     } else {
                         Ty::TypeVar(tv)
@@ -104,13 +104,13 @@ impl Environment {
             let loc = std::panic::Location::caller();
             log::warn!(
                 "new_type_variable {:?} from {}:{}",
-                Ty::TypeVar(self.type_var_id),
+                Ty::TypeVar(self.type_var_id.clone()),
                 loc.file(),
                 loc.line()
             );
         }
 
-        self.type_var_id
+        self.type_var_id.clone()
     }
 }
 
@@ -119,11 +119,11 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
     let mut s = HashSet::new();
     match ty {
         Ty::TypeVar(v) => {
-            s.insert(*v);
+            s.insert(v.clone());
         }
         Ty::Func(params, ret) => {
-            for p in params {
-                s.extend(free_type_vars(p));
+            for param in params {
+                s.extend(free_type_vars(param));
             }
             s.extend(free_type_vars(ret));
         }
