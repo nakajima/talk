@@ -42,7 +42,7 @@ pub enum Expr {
     Call(ExprID, Vec<ExprID>),
 
     // A type annotation
-    TypeRepr(String),
+    TypeRepr(String, Vec<ExprID> /* generics */),
 
     // A dot thing
     Member(Option<ExprID> /* receiver */, String),
@@ -79,9 +79,8 @@ pub enum Expr {
 
     // Enum declaration
     EnumDecl(
-        Name,              // name: "Option"
-        Vec<&'static str>, // generics: ["T"]
-        ExprID,            // Body
+        ExprID, // TypeRepr name: "Option<T>"
+        ExprID, // Body
     ),
 
     // Individual enum variant in declaration

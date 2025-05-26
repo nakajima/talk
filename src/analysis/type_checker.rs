@@ -145,7 +145,7 @@ impl TypeChecker {
 
                 Ok(lhs_ty)
             }
-            Expr::TypeRepr(name) => {
+            Expr::TypeRepr(name, _) => {
                 let name = name.clone();
 
                 let ty = match_builtin(name.clone()).unwrap_or_else(|| {
@@ -311,7 +311,7 @@ impl TypeChecker {
 
                 Ok(typed_expr)
             }
-            Expr::EnumDecl(_, _items, _items1) => todo!(),
+            Expr::EnumDecl(_, _items1) => todo!(),
             Expr::EnumVariant(_, _items) => todo!(),
             Expr::Match(_, _items) => todo!(),
             Expr::MatchArm(_, _) => todo!(),

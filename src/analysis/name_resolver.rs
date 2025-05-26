@@ -125,8 +125,8 @@ impl NameResolver {
                     }
                     Name::Resolved(_) => (),
                 },
-                TypeRepr(_) => todo!(),
-                EnumDecl(_, _items, _items1) => todo!(),
+                TypeRepr(_, _) => todo!(),
+                EnumDecl(_, _items1) => todo!(),
                 EnumVariant(_, _items) => todo!(),
                 Match(_, _items) => todo!(),
                 MatchArm(_, _) => todo!(),
