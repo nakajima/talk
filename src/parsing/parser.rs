@@ -987,14 +987,43 @@ mod tests {
     #[test]
     fn parses_enum_with_generics() {
         let parsed = parse(
-            "enum Fizz<T> {
-                case foo(T), bar
+            "enum Fizz<T, Y> {
+                case foo(T, Y), bar
             }",
         )
         .unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::EnumDecl(1, 5));
+        assert_eq!(*expr, Expr::EnumDecl(2, 7));
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::TypeRepr("Fizz".to_string(), vec![0, 1])
+        );
+
+        // Check the enum generics
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::TypeRepr("T".to_string(), vec![])
+        );
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            Expr::TypeRepr("Y".to_string(), vec![])
+        );
+
+        // Check the body
+        assert_eq!(*parsed.get(7).unwrap(), Expr::Block(vec![5, 6]));
+        assert_eq!(
+            *parsed.get(5).unwrap(),
+            Expr::EnumVariant(Name::Raw("foo".to_string()), vec![3, 4])
+        );
+        assert_eq!(
+            *parsed.get(3).unwrap(),
+            Expr::TypeRepr("T".to_string(), vec![])
+        );
+        assert_eq!(
+            *parsed.get(4).unwrap(),
+            Expr::TypeRepr("Y".to_string(), vec![])
+        );
     }
 
     #[test]
