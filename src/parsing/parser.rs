@@ -253,7 +253,7 @@ impl Parser {
             ..
         }) = self.current
         {
-            ()
+            
         } else {
             condition = Some(self.parse_with_precedence(Precedence::Any)?)
         }

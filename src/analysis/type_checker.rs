@@ -369,7 +369,7 @@ mod tests {
         let parsed = parse(code).unwrap();
         let resolver = NameResolver::new();
         let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker::default();
+        let checker = TypeChecker;
         let (mut typed, constraints) = checker.infer(resolved).unwrap();
         let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints);
         constraint_solver.solve().unwrap();
