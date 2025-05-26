@@ -60,7 +60,7 @@ impl Parser {
 
             let expr = self
                 .parse_with_precedence(Precedence::Assignment)
-                .expect("did not get an expr");
+                .unwrap_or_else(|_| panic!("did not get an expr: {:?}", self.current));
 
             self.parse_tree.push_root(expr);
 
@@ -109,6 +109,113 @@ impl Parser {
         let body = self.enum_body()?;
 
         self.add_expr(EnumDecl(Name::Raw(name), vec![], body))
+    }
+
+    pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Match)?;
+
+        let target = self.parse_with_precedence(Precedence::Call)?;
+        let body = self.match_block()?;
+
+        self.add_expr(Match(target, body))
+    }
+
+    fn match_block(&mut self) -> Result<ExprID, ParserError> {
+        self.skip_newlines();
+
+        self.consume(TokenKind::LeftBrace)?;
+
+        let mut items: Vec<ExprID> = vec![];
+        while !self.did_match(TokenKind::RightBrace)? {
+            let pattern = self.parse_match_pattern()?;
+            self.consume(TokenKind::Arrow)?;
+            let body = self.parse_with_precedence(Precedence::Primary)?;
+            items.push(self.add_expr(MatchArm(pattern, body))?);
+        }
+
+        self.add_expr(Expr::Block(items))
+    }
+
+    fn parse_match_pattern(&mut self) -> Result<ExprID, ParserError> {
+        self.skip_newlines();
+
+        // Handle unqualified enum cases: .EnumCase or .EnumCase(args)
+        if self.did_match(TokenKind::Dot)? {
+            // Get the enum case name
+            let Some((
+                _,
+                Token {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                },
+            )) = self.try_identifier()
+            else {
+                return Err(ParserError::UnexpectedToken(
+                    vec![TokenKind::Identifier("_".to_string())],
+                    self.current.clone().unwrap().kind,
+                ));
+            };
+
+            // Check if it has arguments: .Case(arg1, arg2)
+            if self.did_match(TokenKind::LeftParen)? {
+                let mut args: Vec<ExprID> = vec![];
+
+                // Parse arguments (could be patterns themselves)
+                if !self.did_match(TokenKind::RightParen)? {
+                    loop {
+                        args.push(self.parse_match_pattern()?);
+
+                        if !self.did_match(TokenKind::Comma)? {
+                            break;
+                        }
+                    }
+                    self.consume(TokenKind::RightParen)?;
+                }
+
+                // Create a pattern call: .Case(args)
+                let member = self.add_expr(Member(None, name))?;
+                self.add_expr(Call(member, args))
+            } else {
+                // Simple case: .Case
+                self.add_expr(Member(None, name))
+            }
+        }
+        // Handle variable patterns: just a name
+        else if let Some((
+            _,
+            Token {
+                kind: TokenKind::Identifier(name),
+                ..
+            },
+        )) = self.try_identifier()
+        {
+            self.add_expr(Variable(Name::Raw(name.to_string()), None))
+        }
+        // Handle literal patterns: numbers, etc.
+        else if let Some(current) = self.current.clone() {
+            match current.kind {
+                TokenKind::Int(_) | TokenKind::Float(_) => self.literal(false),
+                _ => Err(ParserError::UnexpectedToken(
+                    vec![
+                        TokenKind::Dot,
+                        TokenKind::Identifier("_".to_string()),
+                        TokenKind::Int("_"),
+                    ],
+                    current.kind,
+                )),
+            }
+        } else {
+            Err(ParserError::UnexpectedEndOfInput(vec![
+                TokenKind::Dot,
+                TokenKind::Identifier("_".to_string()),
+            ]))
+        }
+    }
+
+    pub(crate) fn member_prefix(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Dot)?;
+        let (name, _) = self.try_identifier().unwrap();
+        self.add_expr(Member(None, name.to_string()))
     }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -353,7 +460,7 @@ impl Parser {
 
         if self.did_match(TokenKind::LeftParen)? {
             self.skip_newlines();
-            self.call(variable, can_assign)
+            self.call(can_assign, variable)
         } else {
             Ok(variable)
         }
@@ -361,14 +468,15 @@ impl Parser {
 
     pub(crate) fn call(
         &mut self,
-        callee: ExprID,
         _can_assign: bool,
+        callee: ExprID,
     ) -> Result<ExprID, ParserError> {
         let mut args: Vec<ExprID> = vec![];
 
         if !self.did_match(TokenKind::RightParen)? {
             while {
-                args.push(self.parse_with_precedence(Precedence::Assignment)?);
+                let arg = self.parse_with_precedence(Precedence::Assignment)?;
+                args.push(arg);
                 self.did_match(TokenKind::Comma)?
             } {}
 
@@ -433,6 +541,12 @@ impl Parser {
                 if let Some(previous_lhs) = lhs {
                     lhs = Some(infix(self, precedence.can_assign(), previous_lhs)?);
                 }
+            } else {
+                println!("No infix found for {:?}", self.current)
+            }
+
+            if self.did_match(TokenKind::Newline)? {
+                break;
             }
 
             if i > 100 {
@@ -930,5 +1044,36 @@ mod tests {
         );
         assert_eq!(*parsed.get(3).unwrap(), Expr::TypeRepr("Float".to_string()));
         assert_eq!(*parsed.get(4).unwrap(), Expr::TypeRepr("Int".to_string()));
+    }
+
+    #[test]
+    fn parses_match() {
+        let parsed = parse(
+            "match fizz {
+                .foo(name) -> name
+                .bar -> fizz
+            }",
+        )
+        .unwrap();
+
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, 9));
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Variable(Name::Raw("fizz".to_string()), None)
+        );
+
+        assert_eq!(*parsed.get(9).unwrap(), Block(vec![5, 8]));
+        assert_eq!(*parsed.get(5).unwrap(), MatchArm(3, 4));
+        assert_eq!(*parsed.get(3).unwrap(), Call(2, vec![1]));
+        assert_eq!(
+            *parsed.get(4).unwrap(),
+            Variable(Name::Raw("name".to_string()), None)
+        );
+        assert_eq!(*parsed.get(8).unwrap(), MatchArm(6, 7));
+        assert_eq!(*parsed.get(6).unwrap(), Member(None, "bar".to_string()));
+        assert_eq!(
+            *parsed.get(7).unwrap(),
+            Variable(Name::Raw("fizz".to_string()), None)
+        );
     }
 }

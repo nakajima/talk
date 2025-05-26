@@ -56,7 +56,7 @@ impl Precedence {
         Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {
                 prefix: Some(Parser::tuple),
-                infix: None,
+                infix: Some(Parser::call),
                 precedence: Precedence::Call,
             },
 
@@ -70,6 +70,12 @@ impl Precedence {
                 prefix: Some(Parser::loop_expr),
                 infix: None,
                 precedence: Precedence::None,
+            },
+
+            TokenKind::Match => ParseHandler {
+                prefix: Some(Parser::match_expr),
+                infix: None,
+                precedence: Precedence::Primary,
             },
 
             TokenKind::True => ParseHandler {
@@ -187,7 +193,11 @@ impl Precedence {
             },
 
             TokenKind::Newline => ParseHandler::NONE,
-            TokenKind::Dot => ParseHandler::NONE,
+            TokenKind::Dot => ParseHandler {
+                prefix: Some(Parser::member_prefix),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
             TokenKind::Equals => ParseHandler::NONE,
             TokenKind::Bang => ParseHandler {
                 prefix: Some(Parser::unary),

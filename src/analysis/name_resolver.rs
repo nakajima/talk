@@ -55,6 +55,7 @@ impl NameResolver {
                 LiteralTrue | LiteralFalse => continue,
                 If(_, _, _) => todo!(),
                 Loop(_, _) => todo!(),
+                Member(_, _) => continue,
                 Let(name, rhs) => {
                     match name {
                         Name::Raw(name_str) => {

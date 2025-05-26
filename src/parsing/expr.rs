@@ -44,6 +44,9 @@ pub enum Expr {
     // A type annotation
     TypeRepr(String),
 
+    // A dot thing
+    Member(Option<ExprID> /* receiver */, String),
+
     // Function stuff
     Func(
         Option<FuncName>,
@@ -89,8 +92,8 @@ pub enum Expr {
 
     // Match expression
     Match(
-        ExprID,      // scrutinee: the value being matched
-        Vec<ExprID>, // arms (each is a MatchArm)
+        ExprID, // scrutinee: the value being matched
+        ExprID, // body
     ),
 
     // Individual match arm
