@@ -97,8 +97,12 @@ impl SourceFile<Typed> {
         &self.phase_data.roots
     }
 
-    pub fn types(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
+    pub fn types_mut(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
         &mut self.phase_data.types
+    }
+
+    pub fn types(&self) -> &HashMap<ExprID, TypedExpr> {
+        &self.phase_data.types
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {

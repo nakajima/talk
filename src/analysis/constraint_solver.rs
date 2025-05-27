@@ -42,7 +42,7 @@ impl<'a> ConstraintSolver<'a> {
             self.solve_constraint(constraint, &mut substitutions)?
         }
 
-        for typed_expr in &mut self.source_file.types().values_mut() {
+        for typed_expr in &mut self.source_file.types_mut().values_mut() {
             typed_expr.ty = Self::apply(typed_expr.ty.clone(), &substitutions);
         }
 
@@ -93,7 +93,21 @@ impl<'a> ConstraintSolver<'a> {
                     ty
                 }
             }
-            Ty::Void => todo!(),
+            Ty::Enum(name, variants) => {
+                let applied_variants = variants
+                    .iter()
+                    .map(|variant| Self::apply(variant.clone(), substitutions))
+                    .collect();
+                Ty::Enum(name, applied_variants)
+            }
+            Ty::EnumVariant(enum_id, values) => {
+                let applied_values = values
+                    .iter()
+                    .map(|variant| Self::apply(variant.clone(), substitutions))
+                    .collect();
+                Ty::EnumVariant(enum_id, applied_values)
+            }
+            Ty::Void => ty,
         }
     }
 

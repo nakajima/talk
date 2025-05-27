@@ -1,4 +1,4 @@
-use crate::{symbol_table::SymbolID, token::Token, token_kind::TokenKind};
+use crate::{BuiltinType, symbol_table::SymbolID, token::Token, token_kind::TokenKind};
 
 use super::parser::ExprID;
 
@@ -23,10 +23,23 @@ impl FuncName {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Name {
     Raw(String),
     Resolved(SymbolID),
+    Builtin(BuiltinType),
+}
+
+impl From<String> for Name {
+    fn from(value: String) -> Self {
+        Name::Raw(value)
+    }
+}
+
+impl From<&str> for Name {
+    fn from(value: &str) -> Self {
+        Name::Raw(value.to_string())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,10 +55,10 @@ pub enum Expr {
     Call(ExprID, Vec<ExprID>),
 
     // A type annotation
-    TypeRepr(String, Vec<ExprID> /* generics */),
+    TypeRepr(Name, Vec<ExprID> /* generics */),
 
     // A dot thing
-    Member(Option<ExprID> /* receiver */, String),
+    Member(Option<ExprID> /* receiver */, Name),
 
     // Function stuff
     Func(
@@ -79,8 +92,9 @@ pub enum Expr {
 
     // Enum declaration
     EnumDecl(
-        ExprID, // TypeRepr name: "Option<T>"
-        ExprID, // Body
+        Name,        // TypeRepr name: Option
+        Vec<ExprID>, // Generics <T>
+        ExprID,      // Body
     ),
 
     // Individual enum variant in declaration

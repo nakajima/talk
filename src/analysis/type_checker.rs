@@ -5,10 +5,7 @@ use crate::{
     source_file::SourceFile,
 };
 
-use super::{
-    builtins::match_builtin, constraint_solver::Constraint, environment::Environment,
-    typed_expr::TypedExpr,
-};
+use super::{constraint_solver::Constraint, environment::Environment, typed_expr::TypedExpr};
 
 pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
@@ -25,11 +22,17 @@ pub enum TypeVarKind {
     FuncNameVar(SymbolID),
     FuncBody,
     Let,
-    TypeRepr(String),
+    TypeRepr(Name),
+    Generic,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum TypeError {}
+#[derive(Debug, Clone)]
+pub enum TypeError {
+    Unresolved,
+    InvalidEnumAccess,
+    UnknownEnum(SymbolID),
+    UnknownVariant(Name),
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Ty {
@@ -42,6 +45,8 @@ pub enum Ty {
         FuncReturning, /* returning */
     ),
     TypeVar(TypeVarID),
+    Enum(SymbolID, Vec<Ty>), // enum name + type arguments
+    EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +73,7 @@ impl TypeChecker {
         // Use a raw pointer to the source_file to avoid borrow checker issues
         let mut env = Environment::new();
 
+        self.hoist_enums(&root_ids, &mut env, &source_file);
         self.hoist_functions(&root_ids, &mut env, &source_file);
 
         let mut typed_roots = vec![];
@@ -148,9 +154,10 @@ impl TypeChecker {
             Expr::TypeRepr(name, _) => {
                 let name = name.clone();
 
-                let ty = match_builtin(name.clone()).unwrap_or_else(|| {
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
-                });
+                let ty = match name {
+                    Name::Builtin(builtin) => builtin.as_ty(),
+                    _ => Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name))),
+                };
 
                 let typed_expr = TypedExpr {
                     expr: expr.clone(),
@@ -311,12 +318,15 @@ impl TypeChecker {
 
                 Ok(typed_expr)
             }
-            Expr::EnumDecl(_, _items1) => todo!(),
-            Expr::EnumVariant(_, _items) => todo!(),
+            Expr::EnumDecl(_, _generics, _body) => Ok(env.types.get(&id).unwrap().clone()), /* handled by hoist */
+            Expr::EnumVariant(_, _) => Ok(env.types.get(&id).unwrap().clone()), /* handled by hoist */
             Expr::Match(_, _items) => todo!(),
             Expr::MatchArm(_, _) => todo!(),
             Expr::PatternVariant(_, _, _items) => todo!(),
-            Expr::MemberAccess(_, _) => todo!(),
+            Expr::MemberAccess(_, Name::Resolved(_can_assign)) => {
+                // ??
+                todo!()
+            }
             _ => panic!("Unhandled expr in type checker: {:?}", expr),
         };
 
@@ -329,14 +339,66 @@ impl TypeChecker {
         result
     }
 
-    fn hoist_functions(
+    fn hoist_enums(
         &self,
-        node_ids: &[ExprID],
+        root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &SourceFile<NameResolved>,
     ) {
-        for item in node_ids.iter() {
-            let expr = source_file.get(*item).unwrap().clone();
+        for id in root_ids.iter() {
+            let expr = source_file.get(*id).unwrap().clone();
+
+            if let Expr::EnumDecl(Name::Resolved(enum_id), generics, body) = expr.clone() {
+                let Some(Expr::Block(expr_ids)) = source_file.get(body) else {
+                    unreachable!()
+                };
+
+                let mut variants: Vec<Ty> = vec![];
+
+                for expr_id in expr_ids {
+                    if let Some(Expr::EnumVariant(_, values)) = source_file.get(*expr_id) {
+                        let values = values
+                            .iter()
+                            .map(|id| self.infer_node(*id, env, &None, source_file).unwrap().ty)
+                            .collect();
+                        variants.push(Ty::EnumVariant(enum_id, values));
+                    }
+                }
+
+                let enum_ty = Ty::Enum(enum_id, variants);
+
+                // If there are generics, create a scheme that quantifies over them
+                let scheme = if generics.is_empty() {
+                    env.generalize(&enum_ty)
+                } else {
+                    // Create type variables for each generic parameter
+                    let generic_vars: Vec<TypeVarID> = generics
+                        .iter()
+                        .map(|_| env.new_type_variable(TypeVarKind::Generic))
+                        .collect();
+
+                    Scheme::new(enum_ty.clone(), generic_vars)
+                };
+
+                env.declare(enum_id, scheme);
+
+                let typed_expr = TypedExpr::new(expr, enum_ty.clone());
+                env.types.insert(*id, typed_expr);
+
+                let scheme = env.generalize(&enum_ty);
+                env.declare(enum_id, scheme);
+            }
+        }
+    }
+
+    fn hoist_functions(
+        &self,
+        root_ids: &[ExprID],
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+    ) {
+        for id in root_ids.iter() {
+            let expr = source_file.get(*id).unwrap().clone();
 
             if let Expr::Func(Some(FuncName::Resolved(symbol_id)), ref _params, _body, _ret) = expr
             {
@@ -344,7 +406,7 @@ impl TypeChecker {
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
 
                 let typed_expr = TypedExpr::new(expr, fn_var.clone());
-                env.types.insert(*item, typed_expr);
+                env.types.insert(*id, typed_expr);
 
                 let scheme = env.generalize(&fn_var);
                 env.declare(symbol_id, scheme);
@@ -356,7 +418,7 @@ impl TypeChecker {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SourceFile, Typed,
+        SourceFile, SymbolID, Typed,
         constraint_solver::ConstraintSolver,
         name_resolver::NameResolver,
         parser::parse,
@@ -598,5 +660,23 @@ mod tests {
 
         assert_eq!(checker.type_for(checker.root_ids()[1]), Ty::Int);
         assert_eq!(checker.type_for(checker.root_ids()[2]), Ty::Float);
+    }
+
+    #[test]
+    fn checks_simple_enum_declaration() {
+        let checker = check(
+            "
+            enum Fizz {
+                case foo, bar
+            }
+        ",
+        );
+
+        assert_eq!(
+            checker.type_for(checker.root_ids()[0]),
+            Ty::Enum(SymbolID(1), vec![])
+        );
+
+        println!("types: {:#?}", checker.types());
     }
 }

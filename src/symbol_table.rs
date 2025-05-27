@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct SymbolID(pub u32);
+pub struct SymbolID(pub i32);
 
 #[derive(Debug, Clone)]
 pub enum SymbolKind {
     Func,
     Param,
     Local,
+    Enum,
+    EnumVariant(SymbolID),
 }
 
 #[derive(Debug, Clone)]
@@ -19,7 +21,7 @@ pub struct SymbolInfo {
 #[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
     symbols: HashMap<SymbolID, SymbolInfo>,
-    next_id: u32,
+    next_id: i32,
 }
 
 impl SymbolTable {
@@ -35,5 +37,9 @@ impl SymbolTable {
         );
 
         symbol_id
+    }
+
+    pub fn get(&self, symbol_id: &SymbolID) -> Option<&SymbolInfo> {
+        self.symbols.get(symbol_id)
     }
 }

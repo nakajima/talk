@@ -8,12 +8,21 @@ use super::{
     typed_expr::TypedExpr,
 };
 
+// Enum definition storage
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: SymbolID,
+    pub type_params: Vec<SymbolID>, // generic parameter names like ["T", "E"]
+    pub variants: HashMap<SymbolID, Vec<Ty>>, // variant name -> field types
+}
+
 #[derive(Debug)]
 pub struct Environment {
     pub types: HashMap<ExprID, TypedExpr>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<HashMap<SymbolID, Scheme>>,
+    pub enum_defs: HashMap<SymbolID, EnumDef>,
 }
 
 impl Default for Environment {
@@ -29,6 +38,7 @@ impl Environment {
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![Default::default()],
+            enum_defs: Default::default(),
         }
     }
 
@@ -91,6 +101,14 @@ impl Environment {
                     let new_ret = Box::new(walk(*ret, map));
                     Ty::Func(new_params, new_ret)
                 }
+                Ty::Enum(name, generics) => {
+                    let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
+                    Ty::Enum(name, new_generics)
+                }
+                Ty::EnumVariant(name, values) => {
+                    let new_values = values.iter().map(|g| walk(g.clone(), map)).collect();
+                    Ty::EnumVariant(name, new_values)
+                }
                 Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
             }
         }
@@ -117,6 +135,15 @@ impl Environment {
         }
 
         self.type_var_id.clone()
+    }
+
+    // Helper methods for enum definitions
+    pub fn register_enum(&mut self, def: EnumDef) {
+        self.enum_defs.insert(def.name.clone(), def);
+    }
+
+    pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {
+        self.enum_defs.get(name)
     }
 }
 

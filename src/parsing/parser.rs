@@ -103,12 +103,20 @@ impl Parser {
         self.consume(TokenKind::Enum)?;
         self.skip_newlines();
 
-        let name = self.type_repr()?;
+        let (name, _) = self.try_identifier().unwrap();
+
+        let mut generics = vec![];
+        if self.did_match(TokenKind::Less)? {
+            while !self.did_match(TokenKind::Greater)? {
+                generics.push(self.type_repr()?);
+                self.consume(TokenKind::Comma).ok();
+            }
+        };
 
         // Consume the block
         let body = self.enum_body()?;
 
-        self.add_expr(EnumDecl(name, body))
+        self.add_expr(EnumDecl(Name::Raw(name), generics, body))
     }
 
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -173,11 +181,11 @@ impl Parser {
                 }
 
                 // Create a pattern call: .Case(args)
-                let member = self.add_expr(Member(None, name))?;
+                let member = self.add_expr(Member(None, name.into()))?;
                 self.add_expr(Call(member, args))
             } else {
                 // Simple case: .Case
-                self.add_expr(Member(None, name))
+                self.add_expr(Member(None, name.into()))
             }
         }
         // Handle variable patterns: just a name
@@ -215,7 +223,7 @@ impl Parser {
     pub(crate) fn member_prefix(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::Dot)?;
         let (name, _) = self.try_identifier().unwrap();
-        self.add_expr(Member(None, name.to_string()))
+        self.add_expr(Member(None, name.into()))
     }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -253,7 +261,6 @@ impl Parser {
             ..
         }) = self.current
         {
-            
         } else {
             condition = Some(self.parse_with_precedence(Precedence::Any)?)
         }
@@ -357,7 +364,7 @@ impl Parser {
                 None
             };
 
-            params.push(self.add_expr(Parameter(Name::Raw(name.to_string()), ty_repr))?);
+            params.push(self.add_expr(Parameter(name.into(), ty_repr))?);
 
             if self.did_match(TokenKind::Comma)? {
                 continue;
@@ -377,7 +384,7 @@ impl Parser {
                 },
             )) = self.try_identifier()
             {
-                let ret_id = self.add_expr(TypeRepr(ret_name, vec![]))?;
+                let ret_id = self.add_expr(TypeRepr(ret_name.into(), vec![]))?;
                 Some(ret_id)
             } else {
                 None
@@ -413,7 +420,7 @@ impl Parser {
             }
         }
 
-        let type_repr = TypeRepr(name, generics);
+        let type_repr = TypeRepr(name.into(), generics);
         self.add_expr(type_repr)
     }
 
@@ -892,7 +899,7 @@ mod tests {
             *parsed.get(1).unwrap(),
             Parameter(Name::Raw("name".to_string()), Some(0))
         );
-        assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int".to_string(), vec![]));
+        assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int".into(), vec![]));
     }
 
     #[test]
@@ -981,7 +988,10 @@ mod tests {
     fn parses_empty_enum_decl() {
         let parsed = parse("enum Fizz {}").unwrap();
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::EnumDecl(0, 1));
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl("Fizz".into(), vec![], 0)
+        );
     }
 
     #[test]
@@ -994,36 +1004,21 @@ mod tests {
         .unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::EnumDecl(2, 7));
-        assert_eq!(
-            *parsed.get(2).unwrap(),
-            Expr::TypeRepr("Fizz".to_string(), vec![0, 1])
-        );
+        assert_eq!(*expr, Expr::EnumDecl("Fizz".into(), vec![0, 1], 6));
+        assert_eq!(*parsed.get(2).unwrap(), Expr::TypeRepr("T".into(), vec![]));
 
         // Check the enum generics
-        assert_eq!(
-            *parsed.get(0).unwrap(),
-            Expr::TypeRepr("T".to_string(), vec![])
-        );
-        assert_eq!(
-            *parsed.get(1).unwrap(),
-            Expr::TypeRepr("Y".to_string(), vec![])
-        );
+        assert_eq!(*parsed.get(0).unwrap(), Expr::TypeRepr("T".into(), vec![]));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::TypeRepr("Y".into(), vec![]));
 
         // Check the body
-        assert_eq!(*parsed.get(7).unwrap(), Expr::Block(vec![5, 6]));
-        assert_eq!(
-            *parsed.get(5).unwrap(),
-            Expr::EnumVariant(Name::Raw("foo".to_string()), vec![3, 4])
-        );
-        assert_eq!(
-            *parsed.get(3).unwrap(),
-            Expr::TypeRepr("T".to_string(), vec![])
-        );
+        assert_eq!(*parsed.get(6).unwrap(), Expr::Block(vec![4, 5]));
         assert_eq!(
             *parsed.get(4).unwrap(),
-            Expr::TypeRepr("Y".to_string(), vec![])
+            Expr::EnumVariant(Name::Raw("foo".into()), vec![2, 3])
         );
+        assert_eq!(*parsed.get(2).unwrap(), Expr::TypeRepr("T".into(), vec![]));
+        assert_eq!(*parsed.get(3).unwrap(), Expr::TypeRepr("Y".into(), vec![]));
     }
 
     #[test]
@@ -1036,9 +1031,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::EnumDecl(0, 4));
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl("Fizz".into(), vec![], 3)
+        );
 
-        let Expr::Block(exprs) = parsed.get(4).unwrap() else {
+        let Expr::Block(exprs) = parsed.get(3).unwrap() else {
             panic!("didn't get body")
         };
 
@@ -1066,37 +1064,40 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::EnumDecl(0, 7));
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl("Fizz".into(), vec![], 6)
+        );
 
-        let Expr::Block(exprs) = parsed.get(7).unwrap() else {
+        let Expr::Block(exprs) = parsed.get(6).unwrap() else {
             panic!("didn't get body")
         };
 
         assert_eq!(exprs.len(), 2);
         assert_eq!(
             *parsed.get(exprs[0]).unwrap(),
-            Expr::EnumVariant(Name::Raw("foo".to_string()), vec![1, 2])
+            Expr::EnumVariant("foo".into(), vec![0, 1])
+        );
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::TypeRepr("Int".into(), vec![])
         );
         assert_eq!(
             *parsed.get(1).unwrap(),
-            Expr::TypeRepr("Int".to_string(), vec![])
-        );
-        assert_eq!(
-            *parsed.get(2).unwrap(),
-            Expr::TypeRepr("Float".to_string(), vec![])
+            Expr::TypeRepr("Float".into(), vec![])
         );
 
         assert_eq!(
             *parsed.get(exprs[1]).unwrap(),
-            Expr::EnumVariant(Name::Raw("bar".to_string()), vec![4, 5])
+            Expr::EnumVariant(Name::Raw("bar".into()), vec![3, 4])
+        );
+        assert_eq!(
+            *parsed.get(3).unwrap(),
+            Expr::TypeRepr("Float".into(), vec![])
         );
         assert_eq!(
             *parsed.get(4).unwrap(),
-            Expr::TypeRepr("Float".to_string(), vec![])
-        );
-        assert_eq!(
-            *parsed.get(5).unwrap(),
-            Expr::TypeRepr("Int".to_string(), vec![])
+            Expr::TypeRepr("Int".into(), vec![])
         );
     }
 
@@ -1124,7 +1125,7 @@ mod tests {
             Variable(Name::Raw("name".to_string()), None)
         );
         assert_eq!(*parsed.get(8).unwrap(), MatchArm(6, 7));
-        assert_eq!(*parsed.get(6).unwrap(), Member(None, "bar".to_string()));
+        assert_eq!(*parsed.get(6).unwrap(), Member(None, "bar".into()));
         assert_eq!(
             *parsed.get(7).unwrap(),
             Variable(Name::Raw("fizz".to_string()), None)
