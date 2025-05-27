@@ -1,4 +1,4 @@
-use crate::{BuiltinType, symbol_table::SymbolID, token::Token, token_kind::TokenKind};
+use crate::{symbol_table::SymbolID, token::Token, token_kind::TokenKind};
 
 use super::parser::ExprID;
 
@@ -27,7 +27,6 @@ impl FuncName {
 pub enum Name {
     Raw(String),
     Resolved(SymbolID),
-    Builtin(BuiltinType),
 }
 
 impl From<String> for Name {

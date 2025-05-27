@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{SymbolID, parser::ExprID, type_checker::Ty};
+use crate::{SymbolID, SymbolTable, parser::ExprID, type_checker::Ty};
 
 use super::{
     constraint_solver::Constraint,
@@ -37,7 +37,7 @@ impl Environment {
             types: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
-            scopes: vec![Default::default()],
+            scopes: vec![SymbolTable::default_env_scope()],
             enum_defs: Default::default(),
         }
     }

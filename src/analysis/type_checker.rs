@@ -1,6 +1,7 @@
 use crate::{
     NameResolved, SymbolID, Typed,
     expr::{Expr, FuncName, Name},
+    match_builtin,
     parser::ExprID,
     source_file::SourceFile,
 };
@@ -19,6 +20,7 @@ pub enum TypeVarKind {
     CallArg,
     CallReturn,
     FuncParam,
+    FuncType,
     FuncNameVar(SymbolID),
     FuncBody,
     Let,
@@ -73,7 +75,7 @@ impl TypeChecker {
         // Use a raw pointer to the source_file to avoid borrow checker issues
         let mut env = Environment::new();
 
-        self.hoist_enums(&root_ids, &mut env, &source_file);
+        self.hoist_enums(&root_ids, &mut env, &source_file)?;
         self.hoist_functions(&root_ids, &mut env, &source_file);
 
         let mut typed_roots = vec![];
@@ -154,9 +156,10 @@ impl TypeChecker {
             Expr::TypeRepr(name, _) => {
                 let name = name.clone();
 
-                let ty = match name {
-                    Name::Builtin(builtin) => builtin.as_ty(),
-                    _ => Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name))),
+                let ty = if let Some(ty) = match_builtin(&name) {
+                    ty
+                } else {
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name)))
                 };
 
                 let typed_expr = TypedExpr {
@@ -176,12 +179,12 @@ impl TypeChecker {
                 } else {
                     None
                 };
-                //     ret.as_ref().map(|repr| {
-                //     self.infer_node(*repr, env, &None, source_file)
-                //         .unwrap()
-                //         .ty
-                //         .clone()
-                // });
+
+                let ret_type_expr: Option<TypedExpr> = ret
+                    .as_ref()
+                    .map(|repr| self.infer_node(*repr, env, &None, source_file))
+                    .transpose()
+                    .unwrap_or(None);
 
                 if let Some(FuncName::Resolved(symbol_id)) = name {
                     let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
@@ -211,6 +214,14 @@ impl TypeChecker {
                 }
 
                 let body_ty = self.infer_node(*body, env, &expected_body_ty, source_file)?;
+
+                if let Some(ret_type) = ret_type_expr {
+                    env.constraints.push(Constraint::Equality(
+                        ret.unwrap(),
+                        body_ty.ty.clone(),
+                        ret_type.ty,
+                    ));
+                }
 
                 env.end_scope();
 
@@ -344,7 +355,7 @@ impl TypeChecker {
         root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &SourceFile<NameResolved>,
-    ) {
+    ) -> Result<(), TypeError> {
         for id in root_ids.iter() {
             let expr = source_file.get(*id).unwrap().clone();
 
@@ -365,7 +376,12 @@ impl TypeChecker {
                     }
                 }
 
-                let enum_ty = Ty::Enum(enum_id, variants);
+                let mut generic_vars = vec![];
+                for generic_id in generics.clone() {
+                    generic_vars.push(self.infer_node(generic_id, env, &None, source_file)?.ty);
+                }
+
+                let enum_ty = Ty::Enum(enum_id, generic_vars);
 
                 // If there are generics, create a scheme that quantifies over them
                 let scheme = if generics.is_empty() {
@@ -389,6 +405,8 @@ impl TypeChecker {
                 env.declare(enum_id, scheme);
             }
         }
+
+        Ok(())
     }
 
     fn hoist_functions(
@@ -676,7 +694,5 @@ mod tests {
             checker.type_for(checker.root_ids()[0]),
             Ty::Enum(SymbolID(1), vec![])
         );
-
-        println!("types: {:#?}", checker.types());
     }
 }

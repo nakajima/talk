@@ -10,7 +10,6 @@ use crate::expr::Name;
 use crate::parser::ExprID;
 use crate::source_file::SourceFile;
 
-#[derive(Default)]
 pub struct NameResolver {
     symbol_table: SymbolTable,
     scopes: Vec<HashMap<String, SymbolID>>,
@@ -20,12 +19,11 @@ impl NameResolver {
     pub fn new() -> Self {
         NameResolver {
             symbol_table: SymbolTable::default(),
-            scopes: vec![],
+            scopes: vec![SymbolTable::default_name_scope()],
         }
     }
 
     pub fn resolve(mut self, mut source_file: SourceFile) -> SourceFile<NameResolved> {
-        self.start_scope(); // Push global scope
         let ids: Vec<ExprID> = source_file.root_ids();
         self.resolve_nodes(ids, &mut source_file);
         source_file.to_resolved(self.symbol_table)
@@ -54,14 +52,19 @@ impl NameResolver {
         // 1) Hoist all funcs in this block before any recursion
         for &id in &node_ids {
             if let Func(Some(FuncName::Token(name)), params, body, ret) =
-                source_file.get(id).unwrap()
+                source_file.get(id).unwrap().clone()
             {
                 let symbol_id = self.declare(name.clone(), SymbolKind::Func);
+
+                if let Some(ret) = ret {
+                    self.resolve_nodes(vec![ret], source_file)
+                };
+
                 source_file.nodes[id as usize] = Func(
                     Some(FuncName::Resolved(symbol_id)),
                     params.to_vec(),
-                    *body,
-                    *ret,
+                    body,
+                    ret,
                 );
             }
         }
@@ -81,10 +84,6 @@ impl NameResolver {
                             let symbol_id = self.declare(name_str, SymbolKind::Local);
                             source_file.nodes[node_id as usize] =
                                 Let(Name::Resolved(symbol_id), rhs);
-                        }
-                        Name::Builtin(builtin) => {
-                            source_file.nodes[node_id as usize] =
-                                Let(Name::Resolved(builtin.symbol_id()), rhs);
                         }
                         Name::Resolved(_) => (),
                     };
@@ -113,8 +112,6 @@ impl NameResolver {
                     self.end_scope();
                 }
                 Func(_name, params, body, _ret) => {
-                    // Get set when hoisting
-
                     self.start_scope();
 
                     for param in params.clone() {
@@ -131,14 +128,20 @@ impl NameResolver {
 
                     self.end_scope();
                 }
-                Parameter(name, ty_repr) => match name {
-                    Name::Raw(name_str) => {
-                        let symbol_id = self.lookup(&name_str);
-                        source_file.nodes[node_id as usize] =
-                            Variable(Name::Resolved(symbol_id), ty_repr);
+                Parameter(name, ty_repr) => {
+                    if let Some(ty_repr) = ty_repr {
+                        self.resolve_nodes(vec![ty_repr], source_file)
+                    };
+
+                    match name {
+                        Name::Raw(name_str) => {
+                            let symbol_id = self.lookup(&name_str);
+                            source_file.nodes[node_id as usize] =
+                                Variable(Name::Resolved(symbol_id), ty_repr);
+                        }
+                        Name::Resolved(_) => (),
                     }
-                    Name::Resolved(_) | Name::Builtin(_) => (),
-                },
+                }
                 Variable(name, _) => match name {
                     Name::Raw(name_str) => {
                         let symbol_id = self.lookup(&name_str);
@@ -146,9 +149,17 @@ impl NameResolver {
                         source_file.nodes[node_id as usize] =
                             Variable(Name::Resolved(symbol_id), None);
                     }
-                    Name::Resolved(_) | Name::Builtin(_) => (),
+                    Name::Resolved(_) => (),
                 },
-                TypeRepr(_, generics) => {
+                TypeRepr(name, generics) => {
+                    log::warn!("TypeRepr name: {:?}", name);
+                    if let Some(symbol_id) = self.resolve_builtin(&name) {
+                        log::warn!("builtin found: {:?}", symbol_id);
+                        source_file.nodes[node_id as usize] =
+                            Variable(Name::Resolved(symbol_id), None);
+                    } else {
+                        log::warn!("not a builtin");
+                    }
                     self.resolve_nodes(generics, source_file);
                 }
                 EnumDecl(name, generics, body) => {
@@ -169,9 +180,6 @@ impl NameResolver {
                     Name::Resolved(_) => {
                         self.resolve_nodes(values, source_file);
                     }
-                    Name::Builtin(_) => {
-                        unreachable!("Enum variant should be resolved by hoisting");
-                    }
                     Name::Raw(_) => {
                         unreachable!("Enum variant should be resolved by hoisting");
                     }
@@ -181,6 +189,13 @@ impl NameResolver {
                 PatternVariant(_, _, _items) => todo!(),
                 MemberAccess(_, _) => todo!(),
             }
+        }
+    }
+
+    pub fn resolve_builtin(&self, name: &Name) -> Option<SymbolID> {
+        match name {
+            Name::Raw(name_str) => self.symbol_table.lookup(name_str),
+            _ => None,
         }
     }
 
@@ -226,7 +241,6 @@ impl NameResolver {
         log::trace!("declaring {} in {:?}", name, self.scopes);
         let symbol_id = self.symbol_table.add(&name, kind);
         self.scopes.last_mut().unwrap().insert(name, symbol_id);
-        log::trace!("new symbol table: {:?}", self.symbol_table);
         symbol_id
     }
 
@@ -256,7 +270,7 @@ mod tests {
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let tree = parse(code).expect("parse failed");
-        let resolver = NameResolver::default();
+        let resolver = NameResolver::new();
         resolver.resolve(tree)
     }
 
@@ -272,6 +286,13 @@ mod tests {
         let tree = resolve("3.14");
         let root = tree.roots()[0].unwrap();
         assert_eq!(root, &LiteralFloat("3.14"));
+    }
+
+    #[test]
+    fn resolved_builtin() {
+        let tree = resolve("Int");
+        let root = tree.roots()[0].unwrap();
+        assert_eq!(root, &Variable(Name::Resolved(SymbolID(-1)), None));
     }
 
     #[test]
