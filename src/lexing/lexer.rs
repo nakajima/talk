@@ -87,7 +87,17 @@ impl Lexer {
             '(' => self.make(LeftParen),
             ')' => self.make(RightParen),
             '\n' => self.make(Newline),
-            'a'..='z' | 'A'..='Z' | '_' => {
+            '_' => {
+                if let Some(next) = self.chars.peek() {
+                    if *next == '_' || next.is_alphanumeric() {
+                        let ident = self.identifier(self.current - 1);
+                        return self.make(ident);
+                    }
+                }
+
+                return self.make(Underscore);
+            }
+            'a'..='z' | 'A'..='Z' => {
                 let ident = self.identifier(self.current - 1);
                 self.make(ident)
             }
@@ -324,6 +334,14 @@ mod tests {
     fn keywords() {
         let mut lexer = Lexer::new("func");
         assert_eq!(lexer.next().unwrap().kind, Func);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn underscore() {
+        let mut lexer = Lexer::new("_ _sup");
+        assert_eq!(lexer.next().unwrap().kind, Underscore);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("_sup".to_string()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 }

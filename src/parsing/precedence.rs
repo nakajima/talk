@@ -93,7 +93,7 @@ impl Precedence {
             TokenKind::Enum => ParseHandler {
                 prefix: Some(Parser::enum_decl),
                 infix: None,
-                precedence: Precedence::Primary,
+                precedence: Precedence::Call,
             },
 
             TokenKind::LeftBrace => ParseHandler {

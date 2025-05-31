@@ -17,6 +17,7 @@ pub enum SymbolKind {
     EnumVariant(SymbolID),
     BuiltinType,
     CustomType,
+    TypeParameter,
 }
 
 #[derive(Debug, Clone)]

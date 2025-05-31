@@ -2,6 +2,7 @@ use crate::{SourceFile, lexer::Lexer, token::Token, token_kind::TokenKind};
 
 use super::{
     expr::{
+        self,
         Expr::{self, *},
         ExprMeta, FuncName,
     },
@@ -27,6 +28,7 @@ pub enum ParserError {
     ),
     UnexpectedEndOfInput(Vec<TokenKind> /* expected */),
     UnknownError(&'static str),
+    ExpectedIdentifier(Option<Token>),
 }
 
 pub fn parse(code: &'static str) -> Result<SourceFile, ParserError> {
@@ -87,7 +89,9 @@ impl Parser {
         self.previous.clone()
     }
 
-    fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
+    pub(super) fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
+        log::debug!("Adding expr: {:?}", expr);
+
         let token = self.current.clone().unwrap();
 
         let expr_meta = ExprMeta {
@@ -129,7 +133,7 @@ impl Parser {
         self.add_expr(Match(target, body))
     }
 
-    fn match_block(&mut self) -> Result<ExprID, ParserError> {
+    fn match_block(&mut self) -> Result<Vec<ExprID>, ParserError> {
         self.skip_newlines();
 
         self.consume(TokenKind::LeftBrace)?;
@@ -137,88 +141,171 @@ impl Parser {
         let mut items: Vec<ExprID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             let pattern = self.parse_match_pattern()?;
+            let pattern_id = self.add_expr(Pattern(pattern))?;
             self.consume(TokenKind::Arrow)?;
             let body = self.parse_with_precedence(Precedence::Primary)?;
-            items.push(self.add_expr(MatchArm(pattern, body))?);
+            items.push(self.add_expr(MatchArm(pattern_id, body))?);
         }
 
-        self.add_expr(Expr::Block(items))
+        Ok(items)
     }
 
-    fn parse_match_pattern(&mut self) -> Result<ExprID, ParserError> {
+    pub(super) fn parse_match_pattern(&mut self) -> Result<expr::Pattern, ParserError> {
         self.skip_newlines();
 
-        // Handle unqualified enum cases: .EnumCase or .EnumCase(args)
-        if self.did_match(TokenKind::Dot)? {
-            // Get the enum case name
-            let Some((
-                _,
-                Token {
-                    kind: TokenKind::Identifier(name),
-                    ..
-                },
-            )) = self.try_identifier()
-            else {
-                return Err(ParserError::UnexpectedToken(
-                    vec![TokenKind::Identifier("_".to_string())],
-                    self.current.clone().unwrap().kind,
-                ));
+        if self.did_match(TokenKind::Underscore)? {
+            return Ok(expr::Pattern::Wildcard);
+        }
+
+        if let Some(Token {
+            kind: TokenKind::Int(value),
+            ..
+        }) = self.current
+        {
+            return Ok(expr::Pattern::LiteralInt(value));
+        }
+
+        if let Some(Token {
+            kind: TokenKind::Float(value),
+            ..
+        }) = self.current
+        {
+            return Ok(expr::Pattern::LiteralFloat(value));
+        }
+
+        if let Some(Token {
+            kind: TokenKind::True,
+            ..
+        }) = self.current
+        {
+            return Ok(expr::Pattern::LiteralTrue);
+        }
+
+        if let Some(Token {
+            kind: TokenKind::False,
+            ..
+        }) = self.current
+        {
+            return Ok(expr::Pattern::LiteralFalse);
+        }
+
+        if let Some((name, _)) = self.try_identifier() {
+            // It's not an enum variant so it's a bind
+            if !self.did_match(TokenKind::Dot)? {
+                return Ok(expr::Pattern::Bind(Name::Raw(name)));
+            }
+
+            let Some((variant_name, _)) = self.try_identifier() else {
+                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             };
 
-            // Check if it has arguments: .Case(arg1, arg2)
+            let mut fields: Vec<expr::Pattern> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
-                let mut args: Vec<ExprID> = vec![];
-
-                // Parse arguments (could be patterns themselves)
-                if !self.did_match(TokenKind::RightParen)? {
-                    loop {
-                        args.push(self.parse_match_pattern()?);
-
-                        if !self.did_match(TokenKind::Comma)? {
-                            break;
-                        }
-                    }
-                    self.consume(TokenKind::RightParen)?;
+                while !self.did_match(TokenKind::RightParen)? {
+                    fields.push(self.parse_match_pattern()?);
                 }
+            }
 
-                // Create a pattern call: .Case(args)
-                let member = self.add_expr(Member(None, name.into()))?;
-                self.add_expr(Call(member, args))
-            } else {
-                // Simple case: .Case
-                self.add_expr(Member(None, name.into()))
+            return Ok(expr::Pattern::Variant {
+                enum_name: Some(Name::Raw(name)),
+                variant_name: Name::Raw(variant_name),
+                fields: fields,
+            });
+        }
+
+        // Unqualified variant
+        if self.did_match(TokenKind::Dot)? {
+            let Some((variant_name, _)) = self.try_identifier() else {
+                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+            };
+
+            let mut fields: Vec<expr::Pattern> = vec![];
+            if self.did_match(TokenKind::LeftParen)? {
+                while !self.did_match(TokenKind::RightParen)? {
+                    fields.push(self.parse_match_pattern()?);
+                }
             }
+
+            return Ok(expr::Pattern::Variant {
+                enum_name: None,
+                variant_name: Name::Raw(variant_name),
+                fields: fields,
+            });
         }
-        // Handle variable patterns: just a name
-        else if let Some((
-            _,
-            Token {
-                kind: TokenKind::Identifier(name),
-                ..
-            },
-        )) = self.try_identifier()
-        {
-            self.add_expr(Variable(Name::Raw(name.to_string()), None))
-        }
-        // Handle literal patterns: numbers, etc.
-        else if let Some(current) = self.current.clone() {
-            match current.kind {
-                TokenKind::Int(_) | TokenKind::Float(_) => self.literal(false),
-                _ => Err(ParserError::UnexpectedToken(
-                    vec![
-                        TokenKind::Dot,
-                        TokenKind::Identifier("_".to_string()),
-                        TokenKind::Int("_"),
-                    ],
-                    current.kind,
-                )),
-            }
-        } else {
-            Err(ParserError::UnexpectedEndOfInput(vec![
-                TokenKind::Dot,
-                TokenKind::Identifier("_".to_string()),
-            ]))
-        }
+
+        todo!("TODO: {:?}", self.current)
+
+        // // Handle unqualified enum cases: .EnumCase or .EnumCase(args)
+        // if self.did_match(TokenKind::Dot)? {
+        //     // Get the enum case name
+        //     let Some((
+        //         _,
+        //         Token {
+        //             kind: TokenKind::Identifier(name),
+        //             ..
+        //         },
+        //     )) = self.try_identifier()
+        //     else {
+        //         return Err(ParserError::UnexpectedToken(
+        //             vec![TokenKind::Identifier("_".to_string())],
+        //             self.current.clone().unwrap().kind,
+        //         ));
+        //     };
+
+        //     // Check if it has arguments: .Case(arg1, arg2)
+        //     if self.did_match(TokenKind::LeftParen)? {
+        //         let mut args: Vec<ExprID> = vec![];
+
+        //         // Parse arguments (could be patterns themselves)
+        //         if !self.did_match(TokenKind::RightParen)? {
+        //             loop {
+        //                 args.push(self.parse_match_pattern()?);
+
+        //                 if !self.did_match(TokenKind::Comma)? {
+        //                     break;
+        //                 }
+        //             }
+        //             self.consume(TokenKind::RightParen)?;
+        //         }
+
+        //         // Create a pattern call: .Case(args)
+        //         let member = self.add_expr(Member(None, name.into()))?;
+        //         self.add_expr(Call(member, args))
+        //     } else {
+        //         // Simple case: .Case
+        //         self.add_expr(Member(None, name.into()))
+        //     }
+        // }
+        // // Handle variable patterns: just a name
+        // else if let Some((
+        //     _,
+        //     Token {
+        //         kind: TokenKind::Identifier(name),
+        //         ..
+        //     },
+        // )) = self.try_identifier()
+        // {
+        //     self.add_expr(Variable(Name::Raw(name.to_string()), None))
+        // }
+        // // Handle literal patterns: numbers, etc.
+        // else if let Some(current) = self.current.clone() {
+        //     match current.kind {
+        //         TokenKind::Int(_) | TokenKind::Float(_) => self.literal(false),
+        //         _ => Err(ParserError::UnexpectedToken(
+        //             vec![
+        //                 TokenKind::Dot,
+        //                 TokenKind::Identifier("_".to_string()),
+        //                 TokenKind::Int("_"),
+        //             ],
+        //             current.kind,
+        //         )),
+        //     }
+        // } else {
+        //     Err(ParserError::UnexpectedEndOfInput(vec![
+        //         TokenKind::Dot,
+        //         TokenKind::Identifier("_".to_string()),
+        //     ]))
+        // }
     }
 
     pub(crate) fn member_prefix(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -578,7 +665,8 @@ impl Parser {
                     lhs = Some(infix(self, precedence.can_assign(), previous_lhs)?);
                 }
             } else {
-                println!("No infix found for {:?}", self.current)
+                println!("No infix found for {:?}", self.current);
+                break;
             }
 
             if self.did_match(TokenKind::Newline)? {
@@ -587,7 +675,7 @@ impl Parser {
 
             if i > 100 {
                 panic!(
-                    "we've got a problem: {:?}, parsed: {:?}",
+                    "we've got a problem: {:?}, parsed: {:#?}",
                     self.current, self.parse_tree
                 );
             }
@@ -600,7 +688,7 @@ impl Parser {
     // MARK: Helpers
 
     // Try to get an identifier. If it's a match, return it, otherwise return None
-    fn try_identifier(&mut self) -> Option<(String, Token)> {
+    pub(super) fn try_identifier(&mut self) -> Option<(String, Token)> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone() {
@@ -614,7 +702,7 @@ impl Parser {
     }
 
     // Try to get a specific token. If it's a match, return true.
-    fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
+    pub(super) fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone() {
@@ -628,7 +716,7 @@ impl Parser {
     }
 
     // Try to get a specific token. If it's not a match, return an error.
-    fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
+    pub(super) fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone() {
@@ -1039,16 +1127,16 @@ mod tests {
         let parsed = parse(
             "enum Fizz<T, Y> {
                 case foo(T, Y), bar
+            }
+            
+            enum Buzz<T, Y> {
+                case foo(T, Y), bar
             }",
         )
         .unwrap();
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::EnumDecl("Fizz".into(), vec![0, 1], 6));
-        assert_eq!(
-            *parsed.get(2).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], true)
-        );
 
         // Check the enum generics
         assert_eq!(
@@ -1068,11 +1156,11 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(2).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], true)
+            Expr::TypeRepr("T".into(), vec![], false)
         );
         assert_eq!(
             *parsed.get(3).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], true)
+            Expr::TypeRepr("Y".into(), vec![], false)
         );
     }
 
@@ -1166,24 +1254,79 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, 9));
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, vec![5, 8]));
         assert_eq!(
             *parsed.get(0).unwrap(),
             Variable(Name::Raw("fizz".to_string()), None)
         );
 
-        assert_eq!(*parsed.get(9).unwrap(), Block(vec![5, 8]));
+        assert_eq!(*parsed.get(8).unwrap(), MatchArm(6, 7));
         assert_eq!(*parsed.get(5).unwrap(), MatchArm(3, 4));
         assert_eq!(*parsed.get(3).unwrap(), Call(2, vec![1]));
         assert_eq!(
             *parsed.get(4).unwrap(),
             Variable(Name::Raw("name".to_string()), None)
         );
-        assert_eq!(*parsed.get(8).unwrap(), MatchArm(6, 7));
         assert_eq!(*parsed.get(6).unwrap(), Member(None, "bar".into()));
         assert_eq!(
             *parsed.get(7).unwrap(),
             Variable(Name::Raw("fizz".to_string()), None)
+        );
+    }
+}
+
+#[cfg(test)]
+mod pattern_parsing_tests {
+    use crate::{expr::Pattern, lexer::Lexer, name::Name};
+
+    use super::Parser;
+
+    fn parse_pattern(input: &'static str) -> Pattern {
+        let lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer);
+        parser.advance();
+        parser.parse_match_pattern().unwrap()
+    }
+
+    #[test]
+    fn parses_wildcard() {
+        assert_eq!(parse_pattern("_ "), Pattern::Wildcard);
+    }
+
+    #[test]
+    fn parses_literal_int() {
+        assert_eq!(parse_pattern("123"), Pattern::LiteralInt("123"));
+    }
+
+    #[test]
+    fn parses_literal_float() {
+        assert_eq!(parse_pattern("123."), Pattern::LiteralFloat("123."));
+    }
+
+    #[test]
+    fn parses_literal_bools() {
+        assert_eq!(parse_pattern("true"), Pattern::LiteralTrue);
+        assert_eq!(parse_pattern("false"), Pattern::LiteralFalse);
+    }
+
+    #[test]
+    fn parses_variant_pattern() {
+        assert_eq!(
+            parse_pattern("Fizz.buzz"),
+            Pattern::Variant {
+                enum_name: Some(Name::Raw("Fizz".into())),
+                variant_name: Name::Raw("buzz".into()),
+                fields: vec![]
+            }
+        );
+
+        assert_eq!(
+            parse_pattern(".foo"),
+            Pattern::Variant {
+                enum_name: None,
+                variant_name: Name::Raw("foo".into()),
+                fields: vec![]
+            }
         );
     }
 }

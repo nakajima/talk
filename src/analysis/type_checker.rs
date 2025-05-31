@@ -356,7 +356,7 @@ impl TypeChecker {
             }
             Expr::Variable(Name::Resolved(symbol_id, name), _) => {
                 let ty = env.instantiate_symbol(*symbol_id);
-                log::error!("instantiated {:?} ({:?}) with {:?}", symbol_id, name, ty);
+                log::trace!("instantiated {:?} ({:?}) with {:?}", symbol_id, name, ty);
                 let typed_expr = TypedExpr { expr, ty };
 
                 env.typed_exprs.insert(id, typed_expr.clone());
@@ -407,8 +407,31 @@ impl TypeChecker {
             }
             Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(&id).unwrap().clone()), /* handled by hoist */
             Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(&id).unwrap().clone()), /* handled by hoist */
-            Expr::Match(_, _items) => todo!(),
-            Expr::MatchArm(_, _) => todo!(),
+            Expr::Match(pattern, items) => {
+                let _pattern_ty = self.infer_node(*pattern, env, &None, source_file)?.ty;
+                let items_ty = items
+                    .iter()
+                    .map(|id| self.infer_node(*id, env, &None, source_file))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let items_ty = items_ty.iter().map(|ty| ty.ty.clone()).collect::<Vec<_>>();
+
+                // TODO: Make sure the return type is the same for all arms
+                let ret_ty = items_ty.last().unwrap().clone();
+
+                let typed_expr = TypedExpr::new(expr, ret_ty);
+                env.typed_exprs.insert(id, typed_expr.clone());
+                Ok(typed_expr)
+            }
+            Expr::MatchArm(pattern, body) => {
+                env.start_scope();
+                let _pattern_ty = self.infer_node(*pattern, env, &None, source_file)?.ty;
+                let body_ty = self.infer_node(*body, env, &None, source_file)?.ty;
+                env.end_scope();
+
+                let typed_expr = TypedExpr::new(expr, body_ty);
+                env.typed_exprs.insert(id, typed_expr.clone());
+                Ok(typed_expr)
+            }
             Expr::PatternVariant(_, _, _items) => todo!(),
             // In type_checker.rs, update the Member case:
             Expr::Member(receiver, member_name) => {
@@ -511,7 +534,7 @@ impl TypeChecker {
                 // If there are generics, create a scheme that quantifies over them
                 let enum_ty = Ty::Enum(enum_id, generic_vars.clone());
                 let scheme = env.generalize(&enum_ty);
-                log::error!("enum scheme: {:?}", scheme);
+                log::trace!("enum scheme: {:?}", scheme);
                 env.declare(enum_id, scheme);
 
                 log::debug!(
@@ -886,27 +909,6 @@ mod tests {
         let call_result = checker.type_for(checker.root_ids()[1]);
         assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![]));
     }
-}
-
-#[cfg(test)]
-mod pending {
-    use crate::{
-        SourceFile, SymbolID, Typed, constraint_solver::ConstraintSolver,
-        name_resolver::NameResolver, parser::parse, type_checker::Ty,
-    };
-
-    use super::TypeChecker;
-
-    fn check(code: &'static str) -> SourceFile<Typed> {
-        let parsed = parse(code).unwrap();
-        let resolver = NameResolver::new();
-        let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let (mut typed, constraints, env) = checker.infer(resolved).unwrap();
-        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
-        constraint_solver.solve().unwrap();
-        typed
-    }
 
     #[test]
     fn checks_generic_enum_variant_constructor() {
@@ -948,10 +950,11 @@ mod pending {
             enum Option<T> {
                 case some(T), none
             }
+
             enum Result<T, E> {
                 case ok(T), err(E)
             }
-            ok(some(42))
+            Result.ok(Option.some(42))
             ",
         );
 
@@ -959,7 +962,7 @@ mod pending {
         let result_ty = checker.type_for(checker.root_ids()[2]);
         match result_ty {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID(2)); // Result enum
+                assert_eq!(symbol_id, SymbolID(3)); // Result enum
                 assert_eq!(generics.len(), 2);
 
                 // First generic should be Option<Int>
@@ -980,12 +983,13 @@ mod pending {
         let checker = check(
             "
             enum Bool {
-                case true, false
+                case yes, no
             }
+
             func test(b: Bool) -> Int {
                 match b {
-                    .true -> 1
-                    .false -> 0
+                    .yes -> 1
+                    .no -> 0
                 }
             }
             ",
@@ -1001,6 +1005,27 @@ mod pending {
             }
             _ => panic!("Expected function type, got {:?}", func_ty),
         }
+    }
+}
+
+#[cfg(test)]
+mod pending {
+    use crate::{
+        SourceFile, SymbolID, Typed, constraint_solver::ConstraintSolver,
+        name_resolver::NameResolver, parser::parse, type_checker::Ty,
+    };
+
+    use super::TypeChecker;
+
+    fn check(code: &'static str) -> SourceFile<Typed> {
+        let parsed = parse(code).unwrap();
+        let resolver = NameResolver::new();
+        let resolved = resolver.resolve(parsed);
+        let checker = TypeChecker;
+        let (mut typed, constraints, env) = checker.infer(resolved).unwrap();
+        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
+        constraint_solver.solve().unwrap();
+        typed
     }
 
     #[test]

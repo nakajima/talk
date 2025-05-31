@@ -24,6 +24,33 @@ impl FuncName {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pattern {
+    // Literals that must match exactly
+    LiteralInt(&'static str),
+    LiteralFloat(&'static str),
+    LiteralTrue,
+    LiteralFalse,
+
+    // Variable binding (always succeeds, binds value)
+    Bind(Name),
+
+    // Wildcard (always succeeds, ignores value)
+    Wildcard,
+
+    // Enum variant destructuring
+    Variant {
+        enum_name: Option<Name>, // None for .some, Some for Option.some
+        variant_name: Name,
+        fields: Vec<Pattern>, // Recursive patterns for fields
+    },
+    // // Tuple destructuring
+    // PatternTuple(Vec<Pattern>),
+
+    // // Reference patterns (for Rust-style matching)
+    // PatternRef(Box<Pattern>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     LiteralInt(&'static str),
     LiteralFloat(&'static str),
@@ -34,6 +61,7 @@ pub enum Expr {
     Tuple(Vec<ExprID>),
     Block(Vec<ExprID>),
     Call(ExprID, Vec<ExprID>),
+    Pattern(Pattern),
 
     // A type annotation
     TypeRepr(
@@ -90,8 +118,8 @@ pub enum Expr {
 
     // Match expression
     Match(
-        ExprID, // scrutinee: the value being matched
-        ExprID, // body
+        ExprID,      // scrutinee: the value being matched
+        Vec<ExprID>, // arms: [MatchArm(pattern, body)]
     ),
 
     // Individual match arm

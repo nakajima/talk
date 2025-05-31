@@ -157,23 +157,44 @@ impl NameResolver {
                     }
                     Name::Resolved(_, _) => (),
                 },
-                TypeRepr(name, generics, is_type_variable) => {
-                    log::warn!("TypeRepr name: {:?}", name);
-                    if let Some(symbol_id) = self.resolve_builtin(&name) {
-                        let Name::Raw(name_str) = name else {
-                            unreachable!()
-                        };
-                        source_file.nodes[node_id as usize] =
-                            Variable(Name::Resolved(symbol_id, name_str), None);
-                    } else if let Name::Raw(name) = name {
-                        let symbol_id =
-                            self.declare(name.to_string(), SymbolKind::CustomType, node_id);
-                        source_file.nodes[node_id as usize] = TypeRepr(
-                            Name::Resolved(symbol_id, name),
-                            generics.clone(),
-                            is_type_variable,
-                        );
-                    }
+                TypeRepr(name, generics, is_type_parameter_decl) => {
+                    log::trace!(
+                        "Resolving TypeRepr: {:?}, generics: {:?}, is_param_decl: {}",
+                        name,
+                        generics,
+                        is_type_parameter_decl
+                    );
+
+                    let resolved_name_for_node = match name.clone() {
+                        Name::Raw(raw_name_str) => {
+                            if is_type_parameter_decl {
+                                // Declaration site of a type parameter (e.g., T in `enum Option<T>`)
+                                // Ensure it's declared in the current scope.
+                                let symbol_id = self.declare(
+                                    raw_name_str.clone(),
+                                    SymbolKind::TypeParameter,
+                                    node_id,
+                                );
+                                Name::Resolved(symbol_id, raw_name_str)
+                            } else {
+                                // Usage site of a type name (e.g., T in `case some(T)`, or `Int`)
+                                // Look up an existing symbol.
+                                let symbol_id = self.lookup(&raw_name_str);
+                                Name::Resolved(symbol_id, raw_name_str)
+                            }
+                        }
+                        Name::Resolved(_, _) => name, // Already resolved, no change needed to the name itself.
+                    };
+
+                    // Update the existing TypeRepr node with the resolved name.
+                    // The node type remains TypeRepr.
+                    source_file.nodes[node_id as usize] = TypeRepr(
+                        resolved_name_for_node,
+                        generics.clone(), // Keep original generics ExprIDs
+                        is_type_parameter_decl,
+                    );
+
+                    // Recursively resolve any type arguments within this TypeRepr.
                     self.resolve_nodes(generics, source_file);
                 }
                 EnumDecl(name, generics, body) => {
@@ -196,9 +217,80 @@ impl NameResolver {
                 EnumVariant(_, values) => {
                     self.resolve_nodes(values, source_file);
                 }
-                Match(_, _items) => todo!(),
-                MatchArm(_, _) => todo!(),
+                Match(scrutinee, arms) => {
+                    // Resolve the scrutinee expression
+                    self.resolve_nodes(vec![scrutinee], source_file);
+                    // Each arm will manage its own scope for pattern bindings.
+                    // The Match expression itself doesn't introduce a new scope for *bindings*
+                    // that span across arms or affect expressions outside the match.
+                    self.resolve_nodes(arms, source_file);
+                }
+                MatchArm(pattern, body) => {
+                    self.start_scope(); // New scope for this arm's bindings
+                    self.resolve_pattern_bindings(pattern, source_file); // Declare variables from pattern
+                    // Now resolve the pattern structure (e.g., Member, Call parts)
+                    // and the body within this new scope.
+                    self.resolve_nodes(vec![pattern], source_file);
+                    self.resolve_nodes(vec![body], source_file);
+                    self.end_scope();
+                }
+                Pattern(_) => todo!(),
                 PatternVariant(_, _, _items) => todo!(),
+            }
+        }
+    }
+
+    // New helper method to declare variables found in patterns
+    fn resolve_pattern_bindings(&mut self, pattern_id: ExprID, source_file: &mut SourceFile) {
+        let expr_clone = source_file.get(pattern_id).unwrap().clone();
+        match expr_clone {
+            Variable(Name::Raw(name_str), _) => {
+                // This is a binding variable like `value` in `.some(value)` or `x` in `case x`
+                log::trace!(
+                    "Pattern binding: Declaring variable '{}' in pattern.",
+                    name_str
+                );
+                self.declare(name_str.clone(), SymbolKind::Local, pattern_id); // Or a specific SymbolKind::PatternBinding
+            }
+            Call(_callee, args) => {
+                // Example: .some(value) is Call(Member(None, "some"), [Variable("value")])
+                // The callee (.some) is not a binding.
+                // Recursively find bindings in arguments.
+                for arg_pattern_id in args {
+                    self.resolve_pattern_bindings(arg_pattern_id, source_file);
+                }
+            }
+            Member(opt_receiver_id, _) => {
+                // Member access like .none or Enum.case is not a binding itself.
+                // If the receiver could be a pattern that binds, recurse.
+                // This is not typical for simple enum variant patterns.
+                if let Some(receiver_id) = opt_receiver_id {
+                    self.resolve_pattern_bindings(receiver_id, source_file);
+                }
+            }
+            Tuple(items) => {
+                for item_id in items {
+                    self.resolve_pattern_bindings(item_id, source_file);
+                }
+            }
+            // Literals, resolved names, type representations, and enum structural parts don't introduce new bindings.
+            LiteralInt(_)
+            | LiteralFloat(_)
+            | LiteralTrue
+            | LiteralFalse
+            | TypeRepr(_, _, _)
+            | Variable(Name::Resolved(_, _), _)
+            | EnumDecl(_, _, _)
+            | EnumVariant(_, _) => {
+                // No new bindings to declare from these structures themselves.
+            }
+            // Other complex expressions are unlikely to be direct binding forms in simple patterns.
+            // If more complex patterns are allowed that bind variables, this needs expansion.
+            _ => {
+                log::trace!(
+                    "Skipping resolve_pattern_bindings for non-binding or complex expr: {:?}",
+                    expr_clone
+                );
             }
         }
     }
@@ -419,7 +511,7 @@ mod tests {
         // The first root is the Block, the second is the Variable("x")
         let roots = tree.root_ids();
         // That `x` should resolve to the global‐fallback ID 0,
-        // not to the block’s own `x` (which would have been >0).
+        // not to the block's own `x` (which would have been >0).
         let second = tree.get(roots[1]).unwrap();
         assert_eq!(
             second,

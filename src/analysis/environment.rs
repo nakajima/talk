@@ -163,6 +163,69 @@ impl Environment {
             None
         }
     }
+
+    /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
+    pub fn substitute_ty_with_map(&self, ty: Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
+        match ty {
+            Ty::TypeVar(ref type_var_id) => {
+                if let Some(substituted_ty) = substitutions.get(type_var_id) {
+                    // Important: Clone the substituted type. If it's also a TypeVar that needs further substitution,
+                    // the caller (or a broader substitution application like `apply_substitutions_to_ty`) must handle it.
+                    // This function only applies one layer from the provided map.
+                    substituted_ty.clone()
+                } else {
+                    ty // Not in this substitution map, return as is.
+                }
+            }
+            Ty::Func(params, returning) => {
+                let applied_params = params
+                    .iter()
+                    .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
+                    .collect();
+                let applied_return = self.substitute_ty_with_map(*returning, substitutions);
+                Ty::Func(applied_params, Box::new(applied_return))
+            }
+            Ty::Enum(name, generics) => {
+                let applied_generics = generics
+                    .iter()
+                    .map(|g| self.substitute_ty_with_map(g.clone(), substitutions))
+                    .collect();
+                Ty::Enum(name, applied_generics)
+            }
+            Ty::EnumVariant(enum_id, values) => {
+                let applied_values = values
+                    .iter()
+                    .map(|v| self.substitute_ty_with_map(v.clone(), substitutions))
+                    .collect();
+                Ty::EnumVariant(enum_id, applied_values)
+            }
+            Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty,
+        }
+    }
+
+    /// Applies all current global substitutions from the constraint solver (if they were accessible here)
+    /// For now, this is a placeholder or needs to be called from ConstraintSolver context.
+    /// TypeChecker currently uses it to resolve concrete enum types before looking up variants.
+    pub fn apply_substitutions_to_ty(&self, ty: Ty) -> Ty {
+        // TODO: This ideally needs access to the main substitution map from ConstraintSolver.
+        // For now, it's a simplified pass-through or might apply very local/temporary substitutions
+        // if the `Environment` ever held such a thing (which it currently doesn't for global solving).
+        // During type inference phase (before solving), this effectively does nothing to global TypeVars.
+        // It's more useful if `ty` contains TypeVars that were just locally instantiated (e.g. from a scheme)
+        // and `self` contains some temporary substitutions for those.
+        // Given the current structure, this might be best as a simple clone or a shallow substitution
+        // if `Environment` were to manage any local substitutions not yet part of global constraints.
+
+        // For the purpose of `infer_pattern` trying to see a concrete `Ty::Enum`,
+        // if `expected_ty` is a `TypeVar` that *will be* an Enum, this won't resolve it here.
+        // The constraints must handle that.
+        // However, if `expected_ty` *is* already `Ty::Enum(..., [TypeVar(...)])`, this function
+        // won't change it much without global substitutions.
+
+        // Let's assume for now it's just a pass-through during raw inference.
+        // The `ConstraintSolver::apply` is the main substitution workhorse.
+        ty
+    }
 }
 
 /// Collect all type-variables occurring free in a single monotype.
@@ -193,7 +256,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
 
 /// Collect all free type-vars in *every* in-scope Scheme,
 /// *after* applying the current substitutions.  We exclude
-/// each scheme’s own quantified vars.
+/// each scheme's own quantified vars.
 pub fn free_type_vars_in_env(scopes: &[HashMap<SymbolID, Scheme>]) -> HashSet<TypeVarID> {
     let mut s = HashSet::new();
 

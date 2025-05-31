@@ -14,6 +14,7 @@ pub enum TokenKind {
     Enum,
     Case,
     Match,
+    Underscore,
 
     // More
     Arrow,
