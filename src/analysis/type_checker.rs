@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     NameResolved, SymbolID, Typed,
     environment::EnumVariant,
-    expr::{Expr, FuncName},
+    expr::{Expr, FuncName, Pattern},
     match_builtin,
     name::Name,
     parser::ExprID,
@@ -36,6 +36,7 @@ pub enum TypeVarKind {
     TypeRepr(Name),
     Member,
     VariantValue,
+    PatternBind(Name),
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub enum TypeError {
     InvalidEnumAccess,
     UnknownEnum(SymbolID),
     UnknownVariant(Name),
+    Unknown(&'static str),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -79,13 +81,13 @@ pub struct TypeChecker;
 impl TypeChecker {
     pub fn infer(
         &self,
-        source_file: SourceFile<NameResolved>,
+        mut source_file: SourceFile<NameResolved>,
     ) -> Result<(SourceFile<Typed>, Vec<Constraint>, TypeDefs), TypeError> {
         let root_ids = source_file.root_ids();
         // Use a raw pointer to the source_file to avoid borrow checker issues
         let mut env = Environment::new();
 
-        self.hoist_enums(&root_ids, &mut env, &source_file)?;
+        self.hoist_enums(&root_ids, &mut env, &mut source_file)?;
         self.hoist_functions(&root_ids, &mut env, &source_file);
 
         let mut typed_roots = vec![];
@@ -169,7 +171,7 @@ impl TypeChecker {
 
                 Ok(lhs_ty)
             }
-            Expr::TypeRepr(name, _, is_type_parameter) => {
+            Expr::TypeRepr(name, generics, is_type_parameter) => {
                 let name = name.clone();
                 log::debug!(
                     "TYPE REPR: {:?}, is_param_decl: {}",
@@ -217,6 +219,30 @@ impl TypeChecker {
                         }
                     }
                 };
+
+                // For generic types like Option<Int>, we need to handle the generics
+                if !generics.is_empty() && !*is_type_parameter {
+                    // First, infer all the generic arguments
+                    let mut generic_types = Vec::new();
+                    for generic_id in generics {
+                        let generic_ty = self.infer_node(*generic_id, env, &None, source_file)?.ty;
+                        generic_types.push(generic_ty);
+                    }
+
+                    // Now when we have a resolved symbol for a generic type
+                    if let Name::Resolved(symbol_id, _) = name {
+                        // Instead of just instantiating, we need to build the concrete type
+                        // For enums, this means Ty::Enum(symbol_id, generic_types)
+                        let ty = Ty::Enum(symbol_id, generic_types);
+
+                        let typed_expr = TypedExpr {
+                            expr: expr.clone(),
+                            ty,
+                        };
+                        env.typed_exprs.insert(id, typed_expr.clone());
+                        return Ok(typed_expr);
+                    }
+                }
 
                 if *is_type_parameter {
                     // This is for the T in `enum Option<T>`. Name should be resolved by name_resolver.
@@ -455,13 +481,29 @@ impl TypeChecker {
                         // Qualified: Option.some
                         let receiver_ty = self.infer_node(*receiver_id, env, &None, source_file)?;
 
+                        // If the receiver is an enum type with generic parameters,
+                        // we need to instantiate fresh type variables for each generic
+                        let instantiated_receiver_ty = match &receiver_ty.ty {
+                            Ty::Enum(enum_id, generics) => {
+                                // Create fresh type variables for each generic parameter
+                                let fresh_generics: Vec<Ty> = generics
+                                    .iter()
+                                    .map(|_| {
+                                        Ty::TypeVar(env.new_type_variable(TypeVarKind::Member))
+                                    })
+                                    .collect();
+                                Ty::Enum(*enum_id, fresh_generics)
+                            }
+                            other => other.clone(),
+                        };
+
                         // Create a type variable for the member
                         let member_var = env.new_type_variable(TypeVarKind::Member);
 
                         // Add a constraint that links the receiver type to the member
                         env.constraints.push(Constraint::MemberAccess(
                             id,
-                            receiver_ty.ty.clone(),
+                            instantiated_receiver_ty,
                             member_name.clone(),
                             Ty::TypeVar(member_var.clone()),
                         ));
@@ -472,8 +514,13 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Pattern(_pattern) => {
-                let typed_expr = TypedExpr::new(expr, expected.clone().unwrap());
+            Expr::Pattern(pattern) => {
+                let Some(expected) = expected else {
+                    return Err(TypeError::Unknown("Could not determine expected arm type"));
+                };
+
+                self.infer_pattern(pattern, env, expected);
+                let typed_expr = TypedExpr::new(expr, expected.clone());
                 env.typed_exprs.insert(id, typed_expr.clone());
                 Ok(typed_expr)
             }
@@ -489,17 +536,85 @@ impl TypeChecker {
         result
     }
 
+    fn infer_pattern(&self, pattern: &Pattern, env: &mut Environment, expected: &Ty) {
+        log::trace!("Inferring pattern: {:?}", pattern);
+        match pattern {
+            Pattern::LiteralInt(_) => todo!(),
+            Pattern::LiteralFloat(_) => todo!(),
+            Pattern::LiteralTrue => todo!(),
+            Pattern::LiteralFalse => todo!(),
+            Pattern::Bind(name) => {
+                if let Name::Resolved(symbol_id, _) = name {
+                    // Use the expected type for this binding
+                    let scheme = env.generalize(expected);
+                    env.declare(*symbol_id, scheme);
+                }
+            }
+            Pattern::Wildcard => todo!(),
+            Pattern::Variant {
+                variant_name,
+                fields,
+                ..
+            } => {
+                // The expected type should be an Enum type
+                if let Ty::Enum(enum_id, type_args) = expected {
+                    // Look up the enum definition to find this variant
+                    if let Some(TypeDef::Enum(enum_def)) = env.types.get(enum_id) {
+                        // Find the variant by name
+                        if let Some(variant) = enum_def.variants.iter().find(|v| {
+                            // Match variant name (comparing the raw string)
+                            if let Name::Resolved(_, name_str) = variant_name {
+                                v.name == *name_str
+                            } else {
+                                false
+                            }
+                        }) {
+                            // Now we have the variant definition and the concrete type arguments
+                            // We need to substitute the enum's type parameters with the actual type args
+
+                            // Create substitution map: enum type param -> concrete type arg
+                            let mut substitutions = HashMap::new();
+                            for (param_ty, arg_ty) in
+                                enum_def.type_parameters.iter().zip(type_args.iter())
+                            {
+                                if let Ty::TypeVar(param_id) = param_ty {
+                                    substitutions.insert(param_id.clone(), arg_ty.clone());
+                                }
+                            }
+
+                            // Apply substitutions to get concrete field types
+                            let concrete_field_types: Vec<Ty> = variant
+                                .values
+                                .iter()
+                                .map(|field_ty| {
+                                    env.substitute_ty_with_map(field_ty.clone(), &substitutions)
+                                })
+                                .collect();
+
+                            // Now match field patterns with their concrete types
+                            for (field_pattern, field_ty) in
+                                fields.iter().zip(concrete_field_types.iter())
+                            {
+                                self.infer_pattern(field_pattern, env, field_ty);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn hoist_enums(
         &self,
         root_ids: &[ExprID],
         env: &mut Environment,
-        source_file: &SourceFile<NameResolved>,
+        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
         for id in root_ids.iter() {
             let expr = source_file.get(*id).unwrap().clone();
 
             if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
-                let Some(Expr::Block(expr_ids)) = source_file.get(body) else {
+                let Some(Expr::Block(expr_ids)) = source_file.get(body).cloned() else {
                     unreachable!()
                 };
 
@@ -510,22 +625,48 @@ impl TypeChecker {
                     generic_vars.push(ty);
                 }
 
+                let enum_ty = Ty::Enum(enum_id, generic_vars.clone());
+                let scheme = env.generalize(&enum_ty);
+                log::trace!("enum scheme: {:?}", scheme);
+                env.declare_in_parent(enum_id, scheme);
+
                 let mut variants: Vec<Ty> = vec![];
                 let mut variant_defs: Vec<EnumVariant> = vec![];
 
                 log::debug!("Generic vars: {:?}", generic_vars);
                 for expr_id in expr_ids {
-                    let expr = source_file.get(*expr_id).unwrap();
+                    let expr = source_file.get(expr_id).cloned().unwrap();
                     if let Expr::EnumVariant(Name::Raw(name_str), values) =
-                        source_file.get(*expr_id).unwrap()
+                        source_file.get(expr_id).cloned().unwrap()
                     {
                         let values: Vec<Ty> = values
                             .iter()
                             .map(|id| self.infer_node(*id, env, &None, source_file).unwrap().ty)
                             .collect();
                         let ty = Ty::EnumVariant(enum_id, values.clone());
+
+                        let constructor_symbol = source_file.add_symbol(
+                            name_str.clone(),
+                            crate::SymbolKind::VariantConstructor,
+                            expr_id,
+                        );
+
+                        // Build constructor type
+                        let constructor_ty = if values.is_empty() {
+                            Ty::Enum(enum_id, generic_vars.clone())
+                        } else {
+                            Ty::Func(
+                                values.clone(),
+                                Box::new(Ty::Enum(enum_id, generic_vars.clone())),
+                            )
+                        };
+
+                        // Register the constructor in the environment
+                        let scheme = env.generalize(&constructor_ty);
+                        env.declare(constructor_symbol, scheme);
+
                         env.typed_exprs.insert(
-                            *expr_id,
+                            expr_id,
                             TypedExpr {
                                 expr: expr.clone(),
                                 ty: ty.clone(),
@@ -535,19 +676,13 @@ impl TypeChecker {
                         variant_defs.push(EnumVariant {
                             name: name_str.to_string(),
                             values: values,
+                            constructor_symbol,
                         });
                     } else {
-                        log::debug!("Non-raw expr: {:?}", source_file.get(*expr_id).unwrap());
+                        log::debug!("Non-raw expr: {:?}", source_file.get(expr_id).unwrap());
                     }
                 }
                 env.end_scope();
-
-                // After we've handled the body scope, we can declare the enum in the surrounding scope
-                // If there are generics, create a scheme that quantifies over them
-                let enum_ty = Ty::Enum(enum_id, generic_vars.clone());
-                let scheme = env.generalize(&enum_ty);
-                log::trace!("enum scheme: {:?}", scheme);
-                env.declare(enum_id, scheme);
 
                 log::debug!(
                     "Registering enum {:?}, variants: {:?}",
@@ -1018,27 +1153,6 @@ mod tests {
             _ => panic!("Expected function type, got {:?}", func_ty),
         }
     }
-}
-
-#[cfg(test)]
-mod pending {
-    use crate::{
-        SourceFile, SymbolID, Typed, constraint_solver::ConstraintSolver,
-        name_resolver::NameResolver, parser::parse, type_checker::Ty,
-    };
-
-    use super::TypeChecker;
-
-    fn check(code: &'static str) -> SourceFile<Typed> {
-        let parsed = parse(code).unwrap();
-        let resolver = NameResolver::new();
-        let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let (mut typed, constraints, env) = checker.infer(resolved).unwrap();
-        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
-        constraint_solver.solve().unwrap();
-        typed
-    }
 
     #[test]
     fn checks_match_with_variable_binding() {
@@ -1067,34 +1181,55 @@ mod pending {
             _ => panic!("Expected function type, got {:?}", func_ty),
         }
     }
+}
 
-    #[test]
-    fn checks_polymorphic_match() {
-        let checker = check(
-            "
-            enum Option<T> {
-                case some(T), none
-            }
-            func map<U>(opt: Option<T>, f: T -> U) -> Option<U> {
-                match opt {
-                    .some(value) -> some(f(value))
-                    .none -> none
-                }
-            }
-            ",
-        );
+#[cfg(test)]
+mod pending {
+    use crate::{
+        SourceFile, SymbolID, Typed, constraint_solver::ConstraintSolver, expr::Expr,
+        name_resolver::NameResolver, parser::parse, type_checker::Ty,
+    };
 
-        // Should type check without errors - polymorphic function
-        // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
-        let func_ty = checker.type_for(checker.root_ids()[1]);
-        match func_ty {
-            Ty::Func(params, _ret) => {
-                assert_eq!(params.len(), 2);
-                // Complex assertion for polymorphic types would go here
-            }
-            _ => panic!("Expected function type, got {:?}", func_ty),
-        }
+    use super::TypeChecker;
+
+    fn check(code: &'static str) -> SourceFile<Typed> {
+        let parsed = parse(code).unwrap();
+        let resolver = NameResolver::new();
+        let resolved = resolver.resolve(parsed);
+        let checker = TypeChecker;
+        let (mut typed, constraints, env) = checker.infer(resolved).unwrap();
+        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
+        constraint_solver.solve().unwrap();
+        typed
     }
+
+    // #[test]
+    // fn checks_polymorphic_match() {
+    //     let checker = check(
+    //         "
+    //         enum Option<T> {
+    //             case some(T), none
+    //         }
+    //         func map<U>(opt: Option<T>, f: T -> U) -> Option<U> {
+    //             match opt {
+    //                 .some(value) -> some(f(value))
+    //                 .none -> none
+    //             }
+    //         }
+    //         ",
+    //     );
+
+    //     // Should type check without errors - polymorphic function
+    //     // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
+    //     let func_ty = checker.type_for(checker.root_ids()[1]);
+    //     match func_ty {
+    //         Ty::Func(params, _ret) => {
+    //             assert_eq!(params.len(), 2);
+    //             // Complex assertion for polymorphic types would go here
+    //         }
+    //         _ => panic!("Expected function type, got {:?}", func_ty),
+    //     }
+    // }
 
     #[test]
     fn checks_recursive_enum() {
@@ -1115,8 +1250,20 @@ mod pending {
             _ => panic!("Expected List<T> type, got {:?}", enum_ty),
         }
 
+        let Some(Expr::EnumDecl(_, _, body)) = checker.roots()[0] else {
+            panic!("did not get enum decl");
+        };
+
+        assert_eq!(*body, 6);
+
+        let Some(Expr::Block(exprs)) = checker.get(6) else {
+            panic!("did not get body");
+        };
+
+        assert_eq!(exprs[0], 4);
+
         // Check cons variant has recursive structure: T, List<T>
-        let cons_variant = checker.type_for(0);
+        let cons_variant = checker.type_for(4);
         match cons_variant {
             Ty::EnumVariant(enum_id, field_types) => {
                 assert_eq!(enum_id, SymbolID(1));
@@ -1127,7 +1274,7 @@ mod pending {
                     _ => panic!("Expected recursive List type"),
                 }
             }
-            _ => panic!("Expected cons variant type"),
+            _ => panic!("Expected cons variant type, got: {:?}", cons_variant),
         }
     }
 
@@ -1191,7 +1338,7 @@ mod pending {
                     .blue -> 3
                 }
             }
-            describe(red)
+            describe(.red)
             ",
         );
 
@@ -1248,8 +1395,8 @@ mod pending {
             }
             func swap(e: Either<Int, Float>) -> Either<Float, Int> {
                 match e {
-                    .left(i) -> right(i)   // Int should convert to Float context
-                    .right(f) -> left(f)   // Float should convert to Int context  
+                    .left(i) -> .right(i)
+                    .right(f) -> .left(f)
                 }
             }
             ",

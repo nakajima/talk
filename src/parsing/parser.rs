@@ -1249,23 +1249,29 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, vec![5, 8]));
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, vec![3, 6]));
         assert_eq!(
             *parsed.get(0).unwrap(),
             Variable(Name::Raw("fizz".to_string()), None)
         );
 
-        assert_eq!(*parsed.get(8).unwrap(), MatchArm(6, 7));
-        assert_eq!(*parsed.get(5).unwrap(), MatchArm(3, 4));
-        assert_eq!(*parsed.get(3).unwrap(), Call(2, vec![1]));
+        assert_eq!(*parsed.get(3).unwrap(), MatchArm(1, 2));
+        assert_eq!(*parsed.get(6).unwrap(), MatchArm(4, 5));
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            Pattern(crate::expr::Pattern::Variant {
+                enum_name: None,
+                variant_name: Name::Raw("foo".into()),
+                fields: vec![crate::expr::Pattern::Bind(Name::Raw("name".into()))]
+            })
+        );
         assert_eq!(
             *parsed.get(4).unwrap(),
-            Variable(Name::Raw("name".to_string()), None)
-        );
-        assert_eq!(*parsed.get(6).unwrap(), Member(None, "bar".into()));
-        assert_eq!(
-            *parsed.get(7).unwrap(),
-            Variable(Name::Raw("fizz".to_string()), None)
+            Pattern(crate::expr::Pattern::Variant {
+                enum_name: None,
+                variant_name: Name::Raw("bar".into()),
+                fields: vec![]
+            })
         );
     }
 }

@@ -525,11 +525,11 @@ mod tests {
         assert_eq!(*resolved.get(2).unwrap(), Expr::Block(vec![0, 1]));
         assert_eq!(
             *resolved.get(0).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID(2), "foo".into()), vec![])
+            EnumVariant(Name::Raw("foo".into()), vec![])
         );
         assert_eq!(
             *resolved.get(1).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID(3), "bar".into()), vec![])
+            EnumVariant(Name::Raw("bar".into()), vec![])
         );
 
         assert_eq!(
@@ -557,21 +557,21 @@ mod tests {
         assert_eq!(*resolved.get(3).unwrap(), Expr::Block(vec![1, 2]));
         assert_eq!(
             *resolved.get(1).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID(2), "foo".into()), vec![0])
+            EnumVariant(Name::Raw("foo".into()), vec![0])
         );
         assert_eq!(
             *resolved.get(2).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID(3), "bar".into()), vec![])
+            EnumVariant(Name::Raw("bar".into()), vec![])
         );
 
         assert_eq!(*resolved.roots()[1].unwrap(), Call(6, vec![7]));
         assert_eq!(
             *resolved.get(6).unwrap(),
-            Expr::Member(Some(5), "Fizz".into())
+            Expr::Member(Some(5), "foo".into())
         );
         assert_eq!(
             *resolved.get(5).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID(1), "foo".into()), None)
+            Expr::Variable(Name::Resolved(SymbolID(1), "Fizz".into()), None)
         );
     }
 }

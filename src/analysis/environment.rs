@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::IndexMut,
+};
 
 use crate::{SymbolID, SymbolTable, parser::ExprID, type_checker::Ty};
 
@@ -12,6 +15,7 @@ use super::{
 pub struct EnumVariant {
     pub name: String,
     pub values: Vec<Ty>,
+    pub constructor_symbol: SymbolID,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +73,12 @@ impl Environment {
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
         self.scopes.last_mut().unwrap().insert(symbol_id, scheme);
+    }
+
+    pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
+        self.scopes
+            .index_mut(self.scopes.len() - 2)
+            .insert(symbol_id, scheme);
     }
 
     pub fn start_scope(&mut self) {

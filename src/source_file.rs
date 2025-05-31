@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    SymbolID, environment::TypeDef, symbol_table::SymbolTable, type_checker::Ty,
+    SymbolID, SymbolKind, environment::TypeDef, symbol_table::SymbolTable, type_checker::Ty,
     typed_expr::TypedExpr,
 };
 
@@ -78,6 +78,10 @@ impl SourceFile<Parsed> {
 }
 
 impl SourceFile<NameResolved> {
+    pub fn add_symbol(&mut self, name: String, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
+        self.phase_data.add(&name, kind, expr_id)
+    }
+
     pub fn to_typed(
         self,
         roots: Vec<TypedExpr>,
