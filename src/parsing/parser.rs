@@ -308,10 +308,17 @@ impl Parser {
         // }
     }
 
-    pub(crate) fn member_prefix(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::Dot)?;
         let (name, _) = self.try_identifier().unwrap();
-        self.add_expr(Member(None, name.into()))
+
+        let member = self.add_expr(Member(None, name.into()))?;
+        if self.did_match(TokenKind::LeftParen)? {
+            self.skip_newlines();
+            self.call(can_assign, member)
+        } else {
+            Ok(member)
+        }
     }
 
     pub(crate) fn member_infix(
@@ -483,19 +490,7 @@ impl Parser {
         self.consume(TokenKind::RightParen)?;
 
         let ret = if self.did_match(TokenKind::Arrow)? {
-            if let Some((
-                _,
-                Token {
-                    kind: TokenKind::Identifier(ret_name),
-                    ..
-                },
-            )) = self.try_identifier()
-            {
-                let ret_id = self.add_expr(TypeRepr(ret_name.into(), vec![], false))?;
-                Some(ret_id)
-            } else {
-                None
-            }
+            Some(self.type_repr(false))
         } else {
             None
         };
@@ -506,7 +501,7 @@ impl Parser {
             name.map(|s| s.to_string()).map(FuncName::Token),
             params,
             body,
-            ret,
+            ret.transpose()?,
         ))
     }
 

@@ -424,7 +424,14 @@ impl TypeChecker {
             }
             Expr::MatchArm(pattern, body) => {
                 env.start_scope();
-                let _pattern_ty = self.infer_node(*pattern, env, expected, source_file)?.ty;
+                let pattern_ty = self.infer_node(*pattern, env, expected, source_file)?.ty;
+
+                env.constraints.push(Constraint::Equality(
+                    id,
+                    pattern_ty,
+                    expected.as_ref().cloned().unwrap(),
+                ));
+
                 let body_ty = self.infer_node(*body, env, &None, source_file)?.ty;
                 env.end_scope();
 
@@ -1198,15 +1205,15 @@ mod pending {
         let checker = check(
             "
             enum Bool {
-                case true, false
+                case yes, no
             }
             func and(a: Bool, b: Bool) -> Bool {
                 match a {
-                    .true -> b
-                    .false -> false
+                    .yes -> b
+                    .no -> .no
                 }
             }
-            and(true, false)
+            and(.yes, .no)
             ",
         );
 
@@ -1222,7 +1229,7 @@ mod pending {
                 case some(T), none
             }
             func create_some(x: Int) -> Option<Int> {
-                some(x)
+                .some(x)
             }
             create_some(42)
             ",

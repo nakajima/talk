@@ -236,12 +236,12 @@ impl<'a> ConstraintSolver<'a> {
                     ty
                 }
             }
-            Ty::Enum(name, variants) => {
-                let applied_variants = variants
+            Ty::Enum(name, generics) => {
+                let applied_generics = generics
                     .iter()
-                    .map(|variant| Self::apply(variant.clone(), substitutions))
+                    .map(|generic| Self::apply(generic.clone(), substitutions))
                     .collect();
-                Ty::Enum(name, applied_variants)
+                Ty::Enum(name, applied_generics)
             }
             Ty::EnumVariant(enum_id, values) => {
                 let applied_values = values
@@ -283,7 +283,16 @@ impl<'a> ConstraintSolver<'a> {
 
                 Ok(())
             }
-            _ => todo!("{:#?} / {:#?}", lhs, rhs),
+            (Ty::Enum(_, lhs_types), Ty::Enum(_, rhs_types))
+                if lhs_types.len() == rhs_types.len() =>
+            {
+                for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
+                    Self::unify(lhs, rhs, substitutions)?;
+                }
+
+                Ok(())
+            }
+            _ => panic!("Type mismatch {:#?} / {:#?}", lhs, rhs),
         }
     }
 

@@ -126,7 +126,7 @@ impl Lexer {
 
     fn identifier(&mut self, starting_at: usize) -> TokenKind {
         while let Some(ch) = self.chars.peek() {
-            if ch.is_alphanumeric() {
+            if ch.is_alphanumeric() || *ch == '_' {
                 self.chars.next();
                 self.current += 1;
             } else {
