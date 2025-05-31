@@ -523,7 +523,17 @@ impl Parser {
         }
 
         let type_repr = TypeRepr(name.into(), generics, is_type_parameter);
-        self.add_expr(type_repr)
+        let type_repr_id = self.add_expr(type_repr)?;
+
+        if self.did_match(TokenKind::QuestionMark)? {
+            self.add_expr(TypeRepr(
+                Name::Raw("Optional".to_string()),
+                vec![type_repr_id],
+                is_type_parameter,
+            ))
+        } else {
+            Ok(type_repr_id)
+        }
     }
 
     fn enum_body(&mut self) -> Result<ExprID, ParserError> {
@@ -1271,6 +1281,29 @@ mod tests {
                 variant_name: Name::Raw("bar".into()),
                 fields: vec![]
             })
+        );
+    }
+
+    #[test]
+    fn converts_question_to_optional_for_type_repr() {
+        let parsed = parse("func greet(name: Int?) {}").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(
+            *expr,
+            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![2], 3, None)
+        );
+
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Parameter(Name::Raw("name".to_string()), Some(1))
+        );
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            TypeRepr("Optional".into(), vec![0], false)
+        );
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            TypeRepr("Int".into(), vec![], false)
         );
     }
 }

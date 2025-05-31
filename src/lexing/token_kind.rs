@@ -17,6 +17,7 @@ pub enum TokenKind {
     Underscore,
 
     // More
+    QuestionMark,
     Arrow,
     Colon,
     Newline,

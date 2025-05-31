@@ -70,6 +70,7 @@ impl Lexer {
             '.' => self.make(Dot),
             ',' => self.make(Comma),
             ':' => self.make(Colon),
+            '?' => self.make(QuestionMark),
             '+' => self.compound('=', PlusEquals, Plus),
             '-' => self.minus(),
             '*' => self.compound('=', StarEquals, Star),
