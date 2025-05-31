@@ -733,6 +733,7 @@ mod tests {
     use crate::{
         SourceFile, SymbolID, Typed,
         constraint_solver::ConstraintSolver,
+        expr::Expr,
         name_resolver::NameResolver,
         parser::parse,
         type_checker::{Ty, TypeVarID, TypeVarKind},
@@ -1181,55 +1182,6 @@ mod tests {
             _ => panic!("Expected function type, got {:?}", func_ty),
         }
     }
-}
-
-#[cfg(test)]
-mod pending {
-    use crate::{
-        SourceFile, SymbolID, Typed, constraint_solver::ConstraintSolver, expr::Expr,
-        name_resolver::NameResolver, parser::parse, type_checker::Ty,
-    };
-
-    use super::TypeChecker;
-
-    fn check(code: &'static str) -> SourceFile<Typed> {
-        let parsed = parse(code).unwrap();
-        let resolver = NameResolver::new();
-        let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let (mut typed, constraints, env) = checker.infer(resolved).unwrap();
-        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
-        constraint_solver.solve().unwrap();
-        typed
-    }
-
-    // #[test]
-    // fn checks_polymorphic_match() {
-    //     let checker = check(
-    //         "
-    //         enum Option<T> {
-    //             case some(T), none
-    //         }
-    //         func map<U>(opt: Option<T>, f: T -> U) -> Option<U> {
-    //             match opt {
-    //                 .some(value) -> some(f(value))
-    //                 .none -> none
-    //             }
-    //         }
-    //         ",
-    //     );
-
-    //     // Should type check without errors - polymorphic function
-    //     // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
-    //     let func_ty = checker.type_for(checker.root_ids()[1]);
-    //     match func_ty {
-    //         Ty::Func(params, _ret) => {
-    //             assert_eq!(params.len(), 2);
-    //             // Complex assertion for polymorphic types would go here
-    //         }
-    //         _ => panic!("Expected function type, got {:?}", func_ty),
-    //     }
-    // }
 
     #[test]
     fn checks_recursive_enum() {
@@ -1413,4 +1365,53 @@ mod pending {
             _ => panic!("Expected function type"),
         }
     }
+}
+
+#[cfg(test)]
+mod pending {
+    // use crate::{
+    //     SourceFile, SymbolID, Typed, constraint_solver::ConstraintSolver, expr::Expr,
+    //     name_resolver::NameResolver, parser::parse, type_checker::Ty,
+    // };
+
+    // use super::TypeChecker;
+
+    // fn check(code: &'static str) -> SourceFile<Typed> {
+    //     let parsed = parse(code).unwrap();
+    //     let resolver = NameResolver::new();
+    //     let resolved = resolver.resolve(parsed);
+    //     let checker = TypeChecker;
+    //     let (mut typed, constraints, env) = checker.infer(resolved).unwrap();
+    //     let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
+    //     constraint_solver.solve().unwrap();
+    //     typed
+    // }
+
+    // #[test]
+    // fn checks_polymorphic_match() {
+    //     let checker = check(
+    //         "
+    //         enum Option<T> {
+    //             case some(T), none
+    //         }
+    //         func map<U>(opt: Option<T>, f: T -> U) -> Option<U> {
+    //             match opt {
+    //                 .some(value) -> some(f(value))
+    //                 .none -> none
+    //             }
+    //         }
+    //         ",
+    //     );
+
+    //     // Should type check without errors - polymorphic function
+    //     // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
+    //     let func_ty = checker.type_for(checker.root_ids()[1]);
+    //     match func_ty {
+    //         Ty::Func(params, _ret) => {
+    //             assert_eq!(params.len(), 2);
+    //             // Complex assertion for polymorphic types would go here
+    //         }
+    //         _ => panic!("Expected function type, got {:?}", func_ty),
+    //     }
+    // }
 }
