@@ -195,8 +195,8 @@ impl Precedence {
             TokenKind::Newline => ParseHandler::NONE,
             TokenKind::Dot => ParseHandler {
                 prefix: Some(Parser::member_prefix),
-                infix: None,
-                precedence: Precedence::Primary,
+                infix: Some(Parser::member_infix),
+                precedence: Precedence::Call,
             },
             TokenKind::Equals => ParseHandler::NONE,
             TokenKind::Bang => ParseHandler {

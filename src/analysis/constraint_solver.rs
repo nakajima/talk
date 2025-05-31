@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use crate::{SourceFile, Typed, parser::ExprID};
+use crate::{SourceFile, SymbolID, Typed, parser::ExprID};
 
-use super::type_checker::{Ty, TypeVarID};
+use super::{
+    environment::{EnumVariant, TypeDef},
+    type_checker::{Ty, TypeDefs, TypeVarID},
+};
 
 #[derive(Debug)]
 pub enum ConstraintError {
@@ -19,18 +22,25 @@ pub enum ConstrainedExpr {
 #[derive(Debug, Clone)]
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
+    MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
 }
 
 pub struct ConstraintSolver<'a> {
     source_file: &'a mut SourceFile<Typed>,
+    types: TypeDefs,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(source_file: &'a mut SourceFile<Typed>, constraints: Vec<Constraint>) -> Self {
+    pub fn new(
+        source_file: &'a mut SourceFile<Typed>,
+        constraints: Vec<Constraint>,
+        types: TypeDefs,
+    ) -> Self {
         Self {
             source_file,
             constraints,
+            types,
         }
     }
 
@@ -66,9 +76,142 @@ impl<'a> ConstraintSolver<'a> {
 
                 self.source_file.define(node_id, lhs);
             }
+            Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
+                let receiver_ty = Self::apply(receiver_ty, substitutions);
+                let result_ty = Self::apply(result_ty, substitutions);
+
+                log::debug!("solving MemberAccess constraint");
+
+                match &receiver_ty {
+                    Ty::Enum(enum_id, generics) => {
+                        // Look up the enum definition
+                        if let Some(enum_info) = self.source_file.type_from_symbol(enum_id) {
+                            // Check if this is a variant constructor
+                            log::debug!("Enum info: {:?}", enum_info);
+                            if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
+                                // Create the constructor type
+                                log::debug!("Variant info: {:?}", variant_info);
+
+                                let variant_ty = self.create_variant_constructor_type(
+                                    &enum_id,
+                                    generics,
+                                    &variant_info,
+                                    substitutions,
+                                );
+
+                                // Unify with the result type
+                                Self::unify(&variant_ty, &result_ty, substitutions)?;
+                                self.source_file.define(node_id, variant_ty);
+                            } else {
+                                log::debug!("Could not find variant named {:?}", member_name);
+                            }
+                            // Future: Check for methods, fields, etc.
+                        } else {
+                            log::debug!("Could not find type from symbol: {:?}", enum_id);
+                        }
+                    }
+                    // Future: Handle other receiver types (structs, etc.)
+                    _ => {
+                        log::debug!(
+                            "For now just unify with the result type: {:?}, {:?}",
+                            node_id,
+                            result_ty
+                        );
+                        // For now, just unify with the result type
+                        self.source_file.define(node_id, result_ty);
+                    }
+                }
+            }
         };
 
         Ok(())
+    }
+
+    fn create_variant_constructor_type(
+        &mut self,
+        enum_id: &SymbolID,
+        // `instance_generics` are the type arguments for this specific instance of the enum,
+        // e.g., for Option<Int>, this would be [TypeVar(that_will_become_Int)].
+        // These are ALREADY FRESHLY INSTANTIATED from the enum's scheme by the caller (TypeChecker).
+        instance_generics: &[Ty],
+        variant_info: &EnumVariant, // variant_info.values refers to original enum type params (e.g. T from Option<T>)
+        substitutions: &mut HashMap<TypeVarID, Ty>, // Global substitutions being built by the solver
+    ) -> Ty {
+        // 1. Get the EnumDef to find its declared (formal) type parameters.
+        // These formal parameters are the Ty::TypeVar created during `hoist_enums`.
+        let enum_def = match self.types.get(enum_id) {
+            Some(TypeDef::Enum(ed)) => ed,
+            _ => panic!(
+                "EnumDef not found for {:?} during variant constructor creation",
+                enum_id
+            ),
+        };
+
+        // 2. Create a local substitution map: formal enum type param ID -> actual instance generic arg type.
+        let mut local_param_to_arg_subst = HashMap::new();
+        for (formal_param_ty, actual_instance_arg_ty) in enum_def
+            .type_parameters
+            .iter()
+            .zip(instance_generics.iter())
+        {
+            if let Ty::TypeVar(formal_param_id) = formal_param_ty {
+                // `actual_instance_arg_ty` is the specific type (often a fresh TypeVar) for this instance.
+                local_param_to_arg_subst
+                    .insert(formal_param_id.clone(), actual_instance_arg_ty.clone());
+            } else {
+                // This indicates an issue with how EnumDef.type_parameters were stored, they should be TypeVars.
+                log::error!(
+                    "Formal type parameter in EnumDef was not a TypeVar: {:?}",
+                    formal_param_ty
+                );
+            }
+        }
+
+        // 3. Instantiate the variant's value types (constructor arguments) using this local substitution first,
+        //    then apply the global substitutions.
+        let constructor_arg_tys: Vec<Ty> = variant_info
+            .values
+            .iter()
+            .map(|formal_val_ty| {
+                // Step 3a: Apply local substitution (formal param -> instance arg)
+                Self::apply(formal_val_ty.clone(), &local_param_to_arg_subst)
+            })
+            .map(|instantiated_val_ty| {
+                // Step 3b: Apply global solver substitutions
+                Self::apply(instantiated_val_ty, substitutions)
+            })
+            .collect();
+
+        // 4. The return type of the constructor is the enum type itself, with its actual instance generics.
+        // These instance_generics should also be fully resolved using global substitutions.
+        let constructor_return_ty = Ty::Enum(
+            enum_id.clone(),
+            instance_generics
+                .iter()
+                .map(|g_ty| Self::apply(g_ty.clone(), substitutions))
+                .collect(),
+        );
+
+        if variant_info.values.is_empty() {
+            // If no values, it's not a function, it's just the enum type itself (fully substituted).
+            constructor_return_ty
+        } else {
+            Ty::Func(constructor_arg_tys, Box::new(constructor_return_ty))
+        }
+    }
+
+    fn find_variant(&self, enum_id: &SymbolID, name: &String) -> Option<EnumVariant> {
+        let Some(TypeDef::Enum(enum_def)) = self.types.get(enum_id) else {
+            return None;
+        };
+        log::debug!("Variants: {:?}", enum_def.variants);
+        for variant in enum_def.variants.iter() {
+            log::debug!("Checking variant: {:?}", variant);
+            if variant.name == *name {
+                return Some(variant.clone());
+            }
+        }
+        None
     }
 
     fn apply(ty: Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {

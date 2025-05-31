@@ -8,21 +8,34 @@ use super::{
     typed_expr::TypedExpr,
 };
 
-// Enum definition storage
 #[derive(Debug, Clone)]
-pub struct EnumDef {
-    pub name: SymbolID,
-    pub type_params: Vec<SymbolID>, // generic parameter names like ["T", "E"]
-    pub variants: HashMap<SymbolID, Vec<Ty>>, // variant name -> field types
+pub struct EnumVariant {
+    pub name: String,
+    pub values: Vec<Ty>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: Option<SymbolID>,
+    pub type_parameters: TypeParams,
+    pub variants: Vec<EnumVariant>,
+    pub methods: Vec<Ty>,
+}
+
+pub type TypeParams = Vec<Ty>;
+
+#[derive(Debug, Clone)]
+pub enum TypeDef {
+    Enum(EnumDef),
+}
+
+#[derive(Debug, Clone)]
 pub struct Environment {
-    pub types: HashMap<ExprID, TypedExpr>,
+    pub typed_exprs: HashMap<ExprID, TypedExpr>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<HashMap<SymbolID, Scheme>>,
-    pub enum_defs: HashMap<SymbolID, EnumDef>,
+    pub types: HashMap<SymbolID, TypeDef>,
 }
 
 impl Default for Environment {
@@ -34,11 +47,11 @@ impl Default for Environment {
 impl Environment {
     pub fn new() -> Self {
         Self {
-            types: HashMap::new(),
+            typed_exprs: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![SymbolTable::default_env_scope()],
-            enum_defs: Default::default(),
+            types: Default::default(),
         }
     }
 
@@ -139,11 +152,16 @@ impl Environment {
 
     // Helper methods for enum definitions
     pub fn register_enum(&mut self, def: EnumDef) {
-        self.enum_defs.insert(def.name.clone(), def);
+        self.types
+            .insert(def.clone().name.unwrap().into(), TypeDef::Enum(def));
     }
 
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {
-        self.enum_defs.get(name)
+        if let Some(TypeDef::Enum(def)) = self.types.get(name) {
+            Some(def)
+        } else {
+            None
+        }
     }
 }
 
@@ -159,6 +177,11 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
                 s.extend(free_type_vars(param));
             }
             s.extend(free_type_vars(ret));
+        }
+        Ty::Enum(_, generics) => {
+            for generic in generics {
+                s.extend(free_type_vars(generic));
+            }
         }
         // add more Ty variants here as you grow them:
         // Ty::Tuple(elems)  => for e in elems { s.extend(free_type_vars(e)); }

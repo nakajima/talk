@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::{symbol_table::SymbolTable, type_checker::Ty, typed_expr::TypedExpr};
+use crate::{
+    SymbolID, environment::TypeDef, symbol_table::SymbolTable, type_checker::Ty,
+    typed_expr::TypedExpr,
+};
 
 use super::{
     expr::{Expr, ExprMeta},
@@ -30,7 +33,8 @@ pub struct Typed;
 pub struct TypedInfo {
     pub symbol_table: SymbolTable,
     pub roots: Vec<TypedExpr>,
-    pub types: HashMap<ExprID, TypedExpr>,
+    pub typed_exprs: HashMap<ExprID, TypedExpr>,
+    pub types: HashMap<SymbolID, TypeDef>,
 }
 
 impl Phase for Typed {
@@ -77,7 +81,8 @@ impl SourceFile<NameResolved> {
     pub fn to_typed(
         self,
         roots: Vec<TypedExpr>,
-        types: HashMap<ExprID, TypedExpr>,
+        typed_exprs: HashMap<ExprID, TypedExpr>,
+        types: HashMap<SymbolID, TypeDef>,
     ) -> SourceFile<Typed> {
         SourceFile {
             roots: self.roots,
@@ -86,6 +91,7 @@ impl SourceFile<NameResolved> {
             phase_data: TypedInfo {
                 symbol_table: self.phase_data,
                 roots,
+                typed_exprs,
                 types,
             },
         }
@@ -98,19 +104,27 @@ impl SourceFile<Typed> {
     }
 
     pub fn types_mut(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
-        &mut self.phase_data.types
+        &mut self.phase_data.typed_exprs
     }
 
     pub fn types(&self) -> &HashMap<ExprID, TypedExpr> {
-        &self.phase_data.types
+        &self.phase_data.typed_exprs
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {
-        self.phase_data.types.get_mut(&id).unwrap().ty = ty;
+        self.phase_data.typed_exprs.get_mut(&id).unwrap().ty = ty;
     }
 
     pub fn type_for(&self, id: ExprID) -> Ty {
-        self.phase_data.types.get(&id).unwrap().ty.clone()
+        self.phase_data.typed_exprs.get(&id).unwrap().ty.clone()
+    }
+
+    pub fn type_from_symbol(&self, symbol_id: &SymbolID) -> Option<Ty> {
+        if let Some(info) = self.phase_data.symbol_table.get(symbol_id) {
+            return Some(self.type_for(info.expr_id));
+        }
+
+        None
     }
 }
 

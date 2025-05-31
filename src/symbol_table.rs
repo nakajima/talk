@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::type_checker::{Scheme, Ty};
+use crate::{
+    parser::ExprID,
+    type_checker::{Scheme, Ty},
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
@@ -13,12 +16,14 @@ pub enum SymbolKind {
     Enum,
     EnumVariant(SymbolID),
     BuiltinType,
+    CustomType,
 }
 
 #[derive(Debug, Clone)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
+    pub expr_id: ExprID,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +44,7 @@ impl Default for SymbolTable {
             SymbolInfo {
                 name: "Int".into(),
                 kind: SymbolKind::BuiltinType,
+                expr_id: -1,
             },
         );
 
@@ -47,6 +53,7 @@ impl Default for SymbolTable {
             SymbolInfo {
                 name: "Float".into(),
                 kind: SymbolKind::BuiltinType,
+                expr_id: -2,
             },
         );
 
@@ -69,7 +76,7 @@ impl SymbolTable {
         scope
     }
 
-    pub fn add(&mut self, name: &str, kind: SymbolKind) -> SymbolID {
+    pub fn add(&mut self, name: &str, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
         self.next_id += 1;
         let symbol_id = SymbolID(self.next_id);
         self.symbols.insert(
@@ -77,6 +84,7 @@ impl SymbolTable {
             SymbolInfo {
                 name: name.to_string(),
                 kind,
+                expr_id,
             },
         );
 
@@ -86,7 +94,7 @@ impl SymbolTable {
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
         log::warn!("Lookup: {:?}", name);
         for (id, info) in &self.symbols {
-            log::warn!("Checking: {:?}, {:?}", id, info);
+            log::warn!("Looking up: {:?}, {:?}", id, info);
             if info.name == name {
                 return Some(*id);
             }

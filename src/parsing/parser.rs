@@ -3,8 +3,9 @@ use crate::{SourceFile, lexer::Lexer, token::Token, token_kind::TokenKind};
 use super::{
     expr::{
         Expr::{self, *},
-        ExprMeta, FuncName, Name,
+        ExprMeta, FuncName,
     },
+    name::Name,
     precedence::Precedence,
 };
 
@@ -108,7 +109,7 @@ impl Parser {
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
-                generics.push(self.type_repr()?);
+                generics.push(self.type_repr(true)?);
                 self.consume(TokenKind::Comma).ok();
             }
         };
@@ -224,6 +225,25 @@ impl Parser {
         self.consume(TokenKind::Dot)?;
         let (name, _) = self.try_identifier().unwrap();
         self.add_expr(Member(None, name.into()))
+    }
+
+    pub(crate) fn member_infix(
+        &mut self,
+        can_assign: bool,
+        lhs: ExprID,
+    ) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Dot)?;
+        let (name, _) = self.try_identifier().unwrap();
+        let member = self.add_expr(Member(Some(lhs), name))?;
+
+        self.skip_newlines();
+
+        if self.did_match(TokenKind::LeftParen)? {
+            self.skip_newlines();
+            self.call(can_assign, member)
+        } else {
+            Ok(member)
+        }
     }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -359,7 +379,7 @@ impl Parser {
         )) = self.try_identifier()
         {
             let ty_repr = if self.did_match(TokenKind::Colon)? {
-                Some(self.type_repr()?)
+                Some(self.type_repr(false)?)
             } else {
                 None
             };
@@ -384,7 +404,7 @@ impl Parser {
                 },
             )) = self.try_identifier()
             {
-                let ret_id = self.add_expr(TypeRepr(ret_name.into(), vec![]))?;
+                let ret_id = self.add_expr(TypeRepr(ret_name.into(), vec![], false))?;
                 Some(ret_id)
             } else {
                 None
@@ -403,7 +423,7 @@ impl Parser {
         ))
     }
 
-    fn type_repr(&mut self) -> Result<ExprID, ParserError> {
+    fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {
         let Some((name, _)) = self.try_identifier() else {
             return Err(ParserError::UnexpectedToken(
                 vec![TokenKind::Identifier("_".to_string())],
@@ -414,13 +434,13 @@ impl Parser {
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
-                let generic = self.type_repr()?;
+                let generic = self.type_repr(is_type_parameter)?;
                 generics.push(generic);
                 self.consume(TokenKind::Comma).ok();
             }
         }
 
-        let type_repr = TypeRepr(name.into(), generics);
+        let type_repr = TypeRepr(name.into(), generics, is_type_parameter);
         self.add_expr(type_repr)
     }
 
@@ -437,7 +457,7 @@ impl Parser {
 
                     if self.did_match(TokenKind::LeftParen)? {
                         while !self.did_match(TokenKind::RightParen)? {
-                            types.push(self.type_repr()?);
+                            types.push(self.type_repr(false)?);
                             self.consume(TokenKind::Comma).ok();
                         }
                     }
@@ -644,7 +664,8 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
-        expr::{FuncName, Name},
+        expr::FuncName,
+        name::Name,
         parser::parse,
         parsing::expr::Expr::{self, *},
         token_kind::TokenKind,
@@ -899,7 +920,10 @@ mod tests {
             *parsed.get(1).unwrap(),
             Parameter(Name::Raw("name".to_string()), Some(0))
         );
-        assert_eq!(*parsed.get(0).unwrap(), TypeRepr("Int".into(), vec![]));
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            TypeRepr("Int".into(), vec![], false)
+        );
     }
 
     #[test]
@@ -995,6 +1019,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_empty_enum_instantiation() {
+        let parsed = parse("enum Fizz { case foo }\nFizz.foo").unwrap();
+
+        assert_eq!(*parsed.roots()[1].unwrap(), Member(Some(3), "foo".into()));
+    }
+
+    #[test]
+    fn parses_empty_enum_instantiation_with_value() {
+        let parsed = parse("enum Fizz { case foo(Int) }\nFizz.foo(123)").unwrap();
+
+        assert_eq!(*parsed.roots()[1].unwrap(), Call(5, vec![6]));
+        assert_eq!(*parsed.get(5).unwrap(), Member(Some(4), "foo".into()));
+        assert_eq!(*parsed.get(4).unwrap(), Variable("Fizz".into(), None));
+    }
+
+    #[test]
     fn parses_enum_with_generics() {
         let parsed = parse(
             "enum Fizz<T, Y> {
@@ -1005,11 +1045,20 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::EnumDecl("Fizz".into(), vec![0, 1], 6));
-        assert_eq!(*parsed.get(2).unwrap(), Expr::TypeRepr("T".into(), vec![]));
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::TypeRepr("T".into(), vec![], true)
+        );
 
         // Check the enum generics
-        assert_eq!(*parsed.get(0).unwrap(), Expr::TypeRepr("T".into(), vec![]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::TypeRepr("Y".into(), vec![]));
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::TypeRepr("T".into(), vec![], true)
+        );
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            Expr::TypeRepr("Y".into(), vec![], true)
+        );
 
         // Check the body
         assert_eq!(*parsed.get(6).unwrap(), Expr::Block(vec![4, 5]));
@@ -1017,8 +1066,14 @@ mod tests {
             *parsed.get(4).unwrap(),
             Expr::EnumVariant(Name::Raw("foo".into()), vec![2, 3])
         );
-        assert_eq!(*parsed.get(2).unwrap(), Expr::TypeRepr("T".into(), vec![]));
-        assert_eq!(*parsed.get(3).unwrap(), Expr::TypeRepr("Y".into(), vec![]));
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::TypeRepr("T".into(), vec![], true)
+        );
+        assert_eq!(
+            *parsed.get(3).unwrap(),
+            Expr::TypeRepr("Y".into(), vec![], true)
+        );
     }
 
     #[test]
@@ -1080,11 +1135,11 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![])
+            Expr::TypeRepr("Int".into(), vec![], false)
         );
         assert_eq!(
             *parsed.get(1).unwrap(),
-            Expr::TypeRepr("Float".into(), vec![])
+            Expr::TypeRepr("Float".into(), vec![], false)
         );
 
         assert_eq!(
@@ -1093,11 +1148,11 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(3).unwrap(),
-            Expr::TypeRepr("Float".into(), vec![])
+            Expr::TypeRepr("Float".into(), vec![], false)
         );
         assert_eq!(
             *parsed.get(4).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![])
+            Expr::TypeRepr("Int".into(), vec![], false)
         );
     }
 

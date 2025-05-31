@@ -1,6 +1,6 @@
 use crate::{symbol_table::SymbolID, token::Token, token_kind::TokenKind};
 
-use super::parser::ExprID;
+use super::{name::Name, parser::ExprID};
 
 pub type VarDepth = u32;
 
@@ -23,24 +23,6 @@ impl FuncName {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Name {
-    Raw(String),
-    Resolved(SymbolID),
-}
-
-impl From<String> for Name {
-    fn from(value: String) -> Self {
-        Name::Raw(value)
-    }
-}
-
-impl From<&str> for Name {
-    fn from(value: &str) -> Self {
-        Name::Raw(value.to_string())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     LiteralInt(&'static str),
@@ -54,10 +36,14 @@ pub enum Expr {
     Call(ExprID, Vec<ExprID>),
 
     // A type annotation
-    TypeRepr(Name, Vec<ExprID> /* generics */),
+    TypeRepr(
+        Name,
+        Vec<ExprID>, /* generics */
+        bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
+    ),
 
     // A dot thing
-    Member(Option<ExprID> /* receiver */, Name),
+    Member(Option<ExprID> /* receiver */, String),
 
     // Function stuff
     Func(
@@ -92,7 +78,7 @@ pub enum Expr {
     // Enum declaration
     EnumDecl(
         Name,        // TypeRepr name: Option
-        Vec<ExprID>, // Generics <T>
+        Vec<ExprID>, // Generics TypeParams <T>
         ExprID,      // Body
     ),
 
@@ -119,11 +105,5 @@ pub enum Expr {
         Option<Name>, // enum name (None for unqualified .some)
         Name,         // variant name: "some"
         Vec<ExprID>,  // bindings: ["wrapped"]
-    ),
-
-    // Member access for construction: Option.some(123)
-    MemberAccess(
-        ExprID, // base: Variable("Option")
-        Name,   // member: "some"
     ),
 }
