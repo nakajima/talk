@@ -18,6 +18,7 @@ pub enum SymbolKind {
     BuiltinType,
     CustomType,
     TypeParameter,
+    PatternBind,
 }
 
 #[derive(Debug, Clone)]

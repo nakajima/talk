@@ -6,6 +6,7 @@ use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::expr::Expr::*;
 use crate::expr::FuncName;
+use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
 use crate::source_file::SourceFile;
@@ -227,71 +228,57 @@ impl NameResolver {
                 }
                 MatchArm(pattern, body) => {
                     self.start_scope(); // New scope for this arm's bindings
-                    self.resolve_pattern_bindings(pattern, source_file); // Declare variables from pattern
-                    // Now resolve the pattern structure (e.g., Member, Call parts)
-                    // and the body within this new scope.
                     self.resolve_nodes(vec![pattern], source_file);
                     self.resolve_nodes(vec![body], source_file);
                     self.end_scope();
                 }
-                Pattern(_) => todo!(),
+                Pattern(pattern) => {
+                    let pattern = self.resolve_pattern(pattern, source_file, node_id);
+                    source_file.nodes[node_id as usize] = Pattern(pattern);
+                }
                 PatternVariant(_, _, _items) => todo!(),
             }
         }
     }
 
-    // New helper method to declare variables found in patterns
-    fn resolve_pattern_bindings(&mut self, pattern_id: ExprID, source_file: &mut SourceFile) {
-        let expr_clone = source_file.get(pattern_id).unwrap().clone();
-        match expr_clone {
-            Variable(Name::Raw(name_str), _) => {
-                // This is a binding variable like `value` in `.some(value)` or `x` in `case x`
-                log::trace!(
-                    "Pattern binding: Declaring variable '{}' in pattern.",
-                    name_str
-                );
-                self.declare(name_str.clone(), SymbolKind::Local, pattern_id); // Or a specific SymbolKind::PatternBinding
+    fn resolve_pattern(
+        &mut self,
+        pattern: Pattern,
+        source_file: &mut SourceFile,
+        node_id: ExprID,
+    ) -> Pattern {
+        match pattern {
+            Pattern::Bind(Name::Raw(name_str)) => {
+                let symbol = self.declare(name_str.clone(), SymbolKind::PatternBind, node_id);
+                Pattern::Bind(Name::Resolved(symbol, name_str))
             }
-            Call(_callee, args) => {
-                // Example: .some(value) is Call(Member(None, "some"), [Variable("value")])
-                // The callee (.some) is not a binding.
-                // Recursively find bindings in arguments.
-                for arg_pattern_id in args {
-                    self.resolve_pattern_bindings(arg_pattern_id, source_file);
+            Pattern::Variant {
+                enum_name,
+                variant_name: Name::Raw(variant_name),
+                fields,
+            } => {
+                let enum_name = if let Some(Name::Raw(enum_name)) = enum_name {
+                    let symbol = self.declare(enum_name.clone(), SymbolKind::PatternBind, node_id);
+                    Some(Name::Resolved(symbol, enum_name))
+                } else {
+                    None
+                };
+
+                let symbol = self.declare(variant_name.clone(), SymbolKind::PatternBind, node_id);
+                let variant_name = Name::Resolved(symbol, variant_name);
+
+                let fields = fields
+                    .iter()
+                    .map(|f| self.resolve_pattern(f.clone(), source_file, node_id))
+                    .collect();
+
+                Pattern::Variant {
+                    enum_name,
+                    variant_name,
+                    fields,
                 }
             }
-            Member(opt_receiver_id, _) => {
-                // Member access like .none or Enum.case is not a binding itself.
-                // If the receiver could be a pattern that binds, recurse.
-                // This is not typical for simple enum variant patterns.
-                if let Some(receiver_id) = opt_receiver_id {
-                    self.resolve_pattern_bindings(receiver_id, source_file);
-                }
-            }
-            Tuple(items) => {
-                for item_id in items {
-                    self.resolve_pattern_bindings(item_id, source_file);
-                }
-            }
-            // Literals, resolved names, type representations, and enum structural parts don't introduce new bindings.
-            LiteralInt(_)
-            | LiteralFloat(_)
-            | LiteralTrue
-            | LiteralFalse
-            | TypeRepr(_, _, _)
-            | Variable(Name::Resolved(_, _), _)
-            | EnumDecl(_, _, _)
-            | EnumVariant(_, _) => {
-                // No new bindings to declare from these structures themselves.
-            }
-            // Other complex expressions are unlikely to be direct binding forms in simple patterns.
-            // If more complex patterns are allowed that bind variables, this needs expansion.
-            _ => {
-                log::trace!(
-                    "Skipping resolve_pattern_bindings for non-binding or complex expr: {:?}",
-                    expr_clone
-                );
-            }
+            _ => pattern,
         }
     }
 

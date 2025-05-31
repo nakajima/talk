@@ -408,10 +408,10 @@ impl TypeChecker {
             Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(&id).unwrap().clone()), /* handled by hoist */
             Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(&id).unwrap().clone()), /* handled by hoist */
             Expr::Match(pattern, items) => {
-                let _pattern_ty = self.infer_node(*pattern, env, &None, source_file)?.ty;
+                let pattern_ty = self.infer_node(*pattern, env, &None, source_file)?.ty;
                 let items_ty = items
                     .iter()
-                    .map(|id| self.infer_node(*id, env, &None, source_file))
+                    .map(|id| self.infer_node(*id, env, &Some(pattern_ty.clone()), source_file))
                     .collect::<Result<Vec<_>, _>>()?;
                 let items_ty = items_ty.iter().map(|ty| ty.ty.clone()).collect::<Vec<_>>();
 
@@ -424,7 +424,7 @@ impl TypeChecker {
             }
             Expr::MatchArm(pattern, body) => {
                 env.start_scope();
-                let _pattern_ty = self.infer_node(*pattern, env, &None, source_file)?.ty;
+                let _pattern_ty = self.infer_node(*pattern, env, expected, source_file)?.ty;
                 let body_ty = self.infer_node(*body, env, &None, source_file)?.ty;
                 env.end_scope();
 
@@ -464,6 +464,11 @@ impl TypeChecker {
                         Ok(typed_expr)
                     }
                 }
+            }
+            Expr::Pattern(_pattern) => {
+                let typed_expr = TypedExpr::new(expr, expected.clone().unwrap());
+                env.typed_exprs.insert(id, typed_expr.clone());
+                Ok(typed_expr)
             }
             _ => panic!("Unhandled expr in type checker: {:?}", expr),
         };
@@ -986,7 +991,7 @@ mod tests {
                 case yes, no
             }
 
-            func test(b: Bool) -> Int {
+            func test(b: Bool) {
                 match b {
                     .yes -> 1
                     .no -> 0
@@ -1035,7 +1040,7 @@ mod pending {
             enum Option<T> {
                 case some(T), none
             }
-            func unwrap(opt: Option<Int>) -> Int {
+            func unwrap(opt: Option<Int>) {
                 match opt {
                     .some(value) -> value
                     .none -> 0
