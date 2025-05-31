@@ -3,13 +3,15 @@ use std::{
     ops::IndexMut,
 };
 
-use crate::{SymbolID, SymbolTable, parser::ExprID, type_checker::Ty};
+use crate::{SymbolID, SymbolTable, parser::ExprID, prelude::PRELUDE, type_checker::Ty};
 
 use super::{
     constraint_solver::Constraint,
     type_checker::{Scheme, TypeVarID, TypeVarKind},
     typed_expr::TypedExpr,
 };
+
+pub type Scope = HashMap<SymbolID, Scheme>;
 
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
@@ -38,13 +40,15 @@ pub struct Environment {
     pub typed_exprs: HashMap<ExprID, TypedExpr>,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
-    pub scopes: Vec<HashMap<SymbolID, Scheme>>,
+    pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
 }
 
 impl Default for Environment {
     fn default() -> Self {
-        Self::new()
+        let mut env = Self::new();
+        env.import_prelude(&PRELUDE.types, &PRELUDE.schemes);
+        env
     }
 }
 
@@ -57,6 +61,19 @@ impl Environment {
             scopes: vec![SymbolTable::default_env_scope()],
             types: Default::default(),
         }
+    }
+
+    pub fn import_prelude(
+        &mut self,
+        types: &HashMap<SymbolID, TypeDef>,
+        schemes: &HashMap<SymbolID, Scheme>,
+    ) {
+        // Import types
+        self.types.extend(types.clone());
+
+        // Import schemes into global scope
+        log::debug!("Importing schemes: {:?}", schemes);
+        self.scopes[0].extend(schemes.clone());
     }
 
     /// Look up the scheme for `sym`, then immediately instantiate it.
@@ -76,6 +93,12 @@ impl Environment {
     }
 
     pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
+        log::trace!(
+            "Declaring {:?} {:?} in {:?}",
+            symbol_id,
+            scheme,
+            self.scopes
+        );
         self.scopes
             .index_mut(self.scopes.len() - 2)
             .insert(symbol_id, scheme);

@@ -2,11 +2,19 @@ use std::collections::HashMap;
 
 use crate::{
     parser::ExprID,
+    prelude::PRELUDE,
     type_checker::{Scheme, Ty},
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
+
+impl SymbolID {
+    // Remove the prelude's symbol offset
+    pub fn at(index: i32) -> SymbolID {
+        SymbolID(index + PRELUDE.symbols.max_id())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum SymbolKind {
@@ -65,6 +73,10 @@ impl Default for SymbolTable {
 }
 
 impl SymbolTable {
+    pub fn import(&mut self, symbol_id: &SymbolID, info: SymbolInfo) {
+        self.symbols.insert(*symbol_id, info);
+    }
+
     pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
         let mut scope = HashMap::new();
         scope.insert(SymbolID(-1), Scheme::new(Ty::Int, vec![]));
@@ -77,6 +89,46 @@ impl SymbolTable {
         scope.insert("Int".to_string(), SymbolID(-1));
         scope.insert("Float".to_string(), SymbolID(-2));
         scope
+    }
+
+    pub fn with_prelude(prelude_symbols: &HashMap<SymbolID, SymbolInfo>) -> Self {
+        let mut table = Self::default();
+
+        // Import all prelude symbols
+        for (id, info) in prelude_symbols {
+            table.symbols.insert(*id, info.clone());
+        }
+
+        // Set next_id to avoid collisions
+        let max_id = prelude_symbols
+            .keys()
+            .filter(|id| id.0 > 0) // Only positive IDs
+            .map(|id| id.0)
+            .max()
+            .unwrap_or(0);
+
+        table.next_id = max_id + 1;
+        table
+    }
+
+    // Convert symbols to initial name scope
+    pub fn build_name_scope(&self) -> HashMap<String, SymbolID> {
+        let mut scope = Self::default_name_scope(); // Builtins like Int, Float
+
+        // Add all symbols to name->id mapping
+        for (id, info) in &self.symbols {
+            scope.insert(info.name.clone(), *id);
+        }
+
+        scope
+    }
+
+    pub fn all(&self) -> HashMap<SymbolID, SymbolInfo> {
+        self.symbols.clone()
+    }
+
+    pub fn max_id(&self) -> i32 {
+        self.next_id
     }
 
     pub fn add(&mut self, name: &str, kind: SymbolKind, expr_id: ExprID) -> SymbolID {

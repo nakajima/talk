@@ -660,7 +660,6 @@ impl Parser {
                     lhs = Some(infix(self, precedence.can_assign(), previous_lhs)?);
                 }
             } else {
-                println!("No infix found for {:?}", self.current);
                 break;
             }
 

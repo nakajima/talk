@@ -9,6 +9,7 @@ use crate::expr::FuncName;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
+use crate::prelude::PRELUDE;
 use crate::source_file::SourceFile;
 
 pub struct NameResolver {
@@ -16,11 +17,26 @@ pub struct NameResolver {
     scopes: Vec<HashMap<String, SymbolID>>,
 }
 
+impl Default for NameResolver {
+    fn default() -> Self {
+        let symbol_table = PRELUDE.symbols.clone();
+        let initial_scope = symbol_table.build_name_scope();
+
+        NameResolver {
+            symbol_table,
+            scopes: vec![initial_scope],
+        }
+    }
+}
+
 impl NameResolver {
     pub fn new() -> Self {
+        let symbol_table = SymbolTable::default();
+        let initial_scope = symbol_table.build_name_scope();
+
         NameResolver {
-            symbol_table: SymbolTable::default(),
-            scopes: vec![SymbolTable::default_name_scope()],
+            symbol_table,
+            scopes: vec![initial_scope],
         }
     }
 
@@ -85,15 +101,20 @@ impl NameResolver {
                     }
                 }
                 Let(name, rhs) => {
-                    match name {
+                    let name = match name {
                         Name::Raw(name_str) => {
                             let symbol_id =
                                 self.declare(name_str.clone(), SymbolKind::Local, node_id);
-                            source_file.nodes[node_id as usize] =
-                                Let(Name::Resolved(symbol_id, name_str), rhs);
+                            Name::Resolved(symbol_id, name_str)
                         }
-                        Name::Resolved(_, _) => (),
+                        Name::Resolved(_, _) => name,
                     };
+
+                    if let Some(rhs) = rhs {
+                        self.resolve_nodes(vec![rhs], source_file);
+                    }
+
+                    source_file.nodes[node_id as usize] = Let(name, rhs);
                 }
                 Call(callee, args) => {
                     let mut to_resolve = args.clone();
@@ -254,7 +275,7 @@ impl NameResolver {
             }
             Pattern::Variant {
                 enum_name,
-                variant_name: Name::Raw(variant_name),
+                variant_name,
                 fields,
             } => {
                 let enum_name = if let Some(Name::Raw(enum_name)) = enum_name {
@@ -263,9 +284,6 @@ impl NameResolver {
                 } else {
                     None
                 };
-
-                let symbol = self.declare(variant_name.clone(), SymbolKind::PatternBind, node_id);
-                let variant_name = Name::Resolved(symbol, variant_name);
 
                 let fields = fields
                     .iter()
@@ -321,7 +339,12 @@ impl NameResolver {
     }
 
     fn declare(&mut self, name: String, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
-        log::trace!("declaring {} in {:?}", name, self.scopes);
+        log::trace!(
+            "declaring {} in {:?} at depth {}",
+            name,
+            self.scopes,
+            self.scopes.len() - 1
+        );
         let symbol_id = self.symbol_table.add(&name, kind, expr_id);
         self.scopes.last_mut().unwrap().insert(name, symbol_id);
         symbol_id
@@ -353,7 +376,7 @@ mod tests {
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let tree = parse(code).expect("parse failed");
-        let resolver = NameResolver::new();
+        let resolver = NameResolver::default();
         resolver.resolve(tree)
     }
 
@@ -395,12 +418,13 @@ mod tests {
     fn resolves_shadowed_variable_in_lambda() {
         let tree = resolve("func(x) { x }\n");
         let root = tree.roots()[0].unwrap();
+
         if let Func(_, params, body_id, _ret) = root {
             assert_eq!(params.len(), 1);
             let x_param = tree.get(params[0]).unwrap();
             assert_eq!(
                 x_param,
-                &Variable(Name::Resolved(SymbolID(1), "x".into()), None)
+                &Variable(Name::Resolved(SymbolID::at(1), "x".into()), None)
             );
 
             let Block(exprs) = &tree.get(*body_id).unwrap() else {
@@ -409,7 +433,10 @@ mod tests {
 
             assert_eq!(exprs.len(), 1);
             let x = tree.get(exprs[0]).unwrap();
-            assert_eq!(x, &Variable(Name::Resolved(SymbolID(1), "x".into()), None));
+            assert_eq!(
+                x,
+                &Variable(Name::Resolved(SymbolID::at(1), "x".into()), None)
+            );
         } else {
             panic!("expected Func node");
         }
@@ -439,19 +466,19 @@ mod tests {
         let inner_x = tree.get(inner_body[0]).unwrap();
         assert_eq!(
             inner_x,
-            &Variable(Name::Resolved(SymbolID(3), "x".into()), None)
+            &Variable(Name::Resolved(SymbolID::at(3), "x".into()), None)
         );
 
         let inner_y = tree.get(inner_body[1]).unwrap();
         assert_eq!(
             inner_y,
-            &Variable(Name::Resolved(SymbolID(2), "y".into()), None)
+            &Variable(Name::Resolved(SymbolID::at(2), "y".into()), None)
         );
 
         let outer_x = tree.get(outer_body[1]).unwrap();
         assert_eq!(
             outer_x,
-            &Variable(Name::Resolved(SymbolID(1), "x".into()), None)
+            &Variable(Name::Resolved(SymbolID::at(1), "x".into()), None)
         );
     }
 
@@ -474,16 +501,39 @@ mod tests {
 
         assert_eq!(
             *tree.get(tree.root_ids()[2]).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID(1), "x".into()), None)
+            Expr::Variable(Name::Resolved(SymbolID::at(1), "x".into()), None)
         );
         assert_eq!(
             *tree.get(tree.root_ids()[0]).unwrap(),
-            Let(Name::Resolved(SymbolID(1), "x".into()), Some(0))
+            Let(Name::Resolved(SymbolID::at(1), "x".into()), Some(0))
         );
 
         assert_eq!(
             *tree.get(tree.root_ids()[3]).unwrap(),
-            Variable(Name::Resolved(SymbolID(2), "y".into()), None)
+            Variable(Name::Resolved(SymbolID::at(2), "y".into()), None)
+        );
+    }
+
+    #[test]
+    fn resolves_let_rhs() {
+        let tree = resolve(
+            "
+        let x = Optional.none
+        ",
+        );
+
+        let Expr::Let(_, Some(rhs)) = tree.roots()[0].unwrap() else {
+            panic!("didnt get assignment")
+        };
+
+        assert_eq!(
+            *tree.get(*rhs).unwrap(),
+            Expr::Member(Some(0), "none".into())
+        );
+
+        assert_eq!(
+            *tree.get(0).unwrap(),
+            Variable(Name::Resolved(SymbolID(1), "Optional".into()), None)
         );
     }
 
@@ -492,7 +542,7 @@ mod tests {
         // parse a block with a single let,
         // followed by a bare `x` at top level:
         let tree = parse("{ let x = 123 } x").unwrap();
-        let resolver = NameResolver::new();
+        let resolver = NameResolver::default();
         let tree = resolver.resolve(tree);
 
         // The first root is the Block, the second is the Variable("x")
@@ -520,7 +570,7 @@ mod tests {
 
         assert_eq!(
             *resolved.roots()[0].unwrap(),
-            Expr::EnumDecl(Name::Resolved(SymbolID(1), "Fizz".into()), vec![], 2)
+            Expr::EnumDecl(Name::Resolved(SymbolID::at(1), "Fizz".into()), vec![], 2)
         );
         assert_eq!(*resolved.get(2).unwrap(), Expr::Block(vec![0, 1]));
         assert_eq!(
@@ -552,7 +602,7 @@ mod tests {
 
         assert_eq!(
             *resolved.roots()[0].unwrap(),
-            Expr::EnumDecl(Name::Resolved(SymbolID(1), "Fizz".into()), vec![], 3)
+            Expr::EnumDecl(Name::Resolved(SymbolID::at(1), "Fizz".into()), vec![], 3)
         );
         assert_eq!(*resolved.get(3).unwrap(), Expr::Block(vec![1, 2]));
         assert_eq!(
@@ -571,7 +621,7 @@ mod tests {
         );
         assert_eq!(
             *resolved.get(5).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID(1), "Fizz".into()), None)
+            Expr::Variable(Name::Resolved(SymbolID::at(1), "Fizz".into()), None)
         );
     }
 }

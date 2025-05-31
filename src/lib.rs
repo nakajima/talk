@@ -12,6 +12,7 @@ pub mod parsing;
 pub use parsing::*;
 pub mod lowering;
 pub use lowering::*;
+pub mod prelude;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -19,3 +20,6 @@ fn init_logger() {
     // .is_test(true) silences the “already initialized” panic
     let _ = env_logger::builder().is_test(true).try_init();
 }
+
+#[cfg(test)]
+pub mod test_utils;

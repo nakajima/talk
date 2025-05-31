@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    SymbolID, SymbolKind, environment::TypeDef, symbol_table::SymbolTable, type_checker::Ty,
+    SymbolID, SymbolKind,
+    constraint_solver::Constraint,
+    environment::{Environment, Scope, TypeDef},
+    symbol_table::SymbolTable,
+    type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
 };
 
@@ -33,8 +37,7 @@ pub struct Typed;
 pub struct TypedInfo {
     pub symbol_table: SymbolTable,
     pub roots: Vec<TypedExpr>,
-    pub typed_exprs: HashMap<ExprID, TypedExpr>,
-    pub types: HashMap<SymbolID, TypeDef>,
+    pub env: Environment,
 }
 
 impl Phase for Typed {
@@ -82,12 +85,7 @@ impl SourceFile<NameResolved> {
         self.phase_data.add(&name, kind, expr_id)
     }
 
-    pub fn to_typed(
-        self,
-        roots: Vec<TypedExpr>,
-        typed_exprs: HashMap<ExprID, TypedExpr>,
-        types: HashMap<SymbolID, TypeDef>,
-    ) -> SourceFile<Typed> {
+    pub fn to_typed(self, roots: Vec<TypedExpr>, env: Environment) -> SourceFile<Typed> {
         SourceFile {
             roots: self.roots,
             nodes: self.nodes,
@@ -95,8 +93,7 @@ impl SourceFile<NameResolved> {
             phase_data: TypedInfo {
                 symbol_table: self.phase_data,
                 roots,
-                typed_exprs,
-                types,
+                env,
             },
         }
     }
@@ -108,19 +105,27 @@ impl SourceFile<Typed> {
     }
 
     pub fn types_mut(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
-        &mut self.phase_data.typed_exprs
+        &mut self.phase_data.env.typed_exprs
     }
 
     pub fn types(&self) -> &HashMap<ExprID, TypedExpr> {
-        &self.phase_data.typed_exprs
+        &self.phase_data.env.typed_exprs
+    }
+
+    pub fn type_defs(&self) -> TypeDefs {
+        self.phase_data.env.types.clone()
+    }
+
+    pub fn type_def(&mut self, id: &SymbolID) -> Option<&mut TypeDef> {
+        self.phase_data.env.types.get_mut(id)
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {
-        self.phase_data.typed_exprs.get_mut(&id).unwrap().ty = ty;
+        self.phase_data.env.typed_exprs.get_mut(&id).unwrap().ty = ty;
     }
 
     pub fn type_for(&self, id: ExprID) -> Ty {
-        self.phase_data.typed_exprs.get(&id).unwrap().ty.clone()
+        self.phase_data.env.typed_exprs.get(&id).unwrap().ty.clone()
     }
 
     pub fn type_from_symbol(&self, symbol_id: &SymbolID) -> Option<Ty> {
@@ -129,6 +134,17 @@ impl SourceFile<Typed> {
         }
 
         None
+    }
+
+    pub fn constraints(&self) -> Vec<Constraint> {
+        self.phase_data.env.constraints.clone()
+    }
+
+    pub fn export(self) -> (SymbolTable, TypeDefs, Scope) {
+        let symbols = self.phase_data.symbol_table;
+        let type_defs = self.phase_data.env.types;
+        let scope = self.phase_data.env.scopes[0].clone();
+        (symbols, type_defs, scope)
     }
 }
 

@@ -7,6 +7,7 @@ use crate::{
     match_builtin,
     name::Name,
     parser::ExprID,
+    prelude::PRELUDE,
     source_file::SourceFile,
 };
 
@@ -21,7 +22,7 @@ pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
-pub struct TypeVarID(pub u32, pub TypeVarKind);
+pub struct TypeVarID(pub i32, pub TypeVarKind);
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum TypeVarKind {
@@ -81,11 +82,22 @@ pub struct TypeChecker;
 impl TypeChecker {
     pub fn infer(
         &self,
-        mut source_file: SourceFile<NameResolved>,
-    ) -> Result<(SourceFile<Typed>, Vec<Constraint>, TypeDefs), TypeError> {
-        let root_ids = source_file.root_ids();
-        // Use a raw pointer to the source_file to avoid borrow checker issues
+        source_file: SourceFile<NameResolved>,
+    ) -> Result<SourceFile<Typed>, TypeError> {
         let mut env = Environment::new();
+
+        // Just import the prelude
+        env.import_prelude(&PRELUDE.types, &PRELUDE.schemes);
+
+        self.infer_without_prelude(env, source_file)
+    }
+
+    pub fn infer_without_prelude(
+        &self,
+        mut env: Environment,
+        mut source_file: SourceFile<NameResolved>,
+    ) -> Result<SourceFile<Typed>, TypeError> {
+        let root_ids = source_file.root_ids();
 
         self.hoist_enums(&root_ids, &mut env, &mut source_file)?;
         self.hoist_functions(&root_ids, &mut env, &source_file);
@@ -95,16 +107,8 @@ impl TypeChecker {
             typed_roots.push(self.infer_node(id, &mut env, &None, &source_file)?)
         }
 
-        let typed_exprs = env.typed_exprs;
-        let types = env.types;
-        let constraints = env.constraints;
-
         // Now it's safe to move source_file since env is dropped before this line
-        Ok((
-            source_file.to_typed(typed_roots, typed_exprs, types.clone()),
-            constraints,
-            types,
-        ))
+        Ok(source_file.to_typed(typed_roots, env))
     }
 
     pub fn infer_node(
@@ -524,6 +528,7 @@ impl TypeChecker {
                 env.typed_exprs.insert(id, typed_expr.clone());
                 Ok(typed_expr)
             }
+            Expr::Variable(Name::Raw(_), _) => return Err(TypeError::Unresolved),
             _ => panic!("Unhandled expr in type checker: {:?}", expr),
         };
 
@@ -544,6 +549,7 @@ impl TypeChecker {
             Pattern::LiteralTrue => todo!(),
             Pattern::LiteralFalse => todo!(),
             Pattern::Bind(name) => {
+                log::info!("inferring bind pattern: {:?}", name);
                 if let Name::Resolved(symbol_id, _) = name {
                     // Use the expected type for this binding
                     let scheme = env.generalize(expected);
@@ -557,48 +563,63 @@ impl TypeChecker {
                 ..
             } => {
                 // The expected type should be an Enum type
-                if let Ty::Enum(enum_id, type_args) = expected {
-                    // Look up the enum definition to find this variant
-                    if let Some(TypeDef::Enum(enum_def)) = env.types.get(enum_id) {
-                        // Find the variant by name
-                        if let Some(variant) = enum_def.variants.iter().find(|v| {
-                            // Match variant name (comparing the raw string)
-                            if let Name::Resolved(_, name_str) = variant_name {
-                                v.name == *name_str
-                            } else {
-                                false
-                            }
-                        }) {
-                            // Now we have the variant definition and the concrete type arguments
-                            // We need to substitute the enum's type parameters with the actual type args
 
-                            // Create substitution map: enum type param -> concrete type arg
-                            let mut substitutions = HashMap::new();
-                            for (param_ty, arg_ty) in
-                                enum_def.type_parameters.iter().zip(type_args.iter())
-                            {
-                                if let Ty::TypeVar(param_id) = param_ty {
-                                    substitutions.insert(param_id.clone(), arg_ty.clone());
+                // if let Ty::Enum(enum_id, type_args) =
+                match expected {
+                    Ty::Enum(enum_id, type_args) => {
+                        // Look up the enum definition to find this variant
+                        if let Some(TypeDef::Enum(enum_def)) = env.types.get(enum_id) {
+                            // Find the variant by name
+                            if let Some(variant) = enum_def.variants.iter().find(|v| {
+                                // Match variant name (comparing the raw string)
+                                if let Name::Raw(name_str) = variant_name {
+                                    v.name == *name_str
+                                } else {
+                                    false
                                 }
-                            }
+                            }) {
+                                // Now we have the variant definition and the concrete type arguments
+                                // We need to substitute the enum's type parameters with the actual type args
 
-                            // Apply substitutions to get concrete field types
-                            let concrete_field_types: Vec<Ty> = variant
-                                .values
-                                .iter()
-                                .map(|field_ty| {
-                                    env.substitute_ty_with_map(field_ty.clone(), &substitutions)
-                                })
-                                .collect();
+                                // Create substitution map: enum type param -> concrete type arg
+                                let mut substitutions = HashMap::new();
+                                for (param_ty, arg_ty) in
+                                    enum_def.type_parameters.iter().zip(type_args.iter())
+                                {
+                                    if let Ty::TypeVar(param_id) = param_ty {
+                                        substitutions.insert(param_id.clone(), arg_ty.clone());
+                                    }
+                                }
 
-                            // Now match field patterns with their concrete types
-                            for (field_pattern, field_ty) in
-                                fields.iter().zip(concrete_field_types.iter())
-                            {
-                                self.infer_pattern(field_pattern, env, field_ty);
+                                // Apply substitutions to get concrete field types
+                                let concrete_field_types: Vec<Ty> = variant
+                                    .values
+                                    .iter()
+                                    .map(|field_ty| {
+                                        env.substitute_ty_with_map(field_ty.clone(), &substitutions)
+                                    })
+                                    .collect();
+
+                                // Now match field patterns with their concrete types
+                                for (field_pattern, field_ty) in
+                                    fields.iter().zip(concrete_field_types.iter())
+                                {
+                                    self.infer_pattern(field_pattern, env, field_ty);
+                                }
                             }
                         }
                     }
+                    Ty::TypeVar(_) => {
+                        // The expected type is still a type variable, so we can't look up variant info yet
+                        // Just bind any field patterns to fresh type variables
+                        for field_pattern in fields {
+                            let field_ty = Ty::TypeVar(env.new_type_variable(
+                                TypeVarKind::PatternBind(Name::Raw("field".into())),
+                            ));
+                            self.infer_pattern(field_pattern, env, &field_ty);
+                        }
+                    }
+                    _ => panic!("Unhandled pattern variant: {:?}", pattern),
                 }
             }
         }
@@ -663,7 +684,7 @@ impl TypeChecker {
 
                         // Register the constructor in the environment
                         let scheme = env.generalize(&constructor_ty);
-                        env.declare(constructor_symbol, scheme);
+                        env.declare_in_parent(constructor_symbol, scheme);
 
                         env.typed_exprs.insert(
                             expr_id,
@@ -743,13 +764,13 @@ mod tests {
 
     fn check(code: &'static str) -> SourceFile<Typed> {
         let parsed = parse(code).unwrap();
-        let resolver = NameResolver::new();
+        let resolver = NameResolver::default();
         let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let (mut typed, constraints, types) = checker.infer(resolved).unwrap();
-        let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, types);
+        let checker = TypeChecker::default();
+        let mut inferred = checker.infer(resolved).unwrap();
+        let mut constraint_solver = ConstraintSolver::new(&mut inferred);
         constraint_solver.solve().unwrap();
-        typed
+        inferred
     }
 
     #[test]
@@ -988,12 +1009,18 @@ mod tests {
 
         assert_eq!(
             checker.type_for(checker.root_ids()[0]),
-            Ty::Enum(SymbolID(1), vec![])
+            Ty::Enum(SymbolID::at(1), vec![])
         );
 
         // Check the variants
-        assert_eq!(checker.type_for(0), Ty::EnumVariant(SymbolID(1), vec![]));
-        assert_eq!(checker.type_for(1), Ty::EnumVariant(SymbolID(1), vec![]));
+        assert_eq!(
+            checker.type_for(0),
+            Ty::EnumVariant(SymbolID::at(1), vec![])
+        );
+        assert_eq!(
+            checker.type_for(1),
+            Ty::EnumVariant(SymbolID::at(1), vec![])
+        );
     }
 
     #[test]
@@ -1008,15 +1035,18 @@ mod tests {
 
         assert_eq!(
             checker.type_for(checker.root_ids()[0]),
-            Ty::Enum(SymbolID(1), vec![])
+            Ty::Enum(SymbolID::at(1), vec![])
         );
 
         // Check variant types
         assert_eq!(
             checker.type_for(1),
-            Ty::EnumVariant(SymbolID(1), vec![Ty::Int]),
+            Ty::EnumVariant(SymbolID::at(1), vec![Ty::Int]),
         );
-        assert_eq!(checker.type_for(2), Ty::EnumVariant(SymbolID(1), vec![]));
+        assert_eq!(
+            checker.type_for(2),
+            Ty::EnumVariant(SymbolID::at(1), vec![])
+        );
     }
 
     #[test]
@@ -1032,7 +1062,7 @@ mod tests {
         let enum_ty = checker.type_for(checker.root_ids()[0]);
         match enum_ty {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID(1));
+                assert_eq!(symbol_id, SymbolID::at(1));
                 assert_eq!(generics.len(), 1);
                 // Should be a type variable for T
                 assert!(matches!(generics[0], Ty::TypeVar(_)));
@@ -1055,7 +1085,7 @@ mod tests {
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(checker.root_ids()[1]);
-        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![]));
+        assert_eq!(call_result, Ty::Enum(SymbolID::at(1), vec![]));
     }
 
     #[test]
@@ -1074,7 +1104,7 @@ mod tests {
         let call1 = checker.type_for(checker.root_ids()[1]);
         match call1 {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID(1));
+                assert_eq!(symbol_id, SymbolID::at(1));
                 assert_eq!(generics, vec![Ty::Int]);
             }
             _ => panic!("Expected Option<Int>, got {:?}", call1),
@@ -1084,7 +1114,7 @@ mod tests {
         let call2 = checker.type_for(checker.root_ids()[2]);
         match call2 {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID(1));
+                assert_eq!(symbol_id, SymbolID::at(1));
                 assert_eq!(generics, vec![Ty::Float]);
             }
             _ => panic!("Expected Option<Float>, got {:?}", call2),
@@ -1110,13 +1140,13 @@ mod tests {
         let result_ty = checker.type_for(checker.root_ids()[2]);
         match result_ty {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID(3)); // Result enum
+                assert_eq!(symbol_id, SymbolID::at(3)); // Result enum
                 assert_eq!(generics.len(), 2);
 
                 // First generic should be Option<Int>
                 match &generics[0] {
                     Ty::Enum(opt_id, opt_generics) => {
-                        assert_eq!(*opt_id, SymbolID(1)); // Option enum
+                        assert_eq!(*opt_id, SymbolID::at(1)); // Option enum
                         assert_eq!(opt_generics, &vec![Ty::Int]);
                     }
                     _ => panic!("Expected Option<Int> as first generic"),
@@ -1148,7 +1178,7 @@ mod tests {
         match func_ty {
             Ty::Func(params, ret) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::Enum(SymbolID(1), vec![])); // Bool
+                assert_eq!(params[0], Ty::Enum(SymbolID::at(1), vec![])); // Bool
                 assert_eq!(*ret, Ty::Int);
             }
             _ => panic!("Expected function type, got {:?}", func_ty),
@@ -1176,7 +1206,7 @@ mod tests {
         match func_ty {
             Ty::Func(params, ret) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::Enum(SymbolID(1), vec![Ty::Int])); // Option<Int>
+                assert_eq!(params[0], Ty::Enum(SymbolID::at(1), vec![Ty::Int])); // Option<Int>
                 assert_eq!(*ret, Ty::Int);
             }
             _ => panic!("Expected function type, got {:?}", func_ty),
@@ -1196,7 +1226,7 @@ mod tests {
         let enum_ty = checker.type_for(checker.root_ids()[0]);
         match enum_ty {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID(1));
+                assert_eq!(symbol_id, SymbolID::at(1));
                 assert_eq!(generics.len(), 1);
             }
             _ => panic!("Expected List<T> type, got {:?}", enum_ty),
@@ -1218,11 +1248,11 @@ mod tests {
         let cons_variant = checker.type_for(4);
         match cons_variant {
             Ty::EnumVariant(enum_id, field_types) => {
-                assert_eq!(enum_id, SymbolID(1));
+                assert_eq!(enum_id, SymbolID::at(1));
                 assert_eq!(field_types.len(), 2);
                 // Second field should be List<T> (recursive reference)
                 match &field_types[1] {
-                    Ty::Enum(list_id, _) => assert_eq!(*list_id, SymbolID(1)),
+                    Ty::Enum(list_id, _) => assert_eq!(*list_id, SymbolID::at(1)),
                     _ => panic!("Expected recursive List type"),
                 }
             }
@@ -1317,7 +1347,7 @@ mod tests {
         );
 
         let call_result = checker.type_for(checker.root_ids()[2]);
-        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![])); // Bool
+        assert_eq!(call_result, Ty::Enum(SymbolID::at(1), vec![])); // Bool
     }
 
     #[test]
@@ -1335,7 +1365,7 @@ mod tests {
         );
 
         let call_result = checker.type_for(checker.root_ids()[2]);
-        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![Ty::Int])); // Option<Int>
+        assert_eq!(call_result, Ty::Enum(SymbolID::at(1), vec![Ty::Int])); // Option<Int>
     }
 
     #[test]
@@ -1358,12 +1388,44 @@ mod tests {
         match func_ty {
             Ty::Func(params, ret) => {
                 // Input: Either<Int, Float>
-                assert_eq!(params[0], Ty::Enum(SymbolID(1), vec![Ty::Int, Ty::Float]));
+                assert_eq!(
+                    params[0],
+                    Ty::Enum(SymbolID::at(1), vec![Ty::Int, Ty::Float])
+                );
                 // Output: Either<Float, Int>
-                assert_eq!(*ret, Ty::Enum(SymbolID(1), vec![Ty::Float, Ty::Int]));
+                assert_eq!(*ret, Ty::Enum(SymbolID::at(1), vec![Ty::Float, Ty::Int]));
             }
             _ => panic!("Expected function type"),
         }
+    }
+
+    #[test]
+    fn checks_builtin_optional() {
+        let checker = check(
+            "
+        let x = Optional.some(42)
+        let y = Optional.none
+        
+        match x {
+            .some(val) -> val
+            .none -> 0
+        }
+        ",
+        );
+
+        // x should be Optional<Int>
+        let x_ty = checker.type_for(checker.root_ids()[0]);
+        match x_ty {
+            Ty::Enum(symbol_id, generics) => {
+                assert_eq!(symbol_id, SymbolID::at(-3)); // Optional's ID
+                assert_eq!(generics, vec![Ty::Int]);
+            }
+            _ => panic!("Expected Optional<Int>, got {:?}", x_ty),
+        }
+
+        // The match should return Int
+        let match_ty = checker.type_for(checker.root_ids()[2]);
+        assert_eq!(match_ty, Ty::Int);
     }
 }
 

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::{SourceFile, SymbolID, Typed, parser::ExprID};
+use crate::{SourceFile, SymbolID, Typed, environment::TypeDef, parser::ExprID};
 
 use super::{
-    environment::{EnumVariant, TypeDef},
-    type_checker::{Ty, TypeDefs, TypeVarID},
+    environment::EnumVariant,
+    type_checker::{Ty, TypeVarID},
 };
 
 #[derive(Debug)]
@@ -27,20 +27,14 @@ pub enum Constraint {
 
 pub struct ConstraintSolver<'a> {
     source_file: &'a mut SourceFile<Typed>,
-    types: TypeDefs,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(
-        source_file: &'a mut SourceFile<Typed>,
-        constraints: Vec<Constraint>,
-        types: TypeDefs,
-    ) -> Self {
+    pub fn new(source_file: &'a mut SourceFile<Typed>) -> Self {
         Self {
+            constraints: source_file.constraints().clone(),
             source_file,
-            constraints,
-            types,
         }
     }
 
@@ -139,7 +133,7 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Ty {
         // 1. Get the EnumDef to find its declared (formal) type parameters.
         // These formal parameters are the Ty::TypeVar created during `hoist_enums`.
-        let enum_def = match self.types.get(enum_id) {
+        let enum_def = match self.source_file.type_def(enum_id) {
             Some(TypeDef::Enum(ed)) => ed,
             _ => panic!(
                 "EnumDef not found for {:?} during variant constructor creation",
@@ -200,8 +194,8 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    fn find_variant(&self, enum_id: &SymbolID, name: &String) -> Option<EnumVariant> {
-        let Some(TypeDef::Enum(enum_def)) = self.types.get(enum_id) else {
+    fn find_variant(&mut self, enum_id: &SymbolID, name: &String) -> Option<EnumVariant> {
+        let Some(TypeDef::Enum(enum_def)) = self.source_file.type_def(enum_id) else {
             return None;
         };
         log::debug!("Variants: {:?}", enum_def.variants);
