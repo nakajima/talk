@@ -186,7 +186,7 @@ impl Environment {
     // Helper methods for enum definitions
     pub fn register_enum(&mut self, def: EnumDef) {
         self.types
-            .insert(def.clone().name.unwrap().into(), TypeDef::Enum(def));
+            .insert(def.clone().name.unwrap(), TypeDef::Enum(def));
     }
 
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {

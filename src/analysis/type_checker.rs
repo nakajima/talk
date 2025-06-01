@@ -740,7 +740,7 @@ impl TypeChecker {
                         variants.push(ty);
                         variant_defs.push(EnumVariant {
                             name: name_str.to_string(),
-                            values: values,
+                            values,
                             constructor_symbol,
                         });
                     } else {
@@ -817,7 +817,7 @@ mod tests {
         let parsed = parse(code).unwrap();
         let resolver = NameResolver::default();
         let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker::default();
+        let checker = TypeChecker;
         let mut inferred = checker.infer(resolved).unwrap();
         let mut constraint_solver = ConstraintSolver::new(&mut inferred);
         constraint_solver.solve().unwrap();

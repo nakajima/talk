@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{SourceFile, SymbolID, Typed, environment::TypeDef, parser::ExprID};
 
@@ -72,14 +72,14 @@ impl<'a> ConstraintSolver<'a> {
 
                 // Look for matching constructors based on the result_ty
                 match &result_ty {
-                    Ty::Func(arg_tys, ret_ty) => {
+                    Ty::Func(_arg_tys, ret_ty) => {
                         // This is a constructor call like .some(123)
                         // Look for enum constructors named member_name that take arg_tys and return 
                         // something compatible with ret_ty
 
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
                             // Look up the enum and find the variant
-                            if let Some(enum_info) = self.source_file.type_from_symbol(enum_id) {
+                            if let Some(_enum_info) = self.source_file.type_from_symbol(enum_id) {
                                 if let Some(variant_info) = self.find_variant(enum_id, &member_name)
                                 {
                                     // Create the constructor type for this variant
@@ -99,7 +99,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     Ty::Enum(enum_id, _) => {
                         // This is a valueless constructor like .none
-                        if let Some(enum_info) = self.source_file.type_from_symbol(enum_id) {
+                        if let Some(_enum_info) = self.source_file.type_from_symbol(enum_id) {
                             if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
                                 if variant_info.values.is_empty() {
                                     // This is a valueless variant, unify with the enum type directly
@@ -130,7 +130,7 @@ impl<'a> ConstraintSolver<'a> {
                                 log::debug!("Variant info: {:?}", variant_info);
 
                                 let variant_ty = self.create_variant_constructor_type(
-                                    &enum_id,
+                                    enum_id,
                                     generics,
                                     &variant_info,
                                     substitutions,
@@ -225,7 +225,7 @@ impl<'a> ConstraintSolver<'a> {
         // 4. The return type of the constructor is the enum type itself, with its actual instance generics.
         // These instance_generics should also be fully resolved using global substitutions.
         let constructor_return_ty = Ty::Enum(
-            enum_id.clone(),
+            *enum_id,
             instance_generics
                 .iter()
                 .map(|g_ty| Self::apply(g_ty, substitutions))
@@ -322,8 +322,8 @@ impl<'a> ConstraintSolver<'a> {
         log::trace!("Unifying: {:?} and {:?}", lhs, rhs);
 
         match (
-            Self::apply(&lhs, &substitutions),
-            Self::apply(&rhs, &substitutions),
+            Self::apply(lhs, substitutions),
+            Self::apply(rhs, substitutions),
         ) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),

@@ -96,7 +96,7 @@ impl Lexer {
                     }
                 }
 
-                return self.make(Underscore);
+                self.make(Underscore)
             }
             'a'..='z' | 'A'..='Z' => {
                 let ident = self.identifier(self.current - 1);

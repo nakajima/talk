@@ -209,7 +209,7 @@ impl Parser {
             return Ok(expr::Pattern::Variant {
                 enum_name: Some(Name::Raw(name)),
                 variant_name: Name::Raw(variant_name),
-                fields: fields,
+                fields,
             });
         }
 
@@ -229,7 +229,7 @@ impl Parser {
             return Ok(expr::Pattern::Variant {
                 enum_name: None,
                 variant_name: Name::Raw(variant_name),
-                fields: fields,
+                fields,
             });
         }
 
@@ -312,7 +312,7 @@ impl Parser {
         self.consume(TokenKind::Dot)?;
         let (name, _) = self.try_identifier().unwrap();
 
-        let member = self.add_expr(Member(None, name.into()))?;
+        let member = self.add_expr(Member(None, name))?;
         if self.did_match(TokenKind::LeftParen)? {
             self.skip_newlines();
             self.call(can_assign, member)

@@ -24,7 +24,7 @@ fn compile_prelude() -> Prelude {
     let source = load_stdlib_module("Optional").unwrap();
     let parsed = parse(source).unwrap();
     let resolved = NameResolver::new().resolve(parsed);
-    let checker = TypeChecker::default();
+    let checker = TypeChecker;
     let mut inferred = checker
         .infer_without_prelude(Environment::new(), resolved)
         .unwrap();
