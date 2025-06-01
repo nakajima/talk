@@ -276,8 +276,54 @@ impl TypeChecker {
 
                 Ok(typed_expr)
             }
-            Expr::Func(name, params, body, ret) => {
+            Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
+                let mut inferred_args = vec![];
+                for arg in args {
+                    inferred_args.push(self.infer_node(*arg, env, expected, source_file)?.ty);
+                }
+
+                let inferred_ret = self.infer_node(*ret, env, expected, source_file)?.ty;
+
+                let ty = Ty::Func(inferred_args, Box::new(inferred_ret));
+
+                let typed_expr = TypedExpr {
+                    expr: expr.clone(),
+                    ty,
+                };
+
+                env.typed_exprs.insert(id, typed_expr.clone());
+
+                Ok(typed_expr)
+            }
+            Expr::Func(name, generics, params, body, ret) => {
                 let mut func_var = None;
+
+                if let Some(FuncName::Resolved(symbol_id)) = name {
+                    let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
+                    func_var = Some(type_var.clone());
+                    let scheme = env.generalize(&Ty::TypeVar(type_var));
+                    env.declare(*symbol_id, scheme);
+                    log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
+                }
+
+                env.start_scope();
+
+                // Infer generic type parameters
+                let mut generic_vars = vec![];
+                for generic_id in generics {
+                    let ty = self.infer_node(*generic_id, env, &None, source_file)?.ty;
+                    generic_vars.push(ty);
+
+                    // If this is a type parameter declaration, we need to declare it in the environment
+                    if let Expr::TypeRepr(Name::Resolved(symbol_id, _), _, true) =
+                        source_file.get(*generic_id).unwrap()
+                    {
+                        // The type was already created by infer_node, so we just need to get it
+                        if let Some(typed_expr) = env.typed_exprs.get(generic_id) {
+                            env.declare(*symbol_id, Scheme::new(typed_expr.ty.clone(), vec![]));
+                        }
+                    }
+                }
 
                 let expected_body_ty = if let Some(ret) = ret {
                     Some(self.infer_node(*ret, env, &None, source_file)?.ty)
@@ -290,16 +336,6 @@ impl TypeChecker {
                     .map(|repr| self.infer_node(*repr, env, &None, source_file))
                     .transpose()
                     .unwrap_or(None);
-
-                if let Some(FuncName::Resolved(symbol_id)) = name {
-                    let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
-                    func_var = Some(type_var.clone());
-                    let scheme = env.generalize(&Ty::TypeVar(type_var));
-                    env.declare(*symbol_id, scheme);
-                    log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
-                }
-
-                env.start_scope();
 
                 let mut param_vars: Vec<Ty> = vec![];
                 for expr_opt in params.iter() {
@@ -477,7 +513,15 @@ impl TypeChecker {
                         // Unqualified: .some
                         // Create a type variable that will be constrained later
                         let member_var = env.new_type_variable(TypeVarKind::Member);
+
+                        env.constraints.push(Constraint::UnqualifiedMember(
+                            id,
+                            member_name.to_string(),
+                            Ty::TypeVar(member_var.clone()),
+                        ));
+
                         let typed_expr = TypedExpr::new(expr, Ty::TypeVar(member_var));
+
                         env.typed_exprs.insert(id, typed_expr.clone());
                         Ok(typed_expr)
                     }
@@ -734,7 +778,13 @@ impl TypeChecker {
         for id in root_ids.iter() {
             let expr = source_file.get(*id).unwrap().clone();
 
-            if let Expr::Func(Some(FuncName::Resolved(symbol_id)), ref _params, _body, _ret) = expr
+            if let Expr::Func(
+                Some(FuncName::Resolved(symbol_id)),
+                ref _generics,
+                ref _params,
+                _body,
+                _ret,
+            ) = expr
             {
                 let fn_var =
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
@@ -755,6 +805,7 @@ mod tests {
         SourceFile, SymbolID, Typed,
         constraint_solver::ConstraintSolver,
         expr::Expr,
+        name::Name,
         name_resolver::NameResolver,
         parser::parse,
         type_checker::{Ty, TypeVarID, TypeVarKind},
@@ -1427,6 +1478,73 @@ mod tests {
         let match_ty = checker.type_for(checker.root_ids()[2]);
         assert_eq!(match_ty, Ty::Int);
     }
+
+    #[test]
+    fn checks_polymorphic_match() {
+        let checker = check(
+            "
+            func map<U, T>(opt: T?, f: (T) -> U) -> U? {
+                match opt {
+                    .some(value) -> .some(f(value))
+                    .none -> .none
+                }
+            }
+
+            map(.some(123), func(foo) { foo })
+            ",
+        );
+
+        // Should type check without errors - polymorphic function
+        // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
+        let Ty::Func(args, ret) = checker.type_for(checker.root_ids()[0]) else {
+            panic!("did not get func")
+        };
+
+        assert_eq!(
+            args[0],
+            Ty::Enum(
+                SymbolID(1),
+                vec![Ty::TypeVar(TypeVarID(
+                    4,
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::at(3), "T".into()))
+                ))]
+            )
+        );
+        assert_eq!(
+            args[1],
+            Ty::Func(
+                vec![Ty::TypeVar(TypeVarID(
+                    4,
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::at(3), "T".into()))
+                ))],
+                Ty::TypeVar(TypeVarID(
+                    3,
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::at(2), "U".into()))
+                ))
+                .into()
+            )
+        );
+        assert_eq!(
+            ret,
+            Ty::Enum(
+                SymbolID(1),
+                vec![Ty::TypeVar(TypeVarID(
+                    3,
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID(6), "U".into()))
+                ))]
+            )
+            .into()
+        );
+
+        let call_result = checker.type_for(checker.root_ids()[1]);
+        match call_result {
+            Ty::Enum(symbol_id, generics) => {
+                assert_eq!(symbol_id, SymbolID::at(-3)); // Optional's ID
+                assert_eq!(generics, vec![Ty::Int]);
+            }
+            _ => panic!("Expected Optional<Int>, got {:?}", call_result),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1447,33 +1565,5 @@ mod pending {
     //     let mut constraint_solver = ConstraintSolver::new(&mut typed, constraints, env);
     //     constraint_solver.solve().unwrap();
     //     typed
-    // }
-
-    // #[test]
-    // fn checks_polymorphic_match() {
-    //     let checker = check(
-    //         "
-    //         enum Option<T> {
-    //             case some(T), none
-    //         }
-    //         func map<U>(opt: Option<T>, f: T -> U) -> Option<U> {
-    //             match opt {
-    //                 .some(value) -> some(f(value))
-    //                 .none -> none
-    //             }
-    //         }
-    //         ",
-    //     );
-
-    //     // Should type check without errors - polymorphic function
-    //     // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
-    //     let func_ty = checker.type_for(checker.root_ids()[1]);
-    //     match func_ty {
-    //         Ty::Func(params, _ret) => {
-    //             assert_eq!(params.len(), 2);
-    //             // Complex assertion for polymorphic types would go here
-    //         }
-    //         _ => panic!("Expected function type, got {:?}", func_ty),
-    //     }
     // }
 }

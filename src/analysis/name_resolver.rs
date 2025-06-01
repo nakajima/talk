@@ -69,17 +69,20 @@ impl NameResolver {
 
         // 1) Hoist all funcs in this block before any recursion
         for &id in &node_ids {
-            if let Func(Some(FuncName::Token(name)), params, body, ret) =
+            if let Func(Some(FuncName::Token(name)), generics, params, body, ret) =
                 source_file.get(id).unwrap().clone()
             {
                 let symbol_id = self.declare(name.clone(), SymbolKind::Func, id);
 
-                if let Some(ret) = ret {
-                    self.resolve_nodes(vec![ret], source_file)
-                };
+                // if let Some(ret) = ret {
+                //     self.resolve_nodes(vec![ret], source_file)
+                // };
+
+                // self.resolve_nodes(generics.clone(), source_file);
 
                 source_file.nodes[id as usize] = Func(
                     Some(FuncName::Resolved(symbol_id)),
+                    generics,
                     params.to_vec(),
                     body,
                     ret,
@@ -139,8 +142,10 @@ impl NameResolver {
                     self.resolve_nodes(items.to_vec(), source_file);
                     self.end_scope();
                 }
-                Func(_name, params, body, _ret) => {
+                Func(_name, generics, params, body, ret) => {
                     self.start_scope();
+
+                    self.resolve_nodes(generics, source_file);
 
                     for param in params.clone() {
                         let Some(Parameter(Name::Raw(name), _)) = source_file.get(param) else {
@@ -152,8 +157,12 @@ impl NameResolver {
 
                     let mut to_resolve = params.clone();
                     to_resolve.push(body);
-                    self.resolve_nodes(to_resolve, source_file);
 
+                    if let Some(ret) = ret {
+                        to_resolve.push(ret);
+                    }
+
+                    self.resolve_nodes(to_resolve, source_file);
                     self.end_scope();
                 }
                 Parameter(name, ty_repr) => {
@@ -218,6 +227,10 @@ impl NameResolver {
 
                     // Recursively resolve any type arguments within this TypeRepr.
                     self.resolve_nodes(generics, source_file);
+                }
+                FuncTypeRepr(args, ret, _) => {
+                    self.resolve_nodes(args, source_file);
+                    self.resolve_nodes(vec![ret], source_file);
                 }
                 EnumDecl(name, generics, body) => {
                     match name {
@@ -419,7 +432,7 @@ mod tests {
         let tree = resolve("func(x) { x }\n");
         let root = tree.roots()[0].unwrap();
 
-        if let Func(_, params, body_id, _ret) = root {
+        if let Func(_, _, params, body_id, _ret) = root {
             assert_eq!(params.len(), 1);
             let x_param = tree.get(params[0]).unwrap();
             assert_eq!(
@@ -447,7 +460,7 @@ mod tests {
         let tree = resolve("func(x, y) { func(x) { x \n y }\nx }\n");
         let outer = tree.roots()[0].unwrap();
         // outer Func has its body as an inner Func
-        let Func(_, _, outer_body_id, _ret) = outer else {
+        let Func(_, _, _, outer_body_id, _ret) = outer else {
             panic!("did not get outer func")
         };
         let Block(outer_body) = &tree.get(*outer_body_id).unwrap() else {
@@ -455,7 +468,7 @@ mod tests {
         };
 
         let inner = tree.get(outer_body[0]).unwrap();
-        let Func(_, _, inner_body_id, _ret) = inner else {
+        let Func(_, _, _, inner_body_id, _ret) = inner else {
             panic!("didn't get inner func")
         };
 

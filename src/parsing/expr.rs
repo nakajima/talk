@@ -70,12 +70,19 @@ pub enum Expr {
         bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
+    FuncTypeRepr(
+        Vec<ExprID>, /* [TypeRepr] args */
+        ExprID,      /* return TypeRepr */
+        bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
+    ),
+
     // A dot thing
     Member(Option<ExprID> /* receiver */, String),
 
     // Function stuff
     Func(
         Option<FuncName>,
+        Vec<ExprID>,
         Vec<ExprID>,    /* params tuple */
         ExprID,         /* body */
         Option<ExprID>, /* return type */

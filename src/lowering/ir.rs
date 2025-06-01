@@ -1,5 +1,9 @@
 use crate::{
-    expr::{Expr, FuncName}, symbol_table::SymbolID, type_checker::Ty, typed_expr::TypedExpr, SourceFile, Typed
+    SourceFile, Typed,
+    expr::{Expr, FuncName},
+    symbol_table::SymbolID,
+    type_checker::Ty,
+    typed_expr::TypedExpr,
 };
 
 /// A minimal IR for our language
@@ -28,7 +32,7 @@ impl Lowerer {
             matches!(
                 expr,
                 TypedExpr {
-                    expr: Expr::Func(Some(FuncName::Main), _, _, _),
+                    expr: Expr::Func(Some(FuncName::Main), _, _, _, _),
                     ..
                 }
             )
@@ -36,7 +40,7 @@ impl Lowerer {
             typed_expr
         } else {
             &TypedExpr::new(
-                Expr::Func(Some(FuncName::Main), vec![], -1, None),
+                Expr::Func(Some(FuncName::Main), vec![], vec![], -1, None),
                 Ty::Func(vec![], Box::new(Ty::Void)),
             )
         };
@@ -48,9 +52,5 @@ impl Lowerer {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn lowers() {
-
-    }
+    fn lowers() {}
 }
-
-

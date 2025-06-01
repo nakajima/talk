@@ -461,6 +461,14 @@ impl Parser {
             None
         };
 
+        let mut generics = vec![];
+        if self.did_match(TokenKind::Less)? {
+            while !self.did_match(TokenKind::Greater)? {
+                generics.push(self.type_repr(true)?);
+                self.consume(TokenKind::Comma).ok();
+            }
+        };
+
         self.consume(TokenKind::LeftParen)?;
 
         let mut params: Vec<ExprID> = vec![];
@@ -499,6 +507,7 @@ impl Parser {
 
         self.add_expr(Expr::Func(
             name.map(|s| s.to_string()).map(FuncName::Token),
+            generics,
             params,
             body,
             ret.transpose()?,
@@ -506,6 +515,18 @@ impl Parser {
     }
 
     fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {
+        if self.did_match(TokenKind::LeftParen)? {
+            // it's a func type repr
+            let mut sig_args = vec![];
+            while !self.did_match(TokenKind::RightParen)? {
+                sig_args.push(self.type_repr(is_type_parameter)?)
+            }
+            // TODO: If there's no arrow we can consider it a tuple?
+            self.consume(TokenKind::Arrow)?;
+            let ret = self.type_repr(is_type_parameter)?;
+            return self.add_expr(FuncTypeRepr(sig_args, ret, is_type_parameter));
+        }
+
         let Some((name, _)) = self.try_identifier() else {
             return Err(ParserError::UnexpectedToken(
                 vec![TokenKind::Identifier("_".to_string())],
@@ -933,7 +954,7 @@ mod tests {
         let parsed = parse("func() { }").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::Func(None, vec![], 0, None));
+        assert_eq!(*expr, Expr::Func(None, vec![], vec![], 0, None));
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
 
@@ -950,7 +971,13 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![0], 2, None)
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![],
+                vec![0],
+                2,
+                None
+            )
         );
     }
 
@@ -961,9 +988,44 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![], 0, None)
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![],
+                vec![],
+                0,
+                None
+            )
         );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
+    }
+
+    #[test]
+    fn parses_func_with_generics() {
+        let parsed = parse(
+            "
+        func greet<T>(t) -> T { t }
+        ",
+        )
+        .unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(
+            *expr,
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![0],
+                vec![1],
+                4,
+                Some(2)
+            )
+        );
+
+        assert_eq!(*parsed.get(1).unwrap(), Expr::Parameter("t".into(), None));
+        assert_eq!(*parsed.get(4).unwrap(), Expr::Block(vec![3]));
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::TypeRepr("T".into(), vec![], false)
+        );
     }
 
     #[test]
@@ -972,13 +1034,25 @@ mod tests {
         assert_eq!(2, parsed.roots().len());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Func(Some(FuncName::Token("hello".to_string())), vec![], 0, None)
+            Expr::Func(
+                Some(FuncName::Token("hello".to_string())),
+                vec![],
+                vec![],
+                0,
+                None
+            )
         );
 
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
-            Expr::Func(Some(FuncName::Token("world".to_string())), vec![], 2, None)
+            Expr::Func(
+                Some(FuncName::Token("world".to_string())),
+                vec![],
+                vec![],
+                2,
+                None
+            )
         );
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
     }
@@ -992,6 +1066,7 @@ mod tests {
             *expr,
             Expr::Func(
                 Some(FuncName::Token("greet".to_string())),
+                vec![],
                 vec![0, 1],
                 2,
                 None
@@ -1005,7 +1080,13 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![1], 2, None)
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![],
+                vec![1],
+                2,
+                None
+            )
         );
 
         assert_eq!(
@@ -1049,6 +1130,7 @@ mod tests {
             *expr,
             Expr::Func(
                 Some(FuncName::Token("fizz".to_string())),
+                vec![],
                 vec![],
                 2,
                 Some(0)
@@ -1285,12 +1367,60 @@ mod tests {
     }
 
     #[test]
+    fn parses_fn_type_repr() {
+        let parsed = parse(
+            "
+        func greet(using: (T) -> Y) {}
+        ",
+        )
+        .unwrap();
+
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(
+            *expr,
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![],
+                vec![3],
+                4,
+                None
+            )
+        );
+
+        assert_eq!(
+            *parsed.get(3).unwrap(),
+            Expr::Parameter("using".into(), Some(2))
+        );
+
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::FuncTypeRepr(vec![0], 1, false)
+        );
+
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::TypeRepr("T".into(), vec![], false)
+        );
+
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            Expr::TypeRepr("Y".into(), vec![], false)
+        );
+    }
+
+    #[test]
     fn converts_question_to_optional_for_type_repr() {
         let parsed = parse("func greet(name: Int?) {}").unwrap();
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(Some(FuncName::Token("greet".to_string())), vec![2], 3, None)
+            Expr::Func(
+                Some(FuncName::Token("greet".to_string())),
+                vec![],
+                vec![2],
+                3,
+                None
+            )
         );
 
         assert_eq!(
