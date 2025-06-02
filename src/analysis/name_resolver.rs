@@ -353,10 +353,11 @@ impl NameResolver {
 
     fn declare(&mut self, name: String, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
         log::trace!(
-            "declaring {} in {:?} at depth {}",
+            "declaring {} in {:?} at depth {} with id: {:?}",
             name,
             self.scopes,
-            self.scopes.len() - 1
+            self.scopes.len() - 1,
+            expr_id
         );
         let symbol_id = self.symbol_table.add(&name, kind, expr_id);
         self.scopes.last_mut().unwrap().insert(name, symbol_id);

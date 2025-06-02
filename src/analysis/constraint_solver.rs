@@ -15,9 +15,9 @@ pub enum ConstraintError {
 
 #[derive(Debug, Clone)]
 pub enum Constraint {
-    Equality(ExprID, Ty, Ty),
-    MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
-    UnqualifiedMember(ExprID, String, Ty), // member name, expected type
+    Equality(Ty, Ty),
+    MemberAccess(Ty, String, Ty),  // receiver_ty, member_name, result_ty
+    UnqualifiedMember(String, Ty), // member name, expected type
 }
 
 pub struct ConstraintSolver<'a> {
@@ -54,7 +54,7 @@ impl<'a> ConstraintSolver<'a> {
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), ConstraintError> {
         match constraint {
-            Constraint::Equality(node_id, lhs, rhs) => {
+            Constraint::Equality(lhs, rhs) => {
                 let lhs = Self::apply(&lhs, substitutions);
                 let rhs = Self::apply(&rhs, substitutions);
 
@@ -62,10 +62,8 @@ impl<'a> ConstraintSolver<'a> {
                     log::error!("{:?}", err);
                     err
                 })?;
-
-                self.source_file.define(node_id, lhs);
             }
-            Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
+            Constraint::UnqualifiedMember(member_name, result_ty) => {
                 let result_ty = Self::apply(&result_ty, substitutions);
 
                 log::info!("UNQUALIFIED RESULT TY: {:?}", result_ty);
@@ -74,7 +72,7 @@ impl<'a> ConstraintSolver<'a> {
                 match &result_ty {
                     Ty::Func(_arg_tys, ret_ty) => {
                         // This is a constructor call like .some(123)
-                        // Look for enum constructors named member_name that take arg_tys and return 
+                        // Look for enum constructors named member_name that take arg_tys and return
                         // something compatible with ret_ty
 
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
@@ -92,19 +90,26 @@ impl<'a> ConstraintSolver<'a> {
 
                                     // Unify the constructor type with result_ty
                                     Self::unify(&constructor_ty, &result_ty, substitutions)?;
-                                    self.source_file.define(node_id, constructor_ty);
                                 }
                             }
                         }
                     }
-                    Ty::Enum(enum_id, _) => {
+                    Ty::Enum(enum_id, _generics) => {
                         // This is a valueless constructor like .none
-                        if let Some(_enum_info) = self.source_file.type_from_symbol(enum_id) {
+                        if let Some(enum_info) = self.source_file.type_from_symbol(enum_id) {
                             if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
-                                if variant_info.values.is_empty() {
-                                    // This is a valueless variant, unify with the enum type directly
-                                    self.source_file.define(node_id, result_ty.clone());
-                                }
+                                log::warn!(
+                                    "Enum info: {:?}",
+                                    &Self::apply(&enum_info, substitutions)
+                                );
+                                // if variant_info.values.is_empty() {
+                                //     // This is a valueless variant, unify with the enum type directly
+                                //     Self::unify(
+                                //         &result_ty,
+                                //         &Self::apply(&enum_info, substitutions),
+                                //         substitutions,
+                                //     )?;
+                                // }
                             }
                         }
                     }
@@ -113,7 +118,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                 }
             }
-            Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
+            Constraint::MemberAccess(receiver_ty, member_name, result_ty) => {
                 let receiver_ty = Self::apply(&receiver_ty, substitutions);
                 let result_ty = Self::apply(&result_ty, substitutions);
 
@@ -139,7 +144,6 @@ impl<'a> ConstraintSolver<'a> {
                                 // Unify with the result type
                                 Self::unify(&variant_ty, &result_ty, substitutions)?;
                                 Self::normalize_substitutions(substitutions);
-                                self.source_file.define(node_id, variant_ty);
                             } else {
                                 log::debug!("Could not find variant named {:?}", member_name);
                             }
@@ -150,13 +154,8 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     // Future: Handle other receiver types (structs, etc.)
                     _ => {
-                        log::debug!(
-                            "For now just unify with the result type: {:?}, {:?}",
-                            node_id,
-                            result_ty
-                        );
+                        log::debug!("For now just unify with the result type:  {:?}", result_ty);
                         // For now, just unify with the result type
-                        self.source_file.define(node_id, result_ty);
                     }
                 }
             }
@@ -345,6 +344,7 @@ impl<'a> ConstraintSolver<'a> {
                     Err(ConstraintError::OccursConflict)
                 } else {
                     substitutions.insert(v.clone(), ty.clone());
+                    Self::normalize_substitutions(substitutions);
                     Ok(())
                 }
             }
@@ -370,7 +370,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 Ok(())
             }
-            _ => panic!("Type mismatch {:#?} / {:#?}", lhs, rhs),
+            (lhs, rhs) => panic!("Type mismatch {:#?} / {:#?}", lhs, rhs),
         }
     }
 
