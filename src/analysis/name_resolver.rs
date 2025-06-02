@@ -397,14 +397,14 @@ mod tests {
     fn resolves_literal_int_unchanged() {
         let tree = resolve("123");
         let root = tree.roots()[0].unwrap();
-        assert_eq!(root, &LiteralInt("123"));
+        assert_eq!(root, &LiteralInt("123".into()));
     }
 
     #[test]
     fn resolves_literal_float_unchanged() {
         let tree = resolve("3.14");
         let root = tree.roots()[0].unwrap();
-        assert_eq!(root, &LiteralFloat("3.14"));
+        assert_eq!(root, &LiteralFloat("3.14".into()));
     }
 
     #[test]
@@ -510,7 +510,7 @@ mod tests {
             panic!("didnt get assignment")
         };
 
-        assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123"));
+        assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123".into()));
 
         assert_eq!(
             *tree.get(tree.root_ids()[2]).unwrap(),

@@ -140,6 +140,10 @@ impl SourceFile<Typed> {
         self.phase_data.env.constraints.clone()
     }
 
+    pub fn symbol_table(&self) -> SymbolTable {
+        self.phase_data.symbol_table.clone()
+    }
+
     pub fn export(self) -> (SymbolTable, TypeDefs, Scope) {
         let symbols = self.phase_data.symbol_table;
         let type_defs = self.phase_data.env.types;

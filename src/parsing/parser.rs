@@ -13,8 +13,8 @@ use super::{
 pub type ExprID = i32;
 pub type VariableID = u32;
 
-pub struct Parser {
-    pub(crate) lexer: Lexer,
+pub struct Parser<'a> {
+    pub(crate) lexer: Lexer<'a>,
     pub(crate) previous: Option<Token>,
     pub(crate) current: Option<Token>,
     pub(crate) parse_tree: SourceFile,
@@ -31,7 +31,7 @@ pub enum ParserError {
     ExpectedIdentifier(Option<Token>),
 }
 
-pub fn parse(code: &'static str) -> Result<SourceFile, ParserError> {
+pub fn parse<'a>(code: &'a str) -> Result<SourceFile, ParserError> {
     let lexer = Lexer::new(code);
     let mut parser = Parser::new(lexer);
 
@@ -40,8 +40,8 @@ pub fn parse(code: &'static str) -> Result<SourceFile, ParserError> {
     Ok(parser.parse_tree)
 }
 
-impl Parser {
-    pub fn new(lexer: Lexer) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(lexer: Lexer<'a>) -> Self {
         Self {
             lexer,
             previous: None,
@@ -160,7 +160,7 @@ impl Parser {
         if let Some(Token {
             kind: TokenKind::Int(value),
             ..
-        }) = self.current
+        }) = self.current.clone()
         {
             return Ok(expr::Pattern::LiteralInt(value));
         }
@@ -168,7 +168,7 @@ impl Parser {
         if let Some(Token {
             kind: TokenKind::Float(value),
             ..
-        }) = self.current
+        }) = self.current.clone()
         {
             return Ok(expr::Pattern::LiteralFloat(value));
         }
@@ -789,7 +789,7 @@ mod tests {
         let parsed = parse("123").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, LiteralInt("123"));
+        assert_eq!(*expr, LiteralInt("123".into()));
     }
 
     #[test]
@@ -924,7 +924,7 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Unary(TokenKind::Minus, 0));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1"));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1".into()));
     }
 
     #[test]
@@ -933,8 +933,8 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Tuple(vec![0, 1, 2]));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1"));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("2"));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1".into()));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("2".into()));
         assert_eq!(
             *parsed.get(2).unwrap(),
             Expr::Variable(Name::Raw("fizz".to_string()), None)
@@ -1151,7 +1151,7 @@ mod tests {
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, None));
         assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]
@@ -1160,9 +1160,9 @@ mod tests {
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, Some(4)));
         assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123".into()));
         assert_eq!(*parsed.get(4).unwrap(), Expr::Block(vec![3]));
-        assert_eq!(*parsed.get(3).unwrap(), Expr::LiteralInt("456"));
+        assert_eq!(*parsed.get(3).unwrap(), Expr::LiteralInt("456".into()));
     }
 
     #[test]
@@ -1170,7 +1170,7 @@ mod tests {
         let parsed = parse("loop { 123 }").unwrap();
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(None, 1));
         assert_eq!(*parsed.get(1).unwrap(), Expr::Block(vec![0]));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("123"));
+        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]
@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(0), 2));
         assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123"));
+        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]
@@ -1458,12 +1458,12 @@ mod pattern_parsing_tests {
 
     #[test]
     fn parses_literal_int() {
-        assert_eq!(parse_pattern("123"), Pattern::LiteralInt("123"));
+        assert_eq!(parse_pattern("123"), Pattern::LiteralInt("123".into()));
     }
 
     #[test]
     fn parses_literal_float() {
-        assert_eq!(parse_pattern("123."), Pattern::LiteralFloat("123."));
+        assert_eq!(parse_pattern("123."), Pattern::LiteralFloat("123.".into()));
     }
 
     #[test]

@@ -10,9 +10,10 @@ pub mod analysis;
 pub use analysis::*;
 pub mod parsing;
 pub use parsing::*;
+pub mod cli;
 pub mod lowering;
-pub use lowering::*;
 pub mod prelude;
+pub use cli::*;
 
 #[cfg(test)]
 #[ctor::ctor]

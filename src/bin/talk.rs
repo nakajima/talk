@@ -1,0 +1,41 @@
+use clap::{Parser, Subcommand};
+use talk::{
+    constraint_solver::ConstraintSolver, lowering, name_resolver::NameResolver, parser::parse,
+    type_checker::TypeChecker,
+};
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    IR { filename: String },
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    // You can check for the existence of subcommands, and if found use their
+    // matches just as you would the top level cmd
+    match &cli.command {
+        Commands::IR { filename } => {
+            // Read entire file into a String
+            let contents = std::fs::read_to_string(filename).expect("Could not read file");
+
+            let parsed = parse(&contents).unwrap();
+            let resolved = NameResolver::new().resolve(parsed);
+            let mut inferred = TypeChecker::default().infer(resolved).unwrap();
+            let mut solver = ConstraintSolver::new(&mut inferred);
+            solver.solve().unwrap();
+
+            let lowered = lowering::ir::Lowerer::lower(inferred);
+
+            println!("IR: {:#?}", lowered);
+        }
+    }
+}

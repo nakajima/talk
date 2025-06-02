@@ -28,14 +28,14 @@ impl Precedence {
 }
 
 #[allow(clippy::type_complexity)]
-pub struct ParseHandler {
-    pub(crate) prefix: Option<fn(&mut Parser, bool) -> Result<ExprID, ParserError>>,
-    pub(crate) infix: Option<fn(&mut Parser, bool, ExprID) -> Result<ExprID, ParserError>>,
+pub struct ParseHandler<'a> {
+    pub(crate) prefix: Option<fn(&mut Parser<'a>, bool) -> Result<ExprID, ParserError>>,
+    pub(crate) infix: Option<fn(&mut Parser<'a>, bool, ExprID) -> Result<ExprID, ParserError>>,
     pub(crate) precedence: Precedence,
 }
 
-impl ParseHandler {
-    const NONE: ParseHandler = ParseHandler {
+impl<'a> ParseHandler<'a> {
+    const NONE: ParseHandler<'a> = ParseHandler {
         prefix: None,
         infix: None,
         precedence: Precedence::None,
@@ -43,7 +43,7 @@ impl ParseHandler {
 }
 
 impl Precedence {
-    pub const fn handler(token: &Option<Token>) -> Result<ParseHandler, ParserError> {
+    pub const fn handler<'a>(token: &Option<Token>) -> Result<ParseHandler<'a>, ParserError> {
         let token = match token {
             Some(t) => t,
             None => {

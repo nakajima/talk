@@ -10,15 +10,15 @@ pub enum LexerError {
 }
 
 #[derive(Debug)]
-pub struct Lexer {
-    pub code: &'static str,
-    chars: Peekable<Chars<'static>>,
+pub struct Lexer<'a> {
+    pub code: &'a str,
+    chars: Peekable<Chars<'a>>,
     current: usize,
     started: usize,
 }
 
-impl Lexer {
-    pub fn new(code: &'static str) -> Self {
+impl<'a> Lexer<'a> {
+    pub fn new(code: &'a str) -> Self {
         Self {
             code,
             chars: code.chars().peekable(),
@@ -185,9 +185,9 @@ impl Lexer {
         let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
         if is_float {
-            Float(&self.code[start_idx..=end_idx])
+            Float(self.code[start_idx..=end_idx].to_string())
         } else {
-            Int(&self.code[start_idx..=end_idx])
+            Int(self.code[start_idx..=end_idx].to_string())
         }
     }
 
@@ -269,16 +269,16 @@ mod tests {
     #[test]
     fn ints() {
         let mut lexer = Lexer::new("123 4_56");
-        assert_eq!(lexer.next().unwrap().kind, Int("123"));
-        assert_eq!(lexer.next().unwrap().kind, Int("4_56"));
+        assert_eq!(lexer.next().unwrap().kind, Int("123".into()));
+        assert_eq!(lexer.next().unwrap().kind, Int("4_56".into()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
     #[test]
     fn floats() {
         let mut lexer = Lexer::new("12.3 4.56");
-        assert_eq!(lexer.next().unwrap().kind, Float("12.3"));
-        assert_eq!(lexer.next().unwrap().kind, Float("4.56"));
+        assert_eq!(lexer.next().unwrap().kind, Float("12.3".into()));
+        assert_eq!(lexer.next().unwrap().kind, Float("4.56".into()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

@@ -26,8 +26,8 @@ impl FuncName {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     // Literals that must match exactly
-    LiteralInt(&'static str),
-    LiteralFloat(&'static str),
+    LiteralInt(String),
+    LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
 
@@ -52,8 +52,8 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
-    LiteralInt(&'static str),
-    LiteralFloat(&'static str),
+    LiteralInt(String),
+    LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
     Unary(TokenKind, ExprID),

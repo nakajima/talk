@@ -433,7 +433,7 @@ impl TypeChecker {
             }
             Expr::Tuple(_) => todo!(),
             Expr::Unary(_token_kind, _) => todo!(),
-            Expr::Binary(_, _token_kind, _) => todo!(),
+            Expr::Binary(_lhs, _token_kind, _rhs) => todo!(),
             Expr::Block(items) => {
                 env.start_scope();
 
