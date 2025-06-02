@@ -31,7 +31,7 @@ pub enum ParserError {
     ExpectedIdentifier(Option<Token>),
 }
 
-pub fn parse<'a>(code: &'a str) -> Result<SourceFile, ParserError> {
+pub fn parse(code: &str) -> Result<SourceFile, ParserError> {
     let lexer = Lexer::new(code);
     let mut parser = Parser::new(lexer);
 

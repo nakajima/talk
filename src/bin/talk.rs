@@ -29,7 +29,7 @@ fn main() {
 
             let parsed = parse(&contents).unwrap();
             let resolved = NameResolver::new().resolve(parsed);
-            let mut inferred = TypeChecker::default().infer(resolved).unwrap();
+            let mut inferred = TypeChecker.infer(resolved).unwrap();
             let mut solver = ConstraintSolver::new(&mut inferred);
             solver.solve().unwrap();
 
