@@ -13,6 +13,8 @@ pub use parsing::*;
 pub mod cli;
 pub mod lowering;
 pub mod prelude;
+
+#[cfg(not(test))]
 pub use cli::*;
 
 #[cfg(test)]

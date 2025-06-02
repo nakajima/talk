@@ -135,12 +135,14 @@ impl<'a> Parser<'a> {
 
     fn match_block(&mut self) -> Result<Vec<ExprID>, ParserError> {
         self.skip_newlines();
-
+        log::debug!("in match block");
         self.consume(TokenKind::LeftBrace)?;
+        log::debug!("consumed left brace");
 
         let mut items: Vec<ExprID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             let pattern = self.parse_match_pattern()?;
+            log::trace!("parsed pattern: {:?}", pattern);
             let pattern_id = self.add_expr(Pattern(pattern))?;
             self.consume(TokenKind::Arrow)?;
             let body = self.parse_with_precedence(Precedence::Primary)?;
@@ -157,37 +159,61 @@ impl<'a> Parser<'a> {
             return Ok(expr::Pattern::Wildcard);
         }
 
-        if let Some(Token {
-            kind: TokenKind::Int(value),
-            ..
-        }) = self.current.clone()
-        {
-            return Ok(expr::Pattern::LiteralInt(value));
+        match self.current.clone() {
+            Some(Token { kind, .. }) => match kind {
+                TokenKind::Int(value) => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralInt(value));
+                }
+                TokenKind::Float(value) => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralFloat(value));
+                }
+                TokenKind::True => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralTrue);
+                }
+                TokenKind::False => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralFalse);
+                }
+
+                _ => (),
+            },
+            None => (),
         }
 
-        if let Some(Token {
-            kind: TokenKind::Float(value),
-            ..
-        }) = self.current.clone()
-        {
-            return Ok(expr::Pattern::LiteralFloat(value));
-        }
+        // if let Some(Token {
+        //     kind: TokenKind::Int(value),
+        //     ..
+        // }) = &self.current
+        // {
+        //     return Ok(expr::Pattern::LiteralInt(value.clone));
+        // }
 
-        if let Some(Token {
-            kind: TokenKind::True,
-            ..
-        }) = self.current
-        {
-            return Ok(expr::Pattern::LiteralTrue);
-        }
+        // if let Some(Token {
+        //     kind: TokenKind::Float(value),
+        //     ..
+        // }) = self.current.clone()
+        // {
+        //     return Ok(expr::Pattern::LiteralFloat(value));
+        // }
 
-        if let Some(Token {
-            kind: TokenKind::False,
-            ..
-        }) = self.current
-        {
-            return Ok(expr::Pattern::LiteralFalse);
-        }
+        // if let Some(Token {
+        //     kind: TokenKind::True,
+        //     ..
+        // }) = self.current
+        // {
+        //     return Ok(expr::Pattern::LiteralTrue);
+        // }
+
+        // if let Some(Token {
+        //     kind: TokenKind::False,
+        //     ..
+        // }) = self.current
+        // {
+        //     return Ok(expr::Pattern::LiteralFalse);
+        // }
 
         if let Some((name, _)) = self.try_identifier() {
             // It's not an enum variant so it's a bind
@@ -219,9 +245,12 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             };
 
+            log::debug!("unqualified variant");
+
             let mut fields: Vec<expr::Pattern> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
+                    log::trace!("adding arg: {:?}", self.current);
                     fields.push(self.parse_match_pattern()?);
                 }
             }
@@ -668,6 +697,11 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
+        log::trace!(
+            "Parsing {:?} with precedence: {:?}",
+            self.current,
+            precedence
+        );
         self.skip_newlines();
 
         let mut lhs: Option<ExprID> = None;
@@ -1440,7 +1474,7 @@ mod tests {
 
 #[cfg(test)]
 mod pattern_parsing_tests {
-    use crate::{expr::Pattern, lexer::Lexer, name::Name};
+    use crate::{expr::Pattern, lexer::Lexer, name::Name, parser::parse};
 
     use super::Parser;
 
@@ -1491,5 +1525,24 @@ mod pattern_parsing_tests {
                 fields: vec![]
             }
         );
+    }
+
+    #[test]
+    fn parses_code() {
+        let parsed = parse(
+            "
+            enum MyEnum {
+                case val(Int)
+            }
+
+            func test(e: MyEnum) {
+                match e {
+                    .val(1) -> 0
+                }
+            }
+        ",
+        );
+
+        parsed.unwrap();
     }
 }
