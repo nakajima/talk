@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, i32};
 
 use crate::{
     parser::ExprID,
@@ -11,6 +11,7 @@ pub struct SymbolID(pub i32);
 
 impl SymbolID {
     pub const OPTIONAL: SymbolID = SymbolID(1);
+    pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
 
     // Remove the prelude's symbol offset
     pub fn at(index: i32) -> SymbolID {

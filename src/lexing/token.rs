@@ -6,3 +6,11 @@ pub struct Token {
     pub start: usize,
     pub end: usize,
 }
+
+impl Token {
+    pub const GENERATED: Token = Token {
+        kind: TokenKind::Generated,
+        start: 0,
+        end: 0,
+    };
+}

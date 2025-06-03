@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     NameResolved, SymbolID, Typed,
     environment::{EnumVariant, free_type_vars},
-    expr::{Expr, FuncName, Pattern},
+    expr::{Expr, Pattern},
     match_builtin,
     name::Name,
     parser::ExprID,
@@ -427,7 +427,7 @@ impl TypeChecker {
         &self,
         id: ExprID,
         env: &mut Environment,
-        name: &Option<FuncName>,
+        name: &Option<Name>,
         generics: &[ExprID],
         params: &[ExprID],
         body: ExprID,
@@ -437,7 +437,7 @@ impl TypeChecker {
     ) -> Result<Ty, TypeError> {
         let mut func_var = None;
 
-        if let Some(FuncName::Resolved(symbol_id)) = name {
+        if let Some(Name::Resolved(symbol_id, _)) = name {
             let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
             func_var = Some(type_var.clone());
             let scheme = env.generalize(&Ty::TypeVar(type_var));
@@ -521,7 +521,7 @@ impl TypeChecker {
                 func_ty.clone(),
             ));
 
-            if let Some(FuncName::Resolved(symbol_id)) = name {
+            if let Some(Name::Resolved(symbol_id, _)) = name {
                 let scheme = if env.scopes.len() > 1 {
                     Scheme::new(func_ty.clone(), vec![])
                 } else {
@@ -964,7 +964,7 @@ impl TypeChecker {
             let expr = source_file.get(*id).unwrap().clone();
 
             if let Expr::Func(
-                Some(FuncName::Resolved(symbol_id)),
+                Some(Name::Resolved(symbol_id, _)),
                 ref _generics,
                 ref _params,
                 _body,

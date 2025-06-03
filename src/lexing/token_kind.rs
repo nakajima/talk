@@ -57,6 +57,7 @@ pub enum TokenKind {
     Func,
     Let,
     EOF,
+    Generated,
 }
 
 impl Display for TokenKind {

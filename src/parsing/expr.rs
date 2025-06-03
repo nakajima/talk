@@ -1,4 +1,4 @@
-use crate::{symbol_table::SymbolID, token::Token, token_kind::TokenKind};
+use crate::{token::Token, token_kind::TokenKind};
 
 use super::{name::Name, parser::ExprID};
 
@@ -10,18 +10,12 @@ pub struct ExprMeta {
     pub end: Token,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FuncName {
-    Main,
-    Token(String),
-    Resolved(SymbolID),
-}
-
-impl FuncName {
-    pub fn replace(&mut self, func_name: FuncName) {
-        *self = func_name
-    }
-}
+// #[derive(Clone, Debug, PartialEq, Eq)]
+// pub enum FuncName {
+//     Main,
+//     Token(String),
+//     Resolved(SymbolID),
+// }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -86,7 +80,7 @@ pub enum Expr {
 
     // Function stuff
     Func(
-        Option<FuncName>,
+        Option<Name>,
         Vec<ExprID>,
         Vec<ExprID>,    /* params tuple */
         ExprID,         /* body */

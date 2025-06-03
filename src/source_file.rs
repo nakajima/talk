@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    SymbolID, SymbolKind,
+    SymbolID, SymbolInfo, SymbolKind,
     constraint_solver::Constraint,
     environment::{Environment, Scope, TypeDef},
+    lowering::ir::IRFunction,
     symbol_table::SymbolTable,
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
@@ -45,9 +46,15 @@ impl Phase for Typed {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoweredData {
+    pub symbol_table: SymbolTable,
+    pub functions: Vec<IRFunction>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Lowered;
 impl Phase for Lowered {
-    type Data = ();
+    type Data = LoweredData;
 }
 
 #[derive(Default, Debug, Clone)]
@@ -100,6 +107,10 @@ impl SourceFile<NameResolved> {
 }
 
 impl SourceFile<Typed> {
+    pub fn set(&mut self, symbol_id: SymbolID, info: SymbolInfo) {
+        self.phase_data.symbol_table.import(&symbol_id, info);
+    }
+
     pub fn typed_roots(&self) -> &[TypedExpr] {
         &self.phase_data.roots
     }
@@ -108,8 +119,12 @@ impl SourceFile<Typed> {
         &mut self.phase_data.env.typed_exprs
     }
 
-    pub fn types(&self) -> &HashMap<ExprID, TypedExpr> {
+    pub fn typed_exprs(&self) -> &HashMap<ExprID, TypedExpr> {
         &self.phase_data.env.typed_exprs
+    }
+
+    pub fn typed_expr(&self, expr_id: &ExprID) -> Option<TypedExpr> {
+        self.phase_data.env.typed_exprs.get(expr_id).cloned()
     }
 
     pub fn type_defs(&self) -> TypeDefs {
@@ -157,6 +172,31 @@ impl SourceFile<Typed> {
 
     pub fn get_direct_callable(&self, id: &ExprID) -> Option<SymbolID> {
         self.phase_data.env.direct_callables.get(id).copied()
+    }
+
+    pub fn to_lowered(self, functions: Vec<IRFunction>) -> SourceFile<Lowered> {
+        SourceFile {
+            roots: self.roots,
+            nodes: self.nodes,
+            meta: self.meta,
+            phase_data: LoweredData {
+                symbol_table: self.phase_data.symbol_table,
+                functions,
+            },
+        }
+    }
+
+    pub fn symbol_info(&self, symbol_id: &SymbolID) -> &SymbolInfo {
+        self.phase_data
+            .symbol_table
+            .get(symbol_id)
+            .unwrap_or_else(|| panic!("Did not find symbol info for {:?}", symbol_id))
+    }
+}
+
+impl SourceFile<Lowered> {
+    pub fn functions(&self) -> Vec<IRFunction> {
+        self.phase_data.functions.clone()
     }
 }
 

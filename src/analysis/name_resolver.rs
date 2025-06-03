@@ -5,7 +5,6 @@ use crate::SymbolID;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::expr::Expr::*;
-use crate::expr::FuncName;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
@@ -69,7 +68,7 @@ impl NameResolver {
 
         // 1) Hoist all funcs in this block before any recursion
         for &id in &node_ids {
-            if let Func(Some(FuncName::Token(name)), generics, params, body, ret) =
+            if let Func(Some(Name::Raw(name)), generics, params, body, ret) =
                 source_file.get(id).unwrap().clone()
             {
                 let symbol_id = self.declare(name.clone(), SymbolKind::Func, id);
@@ -81,7 +80,7 @@ impl NameResolver {
                 // self.resolve_nodes(generics.clone(), source_file);
 
                 source_file.nodes[id as usize] = Func(
-                    Some(FuncName::Resolved(symbol_id)),
+                    Some(Name::Resolved(symbol_id, name)),
                     generics,
                     params.to_vec(),
                     body,

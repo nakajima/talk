@@ -4,7 +4,7 @@ use super::{
     expr::{
         self,
         Expr::{self, *},
-        ExprMeta, FuncName,
+        ExprMeta,
     },
     name::Name,
     precedence::Precedence,
@@ -450,7 +450,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let let_expr = self.add_expr(Let(Name::Raw(name.to_string()), type_repr));
+        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr));
 
         if self.did_match(TokenKind::Equals)? {
             let rhs = self.parse_with_precedence(Precedence::None)?;
@@ -535,7 +535,7 @@ impl<'a> Parser<'a> {
         let body = self.block(false)?;
 
         self.add_expr(Expr::Func(
-            name.map(|s| s.to_string()).map(FuncName::Token),
+            name.map(|s| s.to_string()).map(Name::Raw),
             generics,
             params,
             body,
@@ -814,7 +814,6 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        expr::FuncName,
         name::Name,
         parser::parse,
         parsing::expr::Expr::{self, *},
@@ -1009,7 +1008,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![],
                 vec![0],
                 2,
@@ -1026,7 +1025,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![],
                 vec![],
                 0,
@@ -1049,7 +1048,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![0],
                 vec![1],
                 4,
@@ -1072,7 +1071,7 @@ mod tests {
         assert_eq!(
             *parsed.roots()[0].unwrap(),
             Expr::Func(
-                Some(FuncName::Token("hello".to_string())),
+                Some(Name::Raw("hello".to_string())),
                 vec![],
                 vec![],
                 0,
@@ -1084,7 +1083,7 @@ mod tests {
         assert_eq!(
             *parsed.roots()[1].unwrap(),
             Expr::Func(
-                Some(FuncName::Token("world".to_string())),
+                Some(Name::Raw("world".to_string())),
                 vec![],
                 vec![],
                 2,
@@ -1102,7 +1101,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![],
                 vec![0, 1],
                 2,
@@ -1118,7 +1117,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![],
                 vec![1],
                 2,
@@ -1196,7 +1195,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("fizz".to_string())),
+                Some(Name::Raw("fizz".to_string())),
                 vec![],
                 vec![],
                 2,
@@ -1446,7 +1445,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![],
                 vec![3],
                 4,
@@ -1482,7 +1481,7 @@ mod tests {
         assert_eq!(
             *expr,
             Expr::Func(
-                Some(FuncName::Token("greet".to_string())),
+                Some(Name::Raw("greet".to_string())),
                 vec![],
                 vec![2],
                 3,
