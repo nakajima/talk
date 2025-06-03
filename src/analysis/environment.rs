@@ -42,6 +42,7 @@ pub struct Environment {
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
+    pub direct_callables: HashMap<ExprID, SymbolID>,
 }
 
 impl Default for Environment {
@@ -60,6 +61,7 @@ impl Environment {
             constraints: vec![],
             scopes: vec![SymbolTable::default_env_scope()],
             types: Default::default(),
+            direct_callables: Default::default(),
         }
     }
 

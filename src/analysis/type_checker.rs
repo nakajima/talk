@@ -186,8 +186,10 @@ impl TypeChecker {
                 panic!("unresolved parameter: {:?}", source_file.get(id).unwrap())
             }
             Expr::Tuple(types) => self.infer_tuple(types, env, source_file),
-            Expr::Unary(_token_kind, _) => self.infer_unary(id, env),
-            Expr::Binary(_lhs, _token_kind, _rhs) => self.infer_binary(id, env),
+            Expr::Unary(_token_kind, rhs) => self.infer_unary(rhs, expected, env, source_file),
+            Expr::Binary(lhs, _token_kind, rhs) => {
+                self.infer_binary(&id, lhs, rhs, expected, env, source_file)
+            }
             Expr::Block(items) => self.infer_block(id, env, items, expected, source_file),
             Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(&id).unwrap().clone().ty),
             Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(&id).unwrap().clone().ty),
@@ -585,12 +587,30 @@ impl TypeChecker {
         Ok(Ty::Tuple(inferred_types))
     }
 
-    fn infer_unary(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+    fn infer_unary(
+        &self,
+        rhs: &ExprID,
+        expected: &Option<Ty>,
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        self.infer_node(*rhs, env, expected, source_file)
     }
 
-    fn infer_binary(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+    fn infer_binary(
+        &self,
+        id: &ExprID,
+        lhs: &ExprID,
+        rhs: &ExprID,
+        expected: &Option<Ty>,
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let lhs = self.infer_node(*lhs, env, expected, source_file)?;
+        let rhs = self.infer_node(*rhs, env, expected, source_file)?;
+        env.constraints
+            .push(Constraint::Equality(*id, lhs.clone(), rhs));
+        Ok(lhs)
     }
 
     fn infer_block(
@@ -1797,13 +1817,11 @@ mod pending {
     }
 
     #[test]
-    #[should_panic]
     fn checks_unary_expression() {
         check("-1"); // Assuming '-' is a unary op
     }
 
     #[test]
-    #[should_panic]
     fn checks_binary_expression() {
         check("1 + 2");
     }

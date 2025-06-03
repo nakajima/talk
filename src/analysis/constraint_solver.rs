@@ -85,6 +85,13 @@ impl<'a> ConstraintSolver<'a> {
 
                                     // Unify the constructor type with result_ty
                                     Self::unify(&constructor_ty, &result_ty, substitutions)?;
+                                    Self::normalize_substitutions(substitutions);
+
+                                    self.source_file.register_direct_callable(
+                                        node_id,
+                                        variant_info.constructor_symbol,
+                                    );
+
                                     self.source_file.define(node_id, constructor_ty);
                                 }
                             }

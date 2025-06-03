@@ -150,6 +150,14 @@ impl SourceFile<Typed> {
         let scope = self.phase_data.env.scopes[0].clone();
         (symbols, type_defs, scope)
     }
+
+    pub fn register_direct_callable(&mut self, id: ExprID, symbol_id: SymbolID) {
+        self.phase_data.env.direct_callables.insert(id, symbol_id);
+    }
+
+    pub fn get_direct_callable(&self, id: &ExprID) -> Option<SymbolID> {
+        self.phase_data.env.direct_callables.get(id).copied()
+    }
 }
 
 impl<P: Phase> SourceFile<P> {
