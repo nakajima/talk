@@ -2,7 +2,9 @@ use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, Typed,
     expr::{Expr, ExprMeta},
     name::Name,
+    parser::ExprID,
     token::Token,
+    token_kind::TokenKind,
     type_checker::Ty,
     typed_expr::TypedExpr,
 };
@@ -18,13 +20,22 @@ pub enum Instr {
     ConstantInt(Register, u64),
     ConstantFloat(Register, f64),
     ConstantBool(Register, bool),
-    Ret,
+    Add(Register, Register, Register),
+    Sub(Register, Register, Register),
+    Mul(Register, Register, Register),
+    Div(Register, Register, Register),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Terminator {
+    Ret(Option<Register>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasicBlock {
     pub label: Option<String>,
     pub instructions: Vec<Instr>,
+    pub terminator: Terminator,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +106,7 @@ impl Lowerer {
         let mut basic_block = BasicBlock {
             label: None,
             instructions: vec![],
+            terminator: Terminator::Ret(None),
         };
 
         let mut registers = RegisterAllocator::new();
@@ -103,16 +115,18 @@ impl Lowerer {
             panic!("did not get body")
         };
 
-        for id in body_exprs {
+        for (i, id) in body_exprs.iter().enumerate() {
             let expr = self
                 .source_file
                 .typed_expr(id)
                 .unwrap_or_else(|| panic!("Did not get expr for id: {}", id));
 
-            self.lower_expr(&expr, &mut basic_block, &mut registers);
-        }
+            let reg = self.lower_expr(&expr, &mut basic_block, &mut registers);
 
-        basic_block.instructions.push(Instr::Ret);
+            if i == body_exprs.len() - 1 {
+                basic_block.terminator = Terminator::Ret(reg);
+            }
+        }
 
         IRFunction {
             name,
@@ -125,12 +139,15 @@ impl Lowerer {
         typed_expr: &TypedExpr,
         current_block: &mut BasicBlock,
         registers: &mut RegisterAllocator,
-    ) {
-        match typed_expr.expr {
+    ) -> Option<Register> {
+        match &typed_expr.expr {
             Expr::LiteralInt(_)
             | Expr::LiteralFloat(_)
             | Expr::LiteralFalse
             | Expr::LiteralTrue => self.lower_literal(typed_expr, current_block, registers),
+            Expr::Binary(lhs, op, rhs) => {
+                self.lower_binary_op(&lhs, &op, &rhs, current_block, registers)
+            }
             _ => todo!(),
         }
     }
@@ -140,32 +157,67 @@ impl Lowerer {
         typed_expr: &TypedExpr,
         current_block: &mut BasicBlock,
         registers: &mut RegisterAllocator,
-    ) {
+    ) -> Option<Register> {
+        let register = registers.allocate();
         match &typed_expr.expr {
             Expr::LiteralInt(val) => {
                 current_block.instructions.push(Instr::ConstantInt(
-                    registers.allocate(),
+                    register.clone(),
                     str::parse(val).unwrap(),
                 ));
             }
             Expr::LiteralFloat(val) => {
                 current_block.instructions.push(Instr::ConstantFloat(
-                    registers.allocate(),
+                    register.clone(),
                     str::parse(val).unwrap(),
                 ));
             }
             Expr::LiteralFalse => {
                 current_block
                     .instructions
-                    .push(Instr::ConstantBool(registers.allocate(), false));
+                    .push(Instr::ConstantBool(register.clone(), false));
             }
             Expr::LiteralTrue => {
                 current_block
                     .instructions
-                    .push(Instr::ConstantBool(registers.allocate(), true));
+                    .push(Instr::ConstantBool(register.clone(), true));
             }
             _ => unreachable!(),
         }
+
+        Some(register)
+    }
+
+    fn lower_binary_op(
+        &self,
+        lhs: &ExprID,
+        op: &TokenKind,
+        rhs: &ExprID,
+        current_block: &mut BasicBlock,
+        registers: &mut RegisterAllocator,
+    ) -> Option<Register> {
+        let lhs_expr = self.source_file.typed_expr(lhs).unwrap();
+        let rhs_expr = self.source_file.typed_expr(rhs).unwrap();
+        let operand_1 = self
+            .lower_expr(&lhs_expr, current_block, registers)
+            .unwrap();
+        let operand_2 = self
+            .lower_expr(&rhs_expr, current_block, registers)
+            .unwrap();
+        let return_reg = registers.allocate();
+
+        use TokenKind::*;
+        let instr = match op {
+            Plus => Instr::Add(return_reg.clone(), operand_1, operand_2),
+            Minus => Instr::Sub(return_reg.clone(), operand_1, operand_2),
+            Star => Instr::Mul(return_reg.clone(), operand_1, operand_2),
+            Slash => Instr::Div(return_reg.clone(), operand_1, operand_2),
+            _ => panic!("Cannot lower binary operation: {:?}", op),
+        };
+
+        current_block.instructions.push(instr);
+
+        Some(return_reg)
     }
 }
 fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> TypedExpr {
@@ -218,7 +270,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> TypedExpr {
 mod tests {
     use crate::{
         Lowered, SourceFile, SymbolID, check,
-        lowering::ir::{BasicBlock, IRError, IRFunction, Instr, Lowerer, Register},
+        lowering::ir::{BasicBlock, IRError, IRFunction, Instr, Lowerer, Register, Terminator},
         name::Name,
     };
 
@@ -237,7 +289,8 @@ mod tests {
                 name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
                 blocks: vec![BasicBlock {
                     label: None,
-                    instructions: vec![Instr::ConstantInt(Register(0), 123), Instr::Ret]
+                    instructions: vec![Instr::ConstantInt(Register(0), 123)],
+                    terminator: Terminator::Ret(Some(Register(0)))
                 }]
             }]
         )
@@ -252,7 +305,8 @@ mod tests {
                 name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
                 blocks: vec![BasicBlock {
                     label: None,
-                    instructions: vec![Instr::ConstantFloat(Register(0), 123.), Instr::Ret]
+                    instructions: vec![Instr::ConstantFloat(Register(0), 123.)],
+                    terminator: Terminator::Ret(Some(Register(0)))
                 }]
             }]
         )
@@ -270,8 +324,88 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantBool(Register(0), true),
                         Instr::ConstantBool(Register(1), false),
-                        Instr::Ret
-                    ]
+                    ],
+                    terminator: Terminator::Ret(Some(Register(1)))
+                }]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_add() {
+        let lowered = lower("1 + 2").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![IRFunction {
+                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                blocks: vec![BasicBlock {
+                    label: None,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 1),
+                        Instr::ConstantInt(Register(1), 2),
+                        Instr::Add(Register(2), Register(0), Register(1))
+                    ],
+                    terminator: Terminator::Ret(Some(Register(2)))
+                }]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_sub() {
+        let lowered = lower("2 - 1").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![IRFunction {
+                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                blocks: vec![BasicBlock {
+                    label: None,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 2),
+                        Instr::ConstantInt(Register(1), 1),
+                        Instr::Sub(Register(2), Register(0), Register(1))
+                    ],
+                    terminator: Terminator::Ret(Some(Register(2)))
+                }]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_mul() {
+        let lowered = lower("2 * 1").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![IRFunction {
+                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                blocks: vec![BasicBlock {
+                    label: None,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 2),
+                        Instr::ConstantInt(Register(1), 1),
+                        Instr::Mul(Register(2), Register(0), Register(1))
+                    ],
+                    terminator: Terminator::Ret(Some(Register(2)))
+                }]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_div() {
+        let lowered = lower("2 / 1").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![IRFunction {
+                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                blocks: vec![BasicBlock {
+                    label: None,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 2),
+                        Instr::ConstantInt(Register(1), 1),
+                        Instr::Div(Register(2), Register(0), Register(1))
+                    ],
+                    terminator: Terminator::Ret(Some(Register(2)))
                 }]
             }]
         )
