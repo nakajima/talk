@@ -3,3 +3,4 @@ func add(x) {
 }
 
 add(1)
+add(2)

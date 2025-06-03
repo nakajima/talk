@@ -34,7 +34,7 @@ fn main() {
             let mut solver = ConstraintSolver::new(&mut inferred);
             solver.solve().unwrap();
 
-            let lowered = lowering::ir::Lowerer::lower(inferred);
+            let lowered = lowering::ir::Lowerer::new(&inferred).lower_module();
 
             println!("IR: {:#?}", lowered);
         }
