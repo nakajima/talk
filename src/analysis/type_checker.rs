@@ -479,7 +479,7 @@ impl TypeChecker {
         let mut param_vars: Vec<Ty> = vec![];
         for expr_opt in params.iter() {
             let expr = source_file.get(*expr_opt).cloned();
-            if let Some(Expr::Variable(Name::Resolved(symbol_id, _), ty)) = expr {
+            if let Some(Expr::Parameter(Name::Resolved(symbol_id, _), ty)) = expr {
                 let var_ty = if let Some(ty_id) = ty {
                     self.infer_node(ty_id, env, expected, source_file)?
                 } else {
@@ -489,7 +489,14 @@ impl TypeChecker {
                 // Parameters are monomorphic inside the function body
                 let scheme = Scheme::new(var_ty.clone(), vec![]);
                 env.declare(symbol_id, scheme);
-                param_vars.push(var_ty);
+                param_vars.push(var_ty.clone());
+                env.typed_exprs.insert(
+                    *expr_opt,
+                    TypedExpr {
+                        expr: expr.unwrap(),
+                        ty: var_ty,
+                    },
+                );
             }
         }
 

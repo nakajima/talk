@@ -160,11 +160,15 @@ impl NameResolver {
                     self.resolve_nodes(generics, source_file);
 
                     for param in params.clone() {
-                        let Some(Parameter(Name::Raw(name), _)) = source_file.get(param) else {
+                        let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param) else {
                             panic!("got a non variable param")
                         };
 
                         self.declare(name.clone(), SymbolKind::Param, node_id);
+
+                        if let Some(ty_id) = ty_id {
+                            self.resolve_nodes(vec![*ty_id], source_file);
+                        }
                     }
 
                     let mut to_resolve = params.clone();
@@ -186,7 +190,7 @@ impl NameResolver {
                         Name::Raw(name_str) => {
                             let symbol_id = self.lookup(&name_str);
                             source_file.nodes[node_id as usize] =
-                                Variable(Name::Resolved(symbol_id, name_str), ty_repr);
+                                Parameter(Name::Resolved(symbol_id, name_str), ty_repr);
                         }
                         Name::Resolved(_, _) => (),
                     }
@@ -452,7 +456,7 @@ mod tests {
             let x_param = tree.get(params[0]).unwrap();
             assert_eq!(
                 x_param,
-                &Variable(Name::Resolved(SymbolID::at(1), "x".into()), None)
+                &Parameter(Name::Resolved(SymbolID::at(1), "x".into()), None)
             );
 
             let Block(exprs) = &tree.get(*body_id).unwrap() else {

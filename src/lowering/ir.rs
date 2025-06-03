@@ -76,7 +76,7 @@ impl<'a> Lowerer<'a> {
 
         for typed_expr_root in roots {
             if let TypedExpr {
-                expr: Expr::Func(Some(func_name_resolved), ref params, _, body_id, _),
+                expr: Expr::Func(Some(func_name_resolved), _, ref params, body_id, _),
                 ..
             } = typed_expr_root
             {
@@ -105,6 +105,7 @@ impl<'a> Lowerer<'a> {
 
     /// Lowers a single function.
     fn lower_function(&mut self, func_id: SymbolID, params: &[ExprID], body_id: ExprID) {
+        log::trace!("Lowering function {:?}, {:?} {}", func_id, params, body_id);
         self.current_instrs.clear();
         self.local_slots.clear();
         self.next_slot_index = 0;
@@ -116,11 +117,18 @@ impl<'a> Lowerer<'a> {
         // often handled by the Call instruction or prologue. Here, we just reserve slots.
         for param_expr_id in params {
             if let Some(typed_param_expr) = self.source_file.types().get(param_expr_id) {
+                log::debug!(
+                    "Lowerer: For param ExprID {}, found TypedExpr.expr: {:?}",
+                    param_expr_id,
+                    typed_param_expr.expr
+                );
                 if let Expr::Parameter(Name::Resolved(param_symbol_id, _), _) =
                     &typed_param_expr.expr
                 {
                     self.alloc_slot_for_local(*param_symbol_id);
                 }
+            } else {
+                log::error!("No TypedExpr for {}", param_expr_id);
             }
         }
 
@@ -516,7 +524,7 @@ mod tests {
 
     #[test]
     fn lowers_let_and_variable() {
-        let code = "func main() { let x = 42; x }";
+        let code = "func main() { let x = 42\n x }";
         let typed_sf = get_typed_sourcefile(code);
         let lowerer = Lowerer::new(&typed_sf);
         let all_irs = lowerer.lower_module();
