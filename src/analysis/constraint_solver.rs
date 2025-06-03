@@ -68,15 +68,12 @@ impl<'a> ConstraintSolver<'a> {
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
                 let result_ty = Self::apply(&result_ty, substitutions, 0);
 
-                log::info!("UNQUALIFIED RESULT TY: {:?}", result_ty);
-
                 // Look for matching constructors based on the result_ty
                 match &result_ty {
                     Ty::Func(_arg_tys, ret_ty) => {
                         // This is a constructor call like .some(123)
                         // Look for enum constructors named member_name that take arg_tys and return
                         // something compatible with ret_ty
-
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
                             // Look up the enum and find the variant
                             if let Some(_enum_info) = self.source_file.type_from_symbol(enum_id) {
@@ -175,7 +172,6 @@ impl<'a> ConstraintSolver<'a> {
         variant_info: &EnumVariant, // variant_info.values refers to original enum type params (e.g. T from Option<T>)
         substitutions: &mut HashMap<TypeVarID, Ty>, // Global substitutions being built by the solver
     ) -> Ty {
-        // 1. Get the EnumDef to find its declared (formal) type parameters.
         // These formal parameters are the Ty::TypeVar created during `hoist_enums`.
         let enum_def = match self.source_file.type_def(enum_id) {
             Some(TypeDef::Enum(ed)) => ed,
@@ -185,7 +181,6 @@ impl<'a> ConstraintSolver<'a> {
             ),
         };
 
-        // 2. Create a local substitution map: formal enum type param ID -> actual instance generic arg type.
         let mut local_param_to_arg_subst = HashMap::new();
         for (formal_param_ty, actual_instance_arg_ty) in enum_def
             .type_parameters
@@ -205,15 +200,13 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        // 3. Instantiate the variant's value types (constructor arguments) using this local substitution first,
-        //    then apply the global substitutions.
+        // Instantiate the variant's value types (constructor arguments) using this local substitution first,
+        // then apply the global substitutions.
         let constructor_arg_tys: Vec<Ty> = variant_info
             .values
             .iter()
             .map(|formal_val_ty| {
-                // Step 3a: Apply local substitution (formal param -> instance arg)
                 let local_subst = Self::apply(formal_val_ty, &local_param_to_arg_subst, 0);
-                // Step 3b: Apply global solver substitutions
                 Self::apply(&local_subst, substitutions, 0)
             })
             .map(|instantiated_val_ty| {
@@ -222,8 +215,7 @@ impl<'a> ConstraintSolver<'a> {
             })
             .collect();
 
-        // 4. The return type of the constructor is the enum type itself, with its actual instance generics.
-        // These instance_generics should also be fully resolved using global substitutions.
+        // The return type of the constructor is the enum type itself, with its actual instance generics.
         let constructor_return_ty = Ty::Enum(
             *enum_id,
             instance_generics
@@ -334,7 +326,6 @@ impl<'a> ConstraintSolver<'a> {
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
                 // When unifying two type variables, pick one consistently
-                // Let's always substitute the higher ID with the lower ID
                 if v1.0 < v2.0 {
                     substitutions.insert(v2.clone(), Ty::TypeVar(v1.clone()));
                 } else {
@@ -378,7 +369,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    /// Returns true if `v` occurs inside `ty` (after applying current `subs`).
+    /// Returns true if `v` occurs inside `ty`
     fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> bool {
         let ty = Self::apply(ty, substitutions, 0);
         match &ty {
@@ -396,18 +387,12 @@ impl<'a> ConstraintSolver<'a> {
 
                 oh
             }
-            Ty::Enum(_name, generics) => {
-                // Ensure this case exists and is correct
-                generics
-                    .iter()
-                    .any(|generic| Self::occurs_check(v, generic, substitutions))
-            }
-            Ty::EnumVariant(_enum_id, values) => {
-                // Ensure this case exists and is correct
-                values
-                    .iter()
-                    .any(|value| Self::occurs_check(v, value, substitutions))
-            }
+            Ty::Enum(_name, generics) => generics
+                .iter()
+                .any(|generic| Self::occurs_check(v, generic, substitutions)),
+            Ty::EnumVariant(_enum_id, values) => values
+                .iter()
+                .any(|value| Self::occurs_check(v, value, substitutions)),
             _ => false,
         }
     }
