@@ -721,14 +721,7 @@ impl TypeChecker {
         source_file: &SourceFile<NameResolved>,
     ) -> Result<TypedExpr, TypeError> {
         env.start_scope();
-        let pattern_ty = self.infer_node(pattern, env, expected, source_file)?.ty;
-
-        env.constraints.push(Constraint::Equality(
-            id,
-            pattern_ty,
-            expected.as_ref().cloned().unwrap(),
-        ));
-
+        let _pattern_ty = self.infer_node(pattern, env, expected, source_file)?.ty;
         let body_ty = self.infer_node(body, env, &None, source_file)?.ty;
         env.end_scope();
 
@@ -803,7 +796,9 @@ impl TypeChecker {
         expected: &Option<Ty>,
     ) -> Result<TypedExpr, TypeError> {
         let Some(expected) = expected else {
-            return Err(TypeError::Unknown("Could not determine expected arm type"));
+            return Err(TypeError::Unknown(
+                "Pattern is missing an expected type (from scrutinee).",
+            ));
         };
 
         self.infer_pattern(pattern, env, expected);
