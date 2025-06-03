@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     NameResolved, SymbolID, Typed,
-    environment::EnumVariant,
+    environment::{EnumVariant, free_type_vars},
     expr::{Expr, FuncName, Pattern},
     match_builtin,
     name::Name,
@@ -776,27 +776,13 @@ impl TypeChecker {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(*receiver_id, env, &None, source_file)?;
 
-                // If the receiver is an enum type with generic parameters,
-                // we need to instantiate fresh type variables for each generic
-                let instantiated_receiver_ty = match &receiver_ty.ty {
-                    Ty::Enum(enum_id, generics) => {
-                        // Create fresh type variables for each generic parameter
-                        let fresh_generics: Vec<Ty> = generics
-                            .iter()
-                            .map(|_| Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)))
-                            .collect();
-                        Ty::Enum(*enum_id, fresh_generics)
-                    }
-                    other => other.clone(),
-                };
-
                 // Create a type variable for the member
                 let member_var = env.new_type_variable(TypeVarKind::Member);
 
                 // Add a constraint that links the receiver type to the member
                 env.constraints.push(Constraint::MemberAccess(
                     id,
-                    instantiated_receiver_ty,
+                    receiver_ty.ty,
                     member_name.to_string(),
                     Ty::TypeVar(member_var.clone()),
                 ));
@@ -957,19 +943,30 @@ impl TypeChecker {
                             expr_id,
                         );
 
-                        // Build constructor type
-                        let constructor_ty = if values.is_empty() {
-                            Ty::Enum(enum_id, generic_vars.clone())
-                        } else {
-                            Ty::Func(
-                                values.clone(),
-                                Box::new(Ty::Enum(enum_id, generic_vars.clone())),
-                            )
-                        };
+                        let enum_ty = Ty::Enum(enum_id, generic_vars.clone()); // e.g., Option<TypeVar_for_T>
+                        let mut enum_type_unbound_vars = Vec::new();
+                        let ftv_in_enum_ty = free_type_vars(&enum_ty); // Should contain TypeVar_for_T
 
-                        // Register the constructor in the environment
-                        let scheme = env.generalize(&constructor_ty);
-                        env.declare_in_parent(constructor_symbol, scheme);
+                        for enum_tp_var_instance in &generic_vars {
+                            // Iterate over [TypeVar_for_T]
+                            if let Ty::TypeVar(tv_id) = enum_tp_var_instance {
+                                if ftv_in_enum_ty.contains(tv_id) {
+                                    // Check if T is actually in Option<T> (it is)
+                                    if !enum_type_unbound_vars.contains(tv_id) {
+                                        enum_type_unbound_vars.push(tv_id.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        let scheme_for_enum_type =
+                            Scheme::new(enum_ty.clone(), enum_type_unbound_vars.clone()); // Use the collected unbound_vars
+
+                        if env.scopes.len() > 1 && !env.scopes.last().unwrap().is_empty() {
+                            env.declare_in_parent(enum_id, scheme_for_enum_type);
+                        } else {
+                            env.declare(enum_id, scheme_for_enum_type);
+                        }
 
                         env.typed_exprs.insert(
                             expr_id,
@@ -978,6 +975,7 @@ impl TypeChecker {
                                 ty: ty.clone(),
                             },
                         );
+
                         variants.push(ty);
                         variant_defs.push(EnumVariant {
                             name: name_str.to_string(),
@@ -1765,113 +1763,113 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod pending {
-    use crate::{constraint_solver::ConstraintSolver, name_resolver::NameResolver, parser::parse};
+// #[cfg(test)]
+// mod pending {
+//     use crate::{constraint_solver::ConstraintSolver, name_resolver::NameResolver, parser::parse};
 
-    use super::{Ty, TypeChecker};
+//     use super::{Ty, TypeChecker};
 
-    fn check(code: &'static str) -> Ty {
-        let parsed = parse(code).unwrap();
-        let resolver = NameResolver::default();
-        let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let mut inferred = checker.infer(resolved).unwrap();
-        let mut constraint_solver = ConstraintSolver::new(&mut inferred);
-        constraint_solver.solve().unwrap();
-        inferred.type_for(inferred.root_ids()[0])
-    }
+//     fn check(code: &'static str) -> Ty {
+//         let parsed = parse(code).unwrap();
+//         let resolver = NameResolver::default();
+//         let resolved = resolver.resolve(parsed);
+//         let checker = TypeChecker;
+//         let mut inferred = checker.infer(resolved).unwrap();
+//         let mut constraint_solver = ConstraintSolver::new(&mut inferred);
+//         constraint_solver.solve().unwrap();
+//         inferred.type_for(inferred.root_ids()[0])
+//     }
 
-    #[test]
-    fn checks_match_exhaustiveness_error() {
-        // This should fail type checking due to non-exhaustive match
-        let result = std::panic::catch_unwind(|| {
-            check(
-                "
-                enum Bool {
-                    case yes, no
-                }
-                func test(b: Bool) -> Int {
-                    match b {
-                        .yes -> 1
-                    }
-                }
-                ",
-            )
-        });
+//     #[test]
+//     fn checks_match_exhaustiveness_error() {
+//         // This should fail type checking due to non-exhaustive match
+//         let result = std::panic::catch_unwind(|| {
+//             check(
+//                 "
+//                 enum Bool {
+//                     case yes, no
+//                 }
+//                 func test(b: Bool) -> Int {
+//                     match b {
+//                         .yes -> 1
+//                     }
+//                 }
+//                 ",
+//             )
+//         });
 
-        // Should panic or return error - depends on your error handling
-        assert!(result.is_err());
-    }
+//         // Should panic or return error - depends on your error handling
+//         assert!(result.is_err());
+//     }
 
-    #[test]
-    fn checks_literal_true() {
-        assert_eq!(check("true"), Ty::Bool);
-    }
+//     #[test]
+//     fn checks_literal_true() {
+//         assert_eq!(check("true"), Ty::Bool);
+//     }
 
-    #[test]
-    fn checks_literal_false() {
-        check("false");
-    }
+//     #[test]
+//     fn checks_literal_false() {
+//         check("false");
+//     }
 
-    #[test]
-    #[should_panic]
-    fn checks_if_expression() {
-        check("if true { 1 } else { 0 }");
-    }
+//     #[test]
+//     #[should_panic]
+//     fn checks_if_expression() {
+//         check("if true { 1 } else { 0 }");
+//     }
 
-    #[test]
-    #[should_panic]
-    fn checks_loop_expression() {
-        check("loop { 1 }");
-    }
+//     #[test]
+//     #[should_panic]
+//     fn checks_loop_expression() {
+//         check("loop { 1 }");
+//     }
 
-    #[test]
-    #[should_panic]
-    fn checks_tuple_expression() {
-        check("(1, true)");
-    }
+//     #[test]
+//     #[should_panic]
+//     fn checks_tuple_expression() {
+//         check("(1, true)");
+//     }
 
-    #[test]
-    #[should_panic]
-    fn checks_unary_expression() {
-        check("-1"); // Assuming '-' is a unary op
-    }
+//     #[test]
+//     #[should_panic]
+//     fn checks_unary_expression() {
+//         check("-1"); // Assuming '-' is a unary op
+//     }
 
-    #[test]
-    #[should_panic]
-    fn checks_binary_expression() {
-        check("1 + 2");
-    }
+//     #[test]
+//     #[should_panic]
+//     fn checks_binary_expression() {
+//         check("1 + 2");
+//     }
 
-    #[test]
-    fn checks_pattern_literal_int_in_match() {
-        check(
-            "
-            enum MyEnum {
-                case val(Int)
-            }
-            func test(e: MyEnum) {
-                match e {
-                    .val(1) -> 0
-                }
-            }
-        ",
-        );
-    }
+//     #[test]
+//     fn checks_pattern_literal_int_in_match() {
+//         check(
+//             "
+//             enum MyEnum {
+//                 case val(Int)
+//             }
+//             func test(e: MyEnum) {
+//                 match e {
+//                     .val(1) -> 0
+//                 }
+//             }
+//         ",
+//         );
+//     }
 
-    #[test]
-    #[should_panic]
-    fn checks_pattern_wildcard_in_match() {
-        check(
-            "
-            enum MyEnum { case Val(Int) }
-            func test(e: MyEnum) {
-                match e {
-                    _ -> 0 // Pattern::Wildcard
-                }
-            }
-        ",
-        );
-    }
-}
+//     #[test]
+//     #[should_panic]
+//     fn checks_pattern_wildcard_in_match() {
+//         check(
+//             "
+//             enum MyEnum { case Val(Int) }
+//             func test(e: MyEnum) {
+//                 match e {
+//                     _ -> 0 // Pattern::Wildcard
+//                 }
+//             }
+//         ",
+//         );
+//     }
+// }

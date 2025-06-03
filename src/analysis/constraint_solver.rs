@@ -42,7 +42,7 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         for typed_expr in &mut self.source_file.types_mut().values_mut() {
-            typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions);
+            typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
         }
 
         Ok(())
@@ -55,8 +55,8 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), ConstraintError> {
         match constraint {
             Constraint::Equality(node_id, lhs, rhs) => {
-                let lhs = Self::apply(&lhs, substitutions);
-                let rhs = Self::apply(&rhs, substitutions);
+                let lhs = Self::apply(&lhs, substitutions, 0);
+                let rhs = Self::apply(&rhs, substitutions, 0);
 
                 Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
                     log::error!("{:?}", err);
@@ -66,7 +66,7 @@ impl<'a> ConstraintSolver<'a> {
                 self.source_file.define(node_id, lhs);
             }
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
-                let result_ty = Self::apply(&result_ty, substitutions);
+                let result_ty = Self::apply(&result_ty, substitutions, 0);
 
                 log::info!("UNQUALIFIED RESULT TY: {:?}", result_ty);
 
@@ -74,7 +74,7 @@ impl<'a> ConstraintSolver<'a> {
                 match &result_ty {
                     Ty::Func(_arg_tys, ret_ty) => {
                         // This is a constructor call like .some(123)
-                        // Look for enum constructors named member_name that take arg_tys and return 
+                        // Look for enum constructors named member_name that take arg_tys and return
                         // something compatible with ret_ty
 
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
@@ -114,8 +114,8 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
             Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
-                let receiver_ty = Self::apply(&receiver_ty, substitutions);
-                let result_ty = Self::apply(&result_ty, substitutions);
+                let receiver_ty = Self::apply(&receiver_ty, substitutions, 0);
+                let result_ty = Self::apply(&result_ty, substitutions, 0);
 
                 log::debug!("solving MemberAccess constraint");
 
@@ -212,13 +212,13 @@ impl<'a> ConstraintSolver<'a> {
             .iter()
             .map(|formal_val_ty| {
                 // Step 3a: Apply local substitution (formal param -> instance arg)
-                let local_subst = Self::apply(formal_val_ty, &local_param_to_arg_subst);
+                let local_subst = Self::apply(formal_val_ty, &local_param_to_arg_subst, 0);
                 // Step 3b: Apply global solver substitutions
-                Self::apply(&local_subst, substitutions)
+                Self::apply(&local_subst, substitutions, 0)
             })
             .map(|instantiated_val_ty| {
                 // Step 3b: Apply global solver substitutions
-                Self::apply(&instantiated_val_ty, substitutions)
+                Self::apply(&instantiated_val_ty, substitutions, 0)
             })
             .collect();
 
@@ -228,7 +228,7 @@ impl<'a> ConstraintSolver<'a> {
             *enum_id,
             instance_generics
                 .iter()
-                .map(|g_ty| Self::apply(g_ty, substitutions))
+                .map(|g_ty| Self::apply(g_ty, substitutions, 0))
                 .collect(),
         );
 
@@ -254,7 +254,11 @@ impl<'a> ConstraintSolver<'a> {
         None
     }
 
-    fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
+    fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
+        if depth > 1000 {
+            return ty.clone();
+        }
+
         match ty {
             Ty::Int => ty.clone(),
             Ty::Float => ty.clone(),
@@ -262,16 +266,16 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Func(params, returning) => {
                 let applied_params = params
                     .iter()
-                    .map(|param| Self::apply(param, substitutions).clone())
+                    .map(|param| Self::apply(param, substitutions, depth + 1).clone())
                     .collect();
 
-                let applied_return = Self::apply(returning, substitutions);
+                let applied_return = Self::apply(returning, substitutions, depth + 1);
 
                 Ty::Func(applied_params, Box::new(applied_return))
             }
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(type_var) {
-                    Self::apply(ty, substitutions)
+                    Self::apply(ty, substitutions, depth + 1)
                 } else {
                     ty.clone()
                 }
@@ -279,14 +283,14 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Enum(name, generics) => {
                 let applied_generics = generics
                     .iter()
-                    .map(|generic| Self::apply(generic, substitutions))
+                    .map(|generic| Self::apply(generic, substitutions, depth + 1))
                     .collect();
                 Ty::Enum(*name, applied_generics)
             }
             Ty::EnumVariant(enum_id, values) => {
                 let applied_values = values
                     .iter()
-                    .map(|variant| Self::apply(variant, substitutions))
+                    .map(|variant| Self::apply(variant, substitutions, depth + 1))
                     .collect();
                 Ty::EnumVariant(*enum_id, applied_values)
             }
@@ -301,7 +305,7 @@ impl<'a> ConstraintSolver<'a> {
             let mut updates = Vec::new();
 
             for (var_id, ty) in substitutions.iter() {
-                let normalized = Self::apply(ty, substitutions);
+                let normalized = Self::apply(ty, substitutions, 0);
                 if &normalized != ty {
                     updates.push((var_id.clone(), normalized));
                     changed = true;
@@ -322,8 +326,8 @@ impl<'a> ConstraintSolver<'a> {
         log::trace!("Unifying: {:?} and {:?}", lhs, rhs);
 
         match (
-            Self::apply(lhs, substitutions),
-            Self::apply(rhs, substitutions),
+            Self::apply(lhs, substitutions, 0),
+            Self::apply(rhs, substitutions, 0),
         ) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
@@ -376,7 +380,7 @@ impl<'a> ConstraintSolver<'a> {
 
     /// Returns true if `v` occurs inside `ty` (after applying current `subs`).
     fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> bool {
-        let ty = Self::apply(ty, substitutions);
+        let ty = Self::apply(ty, substitutions, 0);
         match &ty {
             Ty::TypeVar(tv) => tv == v,
             Ty::Func(params, returning) => {
@@ -391,6 +395,18 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 oh
+            }
+            Ty::Enum(_name, generics) => {
+                // Ensure this case exists and is correct
+                generics
+                    .iter()
+                    .any(|generic| Self::occurs_check(v, generic, substitutions))
+            }
+            Ty::EnumVariant(_enum_id, values) => {
+                // Ensure this case exists and is correct
+                values
+                    .iter()
+                    .any(|value| Self::occurs_check(v, value, substitutions))
             }
             _ => false,
         }
