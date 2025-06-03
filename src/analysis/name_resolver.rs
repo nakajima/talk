@@ -96,8 +96,20 @@ impl NameResolver {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
                 LiteralTrue | LiteralFalse => continue,
-                If(_, _, _) => todo!(),
-                Loop(_, _) => todo!(),
+                If(condi, conseq, alt) => {
+                    if let Some(alt) = alt {
+                        self.resolve_nodes(vec![condi, conseq, alt], source_file);
+                    } else {
+                        self.resolve_nodes(vec![condi, conseq], source_file);
+                    }
+                }
+                Loop(cond, body) => {
+                    if let Some(cond) = cond {
+                        self.resolve_nodes(vec![cond, body], source_file);
+                    } else {
+                        self.resolve_nodes(vec![body], source_file);
+                    }
+                }
                 Member(receiver, _member) => {
                     if let Some(receiver) = receiver {
                         self.resolve_nodes(vec![receiver], source_file);
@@ -231,6 +243,9 @@ impl NameResolver {
                 FuncTypeRepr(args, ret, _) => {
                     self.resolve_nodes(args, source_file);
                     self.resolve_nodes(vec![ret], source_file);
+                }
+                TupleTypeRepr(types, _) => {
+                    self.resolve_nodes(types, source_file);
                 }
                 EnumDecl(name, generics, body) => {
                     match name {
@@ -506,9 +521,14 @@ mod tests {
         ",
         );
 
-        let Expr::Let(_, Some(int)) = tree.get(tree.root_ids()[0]).unwrap() else {
+        let Expr::Assignment(let_expr, int) = tree.get(tree.root_ids()[0]).unwrap() else {
             panic!("didnt get assignment")
         };
+
+        assert_eq!(
+            *tree.get(*let_expr).unwrap(),
+            Let(Name::Resolved(SymbolID::at(1), "x".into()), None)
+        );
 
         assert_eq!(*tree.get(*int).unwrap(), LiteralInt("123".into()));
 
@@ -516,11 +536,6 @@ mod tests {
             *tree.get(tree.root_ids()[2]).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::at(1), "x".into()), None)
         );
-        assert_eq!(
-            *tree.get(tree.root_ids()[0]).unwrap(),
-            Let(Name::Resolved(SymbolID::at(1), "x".into()), Some(0))
-        );
-
         assert_eq!(
             *tree.get(tree.root_ids()[3]).unwrap(),
             Variable(Name::Resolved(SymbolID::at(2), "y".into()), None)
@@ -535,18 +550,18 @@ mod tests {
         ",
         );
 
-        let Expr::Let(_, Some(rhs)) = tree.roots()[0].unwrap() else {
+        let Expr::Assignment(_, rhs) = tree.get(tree.root_ids()[0]).unwrap() else {
             panic!("didnt get assignment")
         };
 
         assert_eq!(
             *tree.get(*rhs).unwrap(),
-            Expr::Member(Some(0), "none".into())
+            Expr::Member(Some(1), "none".into())
         );
 
         assert_eq!(
-            *tree.get(0).unwrap(),
-            Variable(Name::Resolved(SymbolID(1), "Optional".into()), None)
+            *tree.get(1).unwrap(),
+            Variable(Name::Resolved(SymbolID::OPTIONAL, "Optional".into()), None)
         );
     }
 

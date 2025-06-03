@@ -444,13 +444,13 @@ impl<'a> Parser<'a> {
         self.advance();
         let (name, _) = self.try_identifier().expect("did not get identifier");
 
-        let rhs = if self.did_match(TokenKind::Equals)? {
-            Some(self.parse_with_precedence(Precedence::Assignment)?)
+        let type_repr = if self.did_match(TokenKind::Colon)? {
+            Some(self.type_repr(false)?)
         } else {
             None
         };
 
-        let let_expr = self.add_expr(Let(Name::Raw(name.to_string()), rhs));
+        let let_expr = self.add_expr(Let(Name::Raw(name.to_string()), type_repr));
 
         if self.did_match(TokenKind::Equals)? {
             let rhs = self.parse_with_precedence(Precedence::None)?;
@@ -545,15 +545,18 @@ impl<'a> Parser<'a> {
 
     fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {
         if self.did_match(TokenKind::LeftParen)? {
-            // it's a func type repr
+            // it's a func type or tuple repr
             let mut sig_args = vec![];
             while !self.did_match(TokenKind::RightParen)? {
-                sig_args.push(self.type_repr(is_type_parameter)?)
+                sig_args.push(self.type_repr(is_type_parameter)?);
+                self.consume(TokenKind::Comma).ok();
             }
-            // TODO: If there's no arrow we can consider it a tuple?
-            self.consume(TokenKind::Arrow)?;
-            let ret = self.type_repr(is_type_parameter)?;
-            return self.add_expr(FuncTypeRepr(sig_args, ret, is_type_parameter));
+            if self.did_match(TokenKind::Arrow)? {
+                let ret = self.type_repr(is_type_parameter)?;
+                return self.add_expr(FuncTypeRepr(sig_args, ret, is_type_parameter));
+            } else {
+                return self.add_expr(TupleTypeRepr(sig_args, is_type_parameter));
+            }
         }
 
         let Some((name, _)) = self.try_identifier() else {
@@ -1153,6 +1156,36 @@ mod tests {
         let parsed = parse("let fizz").unwrap();
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), None));
+    }
+
+    #[test]
+    fn parses_let_with_type() {
+        let parsed = parse("let fizz: Int").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(0)));
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::TypeRepr("Int".into(), vec![], false)
+        );
+    }
+
+    #[test]
+    fn parses_let_with_tuple_type() {
+        let parsed = parse("let fizz: (Int, Bool)").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(2)));
+        assert_eq!(
+            *parsed.get(2).unwrap(),
+            Expr::TupleTypeRepr(vec![0, 1], false)
+        );
+        assert_eq!(
+            *parsed.get(0).unwrap(),
+            Expr::TypeRepr("Int".into(), vec![], false)
+        );
+        assert_eq!(
+            *parsed.get(1).unwrap(),
+            Expr::TypeRepr("Bool".into(), vec![], false)
+        );
     }
 
     #[test]

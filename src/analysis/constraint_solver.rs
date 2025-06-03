@@ -1,17 +1,13 @@
 use std::collections::HashMap;
 
-use crate::{SourceFile, SymbolID, Typed, environment::TypeDef, parser::ExprID};
+use crate::{
+    SourceFile, SymbolID, Typed, environment::TypeDef, parser::ExprID, type_checker::TypeError,
+};
 
 use super::{
     environment::EnumVariant,
     type_checker::{Ty, TypeVarID},
 };
-
-#[derive(Debug)]
-pub enum ConstraintError {
-    TypeConflict(Ty, Ty),
-    OccursConflict,
-}
 
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -33,7 +29,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn solve(&mut self) -> Result<(), ConstraintError> {
+    pub fn solve(&mut self) -> Result<(), TypeError> {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
         log::info!("solving {:#?}", self.constraints);
 
@@ -52,7 +48,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         constraint: Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
-    ) -> Result<(), ConstraintError> {
+    ) -> Result<(), TypeError> {
         match constraint {
             Constraint::Equality(node_id, lhs, rhs) => {
                 let lhs = Self::apply(&lhs, substitutions, 0);
@@ -286,6 +282,12 @@ impl<'a> ConstraintSolver<'a> {
                     .collect();
                 Ty::EnumVariant(*enum_id, applied_values)
             }
+            Ty::Tuple(types) => Ty::Tuple(
+                types
+                    .iter()
+                    .map(|variant| Self::apply(variant, substitutions, depth + 1))
+                    .collect(),
+            ),
             Ty::Void => ty.clone(),
         }
     }
@@ -314,7 +316,7 @@ impl<'a> ConstraintSolver<'a> {
         lhs: &Ty,
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
-    ) -> Result<(), ConstraintError> {
+    ) -> Result<(), TypeError> {
         log::trace!("Unifying: {:?} and {:?}", lhs, rhs);
 
         match (
@@ -337,7 +339,7 @@ impl<'a> ConstraintSolver<'a> {
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
                 if Self::occurs_check(&v, &ty, substitutions) {
-                    Err(ConstraintError::OccursConflict)
+                    Err(TypeError::OccursConflict)
                 } else {
                     substitutions.insert(v.clone(), ty.clone());
                     Ok(())
@@ -365,7 +367,10 @@ impl<'a> ConstraintSolver<'a> {
 
                 Ok(())
             }
-            _ => panic!("Type mismatch {:#?} / {:#?}", lhs, rhs),
+            _ => Err(TypeError::Mismatch(
+                Self::apply(lhs, substitutions, 0),
+                Self::apply(rhs, substitutions, 0),
+            )),
         }
     }
 

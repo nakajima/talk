@@ -1,23 +1,24 @@
-use clap::{Parser, Subcommand};
-use talk::{
-    constraint_solver::ConstraintSolver, lowering, name_resolver::NameResolver, parser::parse,
-    type_checker::TypeChecker,
-};
-
-/// Simple program to greet a person
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    IR { filename: String },
-}
-
+#[cfg(feature = "cli")]
 fn main() {
+    use clap::{Parser, Subcommand};
+    use talk::{
+        constraint_solver::ConstraintSolver, lowering, name_resolver::NameResolver, parser::parse,
+        type_checker::TypeChecker,
+    };
+
+    /// Simple program to greet a person
+    #[derive(Parser, Debug)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        #[command(subcommand)]
+        command: Commands,
+    }
+
+    #[derive(Subcommand, Debug)]
+    enum Commands {
+        IR { filename: String },
+    }
+
     let cli = Cli::parse();
 
     // You can check for the existence of subcommands, and if found use their
@@ -38,4 +39,11 @@ fn main() {
             println!("IR: {:#?}", lowered);
         }
     }
+}
+
+#[cfg(not(feature = "cli"))]
+fn main() {
+    use core::panic;
+
+    panic!("Compiled without 'cli' feature.")
 }

@@ -3,12 +3,11 @@ use crate::{SymbolID, name::Name};
 use super::type_checker::Ty;
 
 pub fn match_builtin(name: &Name) -> Option<Ty> {
-    
-
     match name {
         Name::Resolved(symbol, _) => match symbol {
             SymbolID(-1) => Some(Ty::Int),
             SymbolID(-2) => Some(Ty::Float),
+            SymbolID(-3) => Some(Ty::Bool),
             &_ => None,
         },
         _ => None,

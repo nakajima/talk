@@ -47,6 +47,9 @@ pub enum TypeError {
     UnknownEnum(SymbolID),
     UnknownVariant(Name),
     Unknown(&'static str),
+    UnexpectedType(Ty, Ty),
+    Mismatch(Ty, Ty),
+    OccursConflict,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -62,6 +65,13 @@ pub enum Ty {
     TypeVar(TypeVarID),
     Enum(SymbolID, Vec<Ty>), // enum name + type arguments
     EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
+    Tuple(Vec<Ty>),
+}
+
+impl Ty {
+    fn optional(&self) -> Ty {
+        Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +89,21 @@ impl Scheme {
 #[derive(Default, Debug)]
 pub struct TypeChecker;
 
+fn validate_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
+    if let Some(expected) = expected {
+        match (&actual, expected) {
+            (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => (),
+            (typ, expected) => {
+                if typ != expected {
+                    return Err(TypeError::UnexpectedType(expected.clone(), actual.clone()));
+                }
+            }
+        }
+    }
+
+    Ok(actual)
+}
+
 impl TypeChecker {
     pub fn infer(
         &self,
@@ -86,9 +111,7 @@ impl TypeChecker {
     ) -> Result<SourceFile<Typed>, TypeError> {
         let mut env = Environment::new();
 
-        // Just import the prelude
         env.import_prelude(&PRELUDE.types, &PRELUDE.schemes);
-
         self.infer_without_prelude(env, source_file)
     }
 
@@ -123,18 +146,24 @@ impl TypeChecker {
         log::trace!("Inferring {:?}", expr);
 
         let ty = match &expr {
-            Expr::LiteralTrue | Expr::LiteralFalse => self.infer_literal_bool(id, env),
-            Expr::Loop(_, _) => self.infer_loop(id, env),
-            Expr::If(_, _, _) => self.infer_if(id, env),
+            Expr::LiteralTrue | Expr::LiteralFalse => validate_expected(expected, Ty::Bool),
+            Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
+            Expr::If(condition, consequence, alternative) => {
+                let ty = self.infer_if(condition, consequence, alternative, env, source_file)?;
+                validate_expected(expected, ty)
+            }
             Expr::Call(callee, args) => self.infer_call(env, *callee, args, expected, source_file),
-            Expr::LiteralInt(_) => Ok(Ty::Int),
-            Expr::LiteralFloat(_) => Ok(Ty::Float),
+            Expr::LiteralInt(_) => validate_expected(expected, Ty::Int),
+            Expr::LiteralFloat(_) => validate_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, *lhs, *rhs, source_file),
             Expr::TypeRepr(name, generics, is_type_parameter) => {
                 self.infer_type_repr(env, name, generics, *is_type_parameter, source_file)
             }
             Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
                 self.infer_func_type_repr(env, args, *ret, expected, source_file)
+            }
+            Expr::TupleTypeRepr(types, _is_type_parameter) => {
+                self.infer_tuple_type_repr(env, types, expected, source_file)
             }
             Expr::Func(name, generics, params, body, ret) => self.infer_func(
                 id,
@@ -156,7 +185,7 @@ impl TypeChecker {
             Expr::Parameter(_, _) => {
                 panic!("unresolved parameter: {:?}", source_file.get(id).unwrap())
             }
-            Expr::Tuple(_) => self.infer_tuple(id, env),
+            Expr::Tuple(types) => self.infer_tuple(types, env, source_file),
             Expr::Unary(_token_kind, _) => self.infer_unary(id, env),
             Expr::Binary(_lhs, _token_kind, _rhs) => self.infer_binary(id, env),
             Expr::Block(items) => self.infer_block(id, env, items, expected, source_file),
@@ -179,20 +208,47 @@ impl TypeChecker {
             expr,
             ty: ty.clone(),
         };
-        env.typed_exprs.insert(id, typed_expr.clone());
+        env.typed_exprs.insert(id, typed_expr);
         Ok(ty)
     }
 
-    fn infer_literal_bool(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+    fn infer_loop(
+        &self,
+        cond: &Option<ExprID>,
+        body: &ExprID,
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        if let Some(cond) = cond {
+            self.infer_node(*cond, env, &Some(Ty::Bool), source_file)?;
+        }
+
+        self.infer_node(*body, env, &None, source_file)?;
+
+        Ok(Ty::Void)
     }
 
-    fn infer_loop(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
-    }
-
-    fn infer_if(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+    fn infer_if(
+        &self,
+        condition: &ExprID,
+        consequence: &ExprID,
+        alternative: &Option<ExprID>,
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let _condition = self.infer_node(*condition, env, &Some(Ty::Bool), source_file)?;
+        let consequence = self.infer_node(*consequence, env, &None, source_file)?;
+        if let Some(alternative_id) = alternative {
+            let alternative = self.infer_node(*alternative_id, env, &None, source_file)?;
+            env.constraints.push(Constraint::Equality(
+                *alternative_id,
+                consequence.clone(),
+                alternative,
+            ));
+            Ok(consequence)
+        } else {
+            Ok(consequence.optional())
+        }
     }
 
     fn infer_call(
@@ -351,6 +407,20 @@ impl TypeChecker {
         Ok(ty)
     }
 
+    fn infer_tuple_type_repr(
+        &self,
+        env: &mut Environment,
+        types: &Vec<ExprID>,
+        expected: &Option<Ty>,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let mut inferred_types: Vec<Ty> = vec![];
+        for t in types {
+            inferred_types.push(self.infer_node(*t, env, expected, source_file)?);
+        }
+        Ok(Ty::Tuple(inferred_types))
+    }
+
     fn infer_func(
         &self,
         id: ExprID,
@@ -497,8 +567,22 @@ impl TypeChecker {
         Ok(ty)
     }
 
-    fn infer_tuple(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+    fn infer_tuple(
+        &self,
+        types: &Vec<ExprID>,
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        if types.len() == 1 {
+            // If it's a single element, don't treat it as a tuple
+            return self.infer_node(types[0], env, &None, source_file);
+        }
+
+        let mut inferred_types: Vec<Ty> = vec![];
+        for t in types {
+            inferred_types.push(self.infer_node(*t, env, &None, source_file)?);
+        }
+        Ok(Ty::Tuple(inferred_types))
     }
 
     fn infer_unary(&self, _id: ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
@@ -555,17 +639,17 @@ impl TypeChecker {
         &self,
         env: &mut Environment,
         pattern: ExprID,
-        items: &[ExprID],
+        arms: &[ExprID],
         source_file: &SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let pattern_ty = self.infer_node(pattern, env, &None, source_file)?;
-        let items_ty = items
+        let arms_ty = arms
             .iter()
             .map(|id| self.infer_node(*id, env, &Some(pattern_ty.clone()), source_file))
             .collect::<Result<Vec<_>, _>>()?;
 
         // TODO: Make sure the return type is the same for all arms
-        let ret_ty = items_ty.last().unwrap().clone();
+        let ret_ty = arms_ty.last().unwrap().clone();
 
         Ok(ret_ty)
     }
@@ -650,10 +734,10 @@ impl TypeChecker {
     fn infer_pattern(&self, pattern: &Pattern, env: &mut Environment, expected: &Ty) {
         log::trace!("Inferring pattern: {:?}", pattern);
         match pattern {
-            Pattern::LiteralInt(_) => todo!(),
-            Pattern::LiteralFloat(_) => todo!(),
-            Pattern::LiteralTrue => todo!(),
-            Pattern::LiteralFalse => todo!(),
+            Pattern::LiteralInt(_) => (),
+            Pattern::LiteralFloat(_) => (),
+            Pattern::LiteralTrue => (),
+            Pattern::LiteralFalse => (),
             Pattern::Bind(name) => {
                 log::info!("inferring bind pattern: {:?}", name);
                 if let Name::Resolved(symbol_id, _) = name {
@@ -1517,9 +1601,10 @@ mod tests {
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(checker.root_ids()[0]);
+        assert_eq!(x_ty, Ty::Int.optional());
         match x_ty {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID::at(-3)); // Optional's ID
+                assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
                 assert_eq!(generics, vec![Ty::Int]);
             }
             _ => panic!("Expected Optional<Int>, got {:?}", x_ty),
@@ -1598,113 +1683,159 @@ mod tests {
     }
 }
 
-// #[cfg(test)]
-// mod pending {
-//     use crate::{constraint_solver::ConstraintSolver, name_resolver::NameResolver, parser::parse};
+#[cfg(test)]
+mod pending {
+    use crate::{
+        constraint_solver::ConstraintSolver, name_resolver::NameResolver, parser::parse,
+        type_checker::TypeError,
+    };
 
-//     use super::{Ty, TypeChecker};
+    use super::{Ty, TypeChecker};
 
-//     fn check(code: &'static str) -> Ty {
-//         let parsed = parse(code).unwrap();
-//         let resolver = NameResolver::default();
-//         let resolved = resolver.resolve(parsed);
-//         let checker = TypeChecker;
-//         let mut inferred = checker.infer(resolved).unwrap();
-//         let mut constraint_solver = ConstraintSolver::new(&mut inferred);
-//         constraint_solver.solve().unwrap();
-//         inferred.type_for(inferred.root_ids()[0])
-//     }
+    fn check_err(code: &'static str) -> Result<Ty, TypeError> {
+        let parsed = parse(code).unwrap();
+        let resolver = NameResolver::default();
+        let resolved = resolver.resolve(parsed);
+        let checker = TypeChecker;
+        let mut inferred = checker.infer(resolved)?;
+        let mut constraint_solver = ConstraintSolver::new(&mut inferred);
+        constraint_solver.solve()?;
+        Ok(inferred.type_for(inferred.root_ids()[0]))
+    }
 
-//     #[test]
-//     fn checks_match_exhaustiveness_error() {
-//         // This should fail type checking due to non-exhaustive match
-//         let result = std::panic::catch_unwind(|| {
-//             check(
-//                 "
-//                 enum Bool {
-//                     case yes, no
-//                 }
-//                 func test(b: Bool) -> Int {
-//                     match b {
-//                         .yes -> 1
-//                     }
-//                 }
-//                 ",
-//             )
-//         });
+    fn check(code: &'static str) -> Ty {
+        check_err(code).unwrap()
+    }
 
-//         // Should panic or return error - depends on your error handling
-//         assert!(result.is_err());
-//     }
+    // #[test]
+    // fn checks_match_exhaustiveness_error() {
+    //     // This should fail type checking due to non-exhaustive match
+    //     let result = std::panic::catch_unwind(|| {
+    //         check(
+    //             "
+    //             enum Bool {
+    //                 case yes, no
+    //             }
+    //             func test(b: Bool) -> Int {
+    //                 match b {
+    //                     .yes -> 1
+    //                 }
+    //             }
+    //             ",
+    //         )
+    //     });
 
-//     #[test]
-//     fn checks_literal_true() {
-//         assert_eq!(check("true"), Ty::Bool);
-//     }
+    //     // Should panic or return error - depends on your error handling
+    //     assert!(result.is_err());
+    // }
 
-//     #[test]
-//     fn checks_literal_false() {
-//         check("false");
-//     }
+    #[test]
+    fn checks_literal_true() {
+        assert_eq!(check("true"), Ty::Bool);
+    }
 
-//     #[test]
-//     #[should_panic]
-//     fn checks_if_expression() {
-//         check("if true { 1 } else { 0 }");
-//     }
+    #[test]
+    fn checks_literal_false() {
+        assert_eq!(check("false"), Ty::Bool);
+    }
 
-//     #[test]
-//     #[should_panic]
-//     fn checks_loop_expression() {
-//         check("loop { 1 }");
-//     }
+    #[test]
+    fn checks_if_expression() {
+        assert_eq!(check("if true { 1 } else { 0 }"), Ty::Int);
+    }
 
-//     #[test]
-//     #[should_panic]
-//     fn checks_tuple_expression() {
-//         check("(1, true)");
-//     }
+    #[test]
+    fn checks_if_expression_without_else() {
+        assert_eq!(check("if true { 1 }"), Ty::Int.optional());
+    }
 
-//     #[test]
-//     #[should_panic]
-//     fn checks_unary_expression() {
-//         check("-1"); // Assuming '-' is a unary op
-//     }
+    #[test]
+    fn checks_if_expression_with_non_bool_condition() {
+        assert!(check_err("if 123 { 1 }").is_err());
+    }
 
-//     #[test]
-//     #[should_panic]
-//     fn checks_binary_expression() {
-//         check("1 + 2");
-//     }
+    #[test]
+    fn checks_loop_expression() {
+        assert_eq!(check("loop { 1 }"), Ty::Void);
+    }
 
-//     #[test]
-//     fn checks_pattern_literal_int_in_match() {
-//         check(
-//             "
-//             enum MyEnum {
-//                 case val(Int)
-//             }
-//             func test(e: MyEnum) {
-//                 match e {
-//                     .val(1) -> 0
-//                 }
-//             }
-//         ",
-//         );
-//     }
+    #[test]
+    fn checks_loop_expression_with_condition() {
+        assert_eq!(check("loop true { 1 }"), Ty::Void);
+    }
 
-//     #[test]
-//     #[should_panic]
-//     fn checks_pattern_wildcard_in_match() {
-//         check(
-//             "
-//             enum MyEnum { case Val(Int) }
-//             func test(e: MyEnum) {
-//                 match e {
-//                     _ -> 0 // Pattern::Wildcard
-//                 }
-//             }
-//         ",
-//         );
-//     }
-// }
+    #[test]
+    fn checks_loop_expression_with_invalid_condition() {
+        assert!(check_err("loop 1.2 { 1 }").is_err());
+    }
+
+    #[test]
+    fn checks_tuple_expression() {
+        assert_eq!(check("(1, true)"), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    #[test]
+    fn checks_unit_tuple_expression() {
+        assert_eq!(check("()"), Ty::Tuple(vec![]));
+    }
+
+    #[test]
+    fn checks_tuple_expectations() {
+        assert!(
+            check_err(
+                "
+            let my_tuple: (Int, Bool) = (42, 10)
+            ",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn checks_grouping_expression() {
+        assert_eq!(check("(1)"), Ty::Int);
+    }
+
+    #[test]
+    #[should_panic]
+    fn checks_unary_expression() {
+        check("-1"); // Assuming '-' is a unary op
+    }
+
+    #[test]
+    #[should_panic]
+    fn checks_binary_expression() {
+        check("1 + 2");
+    }
+
+    #[test]
+    fn checks_pattern_literal_int_in_match() {
+        check(
+            "
+            enum MyEnum {
+                case val(Int)
+            }
+            func test(e: MyEnum) {
+                match e {
+                    .val(1) -> 0
+                }
+            }
+        ",
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn checks_pattern_wildcard_in_match() {
+        check(
+            "
+            enum MyEnum { case Val(Int) }
+            func test(e: MyEnum) {
+                match e {
+                    _ -> 0 // Pattern::Wildcard
+                }
+            }
+        ",
+        );
+    }
+}

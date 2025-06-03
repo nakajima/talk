@@ -10,6 +10,8 @@ use crate::{
 pub struct SymbolID(pub i32);
 
 impl SymbolID {
+    pub const OPTIONAL: SymbolID = SymbolID(1);
+
     // Remove the prelude's symbol offset
     pub fn at(index: i32) -> SymbolID {
         SymbolID(index + PRELUDE.symbols.max_id())
@@ -81,6 +83,7 @@ impl SymbolTable {
         let mut scope = HashMap::new();
         scope.insert(SymbolID(-1), Scheme::new(Ty::Int, vec![]));
         scope.insert(SymbolID(-2), Scheme::new(Ty::Float, vec![]));
+        scope.insert(SymbolID(-3), Scheme::new(Ty::Bool, vec![]));
         scope
     }
 
@@ -88,6 +91,7 @@ impl SymbolTable {
         let mut scope = HashMap::new();
         scope.insert("Int".to_string(), SymbolID(-1));
         scope.insert("Float".to_string(), SymbolID(-2));
+        scope.insert("Bool".to_string(), SymbolID(-3));
         scope
     }
 

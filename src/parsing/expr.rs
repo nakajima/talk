@@ -76,6 +76,11 @@ pub enum Expr {
         bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
+    TupleTypeRepr(
+        Vec<ExprID>, /* (T1, T2) */
+        bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
+    ),
+
     // A dot thing
     Member(Option<ExprID> /* receiver */, String),
 
