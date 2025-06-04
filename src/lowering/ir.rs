@@ -28,12 +28,15 @@ pub enum Instr {
     Div(Register, Register, Register),
     StoreLocal(Register, Register),
     LoadLocal(Register, Register),
+    Phi(Register, Vec<(Register, BasicBlockID)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Terminator {
     Ret(Option<Register>),
     Unreachable,
+    Jump(BasicBlockID),
+    JumpUnless(Register, BasicBlockID),
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
@@ -55,23 +58,27 @@ pub struct BasicBlock {
 
 #[derive(Default)]
 struct CurrentFunction {
-    current_function_id: BasicBlockID,
-    blocks: HashMap<BasicBlockID, BasicBlock>,
+    current_block_idx: usize,
+    blocks: Vec<BasicBlock>,
 }
 
 impl CurrentFunction {
     fn push_instr(&mut self, instr: Instr) {
-        let id = &self.current_function_id;
-        self.blocks.get_mut(id).unwrap().instructions.push(instr)
+        let idx = &self.current_block_idx;
+        self.blocks[*idx].instructions.push(instr)
     }
 
-    fn add_block(&mut self, id: &BasicBlockID, instr: BasicBlock) {
-        self.blocks.insert(*id, instr);
+    fn add_block(&mut self, block: BasicBlock) {
+        self.blocks.push(block);
     }
 
     fn current_block_mut(&mut self) -> &mut BasicBlock {
-        let id = &self.current_function_id;
-        self.blocks.get_mut(id).unwrap()
+        &mut self.blocks[self.current_block_idx]
+    }
+
+    fn set_current_block(&mut self, id: BasicBlockID) {
+        let index = self.blocks.iter().position(|blk| blk.id == id).unwrap();
+        self.current_block_idx = index;
     }
 }
 
@@ -117,8 +124,7 @@ impl ScopeContext {
     }
 
     fn lookup_symbol(&self, symbol_id: &SymbolID) -> &Register {
-        &self
-            .symbol_registers
+        self.symbol_registers
             .get(symbol_id)
             .expect("No register found for symbol")
     }
@@ -197,12 +203,7 @@ impl Lowerer {
 
         IRFunction {
             name,
-            blocks: self
-                .current_function
-                .blocks
-                .values()
-                .map(|b| b.to_owned())
-                .collect(),
+            blocks: self.current_function.blocks.clone(),
         }
     }
 
@@ -216,6 +217,7 @@ impl Lowerer {
             Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs, context),
             Expr::Variable(name, _) => self.lower_variable(&name, context),
             Expr::If(cond, conseq, alt) => self.lower_if(&cond, &conseq, &alt, context),
+            Expr::Block(_) => self.lower_block(expr_id, context),
             expr => todo!("Cannot lower {:?}", expr),
         }
     }
@@ -293,6 +295,25 @@ impl Lowerer {
         }
     }
 
+    fn lower_block(&mut self, block_id: &ExprID, context: &mut ScopeContext) -> Option<Register> {
+        let Expr::Block(exprs) = self.source_file.get(*block_id).unwrap().clone() else {
+            unreachable!()
+        };
+
+        if exprs.is_empty() {
+            return None;
+        }
+
+        for (i, id) in exprs.iter().enumerate() {
+            let reg = self.lower_expr(id, context);
+            if i == exprs.len() - 1 {
+                return reg;
+            }
+        }
+
+        None
+    }
+
     fn lower_variable(&mut self, name: &Name, context: &mut ScopeContext) -> Option<Register> {
         let Name::Resolved(symbol_id, _) = name else {
             panic!("Unresolved variable: {:?}", name)
@@ -312,14 +333,44 @@ impl Lowerer {
             .lower_expr(cond, context)
             .expect("Condition for if expression did not produce a value");
 
-        let then_bb_id = self.new_basic_block();
-        let mut else_bb_id_opt: Option<BasicBlockID> = None;
-        let merge_bb_id = self.new_basic_block(); // All paths merge here
+        let then_id = self.new_basic_block();
+        let mut else_reg: Option<Register> = None;
+        let else_id: Option<BasicBlockID> = if alt.is_some() {
+            Some(self.new_basic_block())
+        } else {
+            None
+        };
+        let merge_id = self.new_basic_block(); // All paths merge here
 
-        None
+        self.current_function.current_block_mut().terminator =
+            Terminator::JumpUnless(cond_reg, else_id.unwrap_or(merge_id));
+
+        self.current_function.set_current_block(then_id);
+        let then_reg = self.lower_expr(conseq, context).unwrap();
+        self.current_function.current_block_mut().terminator = Terminator::Jump(merge_id);
+
+        if let Some(alt) = alt {
+            self.current_function.set_current_block(else_id.unwrap());
+            else_reg = self.lower_expr(alt, context);
+            self.current_function.current_block_mut().terminator = Terminator::Jump(merge_id);
+        }
+
+        self.current_function.set_current_block(merge_id);
+
+        let phi_dest_reg = context.registers.allocate();
+
+        self.current_function.push_instr(Instr::Phi(
+            phi_dest_reg.clone(),
+            vec![
+                (then_reg, then_id),                   // Value from 'then' path came from then_bb
+                (else_reg.unwrap(), else_id.unwrap()), // Value from 'else' path came from else_bb
+            ],
+        ));
+
+        Some(phi_dest_reg)
     }
 
-    fn new_basic_block(&mut self) -> &mut BasicBlock {
+    fn new_basic_block(&mut self) -> BasicBlockID {
         let id = self.next_block_id();
         let block = BasicBlock {
             id,
@@ -333,8 +384,8 @@ impl Lowerer {
             terminator: Terminator::Unreachable, // Placeholder, must be set before block is "done"
         };
 
-        self.current_function.add_block(&id, block);
-        self.current_function.current_block_mut()
+        self.current_function.add_block(block);
+        id
     }
 }
 
@@ -553,5 +604,72 @@ mod tests {
                 }]
             }]
         )
+    }
+
+    #[test]
+    fn lowers_if_expr_with_else() {
+        let lowered = lower(
+            "
+            if true {
+                123
+            } else {
+                456
+            }
+
+            789
+       ",
+        )
+        .unwrap();
+
+        let expected = vec![IRFunction {
+            name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+            blocks: vec![
+                // if block
+                BasicBlock {
+                    id: BasicBlockID(0),
+                    label: None,
+                    instructions: vec![Instr::ConstantBool(Register(0), true)],
+                    terminator: Terminator::JumpUnless(Register(0), BasicBlockID(2)),
+                },
+                // consequence block
+                BasicBlock {
+                    id: BasicBlockID(1),
+                    label: Some("bb1".into()),
+                    instructions: vec![Instr::ConstantInt(Register(1), 123)],
+                    terminator: Terminator::Jump(BasicBlockID(3)),
+                },
+                // else block
+                BasicBlock {
+                    id: BasicBlockID(2),
+                    label: Some("bb2".into()),
+                    instructions: vec![Instr::ConstantInt(Register(2), 456)],
+                    terminator: Terminator::Jump(BasicBlockID(3)),
+                },
+                // converge block
+                BasicBlock {
+                    id: BasicBlockID(3),
+                    label: Some("bb3".into()),
+                    instructions: vec![
+                        Instr::Phi(
+                            Register(3),
+                            vec![
+                                (Register(1), BasicBlockID(1)),
+                                (Register(2), BasicBlockID(2)),
+                            ],
+                        ),
+                        Instr::ConstantInt(Register(4), 789),
+                    ],
+                    terminator: Terminator::Ret(Some(Register(4))),
+                },
+            ],
+        }];
+
+        assert_eq!(
+            lowered.functions(),
+            expected,
+            "{:#?} \n ========== {:#?}",
+            lowered.functions(),
+            expected
+        );
     }
 }
