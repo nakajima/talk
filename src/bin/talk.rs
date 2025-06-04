@@ -20,7 +20,7 @@ fn main() {
         Run { filename: String },
     }
 
-    env_logger::builder().try_init();
+    env_logger::builder().try_init().unwrap();
 
     let cli = Cli::parse();
 
@@ -37,29 +37,15 @@ fn main() {
             let mut solver = ConstraintSolver::new(&mut inferred);
             solver.solve().unwrap();
 
-            let lowered = lowering::ir::Lowerer::new(inferred).lower();
-
-            println!("IR: {:#?}", lowered);
-        }
-        Commands::Run { filename } => {
-            // Read entire file into a String
-
-            use talk::{cli::vm::VM, name::Name};
-
-            let contents = std::fs::read_to_string(filename).expect("Could not read file");
-
-            let parsed = parse(&contents).unwrap();
-            let resolved = NameResolver::new().resolve(parsed);
-            let mut inferred = TypeChecker.infer(resolved).unwrap();
-            let mut solver = ConstraintSolver::new(&mut inferred);
-            solver.solve().unwrap();
-
             let lowered = lowering::ir::Lowerer::new(inferred).lower().unwrap();
 
-            println!(
-                "Running main function: {:?}",
-                VM::new(lowered.functions()).run()
-            );
+            // Use the pretty printer
+            use talk::lowering::ir_printer::pretty_print_ir;
+            println!("{}", pretty_print_ir(&lowered.functions()));
+        }
+        Commands::Run { filename } => {
+            println!("WIP: {}", filename);
+            // Read entire file into a String
         }
     }
 }
