@@ -207,6 +207,7 @@ impl TypeChecker {
         }?;
 
         let typed_expr = TypedExpr {
+            id,
             expr,
             ty: ty.clone(),
         };
@@ -493,6 +494,7 @@ impl TypeChecker {
                 env.typed_exprs.insert(
                     *expr_opt,
                     TypedExpr {
+                        id: *expr_opt,
                         expr: expr.unwrap(),
                         ty: var_ty,
                     },
@@ -917,6 +919,7 @@ impl TypeChecker {
                         env.typed_exprs.insert(
                             expr_id,
                             TypedExpr {
+                                id: expr_id,
                                 expr: expr.clone(),
                                 ty: ty.clone(),
                             },
@@ -946,7 +949,7 @@ impl TypeChecker {
                     methods: vec![],
                 });
 
-                let typed_expr = TypedExpr::new(expr, enum_ty.clone());
+                let typed_expr = TypedExpr::new(*id, expr, enum_ty.clone());
                 env.typed_exprs.insert(*id, typed_expr);
             }
         }
@@ -974,7 +977,7 @@ impl TypeChecker {
                 let fn_var =
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
 
-                let typed_expr = TypedExpr::new(expr, fn_var.clone());
+                let typed_expr = TypedExpr::new(*id, expr, fn_var.clone());
                 env.typed_exprs.insert(*id, typed_expr);
 
                 let scheme = env.generalize(&fn_var);

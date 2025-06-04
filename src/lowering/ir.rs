@@ -14,8 +14,13 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum IRError {}
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Register(u32);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefKind {
+    Func(SymbolID),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instr {
@@ -29,6 +34,7 @@ pub enum Instr {
     StoreLocal(Register, Register),
     LoadLocal(Register, Register),
     Phi(Register, Vec<(Register, BasicBlockID)>),
+    Ref(Register, RefKind),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +62,12 @@ pub struct BasicBlock {
     pub terminator: Terminator,
 }
 
+impl BasicBlock {
+    fn push_instr(&mut self, instr: Instr) {
+        self.instructions.push(instr)
+    }
+}
+
 #[derive(Default)]
 struct CurrentFunction {
     current_block_idx: usize,
@@ -63,11 +75,6 @@ struct CurrentFunction {
 }
 
 impl CurrentFunction {
-    fn push_instr(&mut self, instr: Instr) {
-        let idx = &self.current_block_idx;
-        self.blocks[*idx].instructions.push(instr)
-    }
-
     fn add_block(&mut self, block: BasicBlock) {
         self.blocks.push(block);
     }
@@ -133,7 +140,8 @@ impl ScopeContext {
 pub struct Lowerer {
     next_block_id: BasicBlockID,
     source_file: SourceFile<Typed>,
-    current_function: CurrentFunction,
+    current_functions: Vec<CurrentFunction>,
+    lowered_functions: Vec<IRFunction>,
 }
 
 impl Lowerer {
@@ -141,25 +149,24 @@ impl Lowerer {
         Self {
             next_block_id: BasicBlockID::default(),
             source_file,
-            current_function: CurrentFunction::default(),
+            current_functions: vec![],
+            lowered_functions: Default::default(),
         }
     }
 
     pub fn lower(mut self) -> Result<SourceFile<Lowered>, IRError> {
-        let main = find_or_create_main(&mut self.source_file);
+        let expr_id = find_or_create_main(&mut self.source_file);
 
-        let mut functions = vec![];
-
-        functions.push(self.lower_function(&main));
+        self.lower_function(&expr_id);
 
         let typed_roots = self.source_file.typed_roots().to_owned();
         for root in typed_roots {
             if let Expr::Func(_, _, _, _, _) = &root.expr {
-                functions.push(self.lower_function(&root));
+                self.lower_function(&root.id);
             }
         }
 
-        Ok(self.source_file.to_lowered(functions))
+        Ok(self.source_file.to_lowered(self.lowered_functions))
     }
 
     fn next_block_id(&mut self) -> BasicBlockID {
@@ -168,10 +175,20 @@ impl Lowerer {
         id
     }
 
-    fn lower_function(&mut self, typed_expr: &TypedExpr) -> IRFunction {
+    fn lower_function(&mut self, expr_id: &ExprID) -> SymbolID {
+        let typed_expr = self
+            .source_file
+            .typed_expr(expr_id)
+            .expect("Did not get typed expr");
+
         let Expr::Func(ref name, _, _, ref body, _) = typed_expr.expr else {
-            panic!("Attempted to lower non-function: {:?}", typed_expr);
+            panic!(
+                "Attempted to lower non-function: {:?}",
+                self.source_file.get(*expr_id)
+            );
         };
+
+        self.current_functions.push(CurrentFunction::default());
 
         let name = match name {
             Some(Name::Resolved(_, _)) => name.clone().unwrap(),
@@ -197,14 +214,21 @@ impl Lowerer {
             let reg = self.lower_expr(&id, &mut context);
 
             if i == body_exprs.len() - 1 {
-                self.current_function.current_block_mut().terminator = Terminator::Ret(reg);
+                self.current_block_mut().terminator = Terminator::Ret(reg);
             }
         }
 
-        IRFunction {
-            name,
-            blocks: self.current_function.blocks.clone(),
-        }
+        let func = IRFunction {
+            name: name.clone(),
+            blocks: self.current_func_mut().blocks.clone(),
+        };
+        self.lowered_functions.push(func.clone());
+        self.current_functions.pop();
+
+        let Name::Resolved(symbol, _) = name else {
+            panic!("no symbol")
+        };
+        symbol
     }
 
     fn lower_expr(&mut self, expr_id: &ExprID, context: &mut ScopeContext) -> Option<Register> {
@@ -218,31 +242,38 @@ impl Lowerer {
             Expr::Variable(name, _) => self.lower_variable(&name, context),
             Expr::If(cond, conseq, alt) => self.lower_if(&cond, &conseq, &alt, context),
             Expr::Block(_) => self.lower_block(expr_id, context),
+            Expr::Func(_, _, _, _, _) => {
+                let symbol_id = self.lower_function(expr_id);
+                let reg = context.registers.allocate();
+                self.current_block_mut()
+                    .push_instr(Instr::Ref(reg, RefKind::Func(symbol_id)));
+                Some(reg)
+            }
             expr => todo!("Cannot lower {:?}", expr),
         }
     }
 
     fn lower_literal(&mut self, expr_id: &ExprID, context: &mut ScopeContext) -> Option<Register> {
         let register = context.registers.allocate();
-        match self.source_file.get(*expr_id).unwrap() {
+        match self.source_file.get(*expr_id).unwrap().clone() {
             Expr::LiteralInt(val) => {
-                self.current_function.push_instr(Instr::ConstantInt(
+                self.current_block_mut().push_instr(Instr::ConstantInt(
                     register.clone(),
-                    str::parse(val).unwrap(),
+                    str::parse(&val).unwrap(),
                 ));
             }
             Expr::LiteralFloat(val) => {
-                self.current_function.push_instr(Instr::ConstantFloat(
+                self.current_block_mut().push_instr(Instr::ConstantFloat(
                     register.clone(),
-                    str::parse(val).unwrap(),
+                    str::parse(&val).unwrap(),
                 ));
             }
             Expr::LiteralFalse => {
-                self.current_function
+                self.current_block_mut()
                     .push_instr(Instr::ConstantBool(register.clone(), false));
             }
             Expr::LiteralTrue => {
-                self.current_function
+                self.current_block_mut()
                     .push_instr(Instr::ConstantBool(register.clone(), true));
             }
             _ => unreachable!(),
@@ -271,7 +302,7 @@ impl Lowerer {
             _ => panic!("Cannot lower binary operation: {:?}", op),
         };
 
-        self.current_function.push_instr(instr);
+        self.current_block_mut().push_instr(instr);
 
         Some(return_reg)
     }
@@ -342,24 +373,24 @@ impl Lowerer {
         };
         let merge_id = self.new_basic_block(); // All paths merge here
 
-        self.current_function.current_block_mut().terminator =
+        self.current_block_mut().terminator =
             Terminator::JumpUnless(cond_reg, else_id.unwrap_or(merge_id));
 
-        self.current_function.set_current_block(then_id);
+        self.set_current_block(then_id);
         let then_reg = self.lower_expr(conseq, context).unwrap();
-        self.current_function.current_block_mut().terminator = Terminator::Jump(merge_id);
+        self.current_block_mut().terminator = Terminator::Jump(merge_id);
 
         if let Some(alt) = alt {
-            self.current_function.set_current_block(else_id.unwrap());
+            self.set_current_block(else_id.unwrap());
             else_reg = self.lower_expr(alt, context);
-            self.current_function.current_block_mut().terminator = Terminator::Jump(merge_id);
+            self.current_block_mut().terminator = Terminator::Jump(merge_id);
         }
 
-        self.current_function.set_current_block(merge_id);
+        self.current_func_mut().set_current_block(merge_id);
 
         let phi_dest_reg = context.registers.allocate();
 
-        self.current_function.push_instr(Instr::Phi(
+        self.current_block_mut().push_instr(Instr::Phi(
             phi_dest_reg.clone(),
             vec![
                 (then_reg, then_id),                   // Value from 'then' path came from then_bb
@@ -368,6 +399,18 @@ impl Lowerer {
         ));
 
         Some(phi_dest_reg)
+    }
+
+    fn current_func_mut(&mut self) -> &mut CurrentFunction {
+        self.current_functions.last_mut().unwrap()
+    }
+
+    fn current_block_mut(&mut self) -> &mut BasicBlock {
+        self.current_func_mut().current_block_mut()
+    }
+
+    fn set_current_block(&mut self, id: BasicBlockID) {
+        self.current_func_mut().set_current_block(id);
     }
 
     fn new_basic_block(&mut self) -> BasicBlockID {
@@ -384,12 +427,12 @@ impl Lowerer {
             terminator: Terminator::Unreachable, // Placeholder, must be set before block is "done"
         };
 
-        self.current_function.add_block(block);
+        self.current_func_mut().add_block(block);
         id
     }
 }
 
-fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> TypedExpr {
+fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> ExprID {
     for root in source_file.typed_roots() {
         if let TypedExpr {
             expr: Expr::Func(Some(Name::Resolved(_, name)), _, _, _, _),
@@ -397,7 +440,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> TypedExpr {
         } = root
         {
             if name == "main" {
-                return root.clone();
+                return root.id;
             }
         }
     }
@@ -420,6 +463,23 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> TypedExpr {
         None,
     );
 
+    source_file.set_typed_expr(
+        SymbolID::GENERATED_MAIN.0,
+        TypedExpr {
+            id: SymbolID::GENERATED_MAIN.0,
+            expr: func_expr.clone(),
+            ty: Ty::Func(vec![], Box::new(Ty::Void)),
+        },
+    );
+
+    source_file.add(
+        func_expr.clone(),
+        ExprMeta {
+            start: Token::GENERATED,
+            end: Token::GENERATED,
+        },
+    );
+
     source_file.set(
         SymbolID::GENERATED_MAIN,
         SymbolInfo {
@@ -429,10 +489,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> TypedExpr {
         },
     );
 
-    TypedExpr {
-        expr: func_expr,
-        ty: Ty::Func(vec![], Box::new(Ty::Void)),
-    }
+    SymbolID::GENERATED_MAIN.0
 }
 
 #[cfg(test)]
@@ -449,6 +506,34 @@ mod tests {
         let typed = check(input).unwrap();
         let lowerer = Lowerer::new(typed);
         lowerer.lower()
+    }
+
+    #[test]
+    fn lowers_nested_function() {
+        let lowered = lower("func foo() { 123 }").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![
+                IRFunction {
+                    name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        label: None,
+                        instructions: vec![],
+                        terminator: Terminator::Ret(Some(Register(0)))
+                    }]
+                },
+                IRFunction {
+                    name: Name::Resolved(SymbolID::at(1), "foo".into()),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(1),
+                        label: None,
+                        instructions: vec![Instr::ConstantInt(Register(1), 123)],
+                        terminator: Terminator::Ret(Some(Register(1)))
+                    }]
+                }
+            ]
+        )
     }
 
     #[test]

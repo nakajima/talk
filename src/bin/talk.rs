@@ -17,6 +17,7 @@ fn main() {
     #[derive(Subcommand, Debug)]
     enum Commands {
         IR { filename: String },
+        Run { filename: String },
     }
 
     let cli = Cli::parse();
@@ -34,7 +35,21 @@ fn main() {
             let mut solver = ConstraintSolver::new(&mut inferred);
             solver.solve().unwrap();
 
-            let lowered = lowering::ir::Lowerer::new(&inferred).lower_module();
+            let lowered = lowering::ir::Lowerer::new(inferred).lower();
+
+            println!("IR: {:#?}", lowered);
+        }
+        Commands::Run { filename } => {
+            // Read entire file into a String
+            let contents = std::fs::read_to_string(filename).expect("Could not read file");
+
+            let parsed = parse(&contents).unwrap();
+            let resolved = NameResolver::new().resolve(parsed);
+            let mut inferred = TypeChecker.infer(resolved).unwrap();
+            let mut solver = ConstraintSolver::new(&mut inferred);
+            solver.solve().unwrap();
+
+            let lowered = lowering::ir::Lowerer::new(inferred).lower();
 
             println!("IR: {:#?}", lowered);
         }

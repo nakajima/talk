@@ -111,6 +111,10 @@ impl SourceFile<Typed> {
         self.phase_data.symbol_table.import(&symbol_id, info);
     }
 
+    pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr) {
+        self.phase_data.env.typed_exprs.insert(id, typed_expr);
+    }
+
     pub fn typed_roots(&self) -> &[TypedExpr] {
         &self.phase_data.roots
     }
