@@ -44,6 +44,8 @@ fn main() {
         Commands::Run { filename } => {
             // Read entire file into a String
 
+            use talk::{cli::vm::VM, name::Name};
+
             let contents = std::fs::read_to_string(filename).expect("Could not read file");
 
             let parsed = parse(&contents).unwrap();
@@ -54,10 +56,10 @@ fn main() {
 
             let lowered = lowering::ir::Lowerer::new(inferred).lower().unwrap();
 
-            for func in lowered.functions() {
-                use talk::cli::vm::VM;
-                println!("{:?}", VM::new(&func).run());
-            }
+            println!(
+                "Running main function: {:?}",
+                VM::new(lowered.functions()).run()
+            );
         }
     }
 }

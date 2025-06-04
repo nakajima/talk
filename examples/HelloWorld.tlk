@@ -2,5 +2,4 @@ func add(x) {
   1 + x
 }
 
-add(1)
 add(2)

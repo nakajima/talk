@@ -15,7 +15,7 @@ use crate::{
 pub enum IRError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
-pub struct Register(u32);
+pub struct Register(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RefKind {
@@ -51,7 +51,7 @@ pub enum Terminator {
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
-pub struct BasicBlockID(u32);
+pub struct BasicBlockID(pub u32);
 
 impl AddAssign<u32> for BasicBlockID {
     fn add_assign(&mut self, rhs: u32) {
@@ -134,6 +134,16 @@ impl CurrentFunction {
 pub struct IRFunction {
     pub name: Name,
     pub blocks: Vec<BasicBlock>,
+}
+
+impl IRFunction {
+    pub fn symbol_id(&self) -> SymbolID {
+        let Name::Resolved(symbol, _) = self.name else {
+            panic!("unresolved func")
+        };
+
+        symbol
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -236,7 +246,8 @@ impl Lowerer {
             panic!("did not get body")
         };
 
-        self.new_basic_block();
+        let id = self.new_basic_block();
+        self.set_current_block(id);
 
         for param in params {
             let Expr::Parameter(Name::Resolved(symbol, _), _) =
