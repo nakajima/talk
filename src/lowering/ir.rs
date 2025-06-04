@@ -310,16 +310,12 @@ impl Lowerer {
         let register = self.current_func_mut().registers.allocate();
         match self.source_file.get(*expr_id).unwrap().clone() {
             Expr::LiteralInt(val) => {
-                self.current_block_mut().push_instr(Instr::ConstantInt(
-                    register,
-                    str::parse(&val).unwrap(),
-                ));
+                self.current_block_mut()
+                    .push_instr(Instr::ConstantInt(register, str::parse(&val).unwrap()));
             }
             Expr::LiteralFloat(val) => {
-                self.current_block_mut().push_instr(Instr::ConstantFloat(
-                    register,
-                    str::parse(&val).unwrap(),
-                ));
+                self.current_block_mut()
+                    .push_instr(Instr::ConstantFloat(register, str::parse(&val).unwrap()));
             }
             Expr::LiteralFalse => {
                 self.current_block_mut()
