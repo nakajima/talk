@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::AddAssign};
 
 use crate::{
-    Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, Typed,
+    SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     expr::{Expr, ExprMeta},
     name::Name,
     parser::ExprID,
@@ -48,6 +48,11 @@ pub enum Terminator {
     Unreachable,
     Jump(BasicBlockID),
     JumpUnless(Register, BasicBlockID),
+}
+
+pub struct IRProgram {
+    pub functions: Vec<IRFunction>,
+    pub symbol_table: Option<SymbolTable>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
@@ -132,18 +137,8 @@ impl CurrentFunction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IRFunction {
-    pub name: Name,
+    pub name: String,
     pub blocks: Vec<BasicBlock>,
-}
-
-impl IRFunction {
-    pub fn symbol_id(&self) -> SymbolID {
-        let Name::Resolved(symbol, _) = self.name else {
-            panic!("unresolved func")
-        };
-
-        symbol
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,7 +176,7 @@ impl Lowerer {
         }
     }
 
-    pub fn lower(mut self) -> Result<SourceFile<Lowered>, IRError> {
+    pub fn lower(mut self) -> Result<IRProgram, IRError> {
         let (expr_id, did_create) = find_or_create_main(&mut self.source_file);
 
         self.lower_function(&expr_id);
@@ -197,7 +192,10 @@ impl Lowerer {
             }
         }
 
-        Ok(self.source_file.to_lowered(self.lowered_functions))
+        Ok(IRProgram {
+            functions: self.lowered_functions,
+            symbol_table: Some(self.source_file.symbol_table()),
+        })
     }
 
     fn next_block_id(&mut self) -> BasicBlockID {
@@ -230,12 +228,12 @@ impl Lowerer {
         let name = match name {
             Some(Name::Resolved(_, _)) => name.clone().unwrap(),
             None => {
-                let name = format!("_fn_{:?}", typed_expr.ty);
+                let name_str = format!("_fn_{:?}", typed_expr.ty);
                 let symbol =
                     self.source_file
                         .symbol_table()
-                        .add(&name, SymbolKind::CustomType, 12345);
-                Name::Resolved(symbol, name)
+                        .add(&name_str, SymbolKind::CustomType, 12345);
+                Name::Resolved(symbol, name_str)
             }
             _ => todo!(),
         };
@@ -269,7 +267,7 @@ impl Lowerer {
         }
 
         let func = IRFunction {
-            name: name.clone(),
+            name: name.mangled(&typed_expr.ty),
             blocks: self.current_func_mut().blocks.clone(),
         };
         self.lowered_functions.push(func.clone());
@@ -593,15 +591,14 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Lowered, SourceFile, SymbolID, check,
+        SymbolID, check,
         lowering::ir::{
-            BasicBlock, BasicBlockID, IRError, IRFunction, Instr, Lowerer, RefKind, Register,
-            Terminator,
+            BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, Instr, Lowerer, RefKind,
+            Register, Terminator,
         },
-        name::Name,
     };
 
-    fn lower(input: &'static str) -> Result<SourceFile<Lowered>, IRError> {
+    fn lower(input: &'static str) -> Result<IRProgram, IRError> {
         let typed = check(input).unwrap();
         let lowerer = Lowerer::new(typed);
         lowerer.lower()
@@ -611,10 +608,10 @@ mod tests {
     fn lowers_nested_function() {
         let lowered = lower("func foo() { 123 }").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![
                 IRFunction {
-                    name: Name::Resolved(SymbolID::at(1), "foo".into()),
+                    name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
                         label: Some("bb1".into()),
@@ -623,7 +620,7 @@ mod tests {
                     }]
                 },
                 IRFunction {
-                    name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                    name: "main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
@@ -639,10 +636,10 @@ mod tests {
     fn lowers_calls() {
         let lowered = lower("func foo(x) { x }\n foo(123)").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![
                 IRFunction {
-                    name: Name::Resolved(SymbolID::at(1), "foo".into()),
+                    name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
                         label: Some("bb1".into()),
@@ -651,7 +648,7 @@ mod tests {
                     }]
                 },
                 IRFunction {
-                    name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                    name: "main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
@@ -675,10 +672,10 @@ mod tests {
     fn lowers_func_with_params() {
         let lowered = lower("func foo(x) { x }").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![
                 IRFunction {
-                    name: Name::Resolved(SymbolID::at(1), "foo".into()),
+                    name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
                         label: Some("bb1".into()),
@@ -687,7 +684,7 @@ mod tests {
                     }]
                 },
                 IRFunction {
-                    name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                    name: "main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
@@ -703,9 +700,9 @@ mod tests {
     fn lowers_int() {
         let lowered = lower("123").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -720,9 +717,9 @@ mod tests {
     fn lowers_float() {
         let lowered = lower("123.").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -737,9 +734,9 @@ mod tests {
     fn lowers_bools() {
         let lowered = lower("true\nfalse").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -757,9 +754,9 @@ mod tests {
     fn lowers_add() {
         let lowered = lower("1 + 2").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -778,9 +775,9 @@ mod tests {
     fn lowers_sub() {
         let lowered = lower("2 - 1").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -799,9 +796,9 @@ mod tests {
     fn lowers_mul() {
         let lowered = lower("2 * 1").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -820,9 +817,9 @@ mod tests {
     fn lowers_div() {
         let lowered = lower("2 / 1").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -841,9 +838,9 @@ mod tests {
     fn lowers_assignment() {
         let lowered = lower("let a = 123\na").unwrap();
         assert_eq!(
-            lowered.functions(),
+            lowered.functions,
             vec![IRFunction {
-                name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                name: "main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -870,7 +867,7 @@ mod tests {
         .unwrap();
 
         let expected = vec![IRFunction {
-            name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+            name: "main".into(),
             blocks: vec![
                 // if block
                 BasicBlock {
@@ -913,11 +910,9 @@ mod tests {
         }];
 
         assert_eq!(
-            lowered.functions(),
-            expected,
+            lowered.functions, expected,
             "{:#?} \n ========== {:#?}",
-            lowered.functions(),
-            expected
+            lowered.functions, expected
         );
     }
 }

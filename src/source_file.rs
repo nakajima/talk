@@ -5,7 +5,6 @@ use crate::{
     constraint_solver::Constraint,
     environment::{Environment, Scope, TypeDef},
     lowering::ir::IRFunction,
-    name::Name,
     symbol_table::SymbolTable,
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
@@ -208,19 +207,16 @@ impl SourceFile<Lowered> {
         self.phase_data.functions.clone()
     }
 
-    pub fn functions_by_symbol_id(&self) -> HashMap<SymbolID, IRFunction> {
-        self.phase_data
-            .functions
-            .clone()
-            .iter()
-            .fold(Default::default(), |mut r, f| {
-                let Name::Resolved(name, _) = f.name else {
-                    panic!("unresolved func")
-                };
-                r.insert(name, f.clone());
-                r
-            })
-    }
+    // pub fn functions_by_symbol_id(&self) -> HashMap<SymbolID, IRFunction> {
+    //     self.phase_data
+    //         .functions
+    //         .clone()
+    //         .iter()
+    //         .fold(Default::default(), |mut r, f| {
+    //             r.insert(f.symbol_id, f.clone());
+    //             r
+    //         })
+    // }
 }
 
 impl<P: Phase> SourceFile<P> {
