@@ -159,29 +159,26 @@ impl<'a> Parser<'a> {
             return Ok(expr::Pattern::Wildcard);
         }
 
-        match self.current.clone() {
-            Some(Token { kind, .. }) => match kind {
-                TokenKind::Int(value) => {
-                    self.advance();
-                    return Ok(expr::Pattern::LiteralInt(value));
-                }
-                TokenKind::Float(value) => {
-                    self.advance();
-                    return Ok(expr::Pattern::LiteralFloat(value));
-                }
-                TokenKind::True => {
-                    self.advance();
-                    return Ok(expr::Pattern::LiteralTrue);
-                }
-                TokenKind::False => {
-                    self.advance();
-                    return Ok(expr::Pattern::LiteralFalse);
-                }
+        if let Some(Token { kind, .. }) = self.current.clone() { match kind {
+            TokenKind::Int(value) => {
+                self.advance();
+                return Ok(expr::Pattern::LiteralInt(value));
+            }
+            TokenKind::Float(value) => {
+                self.advance();
+                return Ok(expr::Pattern::LiteralFloat(value));
+            }
+            TokenKind::True => {
+                self.advance();
+                return Ok(expr::Pattern::LiteralTrue);
+            }
+            TokenKind::False => {
+                self.advance();
+                return Ok(expr::Pattern::LiteralFalse);
+            }
 
-                _ => (),
-            },
-            None => (),
-        }
+            _ => (),
+        } }
 
         // if let Some(Token {
         //     kind: TokenKind::Int(value),

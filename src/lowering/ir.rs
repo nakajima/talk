@@ -261,7 +261,7 @@ impl Lowerer {
         }
 
         for (i, id) in body_exprs.iter().enumerate() {
-            let reg = self.lower_expr(&id);
+            let reg = self.lower_expr(id);
 
             if i == body_exprs.len() - 1 {
                 self.current_block_mut().terminator = Terminator::Ret(reg);
@@ -311,23 +311,23 @@ impl Lowerer {
         match self.source_file.get(*expr_id).unwrap().clone() {
             Expr::LiteralInt(val) => {
                 self.current_block_mut().push_instr(Instr::ConstantInt(
-                    register.clone(),
+                    register,
                     str::parse(&val).unwrap(),
                 ));
             }
             Expr::LiteralFloat(val) => {
                 self.current_block_mut().push_instr(Instr::ConstantFloat(
-                    register.clone(),
+                    register,
                     str::parse(&val).unwrap(),
                 ));
             }
             Expr::LiteralFalse => {
                 self.current_block_mut()
-                    .push_instr(Instr::ConstantBool(register.clone(), false));
+                    .push_instr(Instr::ConstantBool(register, false));
             }
             Expr::LiteralTrue => {
                 self.current_block_mut()
-                    .push_instr(Instr::ConstantBool(register.clone(), true));
+                    .push_instr(Instr::ConstantBool(register, true));
             }
             _ => unreachable!(),
         }
@@ -336,16 +336,16 @@ impl Lowerer {
     }
 
     fn lower_binary_op(&mut self, lhs: &ExprID, op: &TokenKind, rhs: &ExprID) -> Option<Register> {
-        let operand_1 = self.lower_expr(&lhs).unwrap();
-        let operand_2 = self.lower_expr(&rhs).unwrap();
+        let operand_1 = self.lower_expr(lhs).unwrap();
+        let operand_2 = self.lower_expr(rhs).unwrap();
         let return_reg = self.current_func_mut().registers.allocate();
 
         use TokenKind::*;
         let instr = match op {
-            Plus => Instr::Add(return_reg.clone(), operand_1, operand_2),
-            Minus => Instr::Sub(return_reg.clone(), operand_1, operand_2),
-            Star => Instr::Mul(return_reg.clone(), operand_1, operand_2),
-            Slash => Instr::Div(return_reg.clone(), operand_1, operand_2),
+            Plus => Instr::Add(return_reg, operand_1, operand_2),
+            Minus => Instr::Sub(return_reg, operand_1, operand_2),
+            Star => Instr::Mul(return_reg, operand_1, operand_2),
+            Slash => Instr::Div(return_reg, operand_1, operand_2),
             _ => panic!("Cannot lower binary operation: {:?}", op),
         };
 
@@ -432,7 +432,7 @@ impl Lowerer {
         let phi_dest_reg = self.current_func_mut().registers.allocate();
 
         self.current_block_mut().push_instr(Instr::Phi(
-            phi_dest_reg.clone(),
+            phi_dest_reg,
             vec![
                 (then_reg, then_id),                   // Value from 'then' path came from then_bb
                 (else_reg.unwrap(), else_id.unwrap()), // Value from 'else' path came from else_bb
@@ -489,7 +489,7 @@ impl Lowerer {
         }
 
         self.current_block_mut().push_instr(Instr::Call {
-            dest_reg: dest_reg, // clone if Register is Copy, else it's fine
+            dest_reg, // clone if Register is Copy, else it's fine
             callee: func_symbol_id,
             args: arg_registers,
         });
