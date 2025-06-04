@@ -20,6 +20,8 @@ fn main() {
         Run { filename: String },
     }
 
+    env_logger::builder().try_init();
+
     let cli = Cli::parse();
 
     // You can check for the existence of subcommands, and if found use their
@@ -41,6 +43,7 @@ fn main() {
         }
         Commands::Run { filename } => {
             // Read entire file into a String
+
             let contents = std::fs::read_to_string(filename).expect("Could not read file");
 
             let parsed = parse(&contents).unwrap();
@@ -49,9 +52,12 @@ fn main() {
             let mut solver = ConstraintSolver::new(&mut inferred);
             solver.solve().unwrap();
 
-            let lowered = lowering::ir::Lowerer::new(inferred).lower();
+            let lowered = lowering::ir::Lowerer::new(inferred).lower().unwrap();
 
-            println!("IR: {:#?}", lowered);
+            for func in lowered.functions() {
+                use talk::cli::vm::VM;
+                println!("{:?}", VM::new(&func).run());
+            }
         }
     }
 }

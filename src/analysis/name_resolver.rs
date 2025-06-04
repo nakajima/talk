@@ -68,8 +68,13 @@ impl NameResolver {
 
         // 1) Hoist all funcs in this block before any recursion
         for &id in &node_ids {
-            if let Func(Some(Name::Raw(name)), generics, params, body, ret) =
-                source_file.get(id).unwrap().clone()
+            if let Func {
+                name: Some(Name::Raw(name)),
+                generics,
+                params,
+                body,
+                ret,
+            } = source_file.get(id).unwrap().clone()
             {
                 let symbol_id = self.declare(name.clone(), SymbolKind::Func, id);
 
@@ -79,13 +84,13 @@ impl NameResolver {
 
                 // self.resolve_nodes(generics.clone(), source_file);
 
-                source_file.nodes[id as usize] = Func(
-                    Some(Name::Resolved(symbol_id, name)),
+                source_file.nodes[id as usize] = Func {
+                    name: Some(Name::Resolved(symbol_id, name)),
                     generics,
-                    params.to_vec(),
+                    params,
                     body,
                     ret,
-                );
+                };
             }
         }
 
@@ -153,7 +158,13 @@ impl NameResolver {
                     self.resolve_nodes(items.to_vec(), source_file);
                     self.end_scope();
                 }
-                Func(_name, generics, params, body, ret) => {
+                Func {
+                    generics,
+                    params,
+                    body,
+                    ret,
+                    ..
+                } => {
                     self.start_scope();
 
                     self.resolve_nodes(generics, source_file);
@@ -450,7 +461,7 @@ mod tests {
         let tree = resolve("func(x) { x }\n");
         let root = tree.roots()[0].unwrap();
 
-        if let Func(_, _, params, body_id, _ret) = root {
+        if let Func { params, body, .. } = root {
             assert_eq!(params.len(), 1);
             let x_param = tree.get(params[0]).unwrap();
             assert_eq!(
@@ -458,7 +469,7 @@ mod tests {
                 &Parameter(Name::Resolved(SymbolID::at(1), "x".into()), None)
             );
 
-            let Block(exprs) = &tree.get(*body_id).unwrap() else {
+            let Block(exprs) = &tree.get(*body).unwrap() else {
                 panic!("didn't get a block")
             };
 
@@ -478,7 +489,11 @@ mod tests {
         let tree = resolve("func(x, y) { func(x) { x \n y }\nx }\n");
         let outer = tree.roots()[0].unwrap();
         // outer Func has its body as an inner Func
-        let Func(_, _, _, outer_body_id, _ret) = outer else {
+        let Func {
+            body: outer_body_id,
+            ..
+        } = outer
+        else {
             panic!("did not get outer func")
         };
         let Block(outer_body) = &tree.get(*outer_body_id).unwrap() else {
@@ -486,7 +501,11 @@ mod tests {
         };
 
         let inner = tree.get(outer_body[0]).unwrap();
-        let Func(_, _, _, inner_body_id, _ret) = inner else {
+        let Func {
+            body: inner_body_id,
+            ..
+        } = inner
+        else {
             panic!("didn't get inner func")
         };
 

@@ -35,6 +35,11 @@ pub enum Instr {
     LoadLocal(Register, Register),
     Phi(Register, Vec<(Register, BasicBlockID)>),
     Ref(Register, RefKind),
+    Call {
+        dest_reg: Option<Register>,
+        callee: SymbolID,
+        args: Vec<Register>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,13 +73,28 @@ impl BasicBlock {
     }
 }
 
-#[derive(Default)]
 struct CurrentFunction {
     current_block_idx: usize,
     blocks: Vec<BasicBlock>,
+    pub registers: RegisterAllocator,
+    pub symbol_registers: HashMap<SymbolID, Register>,
 }
 
 impl CurrentFunction {
+    #[track_caller]
+    fn new() -> Self {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
+        }
+        Self {
+            current_block_idx: 0,
+            blocks: Default::default(),
+            registers: RegisterAllocator::new(),
+            symbol_registers: Default::default(),
+        }
+    }
+
     fn add_block(&mut self, block: BasicBlock) {
         self.blocks.push(block);
     }
@@ -86,6 +106,27 @@ impl CurrentFunction {
     fn set_current_block(&mut self, id: BasicBlockID) {
         let index = self.blocks.iter().position(|blk| blk.id == id).unwrap();
         self.current_block_idx = index;
+    }
+
+    #[track_caller]
+    fn register_symbol(&mut self, symbol_id: SymbolID, register: Register) {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "register symbol {:?}: {:?} from {}:{}",
+                symbol_id,
+                register,
+                loc.file(),
+                loc.line()
+            );
+        }
+        self.symbol_registers.insert(symbol_id, register);
+    }
+
+    fn lookup_symbol(&self, symbol_id: &SymbolID) -> &Register {
+        self.symbol_registers
+            .get(symbol_id)
+            .unwrap_or_else(|| panic!("No register found for symbol: {:?}", symbol_id))
     }
 }
 
@@ -102,6 +143,7 @@ struct RegisterAllocator {
 
 impl RegisterAllocator {
     fn new() -> Self {
+        log::trace!("new register allocator");
         Self { next_id: 0 }
     }
 
@@ -109,31 +151,6 @@ impl RegisterAllocator {
         let id = self.next_id;
         self.next_id += 1;
         Register(id)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct ScopeContext {
-    pub registers: RegisterAllocator,
-    pub symbol_registers: HashMap<SymbolID, Register>,
-}
-
-impl ScopeContext {
-    pub fn new() -> Self {
-        Self {
-            registers: RegisterAllocator::new(),
-            symbol_registers: Default::default(),
-        }
-    }
-
-    fn register_symbol(&mut self, symbol_id: SymbolID, register: Register) {
-        self.symbol_registers.insert(symbol_id, register);
-    }
-
-    fn lookup_symbol(&self, symbol_id: &SymbolID) -> &Register {
-        self.symbol_registers
-            .get(symbol_id)
-            .expect("No register found for symbol")
     }
 }
 
@@ -155,14 +172,18 @@ impl Lowerer {
     }
 
     pub fn lower(mut self) -> Result<SourceFile<Lowered>, IRError> {
-        let expr_id = find_or_create_main(&mut self.source_file);
+        let (expr_id, did_create) = find_or_create_main(&mut self.source_file);
 
         self.lower_function(&expr_id);
 
-        let typed_roots = self.source_file.typed_roots().to_owned();
-        for root in typed_roots {
-            if let Expr::Func(_, _, _, _, _) = &root.expr {
-                self.lower_function(&root.id);
+        // If we created the main function, we moved all the typed roots into its body
+        // so we don't need to lower them again.
+        if !did_create {
+            let typed_roots = self.source_file.typed_roots().to_owned();
+            for root in typed_roots {
+                if let Expr::Func { .. } = &root.expr {
+                    self.lower_function(&root.id);
+                }
             }
         }
 
@@ -181,14 +202,20 @@ impl Lowerer {
             .typed_expr(expr_id)
             .expect("Did not get typed expr");
 
-        let Expr::Func(ref name, _, _, ref body, _) = typed_expr.expr else {
+        let Expr::Func {
+            ref name,
+            ref params,
+            ref body,
+            ..
+        } = typed_expr.expr
+        else {
             panic!(
                 "Attempted to lower non-function: {:?}",
                 self.source_file.get(*expr_id)
             );
         };
 
-        self.current_functions.push(CurrentFunction::default());
+        self.current_functions.push(CurrentFunction::new());
 
         let name = match name {
             Some(Name::Resolved(_, _)) => name.clone().unwrap(),
@@ -203,15 +230,27 @@ impl Lowerer {
             _ => todo!(),
         };
 
+        log::trace!("lowering {:?}", name);
+
         let Some(Expr::Block(body_exprs)) = self.source_file.get(*body).cloned() else {
             panic!("did not get body")
         };
 
         self.new_basic_block();
-        let mut context = ScopeContext::new();
+
+        for param in params {
+            let Expr::Parameter(Name::Resolved(symbol, _), _) =
+                self.source_file.get(*param).unwrap().clone()
+            else {
+                panic!("didn't get parameter")
+            };
+
+            let register = self.current_func_mut().registers.allocate();
+            self.current_func_mut().register_symbol(symbol, register);
+        }
 
         for (i, id) in body_exprs.iter().enumerate() {
-            let reg = self.lower_expr(&id, &mut context);
+            let reg = self.lower_expr(&id);
 
             if i == body_exprs.len() - 1 {
                 self.current_block_mut().terminator = Terminator::Ret(reg);
@@ -231,20 +270,23 @@ impl Lowerer {
         symbol
     }
 
-    fn lower_expr(&mut self, expr_id: &ExprID, context: &mut ScopeContext) -> Option<Register> {
-        match self.source_file.get(*expr_id).unwrap().clone() {
+    fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
+        let typed_expr = self.source_file.typed_expr(expr_id).unwrap().clone();
+        match typed_expr.expr {
             Expr::LiteralInt(_)
             | Expr::LiteralFloat(_)
             | Expr::LiteralFalse
-            | Expr::LiteralTrue => self.lower_literal(expr_id, context),
-            Expr::Binary(lhs, op, rhs) => self.lower_binary_op(&lhs, &op, &rhs, context),
-            Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs, context),
-            Expr::Variable(name, _) => self.lower_variable(&name, context),
-            Expr::If(cond, conseq, alt) => self.lower_if(&cond, &conseq, &alt, context),
-            Expr::Block(_) => self.lower_block(expr_id, context),
-            Expr::Func(_, _, _, _, _) => {
+            | Expr::LiteralTrue => self.lower_literal(expr_id),
+            Expr::Binary(lhs, op, rhs) => self.lower_binary_op(&lhs, &op, &rhs),
+            Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs),
+            Expr::Variable(name, _) => self.lower_variable(&name),
+            Expr::If(cond, conseq, alt) => self.lower_if(&cond, &conseq, &alt),
+            Expr::Block(_) => self.lower_block(expr_id),
+            Expr::Call(callee, args) => self.lower_call(callee, args, typed_expr.ty),
+            Expr::Func { .. } => {
                 let symbol_id = self.lower_function(expr_id);
-                let reg = context.registers.allocate();
+                let reg = self.current_func_mut().registers.allocate();
+                self.current_func_mut().register_symbol(symbol_id, reg);
                 self.current_block_mut()
                     .push_instr(Instr::Ref(reg, RefKind::Func(symbol_id)));
                 Some(reg)
@@ -253,8 +295,8 @@ impl Lowerer {
         }
     }
 
-    fn lower_literal(&mut self, expr_id: &ExprID, context: &mut ScopeContext) -> Option<Register> {
-        let register = context.registers.allocate();
+    fn lower_literal(&mut self, expr_id: &ExprID) -> Option<Register> {
+        let register = self.current_func_mut().registers.allocate();
         match self.source_file.get(*expr_id).unwrap().clone() {
             Expr::LiteralInt(val) => {
                 self.current_block_mut().push_instr(Instr::ConstantInt(
@@ -282,16 +324,10 @@ impl Lowerer {
         Some(register)
     }
 
-    fn lower_binary_op(
-        &mut self,
-        lhs: &ExprID,
-        op: &TokenKind,
-        rhs: &ExprID,
-        context: &mut ScopeContext,
-    ) -> Option<Register> {
-        let operand_1 = self.lower_expr(&lhs, context).unwrap();
-        let operand_2 = self.lower_expr(&rhs, context).unwrap();
-        let return_reg = context.registers.allocate();
+    fn lower_binary_op(&mut self, lhs: &ExprID, op: &TokenKind, rhs: &ExprID) -> Option<Register> {
+        let operand_1 = self.lower_expr(&lhs).unwrap();
+        let operand_2 = self.lower_expr(&rhs).unwrap();
+        let return_reg = self.current_func_mut().registers.allocate();
 
         use TokenKind::*;
         let instr = match op {
@@ -307,26 +343,21 @@ impl Lowerer {
         Some(return_reg)
     }
 
-    fn lower_assignment(
-        &mut self,
-        lhs: &ExprID,
-        rhs: &ExprID,
-        context: &mut ScopeContext,
-    ) -> Option<Register> {
+    fn lower_assignment(&mut self, lhs: &ExprID, rhs: &ExprID) -> Option<Register> {
         let rhs = self
-            .lower_expr(rhs, context)
+            .lower_expr(rhs)
             .expect("Did not get rhs for assignment");
 
-        match self.source_file.get(*lhs).unwrap() {
+        match self.source_file.get(*lhs).unwrap().clone() {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
-                context.register_symbol(*symbol_id, rhs);
+                self.current_func_mut().register_symbol(symbol_id, rhs);
                 None
             }
             _ => todo!(),
         }
     }
 
-    fn lower_block(&mut self, block_id: &ExprID, context: &mut ScopeContext) -> Option<Register> {
+    fn lower_block(&mut self, block_id: &ExprID) -> Option<Register> {
         let Expr::Block(exprs) = self.source_file.get(*block_id).unwrap().clone() else {
             unreachable!()
         };
@@ -336,7 +367,7 @@ impl Lowerer {
         }
 
         for (i, id) in exprs.iter().enumerate() {
-            let reg = self.lower_expr(id, context);
+            let reg = self.lower_expr(id);
             if i == exprs.len() - 1 {
                 return reg;
             }
@@ -345,12 +376,12 @@ impl Lowerer {
         None
     }
 
-    fn lower_variable(&mut self, name: &Name, context: &mut ScopeContext) -> Option<Register> {
+    fn lower_variable(&mut self, name: &Name) -> Option<Register> {
         let Name::Resolved(symbol_id, _) = name else {
             panic!("Unresolved variable: {:?}", name)
         };
 
-        Some(*context.lookup_symbol(symbol_id))
+        Some(*self.current_func_mut().lookup_symbol(symbol_id))
     }
 
     fn lower_if(
@@ -358,10 +389,9 @@ impl Lowerer {
         cond: &ExprID,
         conseq: &ExprID,
         alt: &Option<ExprID>,
-        context: &mut ScopeContext,
     ) -> Option<Register> {
         let cond_reg = self
-            .lower_expr(cond, context)
+            .lower_expr(cond)
             .expect("Condition for if expression did not produce a value");
 
         let then_id = self.new_basic_block();
@@ -377,18 +407,18 @@ impl Lowerer {
             Terminator::JumpUnless(cond_reg, else_id.unwrap_or(merge_id));
 
         self.set_current_block(then_id);
-        let then_reg = self.lower_expr(conseq, context).unwrap();
+        let then_reg = self.lower_expr(conseq).unwrap();
         self.current_block_mut().terminator = Terminator::Jump(merge_id);
 
         if let Some(alt) = alt {
             self.set_current_block(else_id.unwrap());
-            else_reg = self.lower_expr(alt, context);
+            else_reg = self.lower_expr(alt);
             self.current_block_mut().terminator = Terminator::Jump(merge_id);
         }
 
         self.current_func_mut().set_current_block(merge_id);
 
-        let phi_dest_reg = context.registers.allocate();
+        let phi_dest_reg = self.current_func_mut().registers.allocate();
 
         self.current_block_mut().push_instr(Instr::Phi(
             phi_dest_reg.clone(),
@@ -399,6 +429,62 @@ impl Lowerer {
         ));
 
         Some(phi_dest_reg)
+    }
+
+    fn lower_call(&mut self, callee: ExprID, args: Vec<ExprID>, ty: Ty) -> Option<Register> {
+        let mut arg_registers = vec![];
+        for arg in args {
+            if let Some(arg_reg) = self.lower_expr(&arg) {
+                arg_registers.push(arg_reg);
+            } else {
+                // This would happen if an argument expression doesn't produce a value.
+                // Depending on your language, this might be an error or indicate a void arg,
+                // though void args are uncommon.
+                panic!("Argument expression did not produce a value for call");
+            }
+        }
+
+        let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
+        let func_symbol_id = match &callee_typed_expr.expr {
+            Expr::Variable(Name::Resolved(symbol_id, _), _) => {
+                // Check if the type of this variable is indeed a function
+                if !matches!(callee_typed_expr.ty, Ty::Func(_, _)) {
+                    panic!(
+                        "Attempting to call a non-function variable: {:?}",
+                        callee_typed_expr
+                    );
+                }
+                *symbol_id
+            }
+            // Later, you might handle other forms of callees, like Expr::Member for methods,
+            // or expressions that evaluate to function pointers/closures.
+            _ => panic!(
+                "Unsupported callee expression type: {:?}",
+                callee_typed_expr.expr
+            ),
+        };
+
+        // 3. Allocate Destination Register for Return Value (if not void)
+        let dest_reg: Option<Register>;
+        match ty {
+            Ty::Void => {
+                // Assuming you have a Ty::Void or similar
+                dest_reg = None;
+            }
+            _ => {
+                // Any other type means it returns a value
+                dest_reg = Some(self.current_func_mut().registers.allocate());
+            }
+        }
+
+        self.current_block_mut().push_instr(Instr::Call {
+            dest_reg: dest_reg, // clone if Register is Copy, else it's fine
+            callee: func_symbol_id,
+            args: arg_registers,
+        });
+
+        // 5. Return the destination register
+        dest_reg
     }
 
     fn current_func_mut(&mut self) -> &mut CurrentFunction {
@@ -432,21 +518,26 @@ impl Lowerer {
     }
 }
 
-fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> ExprID {
+fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
     for root in source_file.typed_roots() {
         if let TypedExpr {
-            expr: Expr::Func(Some(Name::Resolved(_, name)), _, _, _, _),
+            expr:
+                Expr::Func {
+                    name: Some(Name::Resolved(_, name)),
+                    ..
+                },
             ..
         } = root
         {
             if name == "main" {
-                return root.id;
+                return (root.id, false);
             }
         }
     }
 
     // We didn't find a main, we have to generate one
     let body = Expr::Block(source_file.root_ids());
+
     let body_id = source_file.add(
         body,
         ExprMeta {
@@ -455,13 +546,13 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> ExprID {
         },
     );
 
-    let func_expr = Expr::Func(
-        Some(Name::Resolved(SymbolID::GENERATED_MAIN, "main".into())),
-        vec![],
-        vec![],
-        body_id,
-        None,
-    );
+    let func_expr = Expr::Func {
+        name: Some(Name::Resolved(SymbolID::GENERATED_MAIN, "main".into())),
+        generics: vec![],
+        params: vec![],
+        body: body_id,
+        ret: None,
+    };
 
     source_file.set_typed_expr(
         SymbolID::GENERATED_MAIN.0,
@@ -489,7 +580,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> ExprID {
         },
     );
 
-    SymbolID::GENERATED_MAIN.0
+    (SymbolID::GENERATED_MAIN.0, true)
 }
 
 #[cfg(test)]
@@ -497,7 +588,8 @@ mod tests {
     use crate::{
         Lowered, SourceFile, SymbolID, check,
         lowering::ir::{
-            BasicBlock, BasicBlockID, IRError, IRFunction, Instr, Lowerer, Register, Terminator,
+            BasicBlock, BasicBlockID, IRError, IRFunction, Instr, Lowerer, RefKind, Register,
+            Terminator,
         },
         name::Name,
     };
@@ -515,23 +607,87 @@ mod tests {
             lowered.functions(),
             vec![
                 IRFunction {
+                    name: Name::Resolved(SymbolID::at(1), "foo".into()),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(1),
+                        label: Some("bb1".into()),
+                        instructions: vec![Instr::ConstantInt(Register(0), 123)],
+                        terminator: Terminator::Ret(Some(Register(0)))
+                    }]
+                },
+                IRFunction {
                     name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
+                        instructions: vec![Instr::Ref(Register(0), RefKind::Func(SymbolID(5)))],
+                        terminator: Terminator::Ret(Some(Register(0)))
+                    }]
+                },
+            ]
+        )
+    }
+
+    #[test]
+    fn lowers_calls() {
+        let lowered = lower("func foo(x) { x }\n foo(123)").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![
+                IRFunction {
+                    name: Name::Resolved(SymbolID::at(1), "foo".into()),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(1),
+                        label: Some("bb1".into()),
                         instructions: vec![],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
                 },
                 IRFunction {
+                    name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        label: None,
+                        instructions: vec![
+                            Instr::Ref(Register(0), RefKind::Func(SymbolID(5))),
+                            Instr::ConstantInt(Register(1), 123),
+                            Instr::Call {
+                                dest_reg: Some(Register(2)),
+                                callee: SymbolID::at(1),
+                                args: vec![Register(1)]
+                            }
+                        ],
+                        terminator: Terminator::Ret(Some(Register(2)))
+                    }]
+                },
+            ]
+        )
+    }
+
+    #[test]
+    fn lowers_func_with_params() {
+        let lowered = lower("func foo(x) { x }").unwrap();
+        assert_eq!(
+            lowered.functions(),
+            vec![
+                IRFunction {
                     name: Name::Resolved(SymbolID::at(1), "foo".into()),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
-                        label: None,
-                        instructions: vec![Instr::ConstantInt(Register(1), 123)],
-                        terminator: Terminator::Ret(Some(Register(1)))
+                        label: Some("bb1".into()),
+                        instructions: vec![],
+                        terminator: Terminator::Ret(Some(Register(0)))
                     }]
-                }
+                },
+                IRFunction {
+                    name: Name::Resolved(SymbolID::GENERATED_MAIN, "main".into()),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        label: None,
+                        instructions: vec![Instr::Ref(Register(0), RefKind::Func(SymbolID(5)))],
+                        terminator: Terminator::Ret(Some(Register(0)))
+                    }]
+                },
             ]
         )
     }

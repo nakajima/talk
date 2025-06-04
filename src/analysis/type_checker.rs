@@ -165,7 +165,13 @@ impl TypeChecker {
             Expr::TupleTypeRepr(types, _is_type_parameter) => {
                 self.infer_tuple_type_repr(env, types, expected, source_file)
             }
-            Expr::Func(name, generics, params, body, ret) => self.infer_func(
+            Expr::Func {
+                name,
+                generics,
+                params,
+                body,
+                ret,
+            } => self.infer_func(
                 id,
                 env,
                 name,
@@ -966,13 +972,10 @@ impl TypeChecker {
         for id in root_ids.iter() {
             let expr = source_file.get(*id).unwrap().clone();
 
-            if let Expr::Func(
-                Some(Name::Resolved(symbol_id, _)),
-                ref _generics,
-                ref _params,
-                _body,
-                _ret,
-            ) = expr
+            if let Expr::Func {
+                name: Some(Name::Resolved(symbol_id, _)),
+                ..
+            } = expr
             {
                 let fn_var =
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));

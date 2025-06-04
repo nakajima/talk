@@ -137,8 +137,12 @@ impl<'a> VM<'a> {
 
     fn execute_instruction(&mut self, instr: Instr) {
         // For debugging:
-        // println!("Regs: {:?}, Locals: {:?}", self.registers, self.locals);
-        // println!("Executing @{}.{}: {:?}", self.current_block_id.0, self.ip, instr);
+        println!("Regs: {:?}, Locals: {:?}", self.registers, self.locals);
+        println!(
+            "Executing @{:?}.{:?}: {:?}",
+            self.current_block_id, self.ip, instr
+        );
+
         match instr {
             Instr::ConstantInt(dest, val) => self.set_reg_val(dest, Value::Int(val)),
             Instr::ConstantFloat(dest, val) => self.set_reg_val(dest, Value::Float(val)),
@@ -235,6 +239,9 @@ impl<'a> VM<'a> {
                 }
             }
             Instr::Ref(_register, _ref_kind) => {
+                todo!()
+            }
+            Instr::Call { .. } => {
                 todo!()
             }
         }

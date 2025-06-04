@@ -534,13 +534,13 @@ impl<'a> Parser<'a> {
 
         let body = self.block(false)?;
 
-        self.add_expr(Expr::Func(
-            name.map(|s| s.to_string()).map(Name::Raw),
+        self.add_expr(Expr::Func {
+            name: name.map(|s| s.to_string()).map(Name::Raw),
             generics,
             params,
             body,
-            ret.transpose()?,
-        ))
+            ret: ret.transpose()?,
+        })
     }
 
     fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {
@@ -990,7 +990,16 @@ mod tests {
         let parsed = parse("func() { }").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::Func(None, vec![], vec![], 0, None));
+        assert_eq!(
+            *expr,
+            Expr::Func {
+                name: None,
+                generics: vec![],
+                params: vec![],
+                body: 0,
+                ret: None
+            }
+        );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
 
@@ -1007,13 +1016,13 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![],
-                vec![0],
-                2,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![],
+                params: vec![0],
+                body: 2,
+                ret: None
+            }
         );
     }
 
@@ -1024,13 +1033,13 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![],
-                vec![],
-                0,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![],
+                params: vec![],
+                body: 0,
+                ret: None
+            }
         );
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
     }
@@ -1047,13 +1056,13 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![0],
-                vec![1],
-                4,
-                Some(2)
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![0],
+                params: vec![1],
+                body: 4,
+                ret: Some(2)
+            }
         );
 
         assert_eq!(*parsed.get(1).unwrap(), Expr::Parameter("t".into(), None));
@@ -1070,25 +1079,25 @@ mod tests {
         assert_eq!(2, parsed.roots().len());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Func(
-                Some(Name::Raw("hello".to_string())),
-                vec![],
-                vec![],
-                0,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("hello".to_string())),
+                generics: vec![],
+                params: vec![],
+                body: 0,
+                ret: None
+            }
         );
 
         assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
-            Expr::Func(
-                Some(Name::Raw("world".to_string())),
-                vec![],
-                vec![],
-                2,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("world".to_string())),
+                generics: vec![],
+                params: vec![],
+                body: 2,
+                ret: None
+            }
         );
         assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
     }
@@ -1100,13 +1109,13 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![],
-                vec![0, 1],
-                2,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![],
+                params: vec![0, 1],
+                body: 2,
+                ret: None
+            }
         );
     }
 
@@ -1116,13 +1125,13 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![],
-                vec![1],
-                2,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![],
+                params: vec![1],
+                body: 2,
+                ret: None
+            }
         );
 
         assert_eq!(
@@ -1194,13 +1203,13 @@ mod tests {
 
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("fizz".to_string())),
-                vec![],
-                vec![],
-                2,
-                Some(0)
-            )
+            Expr::Func {
+                name: Some(Name::Raw("fizz".to_string())),
+                generics: vec![],
+                params: vec![],
+                body: 2,
+                ret: Some(0)
+            }
         );
     }
 
@@ -1444,13 +1453,13 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![],
-                vec![3],
-                4,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![],
+                params: vec![3],
+                body: 4,
+                ret: None
+            }
         );
 
         assert_eq!(
@@ -1480,13 +1489,13 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(
             *expr,
-            Expr::Func(
-                Some(Name::Raw("greet".to_string())),
-                vec![],
-                vec![2],
-                3,
-                None
-            )
+            Expr::Func {
+                name: Some(Name::Raw("greet".to_string())),
+                generics: vec![],
+                params: vec![2],
+                body: 3,
+                ret: None
+            }
         );
 
         assert_eq!(

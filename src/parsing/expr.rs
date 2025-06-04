@@ -79,13 +79,13 @@ pub enum Expr {
     Member(Option<ExprID> /* receiver */, String),
 
     // Function stuff
-    Func(
-        Option<Name>,
-        Vec<ExprID>,
-        Vec<ExprID>,    /* params tuple */
-        ExprID,         /* body */
-        Option<ExprID>, /* return type */
-    ),
+    Func {
+        name: Option<Name>,
+        generics: Vec<ExprID>,
+        params: Vec<ExprID>, /* params tuple */
+        body: ExprID,        /* body */
+        ret: Option<ExprID>, /* return type */
+    },
     Parameter(Name /* name */, Option<ExprID> /* TypeRepr */),
 
     // Variables

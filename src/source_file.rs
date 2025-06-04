@@ -119,6 +119,10 @@ impl SourceFile<Typed> {
         &self.phase_data.roots
     }
 
+    pub fn replace_root_ids(&mut self, with: TypedExpr) {
+        self.phase_data.roots = vec![with];
+    }
+
     pub fn types_mut(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
         &mut self.phase_data.env.typed_exprs
     }
