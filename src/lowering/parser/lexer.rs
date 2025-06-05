@@ -4,6 +4,7 @@ pub enum LexerError {
     UnexpectedInput(char),
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum Tokind {
     Percent,
     At,
@@ -12,16 +13,26 @@ pub enum Tokind {
     LeftParen,
     RightParen,
     Func,
+    Equals,
     Colon,
     Semicolon,
     Underscore,
     Newline,
-    Float(String),
-    Int(String),
+    ConstFloat(String),
+    ConstInt(String),
     Identifier(String),
+    Int,
+    Float,
+    True,
+    False,
+    Bool,
+    Void,
+    Ret,
+    Entry,
     EOF,
 }
 
+#[derive(Debug, Clone)]
 pub struct Token {
     pub kind: Tokind,
     pub start: usize,
@@ -46,6 +57,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Token, LexerError> {
         // Skip whitespaces
         loop {
@@ -93,6 +105,7 @@ impl<'a> Lexer<'a> {
             '%' => self.make(Tokind::Percent),
             '@' => self.make(Tokind::At),
             '#' => self.make(Tokind::Hash),
+            '=' => self.make(Tokind::Equals),
             '\n' => self.make(Tokind::Newline),
             '_' => {
                 if let Some(next) = self.chars.peek() {
@@ -138,6 +151,12 @@ impl<'a> Lexer<'a> {
 
         match &self.code[start_idx..=end_idx] {
             "func" => Tokind::Func,
+            "int" => Tokind::Int,
+            "float" => Tokind::Float,
+            "bool" => Tokind::Bool,
+            "void" => Tokind::Void,
+            "entry" => Tokind::Entry,
+            "ret" => Tokind::Ret,
             _ => Tokind::Identifier(self.code[start_idx..=end_idx].to_string()),
         }
     }
@@ -162,9 +181,9 @@ impl<'a> Lexer<'a> {
         let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
         if is_float {
-            Tokind::Float(self.code[start_idx..=end_idx].to_string())
+            Tokind::ConstFloat(self.code[start_idx..=end_idx].to_string())
         } else {
-            Tokind::Int(self.code[start_idx..=end_idx].to_string())
+            Tokind::ConstInt(self.code[start_idx..=end_idx].to_string())
         }
     }
 }

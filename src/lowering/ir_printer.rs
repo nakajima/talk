@@ -62,7 +62,7 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
     }
 
     res.push_str(")");
-    res.push_str(" -> ");
+    res.push_str(" ");
     res.push_str(&print_ir_ty(ret));
 
     res
@@ -205,7 +205,7 @@ fn format_terminator(terminator: &Terminator) -> String {
         Terminator::JumpUnless(register, basic_block_id) => format!(
             "jump_unless {} {};",
             format_register(register),
-            basic_block_id.0
+            format_block_id(basic_block_id)
         ),
     }
 }
@@ -246,13 +246,13 @@ mod tests {
         let func = print(&program);
         assert_eq!(
             func,
-            "func @_5_add(int %0) -> int
+            "func @_5_add(int %0) int
   entry:
     %1 = int 1;
     %2 = add int %1, %0;
     ret %2;
 
-func @main() -> void
+func @main() void
   entry:
     %0 = @_5_add;
     ret %0;

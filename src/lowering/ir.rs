@@ -74,7 +74,7 @@ pub enum Instr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Terminator {
-    Ret(Option<Register>),
+    Ret(Option<(IRType, Register)>),
     Unreachable,
     Jump(BasicBlockID),
     JumpUnless(Register, BasicBlockID),
@@ -309,10 +309,15 @@ impl Lowerer {
         }
 
         for (i, id) in body_exprs.iter().enumerate() {
-            let reg = self.lower_expr(id);
+            let ret = if let Some(reg) = self.lower_expr(id) {
+                let ty = self.source_file.typed_expr(id).unwrap().ty.to_ir();
+                Some((ty, reg))
+            } else {
+                None
+            };
 
             if i == body_exprs.len() - 1 {
-                self.current_block_mut().terminator = Terminator::Ret(reg);
+                self.current_block_mut().terminator = Terminator::Ret(ret);
             }
         }
 
@@ -699,7 +704,7 @@ mod tests {
                         id: BasicBlockID(0),
                         label: None,
                         instructions: vec![Instr::ConstantInt(Register(0), 123)],
-                        terminator: Terminator::Ret(Some(Register(0)))
+                        terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
                     }]
                 },
                 IRFunction {
@@ -713,7 +718,7 @@ mod tests {
                             IRType::Func(vec![], IRType::Int.into()),
                             RefKind::Func("@_5_foo".into())
                         )],
-                        terminator: Terminator::Ret(Some(Register(0)))
+                        terminator: Terminator::Ret(Some((IRType::Void, Register(0))))
                     }]
                 },
             ]
@@ -736,7 +741,7 @@ mod tests {
                         id: BasicBlockID(0),
                         label: None,
                         instructions: vec![],
-                        terminator: Terminator::Ret(Some(Register(0)))
+                        terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
                     }]
                 },
                 IRFunction {
@@ -762,7 +767,7 @@ mod tests {
                                 args: vec![Register(1)]
                             },
                         ],
-                        terminator: Terminator::Ret(Some(Register(2)))
+                        terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                     }]
                 },
             ]
@@ -785,7 +790,7 @@ mod tests {
                         id: BasicBlockID(0),
                         label: None,
                         instructions: vec![],
-                        terminator: Terminator::Ret(Some(Register(0)))
+                        terminator: Terminator::Ret(Some((IRType::Void, Register(0))))
                     }]
                 },
                 IRFunction {
@@ -802,7 +807,10 @@ mod tests {
                             ),
                             RefKind::Func("@_5_foo".into())
                         )],
-                        terminator: Terminator::Ret(Some(Register(0)))
+                        terminator: Terminator::Ret(Some((
+                            IRType::TypeVar("T3".into()),
+                            Register(0)
+                        )))
                     }]
                 },
             ]
@@ -821,7 +829,7 @@ mod tests {
                     id: BasicBlockID(0),
                     label: None,
                     instructions: vec![Instr::ConstantInt(Register(0), 123)],
-                    terminator: Terminator::Ret(Some(Register(0)))
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
                 }]
             }]
         )
@@ -839,7 +847,7 @@ mod tests {
                     id: BasicBlockID(0),
                     label: None,
                     instructions: vec![Instr::ConstantFloat(Register(0), 123.)],
-                    terminator: Terminator::Ret(Some(Register(0)))
+                    terminator: Terminator::Ret(Some((IRType::Float, Register(0))))
                 }]
             }]
         )
@@ -860,7 +868,7 @@ mod tests {
                         Instr::ConstantBool(Register(0), true),
                         Instr::ConstantBool(Register(1), false),
                     ],
-                    terminator: Terminator::Ret(Some(Register(1)))
+                    terminator: Terminator::Ret(Some((IRType::Bool, Register(1))))
                 }]
             }]
         )
@@ -882,7 +890,7 @@ mod tests {
                         Instr::ConstantInt(Register(1), 2),
                         Instr::Add(Register(2), IRType::Int, Register(0), Register(1))
                     ],
-                    terminator: Terminator::Ret(Some(Register(2)))
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -904,7 +912,7 @@ mod tests {
                         Instr::ConstantInt(Register(1), 1),
                         Instr::Sub(Register(2), IRType::Int, Register(0), Register(1))
                     ],
-                    terminator: Terminator::Ret(Some(Register(2)))
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -966,7 +974,7 @@ mod tests {
                     id: BasicBlockID(0),
                     label: None,
                     instructions: vec![Instr::ConstantInt(Register(0), 123),],
-                    terminator: Terminator::Ret(Some(Register(0)))
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
                 }]
             }]
         )
@@ -1027,7 +1035,7 @@ mod tests {
                         ),
                         Instr::ConstantInt(Register(4), 789),
                     ],
-                    terminator: Terminator::Ret(Some(Register(4))),
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(4)))),
                 },
             ],
         }];
