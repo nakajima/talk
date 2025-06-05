@@ -69,7 +69,7 @@ impl<'a> Parser<'a> {
         Ok(IRFunction {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
-            blocks: vec![],
+            blocks,
         })
     }
 
@@ -296,7 +296,6 @@ impl<'a> Parser<'a> {
     fn advance(&mut self) -> Option<Token> {
         self.previous = self.current.clone();
         self.current = self.lexer.next().ok();
-        println!("advancing: {:?}", self.previous);
         self.previous.clone()
     }
 
@@ -348,7 +347,10 @@ pub fn parse(code: &str) -> IRProgram {
 
 #[cfg(test)]
 mod tests {
-    use crate::lowering::{ir::IRType, parser::parser::parse};
+    use crate::lowering::{
+        ir::{BasicBlockID, IRType, Instr, Register, Terminator},
+        parser::parser::parse,
+    };
     use indoc::formatdoc;
 
     #[test]
@@ -367,5 +369,18 @@ mod tests {
 
         assert_eq!(func.args().len(), 0);
         assert_eq!(func.ret(), &IRType::Int);
+
+        let bb = &func.blocks[0];
+        assert_eq!(bb.id, BasicBlockID(0));
+        assert_eq!(bb.instructions[0], Instr::ConstantInt(Register(1), 1));
+        assert_eq!(bb.instructions[1], Instr::ConstantInt(Register(2), 2));
+        assert_eq!(
+            bb.instructions[2],
+            Instr::Add(Register(3), IRType::Int, Register(1), Register(2))
+        );
+        assert_eq!(
+            bb.terminator,
+            Terminator::Ret(Some((IRType::Int, Register(3))))
+        );
     }
 }
