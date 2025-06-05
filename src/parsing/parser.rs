@@ -63,7 +63,7 @@ impl<'a> Parser<'a> {
 
             let expr = self
                 .parse_with_precedence(Precedence::Assignment)
-                .unwrap_or_else(|_| panic!("did not get an expr: {:?}", self.current));
+                .unwrap_or_else(|e| panic!("did not get an expr: {:?} {:?}", e, self.current));
 
             self.parse_tree.push_root(expr);
 
@@ -122,6 +122,19 @@ impl<'a> Parser<'a> {
         let body = self.enum_body()?;
 
         self.add_expr(EnumDecl(Name::Raw(name), generics, body))
+    }
+
+    pub(crate) fn return_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Return)?;
+
+        if self.peek_is(TokenKind::Newline)
+            || self.peek_is(TokenKind::RightBrace)
+        {
+            return self.add_expr(Return(None));
+        }
+
+        let rhs = self.parse_with_precedence(Precedence::None)?;
+        self.add_expr(Return(Some(rhs)))
     }
 
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -611,6 +624,8 @@ impl<'a> Parser<'a> {
         let mut lhs: Option<ExprID> = None;
         let mut handler = Precedence::handler(&self.current)?;
 
+        println!("handler for {:?}", self.current);
+
         if let Some(prefix) = handler.prefix {
             lhs = Some(prefix(self, precedence.can_assign())?);
         }
@@ -663,6 +678,14 @@ impl<'a> Parser<'a> {
 
         None
     }
+
+    pub(super) fn peek_is(&self, expected: TokenKind) -> bool {
+        if let Some(Token { kind: actual, ..}) = &self.current {
+            *actual == expected
+        } else {
+            false
+        }
+    } 
 
     // Try to get a specific token. If it's a match, return true.
     pub(super) fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
@@ -884,6 +907,11 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Tuple(vec![]));
+    }
+
+    #[test]
+    fn parses_return() {
+        let _parsed = parse("func() { return }").unwrap();
     }
 
     #[test]

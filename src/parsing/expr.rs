@@ -10,13 +10,6 @@ pub struct ExprMeta {
     pub end: Token,
 }
 
-// #[derive(Clone, Debug, PartialEq, Eq)]
-// pub enum FuncName {
-//     Main,
-//     Token(String),
-//     Resolved(SymbolID),
-// }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     // Literals that must match exactly
@@ -56,6 +49,7 @@ pub enum Expr {
     Block(Vec<ExprID>),
     Call(ExprID, Vec<ExprID>),
     Pattern(Pattern),
+    Return(Option<ExprID>),
 
     // A type annotation
     TypeRepr(

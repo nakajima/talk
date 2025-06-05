@@ -78,6 +78,12 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
+            TokenKind::Return => ParseHandler {
+                prefix: Some(Parser::return_expr),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
+
             TokenKind::True => ParseHandler {
                 prefix: Some(Parser::boolean),
                 infix: None,

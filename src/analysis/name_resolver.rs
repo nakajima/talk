@@ -100,6 +100,11 @@ impl NameResolver {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
                 LiteralTrue | LiteralFalse => continue,
+                Return(rhs) => {
+                    if let Some(rhs) = rhs {
+                        self.resolve_nodes(vec![rhs], source_file);
+                    }
+                }
                 If(condi, conseq, alt) => {
                     if let Some(alt) = alt {
                         self.resolve_nodes(vec![condi, conseq, alt], source_file);

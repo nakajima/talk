@@ -149,6 +149,7 @@ impl<'a> Lexer<'a> {
             "enum" => Enum,
             "case" => Case,
             "match" => Match,
+            "return" => Return,
             _ => Identifier(self.code[start_idx..=end_idx].to_string()),
         }
     }
