@@ -12,7 +12,7 @@ impl Name {
             Name::Raw(_) => panic!("Cannot mangle unresolved Name"),
             Name::Resolved(symbol_id, name_str) => {
                 if name_str == "main" {
-                    "main".into()
+                    "@main".into()
                 } else {
                     format!("@_{:?}_{}", symbol_id.0, name_str)
                 }

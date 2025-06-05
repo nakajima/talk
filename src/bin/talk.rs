@@ -29,6 +29,8 @@ fn main() {
     match &cli.command {
         Commands::IR { filename } => {
             // Read entire file into a String
+
+            use talk::lowering::ir_printer::print;
             let contents = std::fs::read_to_string(filename).expect("Could not read file");
 
             let parsed = parse(&contents).unwrap();
@@ -40,8 +42,7 @@ fn main() {
             let lowered = lowering::ir::Lowerer::new(inferred).lower().unwrap();
 
             // Use the pretty printer
-            use talk::lowering::ir_printer::pretty_print_ir;
-            println!("{}", pretty_print_ir(&lowered.functions()));
+            println!("{}", print(&lowered));
         }
         Commands::Run { filename } => {
             println!("WIP: {}", filename);

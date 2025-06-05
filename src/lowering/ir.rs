@@ -66,7 +66,7 @@ pub enum Instr {
     Ref(Register, IRType, RefKind),
     Call {
         dest_reg: Option<Register>,
-        callee: SymbolID,
+        callee: String,
         args: Vec<Register>,
         ty: IRType,
     },
@@ -167,8 +167,27 @@ impl CurrentFunction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IRFunction {
+    pub ty: IRType,
     pub name: String,
     pub blocks: Vec<BasicBlock>,
+}
+
+impl IRFunction {
+    pub(crate) fn args(&self) -> &[IRType] {
+        let IRType::Func(ref args, _) = self.ty else {
+            unreachable!()
+        };
+
+        args
+    }
+
+    pub(crate) fn ret(&self) -> &IRType {
+        let IRType::Func(_, ref ret) = self.ty else {
+            unreachable!()
+        };
+
+        &*ret
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -297,6 +316,7 @@ impl Lowerer {
         }
 
         let func = IRFunction {
+            ty: typed_expr.ty.to_ir(),
             name: name.mangled(&typed_expr.ty),
             blocks: self.current_func_mut().blocks.clone(),
         };
@@ -500,8 +520,8 @@ impl Lowerer {
         }
 
         let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
-        let func_symbol_id = match &callee_typed_expr.expr {
-            Expr::Variable(Name::Resolved(symbol_id, _), _) => {
+        let (_func_symbol_id, name_str) = match &callee_typed_expr.expr {
+            Expr::Variable(Name::Resolved(symbol_id, name_str), _) => {
                 // Check if the type of this variable is indeed a function
                 if !matches!(callee_typed_expr.ty, Ty::Func(_, _)) {
                     panic!(
@@ -509,7 +529,7 @@ impl Lowerer {
                         callee_typed_expr
                     );
                 }
-                *symbol_id
+                (*symbol_id, name_str)
             }
             // Later, you might handle other forms of callees, like Expr::Member for methods,
             // or expressions that evaluate to function pointers/closures.
@@ -535,7 +555,7 @@ impl Lowerer {
         self.current_block_mut().push_instr(Instr::Call {
             ty: ty.to_ir(),
             dest_reg, // clone if Register is Copy, else it's fine
-            callee: func_symbol_id,
+            callee: name_str.to_string(),
             args: arg_registers,
         });
 
@@ -630,7 +650,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
     source_file.set(
         SymbolID::GENERATED_MAIN,
         SymbolInfo {
-            name: "main".into(),
+            name: "@main".into(),
             kind: SymbolKind::Func,
             expr_id: SymbolID::GENERATED_MAIN.0,
         },
@@ -642,7 +662,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolID, check,
+        check,
         lowering::ir::{
             BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
             RefKind, Register, Terminator,
@@ -662,6 +682,7 @@ mod tests {
             lowered.functions,
             vec![
                 IRFunction {
+                    ty: IRType::Func(vec![], IRType::Int.into()),
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
@@ -671,7 +692,8 @@ mod tests {
                     }]
                 },
                 IRFunction {
-                    name: "main".into(),
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
@@ -694,6 +716,10 @@ mod tests {
             lowered.functions,
             vec![
                 IRFunction {
+                    ty: IRType::Func(
+                        vec![IRType::TypeVar("T3".into())],
+                        IRType::TypeVar("T3".into()).into()
+                    ),
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
@@ -703,7 +729,8 @@ mod tests {
                     }]
                 },
                 IRFunction {
-                    name: "main".into(),
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
@@ -720,7 +747,7 @@ mod tests {
                             Instr::Call {
                                 ty: IRType::Int,
                                 dest_reg: Some(Register(2)),
-                                callee: SymbolID::at(1),
+                                callee: "foo".into(),
                                 args: vec![Register(1)]
                             },
                         ],
@@ -738,6 +765,10 @@ mod tests {
             lowered.functions,
             vec![
                 IRFunction {
+                    ty: IRType::Func(
+                        vec![IRType::TypeVar("T3".into())],
+                        IRType::TypeVar("T3".into()).into()
+                    ),
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(1),
@@ -747,7 +778,8 @@ mod tests {
                     }]
                 },
                 IRFunction {
-                    name: "main".into(),
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
@@ -772,7 +804,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -789,7 +822,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -806,7 +840,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -826,7 +861,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -847,7 +883,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -868,7 +905,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -889,7 +927,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -910,7 +949,8 @@ mod tests {
         assert_eq!(
             lowered.functions,
             vec![IRFunction {
-                name: "main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
@@ -937,7 +977,8 @@ mod tests {
         .unwrap();
 
         let expected = vec![IRFunction {
-            name: "main".into(),
+            ty: IRType::Func(vec![], IRType::Void.into()),
+            name: "@main".into(),
             blocks: vec![
                 // if block
                 BasicBlock {

@@ -14,5 +14,5 @@ log = "0.4.27"
 env_logger = "0.11.8"
 
 [features]
-#default = ["cli"]
+default = ["cli"]
 cli = ["dep:clap"]
