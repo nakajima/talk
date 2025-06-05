@@ -19,7 +19,36 @@ pub struct Register(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RefKind {
-    Func(SymbolID),
+    Func(String),
+}
+
+impl Ty {
+    fn to_ir(&self) -> IRType {
+        match self {
+            Ty::Void => IRType::Void,
+            Ty::Int => IRType::Int,
+            Ty::Bool => IRType::Bool,
+            Ty::Float => IRType::Float,
+            Ty::Func(items, ty) => IRType::Func(
+                items.iter().map(|t| t.to_ir()).collect(),
+                Box::new(ty.to_ir()),
+            ),
+            Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.0)),
+            Ty::Enum(_symbol_id, _items) => todo!(),
+            Ty::EnumVariant(_symbol_id, _items) => todo!(),
+            Ty::Tuple(_items) => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IRType {
+    Void,
+    Int,
+    Float,
+    Bool,
+    Func(Vec<IRType>, Box<IRType>),
+    TypeVar(String), // Add other types as needed
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,18 +56,19 @@ pub enum Instr {
     ConstantInt(Register, u64),
     ConstantFloat(Register, f64),
     ConstantBool(Register, bool),
-    Add(Register, Register, Register),
-    Sub(Register, Register, Register),
-    Mul(Register, Register, Register),
-    Div(Register, Register, Register),
-    StoreLocal(Register, Register),
-    LoadLocal(Register, Register),
-    Phi(Register, Vec<(Register, BasicBlockID)>),
-    Ref(Register, RefKind),
+    Add(Register, IRType, Register, Register),
+    Sub(Register, IRType, Register, Register),
+    Mul(Register, IRType, Register, Register),
+    Div(Register, IRType, Register, Register),
+    StoreLocal(Register, IRType, Register),
+    LoadLocal(Register, IRType, Register),
+    Phi(Register, IRType, Vec<(Register, BasicBlockID)>),
+    Ref(Register, IRType, RefKind),
     Call {
         dest_reg: Option<Register>,
         callee: SymbolID,
         args: Vec<Register>,
+        ty: IRType,
     },
 }
 
@@ -286,18 +316,28 @@ impl Lowerer {
             | Expr::LiteralFloat(_)
             | Expr::LiteralFalse
             | Expr::LiteralTrue => self.lower_literal(expr_id),
-            Expr::Binary(lhs, op, rhs) => self.lower_binary_op(&lhs, &op, &rhs),
+            Expr::Binary(_, _, _) => self.lower_binary_op(&expr_id),
             Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs),
             Expr::Variable(name, _) => self.lower_variable(&name),
-            Expr::If(cond, conseq, alt) => self.lower_if(&cond, &conseq, &alt),
+            Expr::If(_, _, _) => self.lower_if(&expr_id),
             Expr::Block(_) => self.lower_block(expr_id),
             Expr::Call(callee, args) => self.lower_call(callee, args, typed_expr.ty),
-            Expr::Func { .. } => {
+            Expr::Func { name, .. } => {
                 let symbol_id = self.lower_function(expr_id);
                 let reg = self.current_func_mut().registers.allocate();
                 self.current_func_mut().register_symbol(symbol_id, reg);
-                self.current_block_mut()
-                    .push_instr(Instr::Ref(reg, RefKind::Func(symbol_id)));
+
+                let name = match name {
+                    Some(Name::Resolved(_, name)) => name,
+                    Some(_) => panic!("unresolved func name: {:?}", name),
+                    None => format!("F{}", symbol_id.0),
+                };
+
+                self.current_block_mut().push_instr(Instr::Ref(
+                    reg,
+                    typed_expr.ty.to_ir(),
+                    RefKind::Func(name.into()),
+                ));
                 Some(reg)
             }
             expr => todo!("Cannot lower {:?}", expr),
@@ -329,17 +369,26 @@ impl Lowerer {
         Some(register)
     }
 
-    fn lower_binary_op(&mut self, lhs: &ExprID, op: &TokenKind, rhs: &ExprID) -> Option<Register> {
-        let operand_1 = self.lower_expr(lhs).unwrap();
-        let operand_2 = self.lower_expr(rhs).unwrap();
+    fn lower_binary_op(&mut self, expr_id: &ExprID) -> Option<Register> {
+        let typed_expr = self
+            .source_file
+            .typed_expr(expr_id)
+            .expect("Did not get binary typed expr");
+
+        let Expr::Binary(lhs, op, rhs) = typed_expr.expr else {
+            panic!("Did not get binary expr");
+        };
+
+        let operand_1 = self.lower_expr(&lhs).unwrap();
+        let operand_2 = self.lower_expr(&rhs).unwrap();
         let return_reg = self.current_func_mut().registers.allocate();
 
         use TokenKind::*;
         let instr = match op {
-            Plus => Instr::Add(return_reg, operand_1, operand_2),
-            Minus => Instr::Sub(return_reg, operand_1, operand_2),
-            Star => Instr::Mul(return_reg, operand_1, operand_2),
-            Slash => Instr::Div(return_reg, operand_1, operand_2),
+            Plus => Instr::Add(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
+            Minus => Instr::Sub(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
+            Star => Instr::Mul(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
+            Slash => Instr::Div(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
             _ => panic!("Cannot lower binary operation: {:?}", op),
         };
 
@@ -389,14 +438,14 @@ impl Lowerer {
         Some(*self.current_func_mut().lookup_symbol(symbol_id))
     }
 
-    fn lower_if(
-        &mut self,
-        cond: &ExprID,
-        conseq: &ExprID,
-        alt: &Option<ExprID>,
-    ) -> Option<Register> {
+    fn lower_if(&mut self, expr_id: &ExprID) -> Option<Register> {
+        let typed_expr = self.source_file.typed_expr(expr_id).unwrap();
+        let Expr::If(cond, conseq, alt) = typed_expr.expr else {
+            unreachable!()
+        };
+
         let cond_reg = self
-            .lower_expr(cond)
+            .lower_expr(&cond)
             .expect("Condition for if expression did not produce a value");
 
         let then_id = self.new_basic_block();
@@ -412,12 +461,12 @@ impl Lowerer {
             Terminator::JumpUnless(cond_reg, else_id.unwrap_or(merge_id));
 
         self.set_current_block(then_id);
-        let then_reg = self.lower_expr(conseq).unwrap();
+        let then_reg = self.lower_expr(&conseq).unwrap();
         self.current_block_mut().terminator = Terminator::Jump(merge_id);
 
         if let Some(alt) = alt {
             self.set_current_block(else_id.unwrap());
-            else_reg = self.lower_expr(alt);
+            else_reg = self.lower_expr(&alt);
             self.current_block_mut().terminator = Terminator::Jump(merge_id);
         }
 
@@ -427,6 +476,7 @@ impl Lowerer {
 
         self.current_block_mut().push_instr(Instr::Phi(
             phi_dest_reg,
+            typed_expr.ty.to_ir(),
             vec![
                 (then_reg, then_id),                   // Value from 'then' path came from then_bb
                 (else_reg.unwrap(), else_id.unwrap()), // Value from 'else' path came from else_bb
@@ -471,7 +521,7 @@ impl Lowerer {
 
         // 3. Allocate Destination Register for Return Value (if not void)
         let dest_reg: Option<Register>;
-        match ty {
+        match &ty {
             Ty::Void => {
                 // Assuming you have a Ty::Void or similar
                 dest_reg = None;
@@ -483,6 +533,7 @@ impl Lowerer {
         }
 
         self.current_block_mut().push_instr(Instr::Call {
+            ty: ty.to_ir(),
             dest_reg, // clone if Register is Copy, else it's fine
             callee: func_symbol_id,
             args: arg_registers,
@@ -593,8 +644,8 @@ mod tests {
     use crate::{
         SymbolID, check,
         lowering::ir::{
-            BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, Instr, Lowerer, RefKind,
-            Register, Terminator,
+            BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
+            RefKind, Register, Terminator,
         },
     };
 
@@ -624,7 +675,11 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![Instr::Ref(Register(0), RefKind::Func(SymbolID(5)))],
+                        instructions: vec![Instr::Ref(
+                            Register(0),
+                            IRType::Func(vec![], IRType::Int.into()),
+                            RefKind::Func("foo".into())
+                        )],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
                 },
@@ -653,13 +708,21 @@ mod tests {
                         id: BasicBlockID(0),
                         label: None,
                         instructions: vec![
-                            Instr::Ref(Register(0), RefKind::Func(SymbolID(5))),
+                            Instr::Ref(
+                                Register(0),
+                                IRType::Func(
+                                    vec![IRType::TypeVar("T3".into())],
+                                    IRType::TypeVar("T3".into()).into()
+                                ),
+                                RefKind::Func("foo".into())
+                            ),
                             Instr::ConstantInt(Register(1), 123),
                             Instr::Call {
+                                ty: IRType::Int,
                                 dest_reg: Some(Register(2)),
                                 callee: SymbolID::at(1),
                                 args: vec![Register(1)]
-                            }
+                            },
                         ],
                         terminator: Terminator::Ret(Some(Register(2)))
                     }]
@@ -688,7 +751,14 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![Instr::Ref(Register(0), RefKind::Func(SymbolID(5)))],
+                        instructions: vec![Instr::Ref(
+                            Register(0),
+                            IRType::Func(
+                                vec![IRType::TypeVar("T3".into())],
+                                IRType::TypeVar("T3".into()).into()
+                            ),
+                            RefKind::Func("foo".into())
+                        )],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
                 },
@@ -763,7 +833,7 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 1),
                         Instr::ConstantInt(Register(1), 2),
-                        Instr::Add(Register(2), Register(0), Register(1))
+                        Instr::Add(Register(2), IRType::Int, Register(0), Register(1))
                     ],
                     terminator: Terminator::Ret(Some(Register(2)))
                 }]
@@ -784,7 +854,7 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
-                        Instr::Sub(Register(2), Register(0), Register(1))
+                        Instr::Sub(Register(2), IRType::Int, Register(0), Register(1))
                     ],
                     terminator: Terminator::Ret(Some(Register(2)))
                 }]
@@ -805,7 +875,7 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
-                        Instr::Mul(Register(2), Register(0), Register(1))
+                        Instr::Mul(Register(2), IRType::Int, Register(0), Register(1))
                     ],
                     terminator: Terminator::Ret(Some(Register(2)))
                 }]
@@ -826,7 +896,7 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
-                        Instr::Div(Register(2), Register(0), Register(1))
+                        Instr::Div(Register(2), IRType::Int, Register(0), Register(1))
                     ],
                     terminator: Terminator::Ret(Some(Register(2)))
                 }]
@@ -897,6 +967,7 @@ mod tests {
                     instructions: vec![
                         Instr::Phi(
                             Register(3),
+                            IRType::Int,
                             vec![
                                 (Register(1), BasicBlockID(1)),
                                 (Register(2), BasicBlockID(2)),

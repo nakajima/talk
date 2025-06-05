@@ -159,58 +159,28 @@ impl<'a> Parser<'a> {
             return Ok(expr::Pattern::Wildcard);
         }
 
-        if let Some(Token { kind, .. }) = self.current.clone() { match kind {
-            TokenKind::Int(value) => {
-                self.advance();
-                return Ok(expr::Pattern::LiteralInt(value));
+        if let Some(Token { kind, .. }) = self.current.clone() {
+            match kind {
+                TokenKind::Int(value) => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralInt(value));
+                }
+                TokenKind::Float(value) => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralFloat(value));
+                }
+                TokenKind::True => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralTrue);
+                }
+                TokenKind::False => {
+                    self.advance();
+                    return Ok(expr::Pattern::LiteralFalse);
+                }
+
+                _ => (),
             }
-            TokenKind::Float(value) => {
-                self.advance();
-                return Ok(expr::Pattern::LiteralFloat(value));
-            }
-            TokenKind::True => {
-                self.advance();
-                return Ok(expr::Pattern::LiteralTrue);
-            }
-            TokenKind::False => {
-                self.advance();
-                return Ok(expr::Pattern::LiteralFalse);
-            }
-
-            _ => (),
-        } }
-
-        // if let Some(Token {
-        //     kind: TokenKind::Int(value),
-        //     ..
-        // }) = &self.current
-        // {
-        //     return Ok(expr::Pattern::LiteralInt(value.clone));
-        // }
-
-        // if let Some(Token {
-        //     kind: TokenKind::Float(value),
-        //     ..
-        // }) = self.current.clone()
-        // {
-        //     return Ok(expr::Pattern::LiteralFloat(value));
-        // }
-
-        // if let Some(Token {
-        //     kind: TokenKind::True,
-        //     ..
-        // }) = self.current
-        // {
-        //     return Ok(expr::Pattern::LiteralTrue);
-        // }
-
-        // if let Some(Token {
-        //     kind: TokenKind::False,
-        //     ..
-        // }) = self.current
-        // {
-        //     return Ok(expr::Pattern::LiteralFalse);
-        // }
+        }
 
         if let Some((name, _)) = self.try_identifier() {
             // It's not an enum variant so it's a bind
@@ -259,79 +229,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        todo!("TODO: {:?}", self.current)
-
-        // // Handle unqualified enum cases: .EnumCase or .EnumCase(args)
-        // if self.did_match(TokenKind::Dot)? {
-        //     // Get the enum case name
-        //     let Some((
-        //         _,
-        //         Token {
-        //             kind: TokenKind::Identifier(name),
-        //             ..
-        //         },
-        //     )) = self.try_identifier()
-        //     else {
-        //         return Err(ParserError::UnexpectedToken(
-        //             vec![TokenKind::Identifier("_".to_string())],
-        //             self.current.clone().unwrap().kind,
-        //         ));
-        //     };
-
-        //     // Check if it has arguments: .Case(arg1, arg2)
-        //     if self.did_match(TokenKind::LeftParen)? {
-        //         let mut args: Vec<ExprID> = vec![];
-
-        //         // Parse arguments (could be patterns themselves)
-        //         if !self.did_match(TokenKind::RightParen)? {
-        //             loop {
-        //                 args.push(self.parse_match_pattern()?);
-
-        //                 if !self.did_match(TokenKind::Comma)? {
-        //                     break;
-        //                 }
-        //             }
-        //             self.consume(TokenKind::RightParen)?;
-        //         }
-
-        //         // Create a pattern call: .Case(args)
-        //         let member = self.add_expr(Member(None, name.into()))?;
-        //         self.add_expr(Call(member, args))
-        //     } else {
-        //         // Simple case: .Case
-        //         self.add_expr(Member(None, name.into()))
-        //     }
-        // }
-        // // Handle variable patterns: just a name
-        // else if let Some((
-        //     _,
-        //     Token {
-        //         kind: TokenKind::Identifier(name),
-        //         ..
-        //     },
-        // )) = self.try_identifier()
-        // {
-        //     self.add_expr(Variable(Name::Raw(name.to_string()), None))
-        // }
-        // // Handle literal patterns: numbers, etc.
-        // else if let Some(current) = self.current.clone() {
-        //     match current.kind {
-        //         TokenKind::Int(_) | TokenKind::Float(_) => self.literal(false),
-        //         _ => Err(ParserError::UnexpectedToken(
-        //             vec![
-        //                 TokenKind::Dot,
-        //                 TokenKind::Identifier("_".to_string()),
-        //                 TokenKind::Int("_"),
-        //             ],
-        //             current.kind,
-        //         )),
-        //     }
-        // } else {
-        //     Err(ParserError::UnexpectedEndOfInput(vec![
-        //         TokenKind::Dot,
-        //         TokenKind::Identifier("_".to_string()),
-        //     ]))
-        // }
+        unreachable!()
     }
 
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
