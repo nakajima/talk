@@ -54,7 +54,11 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
             res.push_str(", ");
         }
 
-        res.push_str(&print_ir_ty(arg));
+        res.push_str(&format!(
+            "{}: {}",
+            format_register(&Register(i as u32)),
+            &print_ir_ty(arg)
+        ));
     }
 
     res.push_str(")");
@@ -76,11 +80,15 @@ fn print_ir_ty(ty: &IRType) -> String {
 }
 
 fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
+    printer.puts(&format!("{}:", format_block_id(&block.id)));
+    printer.indent_level += 1;
+
     for instruction in &block.instructions {
         printer.puts(&format_instruction(instruction))
     }
 
-    printer.puts(&format_terminator(&block.terminator))
+    printer.puts(&format_terminator(&block.terminator));
+    printer.indent_level -= 1;
 }
 
 fn format_instruction(instruction: &Instr) -> String {
