@@ -183,7 +183,7 @@ impl Precedence {
             TokenKind::Func => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
-                precedence: Precedence::None,
+                precedence: Precedence::Assignment,
             },
 
             TokenKind::Let => ParseHandler {

@@ -429,13 +429,19 @@ impl<'a> Parser<'a> {
 
         let body = self.block(false)?;
 
-        self.add_expr(Expr::Func {
+        let func_id = self.add_expr(Expr::Func {
             name: name.map(|s| s.to_string()).map(Name::Raw),
             generics,
             params,
             body,
             ret: ret.transpose()?,
-        })
+        })?;
+
+        if self.did_match(TokenKind::LeftParen)? {
+            self.call(false, func_id)
+        } else {
+            Ok(func_id)
+        }
     }
 
     fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {

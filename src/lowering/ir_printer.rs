@@ -55,9 +55,9 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
         }
 
         res.push_str(&format!(
-            "{}: {}",
+            "{} {}",
+            &print_ir_ty(arg),
             format_register(&Register(i as u32)),
-            &print_ir_ty(arg)
         ));
     }
 
@@ -94,13 +94,13 @@ fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
 fn format_instruction(instruction: &Instr) -> String {
     match instruction {
         Instr::ConstantInt(register, val) => {
-            format!("int {} = {};", format_register(register), val)
+            format!("{} = int {};", format_register(register), val)
         }
         Instr::ConstantFloat(register, val) => {
-            format!("float {} = {};", format_register(register), val)
+            format!("{} = float {};", format_register(register), val)
         }
         Instr::ConstantBool(register, val) => {
-            format!("bool {} = {};", format_register(register), val)
+            format!("{} = bool {};", format_register(register), val)
         }
         Instr::Add(dest, ty, lhs, rhs) => {
             format!(
@@ -142,25 +142,22 @@ fn format_instruction(instruction: &Instr) -> String {
                 .join(", ");
 
             format!(
-                "{} = phi {} [{}]",
+                "{} = phi {} [{}];",
                 format_register(register),
                 print_ir_ty(irtype),
                 phi_args
             )
         }
-        Instr::Ref(register, ty, RefKind::Func(name)) => format!(
-            "{} = {} {}",
-            format_register(register),
-            print_ir_ty(ty),
-            name
-        ),
+        Instr::Ref(register, _ty, RefKind::Func(name)) => {
+            format!("{} = {};", format_register(register), name)
+        }
         Instr::Call {
             dest_reg,
             callee,
             args,
             ty: ret,
         } => format!(
-            "{} = call {} {}{}",
+            "{} = call {} {}{};",
             if let Some(dest) = dest_reg {
                 format_register(dest)
             } else {
@@ -196,17 +193,17 @@ fn format_register(register: &Register) -> String {
 fn format_terminator(terminator: &Terminator) -> String {
     match terminator {
         Terminator::Ret(register) => format!(
-            "ret {}",
+            "ret{};",
             if let Some(register) = register {
-                format_register(register)
+                format!(" {}", format_register(register))
             } else {
-                "void".into()
+                "".into()
             }
         ),
         Terminator::Unreachable => "unreachable".to_string(),
         Terminator::Jump(basic_block_id) => format!("jump {}", basic_block_id.0),
         Terminator::JumpUnless(register, basic_block_id) => format!(
-            "jump_unless {} {}",
+            "jump_unless {} {};",
             format_register(register),
             basic_block_id.0
         ),
@@ -218,5 +215,49 @@ fn format_block_id(id: &BasicBlockID) -> String {
         "entry".to_string()
     } else {
         format!("#{}", id.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        check,
+        lowering::{
+            ir::{IRError, IRProgram, Lowerer},
+            ir_printer::print,
+        },
+    };
+
+    fn lower(input: &'static str) -> Result<IRProgram, IRError> {
+        let typed = check(input).unwrap();
+        let lowerer = Lowerer::new(typed);
+        lowerer.lower()
+    }
+
+    #[test]
+    fn prints_func() {
+        let program = lower(
+            "
+        func add(x) { 1 + x }
+        ",
+        )
+        .unwrap();
+
+        let func = print(&program);
+        assert_eq!(
+            func,
+            "func @_5_add(int %0) -> int
+  entry:
+    %1 = int 1;
+    %2 = add int %1, %0;
+    ret %2;
+
+func @main() -> void
+  entry:
+    %0 = @_5_add;
+    ret %0;
+
+"
+        )
     }
 }

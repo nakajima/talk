@@ -110,6 +110,7 @@ impl BasicBlock {
 
 struct CurrentFunction {
     current_block_idx: usize,
+    next_block_id: BasicBlockID,
     blocks: Vec<BasicBlock>,
     pub registers: RegisterAllocator,
     pub symbol_registers: HashMap<SymbolID, Register>,
@@ -123,11 +124,18 @@ impl CurrentFunction {
             log::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
         }
         Self {
+            next_block_id: BasicBlockID(0),
             current_block_idx: 0,
             blocks: Default::default(),
             registers: RegisterAllocator::new(),
             symbol_registers: Default::default(),
         }
+    }
+
+    fn next_block_id(&mut self) -> BasicBlockID {
+        let id = self.next_block_id;
+        self.next_block_id += 1;
+        id
     }
 
     fn add_block(&mut self, block: BasicBlock) {
@@ -209,7 +217,6 @@ impl RegisterAllocator {
 }
 
 pub struct Lowerer {
-    next_block_id: BasicBlockID,
     source_file: SourceFile<Typed>,
     current_functions: Vec<CurrentFunction>,
     lowered_functions: Vec<IRFunction>,
@@ -218,7 +225,6 @@ pub struct Lowerer {
 impl Lowerer {
     pub fn new(source_file: SourceFile<Typed>) -> Self {
         Self {
-            next_block_id: BasicBlockID::default(),
             source_file,
             current_functions: vec![],
             lowered_functions: Default::default(),
@@ -247,12 +253,6 @@ impl Lowerer {
         })
     }
 
-    fn next_block_id(&mut self) -> BasicBlockID {
-        let id = self.next_block_id;
-        self.next_block_id += 1;
-        id
-    }
-
     fn lower_function(&mut self, expr_id: &ExprID) -> SymbolID {
         let typed_expr = self
             .source_file
@@ -277,11 +277,12 @@ impl Lowerer {
         let name = match name {
             Some(Name::Resolved(_, _)) => name.clone().unwrap(),
             None => {
-                let name_str = format!("_fn_{:?}", typed_expr.ty);
+                let name_str = format!("fn{}", self.source_file.symbol_table().max_id() + 1);
                 let symbol =
                     self.source_file
                         .symbol_table()
                         .add(&name_str, SymbolKind::CustomType, 12345);
+
                 Name::Resolved(symbol, name_str)
             }
             _ => todo!(),
@@ -326,6 +327,7 @@ impl Lowerer {
         let Name::Resolved(symbol, _) = name else {
             panic!("no symbol")
         };
+
         symbol
     }
 
@@ -348,8 +350,7 @@ impl Lowerer {
                 self.current_func_mut().register_symbol(symbol_id, reg);
 
                 let name = match name {
-                    Some(Name::Resolved(_, name)) => name,
-                    Some(_) => panic!("unresolved func name: {:?}", name),
+                    Some(name) => name.mangled(&typed_expr.ty),
                     None => format!("F{}", symbol_id.0),
                 };
 
@@ -520,8 +521,8 @@ impl Lowerer {
         }
 
         let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
-        let (_func_symbol_id, name_str) = match &callee_typed_expr.expr {
-            Expr::Variable(Name::Resolved(symbol_id, name_str), _) => {
+        let name_str = match &callee_typed_expr.expr {
+            Expr::Variable(name, _) => {
                 // Check if the type of this variable is indeed a function
                 if !matches!(callee_typed_expr.ty, Ty::Func(_, _)) {
                     panic!(
@@ -529,7 +530,17 @@ impl Lowerer {
                         callee_typed_expr
                     );
                 }
-                (*symbol_id, name_str)
+
+                name.mangled(&callee_typed_expr.ty)
+            }
+            Expr::Func { name, .. } => {
+                let sym = self.lower_function(&callee);
+
+                if let Some(Name::Resolved(_, name_str)) = name {
+                    name_str.to_string()
+                } else {
+                    Name::Resolved(sym, format!("fn{}", sym.0)).mangled(&callee_typed_expr.ty)
+                }
             }
             // Later, you might handle other forms of callees, like Expr::Member for methods,
             // or expressions that evaluate to function pointers/closures.
@@ -576,7 +587,7 @@ impl Lowerer {
     }
 
     fn new_basic_block(&mut self) -> BasicBlockID {
-        let id = self.next_block_id();
+        let id = self.current_func_mut().next_block_id();
         let block = BasicBlock {
             id,
             label: if id.0 > 0 {
@@ -685,8 +696,8 @@ mod tests {
                     ty: IRType::Func(vec![], IRType::Int.into()),
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
-                        id: BasicBlockID(1),
-                        label: Some("bb1".into()),
+                        id: BasicBlockID(0),
+                        label: None,
                         instructions: vec![Instr::ConstantInt(Register(0), 123)],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
@@ -700,7 +711,7 @@ mod tests {
                         instructions: vec![Instr::Ref(
                             Register(0),
                             IRType::Func(vec![], IRType::Int.into()),
-                            RefKind::Func("foo".into())
+                            RefKind::Func("@_5_foo".into())
                         )],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
@@ -722,8 +733,8 @@ mod tests {
                     ),
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
-                        id: BasicBlockID(1),
-                        label: Some("bb1".into()),
+                        id: BasicBlockID(0),
+                        label: None,
                         instructions: vec![],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
@@ -741,13 +752,13 @@ mod tests {
                                     vec![IRType::TypeVar("T3".into())],
                                     IRType::TypeVar("T3".into()).into()
                                 ),
-                                RefKind::Func("foo".into())
+                                RefKind::Func("@_5_foo".into())
                             ),
                             Instr::ConstantInt(Register(1), 123),
                             Instr::Call {
                                 ty: IRType::Int,
                                 dest_reg: Some(Register(2)),
-                                callee: "foo".into(),
+                                callee: "@_5_foo".into(),
                                 args: vec![Register(1)]
                             },
                         ],
@@ -771,8 +782,8 @@ mod tests {
                     ),
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
-                        id: BasicBlockID(1),
-                        label: Some("bb1".into()),
+                        id: BasicBlockID(0),
+                        label: None,
                         instructions: vec![],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]
@@ -789,7 +800,7 @@ mod tests {
                                 vec![IRType::TypeVar("T3".into())],
                                 IRType::TypeVar("T3".into()).into()
                             ),
-                            RefKind::Func("foo".into())
+                            RefKind::Func("@_5_foo".into())
                         )],
                         terminator: Terminator::Ret(Some(Register(0)))
                     }]

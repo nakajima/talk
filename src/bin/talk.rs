@@ -17,6 +17,7 @@ fn main() {
     #[derive(Subcommand, Debug)]
     enum Commands {
         IR { filename: String },
+        Parse { filename: String },
         Run { filename: String },
     }
 
@@ -43,6 +44,13 @@ fn main() {
 
             // Use the pretty printer
             println!("{}", print(&lowered));
+        }
+        Commands::Parse { filename } => {
+            let contents = std::fs::read_to_string(filename).expect("Could not read file");
+            let parsed = parse(&contents).unwrap();
+            for root in parsed.roots() {
+                println!("{:#?}", root);
+            }
         }
         Commands::Run { filename } => {
             println!("WIP: {}", filename);
