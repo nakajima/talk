@@ -1,10 +1,11 @@
-use talk::lowering::ir::IRProgram;
-
 #[cfg(feature = "cli")]
 fn main() {
     use clap::{Parser, Subcommand};
     use talk::{
-        constraint_solver::ConstraintSolver, lowering, name_resolver::NameResolver, parser::parse,
+        constraint_solver::ConstraintSolver,
+        lowering::{self, ir::IRProgram},
+        name_resolver::NameResolver,
+        parser::parse,
         type_checker::TypeChecker,
     };
 
@@ -55,7 +56,7 @@ fn main() {
             }
         }
         Commands::Run { filename } => {
-            use talk::cli::interpreter::IRInterpreter;
+            use talk::lowering::interpreter::IRInterpreter;
 
             let contents = std::fs::read_to_string(filename).expect("Could not read file");
             let lowered = lower(&contents);

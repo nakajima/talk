@@ -53,7 +53,7 @@ pub enum IRType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instr {
-    ConstantInt(Register, u64),
+    ConstantInt(Register, i64),
     ConstantFloat(Register, f64),
     ConstantBool(Register, bool),
     Add(Register, IRType, Register, Register),

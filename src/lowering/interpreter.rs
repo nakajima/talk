@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::lowering::ir::{
-    BasicBlockID, IRFunction, IRProgram, Instr, RefKind, Register, Terminator,
+    BasicBlock, BasicBlockID, IRFunction, IRProgram, Instr, RefKind, Register, Terminator,
 };
 
 #[derive(Debug)]
@@ -9,6 +9,7 @@ pub enum InterpreterError {
     NoMainFunc,
     CalleeNotFound,
     PredecessorNotFound,
+    TypeError(Value, Value),
 }
 
 #[derive(Debug)]
@@ -25,44 +26,44 @@ pub struct IRInterpreter {
     stack: Vec<StackFrame>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Value {
-    Int(u64),
+    Int(i64),
     Float(f64),
     Bool(bool),
     Void,
 }
 
 impl Value {
-    fn add(&self, other: &Value) -> Value {
+    fn add(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-            _ => panic!("Cannot {:?} + {:?}", self, other),
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+            _ => Err(InterpreterError::TypeError(*self, *other)),
         }
     }
 
-    fn sub(&self, other: &Value) -> Value {
+    fn sub(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
-            _ => panic!("Cannot {:?} - {:?}", self, other),
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+            _ => Err(InterpreterError::TypeError(*self, *other)),
         }
     }
 
-    fn mul(&self, other: &Value) -> Value {
+    fn mul(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
-            _ => panic!("Cannot {:?} * {:?}", self, other),
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+            _ => Err(InterpreterError::TypeError(*self, *other)),
         }
     }
 
-    fn div(&self, other: &Value) -> Value {
+    fn div(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a / b),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
-            _ => panic!("Cannot {:?} / {:?}", self, other),
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
+            _ => Err(InterpreterError::TypeError(*self, *other)),
         }
     }
 }
@@ -113,7 +114,6 @@ impl IRInterpreter {
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         // let blocks = function.blocks.clone();
-
         self.stack.push(StackFrame {
             pred: None,
             block_idx: 0,
@@ -126,38 +126,21 @@ impl IRInterpreter {
             self.set_register_value(&Register(i as u32), arg.clone());
         }
 
-        let mut ret = Value::Void;
-
-        while let Ok(res) = self.step() {
-            log::warn!("{:?}", res);
-            if let Some(res) = res {
-                ret = res;
-                break;
+        loop {
+            match self.step() {
+                Ok(res) => {
+                    if let Some(res) = res {
+                        return Ok(res);
+                    }
+                }
+                Err(err) => return Err(err),
             }
         }
-
-        self.stack.pop();
-
-        Ok(ret)
     }
 
-    // fn execute_basic_block(
-    //     &mut self,
-    //     block: &BasicBlock,
-    //     predecessor: Option<&BasicBlockID>,
-    // ) -> Result<Value, InterpreterError> {
-    //     log::trace!("Executing basic block: {:?}", block);
-
-    //     for instr in &block.instructions {
-    //         self.execute_instr(instr, predecessor)?;
-    //     }
-
-    //     self.execute_terminator(&block.terminator, &block.id)
-    // }
-
     fn execute_instr(&mut self, instr: Instr) -> Result<(), InterpreterError> {
+        log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
         log::trace!("{:?}", instr);
-        log::trace!("{:?}", self.stack);
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -173,25 +156,25 @@ impl IRInterpreter {
                 let op1 = self.register_value(&op1);
                 let op2 = self.register_value(&op2);
 
-                self.set_register_value(&dest, op1.add(&op2));
+                self.set_register_value(&dest, op1.add(&op2)?);
             }
             Instr::Sub(dest, _, op1, op2) => {
                 let op1 = self.register_value(&op1);
                 let op2 = self.register_value(&op2);
 
-                self.set_register_value(&dest, op1.sub(&op2));
+                self.set_register_value(&dest, op1.sub(&op2)?);
             }
             Instr::Mul(dest, _, op1, op2) => {
                 let op1 = self.register_value(&op1);
                 let op2 = self.register_value(&op2);
 
-                self.set_register_value(&dest, op1.mul(&op2));
+                self.set_register_value(&dest, op1.mul(&op2)?);
             }
             Instr::Div(dest, _, op1, op2) => {
                 let op1 = self.register_value(&op1);
                 let op2 = self.register_value(&op2);
 
-                self.set_register_value(&dest, op1.div(&op2));
+                self.set_register_value(&dest, op1.div(&op2)?);
             }
             Instr::StoreLocal(_, _, _) => todo!(),
             Instr::LoadLocal(_, _, _) => todo!(),
@@ -201,11 +184,12 @@ impl IRInterpreter {
                 for (reg, pred) in &predecessors {
                     if frame.pred == Some(*pred) {
                         self.set_register_value(&dest, self.register_value(&reg));
+                        self.stack.last_mut().unwrap().pc += 1;
                         return Ok(());
                     }
                 }
 
-                log::error!("Phi failed from {:?}: {:?}", frame, predecessors);
+                log::error!("Phi failed from {:?}: {:?}", predecessors, frame.pred);
 
                 return Err(InterpreterError::PredecessorNotFound);
             }
@@ -233,27 +217,41 @@ impl IRInterpreter {
             }
             Instr::JumpUnless(cond, jump_to) => {
                 if Value::Bool(false) == self.register_value(&cond) {
+                    let id = self.current_basic_block().id;
                     let frame = self.stack.last_mut().expect("stack underflow");
+                    frame.pred = Some(id);
                     frame.block_idx = jump_to.0 as usize;
                     frame.pc = 0;
+                    return Ok(());
                 }
             }
         }
 
+        self.stack.last_mut().unwrap().pc += 1;
+
         Ok(())
+    }
+
+    fn current_basic_block(&self) -> &BasicBlock {
+        let frame = self.stack.last().unwrap();
+        &frame.function.blocks[frame.block_idx]
     }
 
     fn execute_terminator(
         &mut self,
         terminator: &Terminator,
     ) -> Result<Option<Value>, InterpreterError> {
+        log::trace!("terminator: {:?}", terminator);
         match terminator {
             Terminator::Ret(Some((_, reg))) => {
                 let retval = self.register_value(reg);
+                self.stack.pop();
                 Ok(Some(retval))
             }
             Terminator::Jump(jump_to) => {
+                let id = self.current_basic_block().id;
                 let frame = self.stack.last_mut().unwrap();
+                frame.pred = Some(id);
                 frame.pc = 0;
                 frame.block_idx = jump_to.0 as usize;
 
@@ -264,6 +262,7 @@ impl IRInterpreter {
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
+        log::trace!("set {:?} to {:?}", register, value);
         self.stack
             .last_mut()
             .expect("Stack underflow")
@@ -293,6 +292,67 @@ impl IRInterpreter {
 
     fn block_is_terminating(&self) -> bool {
         let frame = self.stack.last().expect("stack underflow");
-        frame.function.blocks[frame.block_idx].instructions.len() == frame.pc + 1
+        frame.function.blocks[frame.block_idx].instructions.len() == frame.pc
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        check,
+        lowering::{
+            interpreter::{IRInterpreter, InterpreterError, Value},
+            ir::Lowerer,
+        },
+    };
+
+    fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
+        let typed = check(code).unwrap();
+        let lowerer = Lowerer::new(typed);
+        let lowered = lowerer.lower().unwrap();
+        IRInterpreter::new(lowered).run()
+    }
+
+    #[test]
+    fn interprets_int() {
+        assert_eq!(Value::Int(3), interpret("3").unwrap());
+    }
+
+    #[test]
+    fn interprets_float() {
+        assert_eq!(Value::Float(3.), interpret("3.0").unwrap());
+    }
+
+    #[test]
+    fn interprets_bool() {
+        assert_eq!(Value::Bool(true), interpret("true").unwrap());
+    }
+
+    #[test]
+    fn interprets_add() {
+        assert_eq!(Value::Int(3), interpret("1 + 2").unwrap());
+        assert_eq!(Value::Float(3.0), interpret("1. + 2.").unwrap());
+        assert!(interpret("true + false").is_err());
+    }
+
+    #[test]
+    fn interprets_sub() {
+        assert_eq!(Value::Int(-1), interpret("1 - 2").unwrap());
+        assert_eq!(Value::Float(-1.0), interpret("1. - 2.").unwrap());
+        assert!(interpret("true - false").is_err());
+    }
+
+    #[test]
+    fn interprets_mul() {
+        assert_eq!(Value::Int(6), interpret("2 * 3").unwrap());
+        assert_eq!(Value::Float(6.0), interpret("2. * 3.").unwrap());
+        assert!(interpret("true * false").is_err());
+    }
+
+    #[test]
+    fn interprets_div() {
+        assert_eq!(Value::Int(3), interpret("6 / 2").unwrap());
+        assert_eq!(Value::Float(3.0), interpret("6. / 2.").unwrap());
+        assert!(interpret("true / false").is_err());
     }
 }
