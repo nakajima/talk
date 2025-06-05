@@ -70,6 +70,7 @@ pub enum Instr {
         args: Vec<Register>,
         ty: IRType,
     },
+    JumpUnless(Register, BasicBlockID),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +78,6 @@ pub enum Terminator {
     Ret(Option<(IRType, Register)>),
     Unreachable,
     Jump(BasicBlockID),
-    JumpUnless(Register, BasicBlockID),
 }
 
 pub struct IRProgram {
@@ -474,7 +474,8 @@ impl Lowerer {
             .lower_expr(&cond)
             .expect("Condition for if expression did not produce a value");
 
-        let then_id = self.new_basic_block();
+        let then_id = self.current_block_mut().id;
+
         let mut else_reg: Option<Register> = None;
         let else_id: Option<BasicBlockID> = if alt.is_some() {
             Some(self.new_basic_block())
@@ -483,10 +484,9 @@ impl Lowerer {
         };
         let merge_id = self.new_basic_block(); // All paths merge here
 
-        self.current_block_mut().terminator =
-            Terminator::JumpUnless(cond_reg, else_id.unwrap_or(merge_id));
+        self.current_block_mut()
+            .push_instr(Instr::JumpUnless(cond_reg, else_id.unwrap_or(merge_id)));
 
-        self.set_current_block(then_id);
         let then_reg = self.lower_expr(&conseq).unwrap();
         self.current_block_mut().terminator = Terminator::Jump(merge_id);
 
@@ -1015,34 +1015,31 @@ mod tests {
                 BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
-                    instructions: vec![Instr::ConstantBool(Register(0), true)],
-                    terminator: Terminator::JumpUnless(Register(0), BasicBlockID(2)),
-                },
-                // consequence block
-                BasicBlock {
-                    id: BasicBlockID(1),
-                    label: Some("bb1".into()),
-                    instructions: vec![Instr::ConstantInt(Register(1), 123)],
-                    terminator: Terminator::Jump(BasicBlockID(3)),
+                    instructions: vec![
+                        Instr::ConstantBool(Register(0), true),
+                        Instr::JumpUnless(Register(0), BasicBlockID(1)),
+                        Instr::ConstantInt(Register(1), 123),
+                    ],
+                    terminator: Terminator::Jump(BasicBlockID(2)),
                 },
                 // else block
                 BasicBlock {
-                    id: BasicBlockID(2),
-                    label: Some("bb2".into()),
+                    id: BasicBlockID(1),
+                    label: Some("bb1".into()),
                     instructions: vec![Instr::ConstantInt(Register(2), 456)],
-                    terminator: Terminator::Jump(BasicBlockID(3)),
+                    terminator: Terminator::Jump(BasicBlockID(2)),
                 },
                 // converge block
                 BasicBlock {
-                    id: BasicBlockID(3),
-                    label: Some("bb3".into()),
+                    id: BasicBlockID(2),
+                    label: Some("bb2".into()),
                     instructions: vec![
                         Instr::Phi(
                             Register(3),
                             IRType::Int,
                             vec![
-                                (Register(1), BasicBlockID(1)),
-                                (Register(2), BasicBlockID(2)),
+                                (Register(1), BasicBlockID(0)),
+                                (Register(2), BasicBlockID(1)),
                             ],
                         ),
                         Instr::ConstantInt(Register(4), 789),

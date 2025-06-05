@@ -1,3 +1,5 @@
+use talk::lowering::ir::IRProgram;
+
 #[cfg(feature = "cli")]
 fn main() {
     use clap::{Parser, Subcommand};
@@ -25,24 +27,24 @@ fn main() {
 
     let cli = Cli::parse();
 
+    fn lower(contents: &str) -> IRProgram {
+        let parsed = parse(&contents).unwrap();
+        let resolved = NameResolver::new().resolve(parsed);
+        let mut inferred = TypeChecker.infer(resolved).unwrap();
+        let mut solver = ConstraintSolver::new(&mut inferred);
+        solver.solve().unwrap();
+
+        lowering::ir::Lowerer::new(inferred).lower().unwrap()
+    }
+
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
         Commands::IR { filename } => {
-            // Read entire file into a String
-
             use talk::lowering::ir_printer::print;
             let contents = std::fs::read_to_string(filename).expect("Could not read file");
+            let lowered = lower(&contents);
 
-            let parsed = parse(&contents).unwrap();
-            let resolved = NameResolver::new().resolve(parsed);
-            let mut inferred = TypeChecker.infer(resolved).unwrap();
-            let mut solver = ConstraintSolver::new(&mut inferred);
-            solver.solve().unwrap();
-
-            let lowered = lowering::ir::Lowerer::new(inferred).lower().unwrap();
-
-            // Use the pretty printer
             println!("{}", print(&lowered));
         }
         Commands::Parse { filename } => {
@@ -53,8 +55,13 @@ fn main() {
             }
         }
         Commands::Run { filename } => {
-            println!("WIP: {}", filename);
-            // Read entire file into a String
+            use talk::cli::interpreter::IRInterpreter;
+
+            let contents = std::fs::read_to_string(filename).expect("Could not read file");
+            let lowered = lower(&contents);
+            let mut interpreter = IRInterpreter::new(lowered);
+
+            println!("{:?}", interpreter.run())
         }
     }
 }

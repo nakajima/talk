@@ -167,6 +167,11 @@ fn format_instruction(instruction: &Instr) -> String {
             callee,
             format_args(args)
         ),
+        Instr::JumpUnless(register, basic_block_id) => format!(
+            "jump_unless {} {};",
+            format_register(register),
+            format_block_id(basic_block_id)
+        ),
     }
 }
 
@@ -202,11 +207,6 @@ fn format_terminator(terminator: &Terminator) -> String {
         ),
         Terminator::Unreachable => "unreachable".to_string(),
         Terminator::Jump(basic_block_id) => format!("jump {}", basic_block_id.0),
-        Terminator::JumpUnless(register, basic_block_id) => format!(
-            "jump_unless {} {};",
-            format_register(register),
-            format_block_id(basic_block_id)
-        ),
     }
 }
 
