@@ -718,7 +718,10 @@ mod tests {
                             IRType::Func(vec![], IRType::Int.into()),
                             RefKind::Func("@_5_foo".into())
                         )],
-                        terminator: Terminator::Ret(Some((IRType::Void, Register(0))))
+                        terminator: Terminator::Ret(Some((
+                            IRType::Func(vec![], IRType::Int.into()),
+                            Register(0)
+                        )))
                     }]
                 },
             ]
@@ -741,7 +744,10 @@ mod tests {
                         id: BasicBlockID(0),
                         label: None,
                         instructions: vec![],
-                        terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
+                        terminator: Terminator::Ret(Some((
+                            IRType::TypeVar("T3".into()),
+                            Register(0)
+                        )))
                     }]
                 },
                 IRFunction {
@@ -790,7 +796,10 @@ mod tests {
                         id: BasicBlockID(0),
                         label: None,
                         instructions: vec![],
-                        terminator: Terminator::Ret(Some((IRType::Void, Register(0))))
+                        terminator: Terminator::Ret(Some((
+                            IRType::TypeVar("T3".into()),
+                            Register(0)
+                        )))
                     }]
                 },
                 IRFunction {
@@ -808,7 +817,10 @@ mod tests {
                             RefKind::Func("@_5_foo".into())
                         )],
                         terminator: Terminator::Ret(Some((
-                            IRType::TypeVar("T3".into()),
+                            IRType::Func(
+                                vec![IRType::TypeVar("T3".into())],
+                                IRType::TypeVar("T3".into()).into()
+                            ),
                             Register(0)
                         )))
                     }]
@@ -934,7 +946,7 @@ mod tests {
                         Instr::ConstantInt(Register(1), 1),
                         Instr::Mul(Register(2), IRType::Int, Register(0), Register(1))
                     ],
-                    terminator: Terminator::Ret(Some(Register(2)))
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -956,7 +968,7 @@ mod tests {
                         Instr::ConstantInt(Register(1), 1),
                         Instr::Div(Register(2), IRType::Int, Register(0), Register(1))
                     ],
-                    terminator: Terminator::Ret(Some(Register(2)))
+                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )

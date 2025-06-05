@@ -192,10 +192,10 @@ fn format_register(register: &Register) -> String {
 
 fn format_terminator(terminator: &Terminator) -> String {
     match terminator {
-        Terminator::Ret(register) => format!(
+        Terminator::Ret(ret) => format!(
             "ret{};",
-            if let Some(register) = register {
-                format!(" {}", format_register(register))
+            if let Some((ty, register)) = ret {
+                format!(" {} {}", print_ir_ty(ty), format_register(register))
             } else {
                 "".into()
             }
@@ -250,12 +250,12 @@ mod tests {
   entry:
     %1 = int 1;
     %2 = add int %1, %0;
-    ret %2;
+    ret int %2;
 
 func @main() void
   entry:
     %0 = @_5_add;
-    ret %0;
+    ret (int %0) int %0;
 
 "
         )

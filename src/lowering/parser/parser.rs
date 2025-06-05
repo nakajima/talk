@@ -184,8 +184,12 @@ impl<'a> Parser<'a> {
         match current.kind {
             Tokind::Ret => {
                 self.advance();
-                let reg = self.register().ok();
-                Ok(Terminator::Ret(reg))
+                if let Some(ty) = self.type_repr().ok() {
+                    let reg = self.register()?;
+                    Ok(Terminator::Ret(Some((ty, reg))))
+                } else {
+                    Ok(Terminator::Ret(None))
+                }
             }
             _ => todo!("unhandled terminator: {:?}", current.kind),
         }
