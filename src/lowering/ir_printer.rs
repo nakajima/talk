@@ -220,11 +220,14 @@ fn format_block_id(id: &BasicBlockID) -> String {
 
 #[cfg(test)]
 mod tests {
+    use indoc::formatdoc;
+
     use crate::{
         check,
         lowering::{
             ir::{IRError, IRProgram, Lowerer},
             ir_printer::print,
+            parser::parser::parse,
         },
     };
 
@@ -246,18 +249,36 @@ mod tests {
         let func = print(&program);
         assert_eq!(
             func,
-            "func @_5_add(int %0) int
-  entry:
-    %1 = int 1;
-    %2 = add int %1, %0;
-    ret int %2;
+            formatdoc!(
+                r#"
+                func @_5_add(int %0) int
+                  entry:
+                    %1 = int 1;
+                    %2 = add int %1, %0;
+                    ret int %2;
 
-func @main() void
-  entry:
-    %0 = @_5_add;
-    ret (int %0) int %0;
+                func @main() void
+                  entry:
+                    %0 = @_5_add;
+                    ret (int %0) int %0;
 
-"
+                "#
+            )
         )
+    }
+
+    #[test]
+    fn round_trips() {
+        let program = lower(
+            "
+        func add(x) { 1 + x }
+        ",
+        )
+        .unwrap();
+
+        let func = print(&program);
+        let parsed = parse(&func).unwrap();
+
+        assert_eq!(parsed.functions.len(), 2);
     }
 }

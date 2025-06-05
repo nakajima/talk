@@ -1,7 +1,10 @@
 use std::{fmt::Debug, str::FromStr};
 
 use crate::lowering::{
-    ir::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, Register, Terminator},
+    ir::{
+        BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register,
+        Terminator,
+    },
     parser::lexer::{Lexer, Token, Tokind},
 };
 
@@ -62,7 +65,7 @@ impl<'a> Parser<'a> {
 
         let mut blocks: Vec<BasicBlock> = vec![];
 
-        while !self.did_match(Tokind::Func)? && !self.did_match(Tokind::EOF)? {
+        while !self.peek_matches(Tokind::Func) && !self.peek_matches(Tokind::EOF) {
             blocks.push(self.basic_block(blocks.len())?);
         }
 
@@ -167,6 +170,15 @@ impl<'a> Parser<'a> {
                     _ => todo!("unhandled instr ident: {:?}", name),
                 }
             }
+            Tokind::At => {
+                self.advance();
+                let name = self.identifier()?;
+                Ok(Instr::Ref(
+                    dest,
+                    IRType::Func(vec![], IRType::Void.into()),
+                    RefKind::Func(name),
+                ))
+            }
             _ => todo!("unhandled instr token: {:?}", current.kind),
         };
 
@@ -181,7 +193,7 @@ impl<'a> Parser<'a> {
             return Err(ParserError::UnexpectedEOF);
         };
 
-        match current.kind {
+        let res = match current.kind {
             Tokind::Ret => {
                 self.advance();
                 if let Some(ty) = self.type_repr().ok() {
@@ -192,7 +204,12 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => todo!("unhandled terminator: {:?}", current.kind),
-        }
+        };
+
+        self.consume(Tokind::Semicolon)?;
+        self.skip_newlines();
+
+        res
     }
 
     fn register(&mut self) -> Result<Register, ParserError> {
@@ -222,12 +239,29 @@ impl<'a> Parser<'a> {
     }
 
     fn type_repr(&mut self) -> Result<IRType, ParserError> {
-        let ty = match self.advance() {
+        let ty = match &self.current {
             Some(tok) => match tok.kind {
-                Tokind::Int => IRType::Int,
-                Tokind::Float => IRType::Float,
-                Tokind::Bool => IRType::Bool,
-                Tokind::Void => IRType::Void,
+                Tokind::Int => {
+                    self.advance();
+                    IRType::Int
+                }
+                Tokind::Float => {
+                    self.advance();
+                    IRType::Float
+                }
+                Tokind::Bool => {
+                    self.advance();
+                    IRType::Bool
+                }
+                Tokind::Void => {
+                    self.advance();
+                    IRType::Void
+                }
+                Tokind::LeftParen => {
+                    let params = self.parameters()?.into_iter().map(|p| p.1).collect();
+                    let ret = self.type_repr()?;
+                    IRType::Func(params, ret.into())
+                }
                 _ => todo!("{:?}", tok.kind),
             },
             _ => return Err(ParserError::UnexpectedEOF),
@@ -293,6 +327,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn peek_matches(&self, tokind: Tokind) -> bool {
+        if let Some(current) = &self.current {
+            current.kind == tokind
+        } else {
+            false
+        }
+    }
+
     fn advance(&mut self) -> Option<Token> {
         self.previous = self.current.clone();
         self.current = self.lexer.next().ok();
@@ -334,15 +376,10 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(code: &str) -> IRProgram {
+pub fn parse(code: &str) -> Result<IRProgram, ParserError> {
     let lexer = Lexer::new(code);
     let parser = Parser::new(lexer);
-    match parser.parse() {
-        Ok(prog) => prog,
-        Err(err) => {
-            panic!("{:?}", err)
-        }
-    }
+    parser.parse()
 }
 
 #[cfg(test)]
@@ -362,9 +399,10 @@ mod tests {
             %1 = int 1;
             %2 = int 2;
             %3 = add int %1, %2;
-            ret int %3
+            ret int %3;
         "#
         ))
+        .unwrap()
         .functions[0];
 
         assert_eq!(func.args().len(), 0);
