@@ -123,7 +123,7 @@ impl IRInterpreter {
         });
 
         for (i, arg) in args.iter().enumerate() {
-            self.set_register_value(&Register(i as u32), arg.clone());
+            self.set_register_value(&Register(i as u32), *arg);
         }
 
         loop {
@@ -183,7 +183,7 @@ impl IRInterpreter {
 
                 for (reg, pred) in &predecessors {
                     if frame.pred == Some(*pred) {
-                        self.set_register_value(&dest, self.register_value(&reg));
+                        self.set_register_value(&dest, self.register_value(reg));
                         self.stack.last_mut().unwrap().pc += 1;
                         return Ok(());
                     }
@@ -271,13 +271,12 @@ impl IRInterpreter {
     }
 
     fn register_value(&self, register: &Register) -> Value {
-        self.stack
+        *self.stack
             .last()
             .expect("Stack underflow")
             .registers
             .get(register)
             .unwrap_or_else(|| panic!("No value found for register: {:?}", register))
-            .clone()
     }
 
     fn load_function(&self, name: &str) -> Option<IRFunction> {

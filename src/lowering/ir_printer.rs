@@ -22,7 +22,7 @@ impl IRPrinter {
             self.buffer.push_str("  ");
         }
         self.buffer.push_str(line);
-        self.buffer.push_str("\n");
+        self.buffer.push('\n');
     }
 }
 
@@ -47,7 +47,7 @@ fn print_func_def(func: &IRFunction) -> String {
 fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
     let mut res = String::new();
 
-    res.push_str("(");
+    res.push('(');
 
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
@@ -61,8 +61,8 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
         ));
     }
 
-    res.push_str(")");
-    res.push_str(" ");
+    res.push(')');
+    res.push(' ');
     res.push_str(&print_ir_ty(ret));
 
     res
@@ -178,7 +178,7 @@ fn format_instruction(instruction: &Instr) -> String {
 fn format_args(args: &[Register]) -> String {
     let mut res = String::new();
 
-    res.push_str("(");
+    res.push('(');
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
             res.push_str(", ");
@@ -187,7 +187,7 @@ fn format_args(args: &[Register]) -> String {
         res.push_str(&format_register(arg));
     }
 
-    res.push_str(")");
+    res.push(')');
     res
 }
 

@@ -196,7 +196,7 @@ impl<'a> Parser<'a> {
         let res = match current.kind {
             Tokind::Ret => {
                 self.advance();
-                if let Some(ty) = self.type_repr().ok() {
+                if let Ok(ty) = self.type_repr() {
                     let reg = self.register()?;
                     Ok(Terminator::Ret(Some((ty, reg))))
                 } else {

@@ -194,7 +194,7 @@ impl IRFunction {
             unreachable!()
         };
 
-        &*ret
+        ret
     }
 }
 
@@ -343,10 +343,10 @@ impl Lowerer {
             | Expr::LiteralFloat(_)
             | Expr::LiteralFalse
             | Expr::LiteralTrue => self.lower_literal(expr_id),
-            Expr::Binary(_, _, _) => self.lower_binary_op(&expr_id),
+            Expr::Binary(_, _, _) => self.lower_binary_op(expr_id),
             Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs),
             Expr::Variable(name, _) => self.lower_variable(&name),
-            Expr::If(_, _, _) => self.lower_if(&expr_id),
+            Expr::If(_, _, _) => self.lower_if(expr_id),
             Expr::Block(_) => self.lower_block(expr_id),
             Expr::Call(callee, args) => self.lower_call(callee, args, typed_expr.ty),
             Expr::Func { name, .. } => {
@@ -362,7 +362,7 @@ impl Lowerer {
                 self.current_block_mut().push_instr(Instr::Ref(
                     reg,
                     typed_expr.ty.to_ir(),
-                    RefKind::Func(name.into()),
+                    RefKind::Func(name),
                 ));
                 Some(reg)
             }
