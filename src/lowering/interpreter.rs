@@ -355,4 +355,21 @@ mod tests {
         assert_eq!(Value::Float(3.0), interpret("6. / 2.").unwrap());
         assert!(interpret("true / false").is_err());
     }
+
+    #[test]
+    fn interprets_call() {
+        assert_eq!(
+            Value::Int(3),
+            interpret(
+                "
+        func add(x, y) {
+            x + y
+        }
+
+        add(1, 2)
+        "
+            )
+            .unwrap()
+        );
+    }
 }
