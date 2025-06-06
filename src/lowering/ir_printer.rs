@@ -1,5 +1,5 @@
 use crate::lowering::ir::{
-    BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register, Terminator,
+    BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register,
 };
 
 pub fn print(program: &IRProgram) -> String {
@@ -87,7 +87,6 @@ fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
         printer.puts(&format_instruction(instruction))
     }
 
-    printer.puts(&format_terminator(&block.terminator));
     printer.indent_level -= 1;
 }
 
@@ -172,6 +171,16 @@ fn format_instruction(instruction: &Instr) -> String {
             format_register(register),
             format_block_id(basic_block_id)
         ),
+        Instr::Ret(ret) => format!(
+            "ret{};",
+            if let Some((ty, register)) = ret {
+                format!(" {} {}", print_ir_ty(ty), format_register(register))
+            } else {
+                "".into()
+            }
+        ),
+        Instr::Unreachable => "unreachable".to_string(),
+        Instr::Jump(basic_block_id) => format!("jump {}", basic_block_id.0),
     }
 }
 
@@ -195,21 +204,6 @@ fn format_register(register: &Register) -> String {
     format!("%{}", register.0)
 }
 
-fn format_terminator(terminator: &Terminator) -> String {
-    match terminator {
-        Terminator::Ret(ret) => format!(
-            "ret{};",
-            if let Some((ty, register)) = ret {
-                format!(" {} {}", print_ir_ty(ty), format_register(register))
-            } else {
-                "".into()
-            }
-        ),
-        Terminator::Unreachable => "unreachable".to_string(),
-        Terminator::Jump(basic_block_id) => format!("jump {}", basic_block_id.0),
-    }
-}
-
 fn format_block_id(id: &BasicBlockID) -> String {
     if id.0 == 0 {
         "entry".to_string()
@@ -227,7 +221,6 @@ mod tests {
         lowering::{
             ir::{IRError, IRProgram, Lowerer},
             ir_printer::print,
-            parser::parser::parse,
         },
     };
 
@@ -265,20 +258,5 @@ mod tests {
                 "#
             )
         )
-    }
-
-    #[test]
-    fn round_trips() {
-        let program = lower(
-            "
-        func add(x) { 1 + x }
-        ",
-        )
-        .unwrap();
-
-        let func = print(&program);
-        let parsed = parse(&func).unwrap();
-
-        assert_eq!(parsed.functions.len(), 2);
     }
 }

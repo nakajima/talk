@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::lowering::ir::{
-    BasicBlock, BasicBlockID, IRFunction, IRProgram, Instr, RefKind, Register, Terminator,
+    BasicBlock, BasicBlockID, IRFunction, IRProgram, Instr, RefKind, Register,
 };
 
 #[derive(Debug)]
@@ -10,6 +10,7 @@ pub enum InterpreterError {
     CalleeNotFound,
     PredecessorNotFound,
     TypeError(Value, Value),
+    UnreachableReached,
 }
 
 #[derive(Debug)]
@@ -85,27 +86,17 @@ impl IRInterpreter {
     }
 
     pub fn step(&mut self) -> Result<Option<Value>, InterpreterError> {
-        if self.block_is_terminating() {
-            let terminator = {
-                let frame = &mut self.stack.last().expect("Stack underflow");
-                let block = &frame.function.blocks[frame.block_idx];
-                block.terminator.clone()
-            };
+        let instr = {
+            let frame = &mut self.stack.last().expect("Stack underflow");
+            let block = &frame.function.blocks[frame.block_idx];
+            block.instructions[frame.pc].clone()
+        };
 
-            let res = self.execute_terminator(&terminator)?;
-
-            Ok(res)
-        } else {
-            let instr = {
-                let frame = &mut self.stack.last().expect("Stack underflow");
-                let block = &frame.function.blocks[frame.block_idx];
-                block.instructions[frame.pc].clone()
-            };
-
-            self.execute_instr(instr)?;
-
-            Ok(None)
+        if let Some(retval) = self.execute_instr(instr)? {
+            return Ok(Some(retval));
         }
+
+        Ok(None)
     }
 
     fn execute_function(
@@ -138,7 +129,7 @@ impl IRInterpreter {
         }
     }
 
-    fn execute_instr(&mut self, instr: Instr) -> Result<(), InterpreterError> {
+    fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
         log::trace!("{:?}", instr);
 
@@ -185,7 +176,7 @@ impl IRInterpreter {
                     if frame.pred == Some(*pred) {
                         self.set_register_value(&dest, self.register_value(reg));
                         self.stack.last_mut().unwrap().pc += 1;
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
 
@@ -222,43 +213,37 @@ impl IRInterpreter {
                     frame.pred = Some(id);
                     frame.block_idx = jump_to.0 as usize;
                     frame.pc = 0;
-                    return Ok(());
+                    return Ok(None);
                 }
             }
-        }
-
-        self.stack.last_mut().unwrap().pc += 1;
-
-        Ok(())
-    }
-
-    fn current_basic_block(&self) -> &BasicBlock {
-        let frame = self.stack.last().unwrap();
-        &frame.function.blocks[frame.block_idx]
-    }
-
-    fn execute_terminator(
-        &mut self,
-        terminator: &Terminator,
-    ) -> Result<Option<Value>, InterpreterError> {
-        log::trace!("terminator: {:?}", terminator);
-        match terminator {
-            Terminator::Ret(Some((_, reg))) => {
-                let retval = self.register_value(reg);
+            Instr::Ret(Some((_, reg))) => {
+                let retval = self.register_value(&reg);
                 self.stack.pop();
-                Ok(Some(retval))
+                return Ok(Some(retval));
             }
-            Terminator::Jump(jump_to) => {
+            Instr::Ret(None) => {
+                self.stack.pop();
+                return Ok(Some(Value::Void));
+            }
+            Instr::Jump(jump_to) => {
                 let id = self.current_basic_block().id;
                 let frame = self.stack.last_mut().unwrap();
                 frame.pred = Some(id);
                 frame.pc = 0;
                 frame.block_idx = jump_to.0 as usize;
-
-                Ok(None)
+                return Ok(None);
             }
-            _ => todo!(),
+            Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
         }
+
+        self.stack.last_mut().unwrap().pc += 1;
+
+        Ok(None)
+    }
+
+    fn current_basic_block(&self) -> &BasicBlock {
+        let frame = self.stack.last().unwrap();
+        &frame.function.blocks[frame.block_idx]
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
@@ -288,11 +273,6 @@ impl IRInterpreter {
         }
 
         None
-    }
-
-    fn block_is_terminating(&self) -> bool {
-        let frame = self.stack.last().expect("stack underflow");
-        frame.function.blocks[frame.block_idx].instructions.len() == frame.pc
     }
 }
 
@@ -359,14 +339,14 @@ mod tests {
     #[test]
     fn interprets_call() {
         assert_eq!(
-            Value::Int(3),
+            Value::Int(6),
             interpret(
                 "
         func add(x, y) {
             x + y
         }
 
-        add(1, 2)
+        add(add(1, 2), 3)
         "
             )
             .unwrap()

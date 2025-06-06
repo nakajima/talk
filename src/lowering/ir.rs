@@ -70,14 +70,10 @@ pub enum Instr {
         args: Vec<Register>,
         ty: IRType,
     },
-    JumpUnless(Register, BasicBlockID),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Terminator {
     Ret(Option<(IRType, Register)>),
-    Unreachable,
     Jump(BasicBlockID),
+    JumpUnless(Register, BasicBlockID),
+    Unreachable,
 }
 
 pub struct IRProgram {
@@ -99,7 +95,6 @@ pub struct BasicBlock {
     pub id: BasicBlockID,
     pub label: Option<String>,
     pub instructions: Vec<Instr>,
-    pub terminator: Terminator,
 }
 
 impl BasicBlock {
@@ -317,7 +312,7 @@ impl Lowerer {
             };
 
             if i == body_exprs.len() - 1 {
-                self.current_block_mut().terminator = Terminator::Ret(ret);
+                self.current_block_mut().push_instr(Instr::Ret(ret));
             }
         }
 
@@ -488,12 +483,12 @@ impl Lowerer {
             .push_instr(Instr::JumpUnless(cond_reg, else_id.unwrap_or(merge_id)));
 
         let then_reg = self.lower_expr(&conseq).unwrap();
-        self.current_block_mut().terminator = Terminator::Jump(merge_id);
+        self.current_block_mut().push_instr(Instr::Jump(merge_id));
 
         if let Some(alt) = alt {
             self.set_current_block(else_id.unwrap());
             else_reg = self.lower_expr(&alt);
-            self.current_block_mut().terminator = Terminator::Jump(merge_id);
+            self.current_block_mut().push_instr(Instr::Jump(merge_id));
         }
 
         self.current_func_mut().set_current_block(merge_id);
@@ -602,7 +597,6 @@ impl Lowerer {
                 None
             },
             instructions: Vec::new(),
-            terminator: Terminator::Unreachable, // Placeholder, must be set before block is "done"
         };
 
         self.current_func_mut().add_block(block);
@@ -681,7 +675,7 @@ mod tests {
         check,
         lowering::ir::{
             BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
-            RefKind, Register, Terminator,
+            RefKind, Register,
         },
     };
 
@@ -703,8 +697,10 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![Instr::ConstantInt(Register(0), 123)],
-                        terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
+                        instructions: vec![
+                            Instr::ConstantInt(Register(0), 123),
+                            Instr::Ret(Some((IRType::Int, Register(0))))
+                        ],
                     }]
                 },
                 IRFunction {
@@ -713,15 +709,17 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![Instr::Ref(
-                            Register(0),
-                            IRType::Func(vec![], IRType::Int.into()),
-                            RefKind::Func("@_5_foo".into())
-                        )],
-                        terminator: Terminator::Ret(Some((
-                            IRType::Func(vec![], IRType::Int.into()),
-                            Register(0)
-                        )))
+                        instructions: vec![
+                            Instr::Ref(
+                                Register(0),
+                                IRType::Func(vec![], IRType::Int.into()),
+                                RefKind::Func("@_5_foo".into()),
+                            ),
+                            Instr::Ret(Some((
+                                IRType::Func(vec![], IRType::Int.into()),
+                                Register(0)
+                            )))
+                        ],
                     }]
                 },
             ]
@@ -743,11 +741,10 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![],
-                        terminator: Terminator::Ret(Some((
+                        instructions: vec![Instr::Ret(Some((
                             IRType::TypeVar("T3".into()),
                             Register(0)
-                        )))
+                        )))],
                     }]
                 },
                 IRFunction {
@@ -772,8 +769,8 @@ mod tests {
                                 callee: "@_5_foo".into(),
                                 args: vec![Register(1)]
                             },
+                            Instr::Ret(Some((IRType::Int, Register(2))))
                         ],
-                        terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                     }]
                 },
             ]
@@ -795,11 +792,10 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![],
-                        terminator: Terminator::Ret(Some((
+                        instructions: vec![Instr::Ret(Some((
                             IRType::TypeVar("T3".into()),
                             Register(0)
-                        )))
+                        )))],
                     }]
                 },
                 IRFunction {
@@ -808,21 +804,23 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         label: None,
-                        instructions: vec![Instr::Ref(
-                            Register(0),
-                            IRType::Func(
-                                vec![IRType::TypeVar("T3".into())],
-                                IRType::TypeVar("T3".into()).into()
+                        instructions: vec![
+                            Instr::Ref(
+                                Register(0),
+                                IRType::Func(
+                                    vec![IRType::TypeVar("T3".into())],
+                                    IRType::TypeVar("T3".into()).into()
+                                ),
+                                RefKind::Func("@_5_foo".into())
                             ),
-                            RefKind::Func("@_5_foo".into())
-                        )],
-                        terminator: Terminator::Ret(Some((
-                            IRType::Func(
-                                vec![IRType::TypeVar("T3".into())],
-                                IRType::TypeVar("T3".into()).into()
-                            ),
-                            Register(0)
-                        )))
+                            Instr::Ret(Some((
+                                IRType::Func(
+                                    vec![IRType::TypeVar("T3".into())],
+                                    IRType::TypeVar("T3".into()).into()
+                                ),
+                                Register(0)
+                            )))
+                        ],
                     }]
                 },
             ]
@@ -840,8 +838,10 @@ mod tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
-                    instructions: vec![Instr::ConstantInt(Register(0), 123)],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 123),
+                        Instr::Ret(Some((IRType::Int, Register(0))))
+                    ],
                 }]
             }]
         )
@@ -858,8 +858,10 @@ mod tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
-                    instructions: vec![Instr::ConstantFloat(Register(0), 123.)],
-                    terminator: Terminator::Ret(Some((IRType::Float, Register(0))))
+                    instructions: vec![
+                        Instr::ConstantFloat(Register(0), 123.),
+                        Instr::Ret(Some((IRType::Float, Register(0))))
+                    ],
                 }]
             }]
         )
@@ -879,8 +881,8 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantBool(Register(0), true),
                         Instr::ConstantBool(Register(1), false),
+                        Instr::Ret(Some((IRType::Bool, Register(1)))),
                     ],
-                    terminator: Terminator::Ret(Some((IRType::Bool, Register(1))))
                 }]
             }]
         )
@@ -900,9 +902,9 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 1),
                         Instr::ConstantInt(Register(1), 2),
-                        Instr::Add(Register(2), IRType::Int, Register(0), Register(1))
+                        Instr::Add(Register(2), IRType::Int, Register(0), Register(1)),
+                        Instr::Ret(Some((IRType::Int, Register(2))))
                     ],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -922,9 +924,9 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
-                        Instr::Sub(Register(2), IRType::Int, Register(0), Register(1))
+                        Instr::Sub(Register(2), IRType::Int, Register(0), Register(1)),
+                        Instr::Ret(Some((IRType::Int, Register(2))))
                     ],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -944,9 +946,9 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
-                        Instr::Mul(Register(2), IRType::Int, Register(0), Register(1))
+                        Instr::Mul(Register(2), IRType::Int, Register(0), Register(1)),
+                        Instr::Ret(Some((IRType::Int, Register(2))))
                     ],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -966,9 +968,9 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
-                        Instr::Div(Register(2), IRType::Int, Register(0), Register(1))
+                        Instr::Div(Register(2), IRType::Int, Register(0), Register(1)),
+                        Instr::Ret(Some((IRType::Int, Register(2))))
                     ],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(2))))
                 }]
             }]
         )
@@ -985,8 +987,10 @@ mod tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     label: None,
-                    instructions: vec![Instr::ConstantInt(Register(0), 123),],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(0))))
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 123),
+                        Instr::Ret(Some((IRType::Int, Register(0)))),
+                    ],
                 }]
             }]
         )
@@ -1019,15 +1023,17 @@ mod tests {
                         Instr::ConstantBool(Register(0), true),
                         Instr::JumpUnless(Register(0), BasicBlockID(1)),
                         Instr::ConstantInt(Register(1), 123),
+                        Instr::Jump(BasicBlockID(2)),
                     ],
-                    terminator: Terminator::Jump(BasicBlockID(2)),
                 },
                 // else block
                 BasicBlock {
                     id: BasicBlockID(1),
                     label: Some("bb1".into()),
-                    instructions: vec![Instr::ConstantInt(Register(2), 456)],
-                    terminator: Terminator::Jump(BasicBlockID(2)),
+                    instructions: vec![
+                        Instr::ConstantInt(Register(2), 456),
+                        Instr::Jump(BasicBlockID(2)),
+                    ],
                 },
                 // converge block
                 BasicBlock {
@@ -1043,8 +1049,8 @@ mod tests {
                             ],
                         ),
                         Instr::ConstantInt(Register(4), 789),
+                        Instr::Ret(Some((IRType::Int, Register(4)))),
                     ],
-                    terminator: Terminator::Ret(Some((IRType::Int, Register(4)))),
                 },
             ],
         }];

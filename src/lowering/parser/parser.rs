@@ -1,10 +1,7 @@
 use std::{fmt::Debug, str::FromStr};
 
 use crate::lowering::{
-    ir::{
-        BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register,
-        Terminator,
-    },
+    ir::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register},
     parser::lexer::{Lexer, Token, Tokind},
 };
 
@@ -99,9 +96,9 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         let mut instructions = vec![];
-        // TODO:: Support other terminators
+
         while let Some(Token {
-            kind: Tokind::Percent,
+            kind: Tokind::Percent | Tokind::Ret,
             ..
         }) = self.current
         {
@@ -110,106 +107,88 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        let terminator = self.terminator()?;
-
         Ok(BasicBlock {
             id: BasicBlockID(id as u32),
             label: None,
             instructions,
-            terminator,
         })
     }
 
     fn instruction(&mut self) -> Result<Instr, ParserError> {
-        self.consume(Tokind::Percent)?;
-        let reg_id = self.integer()?;
-        let dest = Register(reg_id);
-        self.consume(Tokind::Equals)?;
+        let instr = if self.did_match(Tokind::Percent)? {
+            let reg_id = self.integer()?;
+            let dest = Register(reg_id);
+            self.consume(Tokind::Equals)?;
 
-        let Some(current) = self.current.clone() else {
-            return Err(ParserError::UnexpectedEOF);
-        };
+            let Some(current) = self.current.clone() else {
+                return Err(ParserError::UnexpectedEOF);
+            };
 
-        let instr = match &current.kind {
-            Tokind::Int => {
-                self.advance();
-                let int = self.integer()?;
-                Ok(Instr::ConstantInt(dest, int))
-            }
-            Tokind::Identifier(name) => {
-                self.advance();
-                match name.as_str() {
-                    "add" => {
-                        let ty = self.type_repr()?;
-                        let op1 = self.register()?;
-                        self.consume(Tokind::Comma)?;
-                        let op2 = self.register()?;
-                        Ok(Instr::Add(dest, ty, op1, op2))
-                    }
-                    "sub" => {
-                        let ty = self.type_repr()?;
-                        let op1 = self.register()?;
-                        self.consume(Tokind::Comma)?;
-                        let op2 = self.register()?;
-                        Ok(Instr::Sub(dest, ty, op1, op2))
-                    }
-                    "mul" => {
-                        let ty = self.type_repr()?;
-                        let op1 = self.register()?;
-                        self.consume(Tokind::Comma)?;
-                        let op2 = self.register()?;
-                        Ok(Instr::Mul(dest, ty, op1, op2))
-                    }
-                    "div" => {
-                        let ty = self.type_repr()?;
-                        let op1 = self.register()?;
-                        self.consume(Tokind::Comma)?;
-                        let op2 = self.register()?;
-                        Ok(Instr::Div(dest, ty, op1, op2))
-                    }
-                    _ => todo!("unhandled instr ident: {:?}", name),
+            match &current.kind {
+                Tokind::Int => {
+                    self.advance();
+                    let int = self.integer()?;
+                    Ok(Instr::ConstantInt(dest, int))
                 }
+                Tokind::Identifier(name) => {
+                    self.advance();
+                    match name.as_str() {
+                        "add" => {
+                            let ty = self.type_repr()?;
+                            let op1 = self.register()?;
+                            self.consume(Tokind::Comma)?;
+                            let op2 = self.register()?;
+                            Ok(Instr::Add(dest, ty, op1, op2))
+                        }
+                        "sub" => {
+                            let ty = self.type_repr()?;
+                            let op1 = self.register()?;
+                            self.consume(Tokind::Comma)?;
+                            let op2 = self.register()?;
+                            Ok(Instr::Sub(dest, ty, op1, op2))
+                        }
+                        "mul" => {
+                            let ty = self.type_repr()?;
+                            let op1 = self.register()?;
+                            self.consume(Tokind::Comma)?;
+                            let op2 = self.register()?;
+                            Ok(Instr::Mul(dest, ty, op1, op2))
+                        }
+                        "div" => {
+                            let ty = self.type_repr()?;
+                            let op1 = self.register()?;
+                            self.consume(Tokind::Comma)?;
+                            let op2 = self.register()?;
+                            Ok(Instr::Div(dest, ty, op1, op2))
+                        }
+                        _ => todo!("unhandled instr ident: {:?}", name),
+                    }
+                }
+                Tokind::At => {
+                    self.advance();
+                    let name = self.identifier()?;
+                    Ok(Instr::Ref(
+                        dest,
+                        IRType::Func(vec![], IRType::Void.into()),
+                        RefKind::Func(name),
+                    ))
+                }
+                _ => todo!(),
             }
-            Tokind::At => {
-                self.advance();
-                let name = self.identifier()?;
-                Ok(Instr::Ref(
-                    dest,
-                    IRType::Func(vec![], IRType::Void.into()),
-                    RefKind::Func(name),
-                ))
+        } else if self.did_match(Tokind::Ret)? {
+            if let Ok(ty) = self.type_repr() {
+                let reg = self.register()?;
+                Ok(Instr::Ret(Some((ty, reg))))
+            } else {
+                Ok(Instr::Ret(None))
             }
-            _ => todo!("unhandled instr token: {:?}", current.kind),
+        } else {
+            todo!("unhandled instr token: {:?}", self.current)
         };
 
         self.consume(Tokind::Semicolon)?;
 
         instr
-    }
-
-    fn terminator(&mut self) -> Result<Terminator, ParserError> {
-        self.skip_newlines();
-        let Some(current) = &self.current else {
-            return Err(ParserError::UnexpectedEOF);
-        };
-
-        let res = match current.kind {
-            Tokind::Ret => {
-                self.advance();
-                if let Ok(ty) = self.type_repr() {
-                    let reg = self.register()?;
-                    Ok(Terminator::Ret(Some((ty, reg))))
-                } else {
-                    Ok(Terminator::Ret(None))
-                }
-            }
-            _ => todo!("unhandled terminator: {:?}", current.kind),
-        };
-
-        self.consume(Tokind::Semicolon)?;
-        self.skip_newlines();
-
-        res
     }
 
     fn register(&mut self) -> Result<Register, ParserError> {
@@ -384,11 +363,20 @@ pub fn parse(code: &str) -> Result<IRProgram, ParserError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::lowering::{
-        ir::{BasicBlockID, IRType, Instr, Register, Terminator},
-        parser::parser::parse,
+    use crate::{
+        check,
+        lowering::{
+            ir::{BasicBlockID, IRError, IRProgram, IRType, Instr, Lowerer, Register},
+            parser::parser::parse,
+        },
     };
     use indoc::formatdoc;
+
+    fn lower(input: &'static str) -> Result<IRProgram, IRError> {
+        let typed = check(input).unwrap();
+        let lowerer = Lowerer::new(typed);
+        lowerer.lower()
+    }
 
     #[test]
     fn parses_fn() {
@@ -417,8 +405,23 @@ mod tests {
             Instr::Add(Register(3), IRType::Int, Register(1), Register(2))
         );
         assert_eq!(
-            bb.terminator,
-            Terminator::Ret(Some((IRType::Int, Register(3))))
+            bb.instructions[3],
+            Instr::Ret(Some((IRType::Int, Register(3))))
         );
+    }
+
+    #[test]
+    fn round_trips() {
+        let program = lower(
+            "
+        func add(x) { 1 + x }
+        ",
+        )
+        .unwrap();
+
+        let func = crate::lowering::ir_printer::print(&program);
+        let parsed = parse(&func).unwrap();
+
+        assert_eq!(parsed.functions.len(), 2);
     }
 }
