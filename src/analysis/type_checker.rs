@@ -823,6 +823,7 @@ impl TypeChecker {
                 ..
             } => {
                 // The expected type should be an Enum type
+                println!("Pattern Variant: {:?}({:?})", variant_name, fields);
 
                 // if let Ty::Enum(enum_id, type_args) =
                 match expected {
@@ -882,11 +883,9 @@ impl TypeChecker {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
                             ));
-                            let Some(Expr::Pattern(pattern)) = source_file.get(field_pattern)
-                            else {
-                                unreachable!()
-                            };
-                            self.infer_pattern(pattern, env, &field_ty, source_file);
+
+                            self.infer_node(field_pattern, env, &Some(field_ty), source_file)
+                                .unwrap();
                         }
                     }
                     _ => panic!("Unhandled pattern variant: {:?}", pattern),

@@ -174,6 +174,7 @@ impl IRInterpreter {
 
                 for (reg, pred) in &predecessors {
                     if frame.pred == Some(*pred) {
+                        println!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
                         self.set_register_value(&dest, self.register_value(reg));
                         self.stack.last_mut().unwrap().pc += 1;
                         return Ok(None);
@@ -243,7 +244,12 @@ impl IRInterpreter {
                     return Ok(None);
                 }
             }
-            Instr::Eq(_, _, _, _) => todo!(),
+            Instr::Eq(dest, _, op1, op2) => {
+                self.set_register_value(
+                    &dest,
+                    Value::Bool(self.register_value(&op1) == self.register_value(&op2)),
+                );
+            }
             Instr::TagVariant(_, _, _, _) => todo!(),
             Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
         }
@@ -294,6 +300,7 @@ mod tests {
         check,
         lowering::{
             interpreter::{IRInterpreter, InterpreterError, Value},
+            ir_printer::print,
             lowerer::Lowerer,
         },
     };
@@ -302,6 +309,9 @@ mod tests {
         let typed = check(code).unwrap();
         let lowerer = Lowerer::new(typed);
         let lowered = lowerer.lower().unwrap();
+
+        println!("{}", print(&lowered));
+
         IRInterpreter::new(lowered).run()
     }
 
@@ -377,6 +387,38 @@ mod tests {
         }
 
         foo()
+        "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_simple_match() {
+        assert_eq!(
+            Value::Int(456),
+            interpret(
+                "
+            match 1 {
+                0 -> 123,
+                1 -> 456
+            }
+        "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_builtin_optional() {
+        assert_eq!(
+            Value::Int(123),
+            interpret(
+                "
+            match Optional.some(123) {
+                .some(x) -> x,
+                .none -> 0
+            }
         "
             )
             .unwrap()

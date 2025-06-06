@@ -438,14 +438,20 @@ impl Lowerer {
         let current_basic_block = self.current_block_mut().id;
 
         self.set_current_block(body_basic_block_id);
-        self.lower_expr(&body);
+        let body_ret = self.lower_expr(&body).unwrap();
         self.push_instr(Instr::Jump(merge_block_id));
         self.set_current_block(current_basic_block);
 
-        (candidate, body_basic_block_id)
+        (body_ret, body_basic_block_id)
     }
 
     fn lower_pattern(&mut self, pattern_id: &ExprID) -> Register {
+        println!("{:?}", self.source_file.typed_exprs().keys());
+        println!(
+            "pattern_id: {:?} {:?}",
+            pattern_id,
+            self.source_file.get(pattern_id)
+        );
         let pattern_typed_expr = self.source_file.typed_expr(&pattern_id).unwrap();
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
             panic!("Didn't get pattern for match arm: {:?}", pattern_typed_expr)
@@ -1392,10 +1398,8 @@ mod tests {
         ",
         )
         .unwrap();
-        // assert_lowered_functions!(
-        //     lowered,
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -1424,8 +1428,8 @@ mod tests {
                                 Register(7),
                                 IRType::Float,
                                 vec![
-                                    (Register(1), BasicBlockID(2)),
-                                    (Register(4), BasicBlockID(3))
+                                    (Register(3), BasicBlockID(2)),
+                                    (Register(6), BasicBlockID(3))
                                 ]
                             ),
                             Instr::Ret(Some((IRType::Float, Register(7))))
@@ -1494,8 +1498,8 @@ mod tests {
                                 Register(7),
                                 IRType::Int,
                                 vec![
-                                    (Register(1), BasicBlockID(2)),
-                                    (Register(4), BasicBlockID(3))
+                                    (Register(3), BasicBlockID(2)),
+                                    (Register(6), BasicBlockID(3))
                                 ]
                             ),
                             Instr::Ret(Some((IRType::Int, Register(7))))
