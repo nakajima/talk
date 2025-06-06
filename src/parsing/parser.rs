@@ -127,9 +127,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn return_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::Return)?;
 
-        if self.peek_is(TokenKind::Newline)
-            || self.peek_is(TokenKind::RightBrace)
-        {
+        if self.peek_is(TokenKind::Newline) || self.peek_is(TokenKind::RightBrace) {
             return self.add_expr(Return(None));
         }
 
@@ -624,8 +622,6 @@ impl<'a> Parser<'a> {
         let mut lhs: Option<ExprID> = None;
         let mut handler = Precedence::handler(&self.current)?;
 
-        println!("handler for {:?}", self.current);
-
         if let Some(prefix) = handler.prefix {
             lhs = Some(prefix(self, precedence.can_assign())?);
         }
@@ -680,12 +676,12 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn peek_is(&self, expected: TokenKind) -> bool {
-        if let Some(Token { kind: actual, ..}) = &self.current {
+        if let Some(Token { kind: actual, .. }) = &self.current {
             *actual == expected
         } else {
             false
         }
-    } 
+    }
 
     // Try to get a specific token. If it's a match, return true.
     pub(super) fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {

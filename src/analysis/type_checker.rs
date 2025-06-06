@@ -209,6 +209,7 @@ impl TypeChecker {
             }
             Expr::Pattern(pattern) => self.infer_pattern_expr(env, pattern, expected),
             Expr::Variable(Name::Raw(_), _) => Err(TypeError::Unresolved),
+            Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             _ => panic!("Unhandled expr in type checker: {:?}", expr.clone()),
         }?;
 
@@ -219,6 +220,20 @@ impl TypeChecker {
         };
         env.typed_exprs.insert(id, typed_expr);
         Ok(ty)
+    }
+
+    fn infer_return(
+        &self,
+        rhs: &Option<ExprID>,
+        env: &mut Environment,
+        expected: &Option<Ty>,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        if let Some(rhs) = rhs {
+            self.infer_node(*rhs, env, expected, source_file)
+        } else {
+            Ok(Ty::Void)
+        }
     }
 
     fn infer_loop(
@@ -1837,6 +1852,42 @@ mod pending {
     #[test]
     fn checks_binary_expression() {
         check("1 + 2");
+    }
+
+    #[test]
+    fn checks_void_expr() {
+        assert_eq!(
+            check(
+                "func foo() {
+            return
+        }()"
+            ),
+            Ty::Void
+        );
+    }
+
+    #[test]
+    fn checks_return_err() {
+        assert!(
+            check_err(
+                "func foo() -> Int {
+            return
+        }()"
+            )
+            .is_err(),
+        );
+    }
+
+    #[test]
+    fn checks_return_expr() {
+        assert_eq!(
+            check(
+                "func foo() {
+            return 123
+        }()"
+            ),
+            Ty::Int
+        );
     }
 
     #[test]

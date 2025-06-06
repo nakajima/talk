@@ -271,7 +271,8 @@ impl IRInterpreter {
     }
 
     fn register_value(&self, register: &Register) -> Value {
-        *self.stack
+        *self
+            .stack
             .last()
             .expect("Stack underflow")
             .registers
