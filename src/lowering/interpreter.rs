@@ -352,4 +352,22 @@ mod tests {
             .unwrap()
         );
     }
+
+    #[test]
+    fn interprets_return() {
+        assert_eq!(
+            Value::Int(1),
+            interpret(
+                "
+        func foo() {
+            return 1
+            2
+        }
+
+        foo()
+        "
+            )
+            .unwrap()
+        );
+    }
 }

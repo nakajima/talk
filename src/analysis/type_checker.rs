@@ -655,14 +655,21 @@ impl TypeChecker {
 
         self.hoist_functions(items, env, source_file);
 
+        let mut return_exprs: Vec<(ExprID, Ty)> = vec![];
+
         let return_ty: Ty = {
             let mut return_ty: Ty = Ty::Void;
 
             for (i, item) in items.iter().enumerate() {
-                if i == items.len() - 1 {
+                let ty = if i == items.len() - 1 {
                     return_ty = self.infer_node(*item, env, expected, source_file)?;
+                    return_ty.clone()
                 } else {
-                    self.infer_node(*item, env, &None, source_file)?;
+                    self.infer_node(*item, env, &None, source_file)?
+                };
+
+                if let Some(Expr::Return(_)) = source_file.get(*item) {
+                    return_exprs.push((*item, ty));
                 }
             }
 
@@ -679,6 +686,12 @@ impl TypeChecker {
         } else {
             return_ty.clone()
         };
+
+        // Make sure all return exprs agree
+        for (id, ty) in return_exprs {
+            env.constraints
+                .push(Constraint::Equality(id, ty, return_ty.clone()));
+        }
 
         env.end_scope();
 
@@ -1875,6 +1888,19 @@ mod pending {
         }()"
             )
             .is_err(),
+        );
+    }
+
+    #[test]
+    fn checks_return_infer() {
+        assert_eq!(
+            check(
+                "func foo(x) {
+            return x
+            123
+        }"
+            ),
+            Ty::Func(vec![Ty::Int], Ty::Int.into())
         );
     }
 

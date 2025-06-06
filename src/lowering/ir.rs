@@ -361,7 +361,22 @@ impl Lowerer {
                 ));
                 Some(reg)
             }
+            Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             expr => todo!("Cannot lower {:?}", expr),
+        }
+    }
+
+    fn lower_return(&mut self, expr_id: &ExprID, rhs: &Option<ExprID>) -> Option<Register> {
+        let typed_expr = self.source_file.typed_expr(expr_id).unwrap();
+
+        if let Some(rhs) = rhs {
+            let register = self.lower_expr(rhs)?;
+            self.current_block_mut()
+                .push_instr(Instr::Ret(Some((typed_expr.ty.to_ir(), register))));
+            return Some(register);
+        } else {
+            self.current_block_mut().push_instr(Instr::Ret(None));
+            return None;
         }
     }
 
@@ -717,6 +732,57 @@ mod tests {
                             ),
                             Instr::Ret(Some((
                                 IRType::Func(vec![], IRType::Int.into()),
+                                Register(0)
+                            )))
+                        ],
+                    }]
+                },
+            ]
+        )
+    }
+
+    #[test]
+    fn lowers_return() {
+        let lowered = lower(
+            "
+        func foo(x) {
+          return x
+          123
+        }
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            lowered.functions,
+            vec![
+                IRFunction {
+                    ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                    name: "@_5_foo".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        label: None,
+                        instructions: vec![
+                            Instr::Ret(Some((IRType::Int, Register(0)))),
+                            Instr::ConstantInt(Register(1), 123),
+                            Instr::Ret(Some((IRType::Int, Register(1)))),
+                        ],
+                    }]
+                },
+                IRFunction {
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        label: None,
+                        instructions: vec![
+                            Instr::Ref(
+                                Register(0),
+                                IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                                RefKind::Func("@_5_foo".into())
+                            ),
+                            Instr::Ret(Some((
+                                IRType::Func(vec![IRType::Int], IRType::Int.into()),
                                 Register(0)
                             )))
                         ],
