@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::{
     SymbolID, SymbolTable,
     constraint_solver::ConstraintSolver,
-    environment::Environment,
+    environment::{Environment, TypedExprs},
     name_resolver::NameResolver,
     parser::parse,
     type_checker::{Scheme, TypeChecker, TypeDefs},
@@ -18,6 +18,7 @@ pub struct Prelude {
     pub symbols: SymbolTable,
     pub types: TypeDefs,
     pub schemes: HashMap<SymbolID, Scheme>,
+    pub typed_exprs: TypedExprs,
 }
 
 fn compile_prelude() -> Prelude {
@@ -31,12 +32,13 @@ fn compile_prelude() -> Prelude {
     let mut solver = ConstraintSolver::new(&mut inferred);
     solver.solve().unwrap();
 
-    let (symbols, types, schemes) = inferred.export();
+    let (symbols, types, schemes, typed_exprs) = inferred.export();
 
     Prelude {
         symbols,
         types,
         schemes,
+        typed_exprs,
     }
 }
 

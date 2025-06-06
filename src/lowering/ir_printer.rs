@@ -1,4 +1,4 @@
-use crate::lowering::ir::{
+use crate::lowering::lowerer::{
     BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register,
 };
 
@@ -56,19 +56,19 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
 
         res.push_str(&format!(
             "{} {}",
-            &print_ir_ty(arg),
+            &format_ir_ty(arg),
             format_register(&Register(i as u32)),
         ));
     }
 
     res.push(')');
     res.push(' ');
-    res.push_str(&print_ir_ty(ret));
+    res.push_str(&format_ir_ty(ret));
 
     res
 }
 
-fn print_ir_ty(ty: &IRType) -> String {
+fn format_ir_ty(ty: &IRType) -> String {
     match ty {
         IRType::Bool => "bool".into(),
         IRType::Void => "void".into(),
@@ -76,6 +76,14 @@ fn print_ir_ty(ty: &IRType) -> String {
         IRType::Float => "float".into(),
         IRType::Func(args, ret) => print_func_sig(args, ret),
         IRType::TypeVar(name) => name.into(),
+        IRType::Enum(types) => format!(
+            "enum({})",
+            types
+                .iter()
+                .map(|t| format_ir_ty(t))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -105,7 +113,7 @@ fn format_instruction(instruction: &Instr) -> String {
             format!(
                 "{} = add {} {}, {};",
                 format_register(dest),
-                print_ir_ty(ty),
+                format_ir_ty(ty),
                 format_register(lhs),
                 format_register(rhs)
             )
@@ -113,21 +121,21 @@ fn format_instruction(instruction: &Instr) -> String {
         Instr::Sub(dest, ty, lhs, rhs) => format!(
             "{} = sub {} {}, {};",
             format_register(dest),
-            print_ir_ty(ty),
+            format_ir_ty(ty),
             format_register(lhs),
             format_register(rhs)
         ),
         Instr::Mul(dest, ty, lhs, rhs) => format!(
             "{} = mul {} {}, {};",
             format_register(dest),
-            print_ir_ty(ty),
+            format_ir_ty(ty),
             format_register(lhs),
             format_register(rhs)
         ),
         Instr::Div(dest, ty, lhs, rhs) => format!(
             "{} = div {} {}, {};",
             format_register(dest),
-            print_ir_ty(ty),
+            format_ir_ty(ty),
             format_register(lhs),
             format_register(rhs)
         ),
@@ -143,7 +151,7 @@ fn format_instruction(instruction: &Instr) -> String {
             format!(
                 "{} = phi {} [{}];",
                 format_register(register),
-                print_ir_ty(irtype),
+                format_ir_ty(irtype),
                 phi_args
             )
         }
@@ -162,7 +170,7 @@ fn format_instruction(instruction: &Instr) -> String {
             } else {
                 "void".into()
             },
-            print_ir_ty(ret),
+            format_ir_ty(ret),
             callee,
             format_args(args)
         ),
@@ -174,17 +182,31 @@ fn format_instruction(instruction: &Instr) -> String {
         Instr::Ret(ret) => format!(
             "ret{};",
             if let Some((ty, register)) = ret {
-                format!(" {} {}", print_ir_ty(ty), format_register(register))
+                format!(" {} {}", format_ir_ty(ty), format_register(register))
             } else {
                 "".into()
             }
         ),
         Instr::Unreachable => "unreachable".to_string(),
         Instr::Jump(basic_block_id) => format!("jump {}", basic_block_id.0),
+        Instr::TagVariant(dest, IRType::Enum(generics), tag, values) => format!(
+            "{} = tag {} [{}] {}",
+            format_register(dest),
+            tag,
+            format_args(&values),
+            {
+                let strings = generics
+                    .iter()
+                    .map(|g| format_ir_ty(g))
+                    .collect::<Vec<String>>();
+                strings.join(", ")
+            }
+        ),
+        _ => todo!("{:?}", instruction),
     }
 }
 
-fn format_args(args: &[Register]) -> String {
+fn format_args(args: &Vec<Register>) -> String {
     let mut res = String::new();
 
     res.push('(');
@@ -219,8 +241,8 @@ mod tests {
     use crate::{
         check,
         lowering::{
-            ir::{IRError, IRProgram, Lowerer},
             ir_printer::print,
+            lowerer::{IRError, IRProgram, Lowerer},
         },
     };
 

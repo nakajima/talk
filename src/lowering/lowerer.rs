@@ -2,6 +2,7 @@ use std::{collections::HashMap, ops::AddAssign};
 
 use crate::{
     SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
+    environment::TypeDef,
     expr::{Expr, ExprMeta},
     name::Name,
     parser::ExprID,
@@ -34,7 +35,9 @@ impl Ty {
                 Box::new(ty.to_ir()),
             ),
             Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.0)),
-            Ty::Enum(_symbol_id, _items) => todo!(),
+            Ty::Enum(_symbol_id, generics) => {
+                IRType::Enum(generics.iter().map(|i| i.to_ir()).collect())
+            }
             Ty::EnumVariant(_symbol_id, _items) => todo!(),
             Ty::Tuple(_items) => todo!(),
         }
@@ -49,6 +52,7 @@ pub enum IRType {
     Bool,
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String), // Add other types as needed
+    Enum(Vec<IRType>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +74,15 @@ pub enum Instr {
         args: Vec<Register>,
         ty: IRType,
     },
+
+    TagVariant(
+        Register,      /* dest */
+        IRType,        /* enum type */
+        u16,           /* tag */
+        Vec<Register>, /* associated values */
+    ),
+
+    // Flow control
     Ret(Option<(IRType, Register)>),
     Jump(BasicBlockID),
     JumpUnless(Register, BasicBlockID),
@@ -362,8 +375,55 @@ impl Lowerer {
                 Some(reg)
             }
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
+            Expr::EnumDecl(_, _, _) => None,
+            Expr::Member(_, name) => self.lower_member(expr_id, &name),
             expr => todo!("Cannot lower {:?}", expr),
         }
+    }
+
+    fn lower_member(&mut self, expr_id: &ExprID, name: &str) -> Option<Register> {
+        let typed_expr = self.source_file.typed_expr(expr_id).unwrap();
+
+        match &typed_expr.ty {
+            Ty::Enum(sym, _generics) => {
+                // Since we got called directly from lower_expr, this is variant that doesn't
+                // have any attached values.
+                let dest = self.lower_enum_construction(*sym, name, &typed_expr.ty, &vec![]);
+                return dest;
+            }
+            _ => todo!("lower_member: {:?}", typed_expr),
+        }
+    }
+
+    fn lower_enum_construction(
+        &mut self,
+        enum_id: SymbolID,
+        variant_name: &str,
+        ty: &Ty,
+        args: &[Register],
+    ) -> Option<Register> {
+        let Some(TypeDef::Enum(type_def)) = self.source_file.type_def(&enum_id).cloned() else {
+            panic!("didn't get type def for {:?}", enum_id);
+        };
+
+        let mut tag: Option<u16> = None;
+
+        for (i, var) in type_def.variants.iter().enumerate() {
+            if var.name != variant_name {
+                continue;
+            }
+
+            tag = Some(i as u16);
+        }
+
+        let Some(tag) = tag else {
+            panic!("did not find variant for tag")
+        };
+
+        let dest = self.allocate_register();
+        self.push_instr(Instr::TagVariant(dest, ty.to_ir(), tag, args.to_vec()));
+
+        Some(dest)
     }
 
     fn lower_return(&mut self, expr_id: &ExprID, rhs: &Option<ExprID>) -> Option<Register> {
@@ -536,6 +596,16 @@ impl Lowerer {
         }
 
         let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
+
+        // Handle enum variant construction
+        if let Ty::Enum(enum_id, _) = &ty {
+            let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
+                panic!("didn't get member expr for enum call")
+            };
+
+            return self.lower_enum_construction(*enum_id, &variant_name, &ty, &arg_registers);
+        }
+
         let name_str = match &callee_typed_expr.expr {
             Expr::Variable(name, _) => {
                 // Check if the type of this variable is indeed a function
@@ -560,8 +630,8 @@ impl Lowerer {
             // Later, you might handle other forms of callees, like Expr::Member for methods,
             // or expressions that evaluate to function pointers/closures.
             _ => panic!(
-                "Unsupported callee expression type: {:?}",
-                callee_typed_expr.expr
+                "Unsupported callee expression type: {:?}, {:?}, (ty: {:?})",
+                callee_typed_expr.expr, callee_typed_expr.ty, ty
             ),
         };
 
@@ -587,6 +657,14 @@ impl Lowerer {
 
         // 5. Return the destination register
         dest_reg
+    }
+
+    fn push_instr(&mut self, instr: Instr) {
+        self.current_block_mut().push_instr(instr);
+    }
+
+    fn allocate_register(&mut self) -> Register {
+        self.current_func_mut().registers.allocate()
     }
 
     fn current_func_mut(&mut self) -> &mut CurrentFunction {
@@ -691,11 +769,11 @@ mod tests {
     use crate::{
         check,
         lowering::{
-            ir::{
+            ir_printer::print,
+            lowerer::{
                 BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
                 RefKind, Register,
             },
-            ir_printer::print,
         },
     };
 
@@ -1151,5 +1229,58 @@ mod tests {
         }];
 
         assert_lowered_functions!(lowered, expected,);
+    }
+
+    #[test]
+    fn lowers_basic_enum() {
+        let lowered = lower(
+            "enum Foo {
+                case fizz, buzz
+            }
+            
+            Foo.buzz",
+        )
+        .unwrap();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    label: None,
+                    instructions: vec![
+                        Instr::TagVariant(Register(0), IRType::Enum(vec![]), 1, vec![]),
+                        Instr::Ret(Some((IRType::Enum(vec![]), Register(0))))
+                    ],
+                }]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_builtin_optional() {
+        let lowered = lower("Optional.some(123)").unwrap();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    label: None,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 123),
+                        Instr::TagVariant(
+                            Register(1),
+                            IRType::Enum(vec![IRType::Int]),
+                            0,
+                            vec![Register(0)]
+                        ),
+                        Instr::Ret(Some((IRType::Enum(vec![IRType::Int]), Register(1))))
+                    ],
+                }]
+            }]
+        )
     }
 }

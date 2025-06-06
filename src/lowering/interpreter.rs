@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::lowering::ir::{
+use crate::lowering::lowerer::{
     BasicBlock, BasicBlockID, IRFunction, IRProgram, Instr, RefKind, Register,
 };
 
@@ -233,6 +233,7 @@ impl IRInterpreter {
                 frame.block_idx = jump_to.0 as usize;
                 return Ok(None);
             }
+            Instr::TagVariant(_, _, _, _) => todo!(),
             Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
         }
 
@@ -282,7 +283,7 @@ mod tests {
         check,
         lowering::{
             interpreter::{IRInterpreter, InterpreterError, Value},
-            ir::Lowerer,
+            lowerer::Lowerer,
         },
     };
 

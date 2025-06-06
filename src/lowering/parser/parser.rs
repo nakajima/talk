@@ -1,7 +1,7 @@
 use std::{fmt::Debug, str::FromStr};
 
 use crate::lowering::{
-    ir::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register},
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register},
     parser::lexer::{Lexer, Token, Tokind},
 };
 
@@ -366,7 +366,7 @@ mod tests {
     use crate::{
         check,
         lowering::{
-            ir::{BasicBlockID, IRError, IRProgram, IRType, Instr, Lowerer, Register},
+            lowerer::{BasicBlockID, IRError, IRProgram, IRType, Instr, Lowerer, Register},
             parser::parser::parse,
         },
     };

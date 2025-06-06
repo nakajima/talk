@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::{
     SymbolID, SymbolInfo, SymbolKind,
     constraint_solver::Constraint,
-    environment::{Environment, Scope, TypeDef},
-    lowering::ir::IRFunction,
+    environment::{Environment, Scope, TypeDef, TypedExprs},
+    lowering::lowerer::IRFunction,
     symbol_table::SymbolTable,
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
@@ -167,11 +167,13 @@ impl SourceFile<Typed> {
         self.phase_data.symbol_table.clone()
     }
 
-    pub fn export(self) -> (SymbolTable, TypeDefs, Scope) {
+    pub fn export(self) -> (SymbolTable, TypeDefs, Scope, TypedExprs) {
         let symbols = self.phase_data.symbol_table;
         let type_defs = self.phase_data.env.types;
+        let typed_exprs = self.phase_data.env.typed_exprs;
         let scope = self.phase_data.env.scopes[0].clone();
-        (symbols, type_defs, scope)
+
+        (symbols, type_defs, scope, typed_exprs)
     }
 
     pub fn register_direct_callable(&mut self, id: ExprID, symbol_id: SymbolID) {

@@ -111,7 +111,7 @@ impl TypeChecker {
     ) -> Result<SourceFile<Typed>, TypeError> {
         let mut env = Environment::new();
 
-        env.import_prelude(&PRELUDE.types, &PRELUDE.schemes);
+        env.import_prelude(&PRELUDE);
         self.infer_without_prelude(env, source_file)
     }
 

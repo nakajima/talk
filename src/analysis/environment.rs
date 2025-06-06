@@ -3,7 +3,12 @@ use std::{
     ops::IndexMut,
 };
 
-use crate::{SymbolID, SymbolTable, parser::ExprID, prelude::PRELUDE, type_checker::Ty};
+use crate::{
+    SymbolID, SymbolTable,
+    parser::ExprID,
+    prelude::{PRELUDE, Prelude},
+    type_checker::Ty,
+};
 
 use super::{
     constraint_solver::Constraint,
@@ -35,9 +40,11 @@ pub enum TypeDef {
     Enum(EnumDef),
 }
 
+pub type TypedExprs = HashMap<ExprID, TypedExpr>;
+
 #[derive(Debug, Clone)]
 pub struct Environment {
-    pub typed_exprs: HashMap<ExprID, TypedExpr>,
+    pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
@@ -48,7 +55,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         let mut env = Self::new();
-        env.import_prelude(&PRELUDE.types, &PRELUDE.schemes);
+        env.import_prelude(&PRELUDE);
         env
     }
 }
@@ -65,17 +72,15 @@ impl Environment {
         }
     }
 
-    pub fn import_prelude(
-        &mut self,
-        types: &HashMap<SymbolID, TypeDef>,
-        schemes: &HashMap<SymbolID, Scheme>,
-    ) {
+    pub fn import_prelude(&mut self, prelude: &Prelude) {
         // Import types
-        self.types.extend(types.clone());
+        self.types.extend(prelude.types.clone());
+
+        self.typed_exprs.extend(prelude.typed_exprs.clone());
 
         // Import schemes into global scope
-        log::debug!("Importing schemes: {:?}", schemes);
-        self.scopes[0].extend(schemes.clone());
+        log::debug!("Importing schemes: {:?}", prelude.schemes);
+        self.scopes[0].extend(prelude.schemes.clone());
     }
 
     /// Look up the scheme for `sym`, then immediately instantiate it.

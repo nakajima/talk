@@ -3,7 +3,7 @@ fn main() {
     use clap::{Parser, Subcommand};
     use talk::{
         constraint_solver::ConstraintSolver,
-        lowering::{self, ir::IRProgram},
+        lowering::{self, lowerer::IRProgram},
         name_resolver::NameResolver,
         parser::parse,
         type_checker::TypeChecker,
