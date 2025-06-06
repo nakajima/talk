@@ -686,11 +686,16 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
 
 #[cfg(test)]
 mod tests {
+    use prettydiff::diff_chars;
+
     use crate::{
         check,
-        lowering::ir::{
-            BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
-            RefKind, Register,
+        lowering::{
+            ir::{
+                BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
+                RefKind, Register,
+            },
+            ir_printer::print,
         },
     };
 
@@ -700,11 +705,35 @@ mod tests {
         lowerer.lower()
     }
 
+    macro_rules! assert_lowered_functions {
+        ($left:expr, $right:expr $(,)?) => {
+            match (&$left, &$right) {
+                (left_val, right_val) => {
+                    if !(*left_val.functions == *right_val) {
+                        // The reborrows below are intentional. Without them, the stack slot for the
+                        // borrow is initialized even before the values are compared, leading to a
+                        // noticeable slow down.
+
+                        let right_program = IRProgram {
+                            functions: right_val.clone(),
+                            symbol_table: None,
+                        };
+
+                        panic!(
+                            "{}",
+                            diff_chars(print(left_val).as_ref(), print(&right_program).as_ref())
+                        )
+                    }
+                }
+            }
+        };
+    }
+
     #[test]
     fn lowers_nested_function() {
         let lowered = lower("func foo() { 123 }").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Int.into()),
@@ -753,8 +782,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![
                 IRFunction {
                     ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
@@ -795,8 +824,8 @@ mod tests {
     #[test]
     fn lowers_calls() {
         let lowered = lower("func foo(x) { x }\n foo(123)").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![
                 IRFunction {
                     ty: IRType::Func(
@@ -846,8 +875,8 @@ mod tests {
     #[test]
     fn lowers_func_with_params() {
         let lowered = lower("func foo(x) { x }").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![
                 IRFunction {
                     ty: IRType::Func(
@@ -896,8 +925,8 @@ mod tests {
     #[test]
     fn lowers_int() {
         let lowered = lower("123").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -916,8 +945,8 @@ mod tests {
     #[test]
     fn lowers_float() {
         let lowered = lower("123.").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -936,8 +965,8 @@ mod tests {
     #[test]
     fn lowers_bools() {
         let lowered = lower("true\nfalse").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -957,8 +986,8 @@ mod tests {
     #[test]
     fn lowers_add() {
         let lowered = lower("1 + 2").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -979,8 +1008,8 @@ mod tests {
     #[test]
     fn lowers_sub() {
         let lowered = lower("2 - 1").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -1001,8 +1030,8 @@ mod tests {
     #[test]
     fn lowers_mul() {
         let lowered = lower("2 * 1").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -1023,8 +1052,8 @@ mod tests {
     #[test]
     fn lowers_div() {
         let lowered = lower("2 / 1").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -1045,8 +1074,8 @@ mod tests {
     #[test]
     fn lowers_assignment() {
         let lowered = lower("let a = 123\na").unwrap();
-        assert_eq!(
-            lowered.functions,
+        assert_lowered_functions!(
+            lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -1121,10 +1150,6 @@ mod tests {
             ],
         }];
 
-        assert_eq!(
-            lowered.functions, expected,
-            "{:#?} \n ========== {:#?}",
-            lowered.functions, expected
-        );
+        assert_lowered_functions!(lowered, expected,);
     }
 }
