@@ -109,7 +109,6 @@ impl<'a> Parser<'a> {
 
         Ok(BasicBlock {
             id: BasicBlockID(id as u32),
-            label: None,
             instructions,
         })
     }

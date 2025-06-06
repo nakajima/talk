@@ -3,7 +3,7 @@ use std::{collections::HashMap, ops::AddAssign};
 use crate::{
     SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     environment::TypeDef,
-    expr::{Expr, ExprMeta},
+    expr::{Expr, ExprMeta, Pattern},
     name::Name,
     parser::ExprID,
     token::Token,
@@ -44,6 +44,15 @@ impl Ty {
     }
 }
 
+pub enum IRPattern {
+    Bind,
+    Wildcard,
+    EnumVariant { tag: u32, bindings: Vec<IRType> },
+    IntLiteral(i64),
+    FloatLiteral(f64),
+    LiteralBool(bool),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IRType {
     Void,
@@ -68,6 +77,7 @@ pub enum Instr {
     LoadLocal(Register, IRType, Register),
     Phi(Register, IRType, Vec<(Register, BasicBlockID)>),
     Ref(Register, IRType, RefKind),
+    Eq(Register, IRType, Register, Register),
     Call {
         dest_reg: Option<Register>,
         callee: String,
@@ -85,6 +95,7 @@ pub enum Instr {
     // Flow control
     Ret(Option<(IRType, Register)>),
     Jump(BasicBlockID),
+    JumpIf(Register, BasicBlockID),
     JumpUnless(Register, BasicBlockID),
     Unreachable,
 }
@@ -106,7 +117,6 @@ impl AddAssign<u32> for BasicBlockID {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasicBlock {
     pub id: BasicBlockID,
-    pub label: Option<String>,
     pub instructions: Vec<Instr>,
 }
 
@@ -276,7 +286,7 @@ impl Lowerer {
         else {
             panic!(
                 "Attempted to lower non-function: {:?}",
-                self.source_file.get(*expr_id)
+                self.source_file.get(expr_id)
             );
         };
 
@@ -298,7 +308,7 @@ impl Lowerer {
 
         log::trace!("lowering {:?}", name);
 
-        let Some(Expr::Block(body_exprs)) = self.source_file.get(*body).cloned() else {
+        let Some(Expr::Block(body_exprs)) = self.source_file.get(body).cloned() else {
             panic!("did not get body")
         };
 
@@ -307,7 +317,7 @@ impl Lowerer {
 
         for param in params {
             let Expr::Parameter(Name::Resolved(symbol, _), _) =
-                self.source_file.get(*param).unwrap().clone()
+                self.source_file.get(param).unwrap().clone()
             else {
                 panic!("didn't get parameter")
             };
@@ -377,7 +387,124 @@ impl Lowerer {
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(_, name) => self.lower_member(expr_id, &name),
+            Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
             expr => todo!("Cannot lower {:?}", expr),
+        }
+    }
+
+    fn lower_match(&mut self, scrutinee: &ExprID, arms: &[ExprID], ty: &Ty) -> Option<Register> {
+        let scrutinee_reg = self.lower_expr(scrutinee).unwrap();
+        let merge_block_id = self.new_basic_block();
+
+        let mut predecessors = vec![];
+        for arm in arms {
+            predecessors.push(self.lower_match_arm(arm, &scrutinee_reg, merge_block_id));
+        }
+
+        self.push_instr(Instr::Unreachable);
+        self.set_current_block(merge_block_id);
+
+        let phi_reg = self.allocate_register();
+        self.push_instr(Instr::Phi(phi_reg, ty.to_ir(), predecessors));
+
+        return Some(phi_reg);
+    }
+
+    fn lower_match_arm(
+        &mut self,
+        expr_id: &ExprID,
+        scrutinee: &Register,
+        merge_block_id: BasicBlockID,
+    ) -> (Register, BasicBlockID) {
+        let typed_arm = self.source_file.typed_expr(expr_id).unwrap();
+        let Expr::MatchArm(pattern, body) = typed_arm.expr else {
+            panic!("Didn't get match arm: {:?}", typed_arm);
+        };
+
+        let typed_pattern = self.source_file.typed_expr(&pattern).unwrap();
+        let candidate = self.lower_pattern(&pattern);
+        let eq_reg = self.allocate_register();
+        self.push_instr(Instr::Eq(
+            eq_reg,
+            typed_pattern.ty.to_ir(),
+            *scrutinee,
+            candidate,
+        ));
+
+        let body_basic_block_id = self.new_basic_block();
+
+        self.push_instr(Instr::JumpIf(eq_reg, body_basic_block_id));
+
+        let current_basic_block = self.current_block_mut().id;
+
+        self.set_current_block(body_basic_block_id);
+        self.lower_expr(&body);
+        self.push_instr(Instr::Jump(merge_block_id));
+        self.set_current_block(current_basic_block);
+
+        (candidate, body_basic_block_id)
+    }
+
+    fn lower_pattern(&mut self, pattern_id: &ExprID) -> Register {
+        let pattern_typed_expr = self.source_file.typed_expr(&pattern_id).unwrap();
+        let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
+            panic!("Didn't get pattern for match arm: {:?}", pattern_typed_expr)
+        };
+
+        match pattern {
+            Pattern::Bind(_) => todo!(),
+            Pattern::LiteralInt(val) => {
+                let reg = self.allocate_register();
+                self.push_instr(Instr::ConstantInt(reg, str::parse(&val).unwrap()));
+                reg
+            }
+            Pattern::LiteralFloat(val) => {
+                let reg = self.allocate_register();
+                self.push_instr(Instr::ConstantFloat(reg, str::parse(&val).unwrap()));
+                reg
+            }
+            Pattern::LiteralTrue => {
+                let reg = self.allocate_register();
+                self.push_instr(Instr::ConstantBool(reg, true));
+                reg
+            }
+            Pattern::LiteralFalse => {
+                let reg = self.allocate_register();
+                self.push_instr(Instr::ConstantBool(reg, false));
+                reg
+            }
+            Pattern::Wildcard => todo!(),
+            Pattern::Variant {
+                variant_name: Name::Raw(variant_name),
+                fields,
+                ..
+            } => {
+                let Ty::Enum(enum_id, _) = pattern_typed_expr.ty else {
+                    panic!("didn't get pattern type: {:?}", pattern_typed_expr.ty)
+                };
+                let Some(TypeDef::Enum(type_def)) = self.source_file.type_def(&enum_id).cloned()
+                else {
+                    panic!("didn't get type def for {:?}", enum_id);
+                };
+
+                let tag = type_def
+                    .variants
+                    .iter()
+                    .position(|v| v.name == variant_name)
+                    .unwrap() as u16;
+
+                let dest = self.allocate_register();
+                let args = fields.iter().map(|f| self.lower_pattern(f)).collect();
+                self.push_instr(Instr::TagVariant(
+                    dest,
+                    pattern_typed_expr.ty.to_ir(),
+                    tag,
+                    args,
+                ));
+
+                dest
+            }
+            _ => todo!("{:?}", pattern),
         }
     }
 
@@ -441,8 +568,8 @@ impl Lowerer {
     }
 
     fn lower_literal(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let register = self.current_func_mut().registers.allocate();
-        match self.source_file.get(*expr_id).unwrap().clone() {
+        let register = self.allocate_register();
+        match self.source_file.get(expr_id).unwrap().clone() {
             Expr::LiteralInt(val) => {
                 self.current_block_mut()
                     .push_instr(Instr::ConstantInt(register, str::parse(&val).unwrap()));
@@ -477,7 +604,7 @@ impl Lowerer {
 
         let operand_1 = self.lower_expr(&lhs).unwrap();
         let operand_2 = self.lower_expr(&rhs).unwrap();
-        let return_reg = self.current_func_mut().registers.allocate();
+        let return_reg = self.allocate_register();
 
         use TokenKind::*;
         let instr = match op {
@@ -498,7 +625,7 @@ impl Lowerer {
             .lower_expr(rhs)
             .expect("Did not get rhs for assignment");
 
-        match self.source_file.get(*lhs).unwrap().clone() {
+        match self.source_file.get(lhs).unwrap().clone() {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
                 self.current_func_mut().register_symbol(symbol_id, rhs);
                 None
@@ -508,7 +635,7 @@ impl Lowerer {
     }
 
     fn lower_block(&mut self, block_id: &ExprID) -> Option<Register> {
-        let Expr::Block(exprs) = self.source_file.get(*block_id).unwrap().clone() else {
+        let Expr::Block(exprs) = self.source_file.get(block_id).unwrap().clone() else {
             unreachable!()
         };
 
@@ -568,7 +695,7 @@ impl Lowerer {
 
         self.current_func_mut().set_current_block(merge_id);
 
-        let phi_dest_reg = self.current_func_mut().registers.allocate();
+        let phi_dest_reg = self.allocate_register();
 
         self.current_block_mut().push_instr(Instr::Phi(
             phi_dest_reg,
@@ -644,7 +771,7 @@ impl Lowerer {
             }
             _ => {
                 // Any other type means it returns a value
-                dest_reg = Some(self.current_func_mut().registers.allocate());
+                dest_reg = Some(self.allocate_register());
             }
         }
 
@@ -683,12 +810,6 @@ impl Lowerer {
         let id = self.current_func_mut().next_block_id();
         let block = BasicBlock {
             id,
-            label: if id.0 > 0 {
-                // give additional blocks default labels
-                Some(format!("bb{}", id.0))
-            } else {
-                None
-            },
             instructions: Vec::new(),
         };
 
@@ -764,7 +885,7 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
 
 #[cfg(test)]
 mod tests {
-    use prettydiff::diff_chars;
+    use prettydiff::diff_lines;
 
     use crate::{
         check,
@@ -788,18 +909,15 @@ mod tests {
             match (&$left, &$right) {
                 (left_val, right_val) => {
                     if !(*left_val.functions == *right_val) {
-                        // The reborrows below are intentional. Without them, the stack slot for the
-                        // borrow is initialized even before the values are compared, leading to a
-                        // noticeable slow down.
-
                         let right_program = IRProgram {
                             functions: right_val.clone(),
                             symbol_table: None,
                         };
 
                         panic!(
-                            "{}",
-                            diff_chars(print(left_val).as_ref(), print(&right_program).as_ref())
+                            "{}\n{}",
+                            diff_lines("Actual", "Expected"),
+                            diff_lines(print(left_val).as_ref(), print(&right_program).as_ref())
                         )
                     }
                 }
@@ -818,7 +936,6 @@ mod tests {
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![
                             Instr::ConstantInt(Register(0), 123),
                             Instr::Ret(Some((IRType::Int, Register(0))))
@@ -830,7 +947,6 @@ mod tests {
                     name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![
                             Instr::Ref(
                                 Register(0),
@@ -868,7 +984,6 @@ mod tests {
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![
                             Instr::Ret(Some((IRType::Int, Register(0)))),
                             Instr::ConstantInt(Register(1), 123),
@@ -881,7 +996,6 @@ mod tests {
                     name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![
                             Instr::Ref(
                                 Register(0),
@@ -913,7 +1027,6 @@ mod tests {
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![Instr::Ret(Some((
                             IRType::TypeVar("T3".into()),
                             Register(0)
@@ -925,7 +1038,6 @@ mod tests {
                     name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![
                             Instr::Ref(
                                 Register(0),
@@ -964,7 +1076,6 @@ mod tests {
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![Instr::Ret(Some((
                             IRType::TypeVar("T3".into()),
                             Register(0)
@@ -976,7 +1087,6 @@ mod tests {
                     name: "@main".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        label: None,
                         instructions: vec![
                             Instr::Ref(
                                 Register(0),
@@ -1010,7 +1120,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 123),
                         Instr::Ret(Some((IRType::Int, Register(0))))
@@ -1030,7 +1139,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantFloat(Register(0), 123.),
                         Instr::Ret(Some((IRType::Float, Register(0))))
@@ -1050,7 +1158,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantBool(Register(0), true),
                         Instr::ConstantBool(Register(1), false),
@@ -1071,7 +1178,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 1),
                         Instr::ConstantInt(Register(1), 2),
@@ -1093,7 +1199,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
@@ -1115,7 +1220,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
@@ -1137,7 +1241,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
@@ -1159,7 +1262,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 123),
                         Instr::Ret(Some((IRType::Int, Register(0)))),
@@ -1191,7 +1293,6 @@ mod tests {
                 // if block
                 BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantBool(Register(0), true),
                         Instr::JumpUnless(Register(0), BasicBlockID(1)),
@@ -1202,7 +1303,6 @@ mod tests {
                 // else block
                 BasicBlock {
                     id: BasicBlockID(1),
-                    label: Some("bb1".into()),
                     instructions: vec![
                         Instr::ConstantInt(Register(2), 456),
                         Instr::Jump(BasicBlockID(2)),
@@ -1211,7 +1311,6 @@ mod tests {
                 // converge block
                 BasicBlock {
                     id: BasicBlockID(2),
-                    label: Some("bb2".into()),
                     instructions: vec![
                         Instr::Phi(
                             Register(3),
@@ -1248,7 +1347,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::TagVariant(Register(0), IRType::Enum(vec![]), 1, vec![]),
                         Instr::Ret(Some((IRType::Enum(vec![]), Register(0))))
@@ -1268,7 +1366,6 @@ mod tests {
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
-                    label: None,
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 123),
                         Instr::TagVariant(
@@ -1280,6 +1377,145 @@ mod tests {
                         Instr::Ret(Some((IRType::Enum(vec![IRType::Int]), Register(1))))
                     ],
                 }]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_match_ints() {
+        let lowered = lower(
+            "
+        match 123 {
+            123 -> 3.14,
+            456 -> 2.71
+        }
+        ",
+        )
+        .unwrap();
+        // assert_lowered_functions!(
+        //     lowered,
+        assert_eq!(
+            lowered.functions,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![
+                    BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            // Add the scrutinee
+                            Instr::ConstantInt(Register(0), 123),
+                            // Add the first arm (register 1 is allocated for the return val of the match expr)
+                            Instr::ConstantInt(Register(1), 123),
+                            Instr::Eq(Register(2), IRType::Int, Register(0), Register(1)),
+                            Instr::JumpIf(Register(2), BasicBlockID(2)),
+                            // Add the second term
+                            Instr::ConstantInt(Register(4), 456),
+                            Instr::Eq(Register(5), IRType::Int, Register(0), Register(4)),
+                            Instr::JumpIf(Register(5), BasicBlockID(3)),
+                            // We should have jumped no matter what
+                            Instr::Unreachable,
+                        ],
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(1),
+                        instructions: vec![
+                            Instr::Phi(
+                                Register(7),
+                                IRType::Float,
+                                vec![
+                                    (Register(1), BasicBlockID(2)),
+                                    (Register(4), BasicBlockID(3))
+                                ]
+                            ),
+                            Instr::Ret(Some((IRType::Float, Register(7))))
+                        ]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(2),
+                        instructions: vec![
+                            Instr::ConstantFloat(Register(3), 3.14),
+                            Instr::Jump(BasicBlockID(1))
+                        ]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(3),
+                        instructions: vec![
+                            Instr::ConstantFloat(Register(6), 2.71),
+                            Instr::Jump(BasicBlockID(1))
+                        ]
+                    },
+                ]
+            }]
+        )
+    }
+
+    #[test]
+    fn lowers_enum_match() {
+        let lowered = lower(
+            "
+        enum Foo {
+            case fizz, buzz
+        }
+        match Foo.buzz {
+            .fizz -> 123,
+            .buzz -> 456
+        }
+        ",
+        )
+        .unwrap();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![
+                    BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            // Add the scrutinee
+                            Instr::TagVariant(Register(0), IRType::Enum(vec![]), 1, vec![]),
+                            // Add the first arm (register 1 is allocated for the return val of the match expr)
+                            Instr::TagVariant(Register(1), IRType::Enum(vec![]), 0, vec![]),
+                            Instr::Eq(Register(2), IRType::Enum(vec![]), Register(0), Register(1)),
+                            Instr::JumpIf(Register(2), BasicBlockID(2)),
+                            // Add the second term
+                            Instr::TagVariant(Register(4), IRType::Enum(vec![]), 1, vec![]),
+                            Instr::Eq(Register(5), IRType::Enum(vec![]), Register(0), Register(4)),
+                            Instr::JumpIf(Register(5), BasicBlockID(3)),
+                            // We should have jumped no matter what
+                            Instr::Unreachable,
+                        ],
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(1),
+                        instructions: vec![
+                            Instr::Phi(
+                                Register(7),
+                                IRType::Int,
+                                vec![
+                                    (Register(1), BasicBlockID(2)),
+                                    (Register(4), BasicBlockID(3))
+                                ]
+                            ),
+                            Instr::Ret(Some((IRType::Int, Register(7))))
+                        ]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(2),
+                        instructions: vec![
+                            Instr::ConstantInt(Register(3), 123),
+                            Instr::Jump(BasicBlockID(1))
+                        ]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(3),
+                        instructions: vec![
+                            Instr::ConstantInt(Register(6), 456),
+                            Instr::Jump(BasicBlockID(1))
+                        ]
+                    },
+                ]
             }]
         )
     }

@@ -28,7 +28,7 @@ pub enum Pattern {
     Variant {
         enum_name: Option<Name>, // None for .some, Some for Option.some
         variant_name: Name,
-        fields: Vec<Pattern>, // Recursive patterns for fields
+        fields: Vec<ExprID>, // Recursive patterns for fields
     },
     // // Tuple destructuring
     // PatternTuple(Vec<Pattern>),

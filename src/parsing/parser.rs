@@ -138,7 +138,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::Match)?;
 
-        let target = self.parse_with_precedence(Precedence::Call)?;
+        let target = self.parse_with_precedence(Precedence::Assignment)?;
         let body = self.match_block()?;
 
         self.add_expr(Match(target, body))
@@ -158,6 +158,7 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Arrow)?;
             let body = self.parse_with_precedence(Precedence::Primary)?;
             items.push(self.add_expr(MatchArm(pattern_id, body))?);
+            self.consume(TokenKind::Comma).ok();
         }
 
         Ok(items)
@@ -203,10 +204,11 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             };
 
-            let mut fields: Vec<expr::Pattern> = vec![];
+            let mut fields: Vec<ExprID> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
-                    fields.push(self.parse_match_pattern()?);
+                    let pattern = self.parse_match_pattern()?;
+                    fields.push(self.add_expr(Expr::Pattern(pattern))?);
                 }
             }
 
@@ -225,11 +227,12 @@ impl<'a> Parser<'a> {
 
             log::debug!("unqualified variant");
 
-            let mut fields: Vec<expr::Pattern> = vec![];
+            let mut fields: Vec<ExprID> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
                     log::trace!("adding arg: {:?}", self.current);
-                    fields.push(self.parse_match_pattern()?);
+                    let pattern = self.parse_match_pattern()?;
+                    fields.push(self.add_expr(Expr::Pattern(pattern))?);
                 }
             }
 
@@ -240,7 +243,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        unreachable!()
+        unreachable!("{:?}", self.current)
     }
 
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
@@ -834,7 +837,10 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Binary(2, TokenKind::Star, 3));
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Binary(0, TokenKind::Plus, 1));
+        assert_eq!(
+            *parsed.get(&2).unwrap(),
+            Expr::Binary(0, TokenKind::Plus, 1)
+        );
     }
 
     #[test]
@@ -846,10 +852,13 @@ mod tests {
         };
 
         assert_eq!(1, tup.len());
-        let expr = parsed.get(tup[0]).unwrap();
+        let expr = parsed.get(&tup[0]).unwrap();
 
         assert_eq!(*expr, Expr::Binary(0, TokenKind::Plus, 1));
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Binary(0, TokenKind::Plus, 1));
+        assert_eq!(
+            *parsed.get(&2).unwrap(),
+            Expr::Binary(0, TokenKind::Plus, 1)
+        );
     }
 
     #[test]
@@ -869,7 +878,7 @@ mod tests {
 
         assert_eq!(*expr, Expr::Unary(TokenKind::Bang, 0));
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Expr::Variable(Name::Raw("hello".to_string()), None)
         );
     }
@@ -880,7 +889,7 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Unary(TokenKind::Minus, 0));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1".into()));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
     }
 
     #[test]
@@ -889,10 +898,10 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Tuple(vec![0, 1, 2]));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("1".into()));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("2".into()));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("2".into()));
         assert_eq!(
-            *parsed.get(2).unwrap(),
+            *parsed.get(&2).unwrap(),
             Expr::Variable(Name::Raw("fizz".to_string()), None)
         );
     }
@@ -925,7 +934,7 @@ mod tests {
                 ret: None
             }
         );
-        assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
     }
 
     #[test]
@@ -966,7 +975,7 @@ mod tests {
                 ret: None
             }
         );
-        assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
     }
 
     #[test]
@@ -990,10 +999,10 @@ mod tests {
             }
         );
 
-        assert_eq!(*parsed.get(1).unwrap(), Expr::Parameter("t".into(), None));
-        assert_eq!(*parsed.get(4).unwrap(), Expr::Block(vec![3]));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::Parameter("t".into(), None));
+        assert_eq!(*parsed.get(&4).unwrap(), Expr::Block(vec![3]));
         assert_eq!(
-            *parsed.get(2).unwrap(),
+            *parsed.get(&2).unwrap(),
             Expr::TypeRepr("T".into(), vec![], false)
         );
     }
@@ -1013,7 +1022,7 @@ mod tests {
             }
         );
 
-        assert_eq!(*parsed.get(0).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
             *parsed.roots()[1].unwrap(),
             Expr::Func {
@@ -1024,7 +1033,7 @@ mod tests {
                 ret: None
             }
         );
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![]));
+        assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![]));
     }
 
     #[test]
@@ -1060,11 +1069,11 @@ mod tests {
         );
 
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&1).unwrap(),
             Parameter(Name::Raw("name".to_string()), Some(0))
         );
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             TypeRepr("Int".into(), vec![], false)
         );
     }
@@ -1078,8 +1087,8 @@ mod tests {
             panic!("no call found")
         };
 
-        let callee = parsed.get(*callee_id).unwrap();
-        let args_id: Vec<_> = args_ids.iter().map(|id| parsed.get(*id).unwrap()).collect();
+        let callee = parsed.get(callee_id).unwrap();
+        let args_id: Vec<_> = args_ids.iter().map(|id| parsed.get(id).unwrap()).collect();
         assert_eq!(*callee, Expr::Variable(Name::Raw("fizz".to_string()), None));
         assert_eq!(args_id.len(), 0);
     }
@@ -1097,7 +1106,7 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(0)));
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Expr::TypeRepr("Int".into(), vec![], false)
         );
     }
@@ -1108,15 +1117,15 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
         assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(2)));
         assert_eq!(
-            *parsed.get(2).unwrap(),
+            *parsed.get(&2).unwrap(),
             Expr::TupleTypeRepr(vec![0, 1], false)
         );
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Expr::TypeRepr("Int".into(), vec![], false)
         );
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&1).unwrap(),
             Expr::TypeRepr("Bool".into(), vec![], false)
         );
     }
@@ -1149,37 +1158,37 @@ mod tests {
     fn parses_if() {
         let parsed = parse("if true { 123 }").unwrap();
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, None));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123".into()));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]
     fn parses_if_else() {
         let parsed = parse("if true { 123 } else { 456 }").unwrap();
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, Some(4)));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123".into()));
-        assert_eq!(*parsed.get(4).unwrap(), Expr::Block(vec![3]));
-        assert_eq!(*parsed.get(3).unwrap(), Expr::LiteralInt("456".into()));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
+        assert_eq!(*parsed.get(&4).unwrap(), Expr::Block(vec![3]));
+        assert_eq!(*parsed.get(&3).unwrap(), Expr::LiteralInt("456".into()));
     }
 
     #[test]
     fn parses_loop() {
         let parsed = parse("loop { 123 }").unwrap();
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(None, 1));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::Block(vec![0]));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralInt("123".into()));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::Block(vec![0]));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]
     fn parses_loop_with_condition() {
         let parsed = parse("loop true { 123 }").unwrap();
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(0), 2));
-        assert_eq!(*parsed.get(0).unwrap(), Expr::LiteralTrue);
-        assert_eq!(*parsed.get(2).unwrap(), Expr::Block(vec![1]));
-        assert_eq!(*parsed.get(1).unwrap(), Expr::LiteralInt("123".into()));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
+        assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]
@@ -1204,8 +1213,8 @@ mod tests {
         let parsed = parse("enum Fizz { case foo(Int) }\nFizz.foo(123)").unwrap();
 
         assert_eq!(*parsed.roots()[1].unwrap(), Call(5, vec![6]));
-        assert_eq!(*parsed.get(5).unwrap(), Member(Some(4), "foo".into()));
-        assert_eq!(*parsed.get(4).unwrap(), Variable("Fizz".into(), None));
+        assert_eq!(*parsed.get(&5).unwrap(), Member(Some(4), "foo".into()));
+        assert_eq!(*parsed.get(&4).unwrap(), Variable("Fizz".into(), None));
     }
 
     #[test]
@@ -1226,26 +1235,26 @@ mod tests {
 
         // Check the enum generics
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Expr::TypeRepr("T".into(), vec![], true)
         );
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&1).unwrap(),
             Expr::TypeRepr("Y".into(), vec![], true)
         );
 
         // Check the body
-        assert_eq!(*parsed.get(6).unwrap(), Expr::Block(vec![4, 5]));
+        assert_eq!(*parsed.get(&6).unwrap(), Expr::Block(vec![4, 5]));
         assert_eq!(
-            *parsed.get(4).unwrap(),
+            *parsed.get(&4).unwrap(),
             Expr::EnumVariant(Name::Raw("foo".into()), vec![2, 3])
         );
         assert_eq!(
-            *parsed.get(2).unwrap(),
+            *parsed.get(&2).unwrap(),
             Expr::TypeRepr("T".into(), vec![], false)
         );
         assert_eq!(
-            *parsed.get(3).unwrap(),
+            *parsed.get(&3).unwrap(),
             Expr::TypeRepr("Y".into(), vec![], false)
         );
     }
@@ -1265,21 +1274,21 @@ mod tests {
             Expr::EnumDecl("Fizz".into(), vec![], 3)
         );
 
-        let Expr::Block(exprs) = parsed.get(3).unwrap() else {
+        let Expr::Block(exprs) = parsed.get(&3).unwrap() else {
             panic!("didn't get body")
         };
 
         assert_eq!(exprs.len(), 3);
         assert_eq!(
-            *parsed.get(exprs[0]).unwrap(),
+            *parsed.get(&exprs[0]).unwrap(),
             Expr::EnumVariant(Name::Raw("foo".to_string()), vec![])
         );
         assert_eq!(
-            *parsed.get(exprs[1]).unwrap(),
+            *parsed.get(&exprs[1]).unwrap(),
             Expr::EnumVariant(Name::Raw("bar".to_string()), vec![])
         );
         assert_eq!(
-            *parsed.get(exprs[2]).unwrap(),
+            *parsed.get(&exprs[2]).unwrap(),
             Expr::EnumVariant(Name::Raw("fizz".to_string()), vec![])
         );
     }
@@ -1298,34 +1307,34 @@ mod tests {
             Expr::EnumDecl("Fizz".into(), vec![], 6)
         );
 
-        let Expr::Block(exprs) = parsed.get(6).unwrap() else {
+        let Expr::Block(exprs) = parsed.get(&6).unwrap() else {
             panic!("didn't get body")
         };
 
         assert_eq!(exprs.len(), 2);
         assert_eq!(
-            *parsed.get(exprs[0]).unwrap(),
+            *parsed.get(&exprs[0]).unwrap(),
             Expr::EnumVariant("foo".into(), vec![0, 1])
         );
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Expr::TypeRepr("Int".into(), vec![], false)
         );
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&1).unwrap(),
             Expr::TypeRepr("Float".into(), vec![], false)
         );
 
         assert_eq!(
-            *parsed.get(exprs[1]).unwrap(),
+            *parsed.get(&exprs[1]).unwrap(),
             Expr::EnumVariant(Name::Raw("bar".into()), vec![3, 4])
         );
         assert_eq!(
-            *parsed.get(3).unwrap(),
+            *parsed.get(&3).unwrap(),
             Expr::TypeRepr("Float".into(), vec![], false)
         );
         assert_eq!(
-            *parsed.get(4).unwrap(),
+            *parsed.get(&4).unwrap(),
             Expr::TypeRepr("Int".into(), vec![], false)
         );
     }
@@ -1340,24 +1349,28 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, vec![3, 6]));
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, vec![4, 7]));
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Variable(Name::Raw("fizz".to_string()), None)
         );
 
-        assert_eq!(*parsed.get(3).unwrap(), MatchArm(1, 2));
-        assert_eq!(*parsed.get(6).unwrap(), MatchArm(4, 5));
+        assert_eq!(*parsed.get(&4).unwrap(), MatchArm(2, 3));
+        assert_eq!(*parsed.get(&7).unwrap(), MatchArm(5, 6));
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&2).unwrap(),
             Pattern(crate::expr::Pattern::Variant {
                 enum_name: None,
                 variant_name: Name::Raw("foo".into()),
-                fields: vec![crate::expr::Pattern::Bind(Name::Raw("name".into()))]
+                fields: vec![1]
             })
         );
         assert_eq!(
-            *parsed.get(4).unwrap(),
+            *parsed.get(&1).unwrap(),
+            Pattern(crate::expr::Pattern::Bind(Name::Raw("name".into())))
+        );
+        assert_eq!(
+            *parsed.get(&5).unwrap(),
             Pattern(crate::expr::Pattern::Variant {
                 enum_name: None,
                 variant_name: Name::Raw("bar".into()),
@@ -1388,22 +1401,22 @@ mod tests {
         );
 
         assert_eq!(
-            *parsed.get(3).unwrap(),
+            *parsed.get(&3).unwrap(),
             Expr::Parameter("using".into(), Some(2))
         );
 
         assert_eq!(
-            *parsed.get(2).unwrap(),
+            *parsed.get(&2).unwrap(),
             Expr::FuncTypeRepr(vec![0], 1, false)
         );
 
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             Expr::TypeRepr("T".into(), vec![], false)
         );
 
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&1).unwrap(),
             Expr::TypeRepr("Y".into(), vec![], false)
         );
     }
@@ -1424,15 +1437,15 @@ mod tests {
         );
 
         assert_eq!(
-            *parsed.get(2).unwrap(),
+            *parsed.get(&2).unwrap(),
             Parameter(Name::Raw("name".to_string()), Some(1))
         );
         assert_eq!(
-            *parsed.get(1).unwrap(),
+            *parsed.get(&1).unwrap(),
             TypeRepr("Optional".into(), vec![0], false)
         );
         assert_eq!(
-            *parsed.get(0).unwrap(),
+            *parsed.get(&0).unwrap(),
             TypeRepr("Int".into(), vec![], false)
         );
     }

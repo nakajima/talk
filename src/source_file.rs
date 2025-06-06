@@ -236,7 +236,7 @@ impl<P: Phase> SourceFile<P> {
 
     // Gets the root expr of the tree
     pub fn roots(&self) -> Vec<Option<&Expr>> {
-        self.roots.iter().map(|r| self.get(*r)).collect()
+        self.roots.iter().map(|r| self.get(r)).collect()
     }
 
     // Gets the root expr of the tree
@@ -245,8 +245,8 @@ impl<P: Phase> SourceFile<P> {
     }
 
     // Gets the expr at a given index
-    pub fn get(&self, index: ExprID) -> Option<&Expr> {
-        let index = index as usize;
+    pub fn get(&self, index: &ExprID) -> Option<&Expr> {
+        let index = *index as usize;
 
         if self.nodes.len() <= index {
             None
@@ -256,8 +256,8 @@ impl<P: Phase> SourceFile<P> {
     }
 
     // Gets the expr at a given index
-    pub fn get_mut(&mut self, index: ExprID) -> Option<&mut Expr> {
-        let index = index as usize;
+    pub fn get_mut(&mut self, index: &ExprID) -> Option<&mut Expr> {
+        let index = *index as usize;
 
         if self.nodes.len() <= index {
             None

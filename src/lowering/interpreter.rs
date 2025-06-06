@@ -233,6 +233,17 @@ impl IRInterpreter {
                 frame.block_idx = jump_to.0 as usize;
                 return Ok(None);
             }
+            Instr::JumpIf(cond, jump_to) => {
+                if Value::Bool(true) == self.register_value(&cond) {
+                    let id = self.current_basic_block().id;
+                    let frame = self.stack.last_mut().expect("stack underflow");
+                    frame.pred = Some(id);
+                    frame.block_idx = jump_to.0 as usize;
+                    frame.pc = 0;
+                    return Ok(None);
+                }
+            }
+            Instr::Eq(_, _, _, _) => todo!(),
             Instr::TagVariant(_, _, _, _) => todo!(),
             Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
         }

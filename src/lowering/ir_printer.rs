@@ -179,6 +179,11 @@ fn format_instruction(instruction: &Instr) -> String {
             format_register(register),
             format_block_id(basic_block_id)
         ),
+        Instr::JumpIf(register, basic_block_id) => format!(
+            "jump_if {} {};",
+            format_register(register),
+            format_block_id(basic_block_id)
+        ),
         Instr::Ret(ret) => format!(
             "ret{};",
             if let Some((ty, register)) = ret {
@@ -202,6 +207,15 @@ fn format_instruction(instruction: &Instr) -> String {
                 strings.join(", ")
             }
         ),
+        Instr::Eq(dest, ty, op1, op2) => {
+            format!(
+                "{} = eq {} {} {}",
+                format_register(dest),
+                format_ir_ty(ty),
+                format_register(op1),
+                format_register(op2)
+            )
+        }
         _ => todo!("{:?}", instruction),
     }
 }
