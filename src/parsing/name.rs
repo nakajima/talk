@@ -4,6 +4,7 @@ use crate::{SymbolID, type_checker::Ty};
 pub enum Name {
     Raw(String),
     Resolved(SymbolID, String),
+    _Self(SymbolID),
 }
 
 impl Name {
@@ -16,6 +17,9 @@ impl Name {
                 } else {
                     format!("@_{:?}_{}", symbol_id.0, name_str)
                 }
+            }
+            Name::_Self(_) => {
+                todo!()
             }
         }
     }

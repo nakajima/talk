@@ -370,6 +370,7 @@ impl TypeChecker {
                     env.instantiate_symbol(*symbol_id)
                 }
             }
+            Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id),
         };
 
         // For generic types like Option<Int>, we need to handle the generics

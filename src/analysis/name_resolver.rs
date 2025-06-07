@@ -14,6 +14,9 @@ use crate::source_file::SourceFile;
 pub struct NameResolver {
     symbol_table: SymbolTable,
     scopes: Vec<HashMap<String, SymbolID>>,
+
+    // For resolving `self` references
+    type_symbol_stack: Vec<SymbolID>,
 }
 
 impl Default for NameResolver {
@@ -24,6 +27,7 @@ impl Default for NameResolver {
         NameResolver {
             symbol_table,
             scopes: vec![initial_scope],
+            type_symbol_stack: vec![],
         }
     }
 }
@@ -36,6 +40,7 @@ impl NameResolver {
         NameResolver {
             symbol_table,
             scopes: vec![initial_scope],
+            type_symbol_stack: vec![],
         }
     }
 
@@ -46,55 +51,14 @@ impl NameResolver {
 
     fn resolve_nodes(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
         // 1) First pass: Hoist enums and their variants
-        for id in node_ids {
-            let Some(EnumDecl(Name::Raw(name_str), generics, body_expr)) =
-                source_file.get(id).cloned()
-            else {
-                continue;
-            };
-
-            // Declare the enum type
-            let enum_symbol = self.declare(name_str.clone(), SymbolKind::Enum, &id);
-
-            self.resolve_nodes(&generics, source_file);
-
-            source_file.nodes[*id as usize] =
-                EnumDecl(Name::Resolved(enum_symbol, name_str), generics, body_expr);
-
-            // Hoist variants
-            self.hoist_enum_variants(&body_expr, source_file);
-        }
+        self.hoist_enums(node_ids, source_file);
 
         // 1) Hoist all funcs in this block before any recursion
-        for id in node_ids {
-            if let Func {
-                name: Some(Name::Raw(name)),
-                generics,
-                params,
-                body,
-                ret,
-            } = source_file.get(id).unwrap().clone()
-            {
-                let symbol_id = self.declare(name.clone(), SymbolKind::Func, &id);
-
-                // if let Some(ret) = ret {
-                //     self.resolve_nodes(vec![ret], source_file)
-                // };
-
-                // self.resolve_nodes(generics.clone(), source_file);
-
-                source_file.nodes[*id as usize] = Func {
-                    name: Some(Name::Resolved(symbol_id, name)),
-                    generics,
-                    params,
-                    body,
-                    ret,
-                };
-            }
-        }
+        self.hoist_funcs(node_ids, source_file);
 
         for node_id in node_ids {
             let expr = &mut source_file.get_mut(node_id).unwrap();
+            log::trace!("Resolving: {:?}", expr);
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
@@ -130,7 +94,7 @@ impl NameResolver {
                                 self.declare(name_str.clone(), SymbolKind::Local, node_id);
                             Name::Resolved(symbol_id, name_str)
                         }
-                        Name::Resolved(_, _) => name,
+                        Name::Resolved(_, _) | Name::_Self(_) => name,
                     };
 
                     if let Some(rhs) = rhs {
@@ -159,6 +123,7 @@ impl NameResolver {
                 }
                 Block(items) => {
                     self.start_scope();
+                    self.hoist_funcs(&items, source_file);
                     self.resolve_nodes(&items, source_file);
                     self.end_scope();
                 }
@@ -206,17 +171,27 @@ impl NameResolver {
                             source_file.nodes[*node_id as usize] =
                                 Parameter(Name::Resolved(symbol_id, name_str), ty_repr);
                         }
-                        Name::Resolved(_, _) => (),
+                        Name::Resolved(_, _) | Name::_Self(_) => (),
                     }
                 }
                 Variable(name, _) => match name {
                     Name::Raw(name_str) => {
-                        let symbol_id = self.lookup(&name_str);
-                        log::trace!("Replacing variable {} with {:?}", name_str, symbol_id);
-                        source_file.nodes[*node_id as usize] =
-                            Variable(Name::Resolved(symbol_id, name_str), None);
+                        let name = if name_str == "self" {
+                            Name::_Self(
+                                *self
+                                    .type_symbol_stack
+                                    .last()
+                                    .expect("used self outside of type"),
+                            )
+                        } else {
+                            let symbol_id = self.lookup(&name_str);
+                            log::trace!("Replacing variable {} with {:?}", name_str, symbol_id);
+                            Name::Resolved(symbol_id, name_str)
+                        };
+
+                        source_file.nodes[*node_id as usize] = Variable(name, None);
                     }
-                    Name::Resolved(_, _) => (),
+                    Name::Resolved(_, _) | Name::_Self(_) => (),
                 },
                 TypeRepr(name, generics, is_type_parameter_decl) => {
                     log::trace!(
@@ -244,7 +219,7 @@ impl NameResolver {
                                 Name::Resolved(symbol_id, raw_name_str)
                             }
                         }
-                        Name::Resolved(_, _) => name, // Already resolved, no change needed to the name itself.
+                        Name::Resolved(_, _) | Name::_Self(_) => name, // Already resolved, no change needed to the name itself.
                     };
 
                     // Update the existing TypeRepr node with the resolved name.
@@ -270,6 +245,7 @@ impl NameResolver {
                         Name::Raw(name_str) => {
                             let symbol_id =
                                 self.declare(name_str.clone(), SymbolKind::Enum, node_id);
+                            self.type_symbol_stack.push(symbol_id);
                             source_file.nodes[*node_id as usize] = EnumDecl(
                                 Name::Resolved(symbol_id, name_str),
                                 generics.clone(),
@@ -281,6 +257,7 @@ impl NameResolver {
 
                     self.resolve_nodes(&generics, source_file);
                     self.resolve_nodes(&[body], source_file);
+                    self.type_symbol_stack.pop();
                 }
                 EnumVariant(_, values) => {
                     self.resolve_nodes(&values, source_file);
@@ -305,6 +282,52 @@ impl NameResolver {
                 }
                 PatternVariant(_, _, _items) => todo!(),
             }
+        }
+    }
+
+    fn hoist_funcs(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
+        for id in node_ids {
+            if let Func {
+                name: Some(Name::Raw(name)),
+                generics,
+                params,
+                body,
+                ret,
+            } = source_file.get(id).unwrap().clone()
+            {
+                let symbol_id = self.declare(name.clone(), SymbolKind::Func, &id);
+
+                source_file.nodes[*id as usize] = Func {
+                    name: Some(Name::Resolved(symbol_id, name)),
+                    generics,
+                    params,
+                    body,
+                    ret,
+                };
+            }
+        }
+    }
+
+    fn hoist_enums(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
+        for id in node_ids {
+            let Some(EnumDecl(Name::Raw(name_str), generics, body_expr)) =
+                source_file.get(id).cloned()
+            else {
+                continue;
+            };
+
+            // Declare the enum type
+            let enum_symbol = self.declare(name_str.clone(), SymbolKind::Enum, &id);
+
+            self.resolve_nodes(&generics, source_file);
+
+            source_file.nodes[*id as usize] =
+                EnumDecl(Name::Resolved(enum_symbol, name_str), generics, body_expr);
+
+            // Hoist variants
+            self.type_symbol_stack.push(enum_symbol);
+            self.hoist_enum_members(&body_expr, source_file);
+            self.type_symbol_stack.pop();
         }
     }
 
@@ -364,12 +387,12 @@ impl NameResolver {
     }
 
     // New helper method to hoist enum variants
-    fn hoist_enum_variants(&mut self, body_expr_id: &ExprID, source_file: &mut SourceFile) {
-        let Block(variant_ids) = source_file.get(body_expr_id).unwrap().clone() else {
+    fn hoist_enum_members(&mut self, body_expr_id: &ExprID, source_file: &mut SourceFile) {
+        let Block(items) = source_file.get(body_expr_id).unwrap().clone() else {
             panic!("Expected Block for enum body");
         };
 
-        for variant_id in &variant_ids {
+        for variant_id in &items {
             let variant_expr = source_file.get(variant_id).unwrap().clone();
 
             if let EnumVariant(Name::Raw(variant_name), field_types) = variant_expr {
@@ -380,6 +403,8 @@ impl NameResolver {
                     EnumVariant(Name::Raw(variant_name), field_types);
             }
         }
+
+        self.resolve_nodes(&items, source_file);
     }
 
     // Helper method to get enum symbol from variant symbol
@@ -686,6 +711,24 @@ mod tests {
         assert_eq!(
             *resolved.get(&5).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::at(1), "Fizz".into()), None)
+        );
+    }
+
+    #[test]
+    fn resolves_enum_method() {
+        let resolved = resolve(
+            "
+        enum Fizz {
+            func sup() {
+                self
+            }
+        }
+        ",
+        );
+
+        assert_eq!(
+            *resolved.get(&0).unwrap(),
+            Expr::Variable(Name::_Self(SymbolID(5)), None)
         );
     }
 }
