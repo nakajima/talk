@@ -209,6 +209,7 @@ impl TypeChecker {
             }
             Expr::Pattern(pattern) => self.infer_pattern_expr(env, pattern, expected, source_file),
             Expr::Variable(Name::Raw(_), _) => Err(TypeError::Unresolved),
+            Expr::Variable(Name::_Self(sym), _) => Ok(env.instantiate_symbol(*sym)),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             _ => panic!("Unhandled expr in type checker: {:?}", expr.clone()),
         }?;
@@ -914,12 +915,19 @@ impl TypeChecker {
                 log::trace!("enum scheme: {:?}", scheme);
                 env.declare_in_parent(enum_id, scheme);
 
+                let mut methods: Vec<Ty> = vec![];
                 let mut variants: Vec<Ty> = vec![];
                 let mut variant_defs: Vec<EnumVariant> = vec![];
 
                 log::debug!("Generic vars: {:?}", generic_vars);
                 for expr_id in expr_ids.clone() {
                     let expr = source_file.get(&expr_id).cloned().unwrap();
+
+                    if let Expr::Func { .. } = &expr {
+                        let method = self.infer_node(&expr_id, env, &None, source_file)?;
+                        methods.push(method);
+                    }
+
                     if let Expr::EnumVariant(Name::Raw(name_str), values) =
                         source_file.get(&expr_id).cloned().unwrap()
                     {
@@ -990,7 +998,7 @@ impl TypeChecker {
                     name: Some(enum_id),
                     variants: variant_defs,
                     type_parameters: generic_vars,
-                    methods: vec![],
+                    methods
                 });
 
                 let typed_expr = TypedExpr::new(*id, expr.clone(), enum_ty.clone());
@@ -1033,6 +1041,7 @@ mod tests {
     use crate::{
         SourceFile, SymbolID, Typed,
         constraint_solver::ConstraintSolver,
+        environment::TypeDef,
         expr::Expr,
         name::Name,
         name_resolver::NameResolver,
@@ -1770,6 +1779,32 @@ mod tests {
             }
             _ => panic!("Expected Optional<Int>, got {:?}", call_result),
         }
+    }
+
+    #[test]
+    fn checks_self() {
+        let checked = check(
+            "enum Fizz {
+            func buzz() {
+                self
+            }
+
+            func foo() {
+                123
+            }
+        }",
+        );
+
+        assert_eq!(
+            checked.typed_roots()[0].ty,
+            Ty::Enum(SymbolID::at(1), vec![])
+        );
+        let Some(TypeDef::Enum(enum_def)) = checked.type_def(&SymbolID::at(1)) else {
+            panic!();
+        };
+        assert_eq!(enum_def.methods.len(), 2);
+        assert_eq!(enum_def.methods[0], Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::at(1), vec![]))));
+        assert_eq!(enum_def.methods[1], Ty::Func(vec![], Box::new(Ty::Int)));
     }
 }
 

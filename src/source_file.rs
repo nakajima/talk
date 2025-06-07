@@ -139,8 +139,8 @@ impl SourceFile<Typed> {
         self.phase_data.env.types.clone()
     }
 
-    pub fn type_def(&mut self, id: &SymbolID) -> Option<&mut TypeDef> {
-        self.phase_data.env.types.get_mut(id)
+    pub fn type_def(&self, id: &SymbolID) -> Option<&TypeDef> {
+        self.phase_data.env.types.get(id)
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {

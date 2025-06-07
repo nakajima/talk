@@ -132,8 +132,12 @@ impl NameResolver {
                     params,
                     body,
                     ret,
-                    ..
+                    name
                 } => {
+                    if !self.type_symbol_stack.is_empty() && name.is_none() {
+                        panic!("missing method name");
+                    }
+
                     self.start_scope();
 
                     self.resolve_nodes(&generics, source_file);
@@ -729,6 +733,20 @@ mod tests {
         assert_eq!(
             *resolved.get(&0).unwrap(),
             Expr::Variable(Name::_Self(SymbolID(5)), None)
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn ensures_methods_have_names() {
+        let resolved = resolve(
+            "
+        enum Fizz {
+            func() {
+                self
+            }
+        }
+        ",
         );
     }
 }
