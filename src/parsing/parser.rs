@@ -1449,6 +1449,43 @@ mod tests {
             TypeRepr("Int".into(), vec![], false)
         );
     }
+
+    #[test]
+    fn parses_enum_methods() {
+        let parsed = parse(
+            "
+            enum MyEnum {
+                case val(Int), nope
+
+                func fizz() {
+                    123
+                }
+            }
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::EnumDecl("MyEnum".into(), vec![], 6)
+        );
+
+        let Expr::Block(exprs) = parsed.get(&6).unwrap() else {
+            panic!("didn't get block: {:?}", parsed.get(&3));
+        };
+
+        assert_eq!(3, exprs.len());
+        assert_eq!(
+            *parsed.get(&exprs[2]).unwrap(),
+            Expr::Func {
+                name: Some(Name::Raw("fizz".into())),
+                generics: vec![],
+                params: vec![],
+                body: 4,
+                ret: None
+            }
+        )
+    }
 }
 
 #[cfg(test)]
