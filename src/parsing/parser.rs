@@ -599,6 +599,8 @@ impl<'a> Parser<'a> {
             TokenKind::Star,
             TokenKind::Slash,
             TokenKind::Less,
+            TokenKind::BangEquals,
+            TokenKind::EqualsEquals,
             TokenKind::LessEquals,
             TokenKind::Greater,
             TokenKind::GreaterEquals,
@@ -749,6 +751,54 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, LiteralInt("123".into()));
+    }
+
+    #[test]
+    fn parses_eq() {
+        let parsed = parse("1 == 2").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, Expr::Binary(0, TokenKind::EqualsEquals, 1,));
+    }
+
+    #[test]
+    fn parses_not_eq() {
+        let parsed = parse("1 != 2").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, Expr::Binary(0, TokenKind::BangEquals, 1,));
+    }
+
+    #[test]
+    fn parses_greater() {
+        let parsed = parse("1 > 2").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, Expr::Binary(0, TokenKind::Greater, 1,));
+    }
+
+    #[test]
+    fn parses_greater_eq() {
+        let parsed = parse("1 >= 2").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, Expr::Binary(0, TokenKind::GreaterEquals, 1,));
+    }
+
+    #[test]
+    fn parses_less() {
+        let parsed = parse("1 < 2").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, Expr::Binary(0, TokenKind::Less, 1,));
+    }
+
+    #[test]
+    fn parses_less_eq() {
+        let parsed = parse("1 <= 2").unwrap();
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, Expr::Binary(0, TokenKind::LessEquals, 1,));
     }
 
     #[test]

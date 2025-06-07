@@ -450,4 +450,23 @@ mod tests {
             .unwrap()
         );
     }
+
+    #[test]
+    fn interprets_recursion() {
+        assert_eq!(
+            Value::Int(120),
+            interpret(
+                "
+                func factorial(n) {
+                    if n == 1 {
+                        return n
+                    }
+
+                    factorial(n - 1)
+                }
+        "
+            )
+            .unwrap()
+        );
+    }
 }

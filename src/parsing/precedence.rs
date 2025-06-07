@@ -168,6 +168,18 @@ impl Precedence {
                 precedence: Precedence::Comparison,
             },
 
+            TokenKind::EqualsEquals => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Equality,
+            },
+
+            TokenKind::BangEquals => ParseHandler {
+                prefix: None,
+                infix: Some(Parser::binary),
+                precedence: Precedence::Equality,
+            },
+
             TokenKind::Caret => ParseHandler {
                 prefix: None,
                 infix: Some(Parser::binary),
@@ -216,8 +228,7 @@ impl Precedence {
             TokenKind::MinusEquals => ParseHandler::NONE,
             TokenKind::StarEquals => ParseHandler::NONE,
             TokenKind::SlashEquals => ParseHandler::NONE,
-            TokenKind::EqualsEquals => ParseHandler::NONE,
-            TokenKind::BangEquals => ParseHandler::NONE,
+
             TokenKind::TildeEquals => ParseHandler::NONE,
 
             TokenKind::CaretEquals => ParseHandler::NONE,
