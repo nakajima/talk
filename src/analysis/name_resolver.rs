@@ -299,7 +299,7 @@ impl NameResolver {
                 ret,
             } = source_file.get(id).unwrap().clone()
             {
-                let symbol_id = self.declare(name.clone(), SymbolKind::Func, &id);
+                let symbol_id = self.declare(name.clone(), SymbolKind::Func, id);
 
                 source_file.nodes[*id as usize] = Func {
                     name: Some(Name::Resolved(symbol_id, name)),
@@ -321,7 +321,7 @@ impl NameResolver {
             };
 
             // Declare the enum type
-            let enum_symbol = self.declare(name_str.clone(), SymbolKind::Enum, &id);
+            let enum_symbol = self.declare(name_str.clone(), SymbolKind::Enum, id);
 
             self.resolve_nodes(&generics, source_file);
 
@@ -358,7 +358,7 @@ impl NameResolver {
                     None
                 };
 
-                self.resolve_nodes(&fields, source_file);
+                self.resolve_nodes(fields, source_file);
 
                 // let fields = fields
                 //     .iter()

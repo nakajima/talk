@@ -372,7 +372,7 @@ impl Lowerer {
         let phi_reg = self.allocate_register();
         self.push_instr(Instr::Phi(phi_reg, ty.to_ir(), predecessors));
 
-        return Some(phi_reg);
+        Some(phi_reg)
     }
 
     fn lower_match_arm(
@@ -449,7 +449,7 @@ impl Lowerer {
                     panic!("did not get enum")
                 };
 
-                let TypeDef::Enum(type_def) = self.source_file.type_def(&enum_id).cloned().unwrap();
+                let TypeDef::Enum(type_def) = self.source_file.type_def(enum_id).cloned().unwrap();
 
                 /* ... find variant by name in type_def ... */
                 let (tag, variant_def) = type_def.tag_with_variant_for(&variant_name);
@@ -510,7 +510,7 @@ impl Lowerer {
                             value_reg,
                             ty.to_ir(),
                             *scrutinee_reg,
-                            tag as u16,
+                            tag,
                             i as u16,
                         ));
                         self.current_func_mut()
@@ -551,7 +551,7 @@ impl Lowerer {
             pattern_id,
             self.source_file.get(pattern_id)
         );
-        let pattern_typed_expr = self.source_file.typed_expr(&pattern_id).unwrap();
+        let pattern_typed_expr = self.source_file.typed_expr(pattern_id).unwrap();
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
             panic!("Didn't get pattern for match arm: {:?}", pattern_typed_expr)
         };
@@ -619,8 +619,8 @@ impl Lowerer {
             Ty::Enum(sym, _generics) => {
                 // Since we got called directly from lower_expr, this is variant that doesn't
                 // have any attached values.
-                let dest = self.lower_enum_construction(*sym, name, &typed_expr.ty, &vec![]);
-                return dest;
+                
+                self.lower_enum_construction(*sym, name, &typed_expr.ty, &[])
             }
             _ => todo!("lower_member: {:?}", typed_expr),
         }
@@ -664,10 +664,10 @@ impl Lowerer {
             let register = self.lower_expr(rhs)?;
             self.current_block_mut()
                 .push_instr(Instr::Ret(Some((typed_expr.ty.to_ir(), register))));
-            return Some(register);
+            Some(register)
         } else {
             self.current_block_mut().push_instr(Instr::Ret(None));
-            return None;
+            None
         }
     }
 
@@ -834,7 +834,7 @@ impl Lowerer {
                 panic!("didn't get member expr for enum call")
             };
 
-            return self.lower_enum_construction(*enum_id, &variant_name, &ty, &arg_registers);
+            return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
         }
 
         let name_str = match &callee_typed_expr.expr {

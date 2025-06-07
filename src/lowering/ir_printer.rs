@@ -81,7 +81,7 @@ fn format_ir_ty(ty: &IRType) -> String {
             "enum({})",
             types
                 .iter()
-                .map(|t| format_ir_ty(t))
+                .map(format_ir_ty)
                 .collect::<Vec<String>>()
                 .join(", ")
         ),
@@ -199,11 +199,11 @@ fn format_instruction(instruction: &Instr) -> String {
             "{} = tag {} [{}] {}",
             format_register(dest),
             tag,
-            format_args(&values),
+            format_args(values),
             {
                 let strings = generics
                     .iter()
-                    .map(|g| format_ir_ty(g))
+                    .map(format_ir_ty)
                     .collect::<Vec<String>>();
                 strings.join(", ")
             }

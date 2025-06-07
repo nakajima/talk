@@ -128,7 +128,7 @@ impl TypeChecker {
         let mut typed_roots = vec![];
         for id in &root_ids {
             self.infer_node(id, &mut env, &None, &source_file)?;
-            typed_roots.push(env.typed_exprs.get(&id).unwrap().clone())
+            typed_roots.push(env.typed_exprs.get(id).unwrap().clone())
         }
 
         // Now it's safe to move source_file since env is dropped before this line
@@ -194,11 +194,11 @@ impl TypeChecker {
             Expr::Tuple(types) => self.infer_tuple(types, env, source_file),
             Expr::Unary(_token_kind, rhs) => self.infer_unary(rhs, expected, env, source_file),
             Expr::Binary(lhs, _token_kind, rhs) => {
-                self.infer_binary(&id, lhs, rhs, expected, env, source_file)
+                self.infer_binary(id, lhs, rhs, expected, env, source_file)
             }
             Expr::Block(items) => self.infer_block(id, env, items, expected, source_file),
-            Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(&id).unwrap().clone().ty),
-            Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(&id).unwrap().clone().ty),
+            Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
+            Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
             Expr::Match(pattern, items) => self.infer_match(env, pattern, items, source_file),
             Expr::MatchArm(pattern, body) => {
                 self.infer_match_arm(env, pattern, body, expected, source_file)
@@ -899,7 +899,7 @@ impl TypeChecker {
             let expr = source_file.get(id).unwrap().clone();
 
             if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
-                let Some(Expr::Block(expr_ids)) = source_file.get(&body).clone() else {
+                let Some(Expr::Block(expr_ids)) = source_file.get(&body) else {
                     unreachable!()
                 };
 

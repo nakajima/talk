@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
 
             return Ok(expr::Pattern::Variant {
                 enum_name: Some(Name::Raw(name)),
-                variant_name: variant_name,
+                variant_name,
                 fields,
             });
         }
@@ -238,7 +238,7 @@ impl<'a> Parser<'a> {
 
             return Ok(expr::Pattern::Variant {
                 enum_name: None,
-                variant_name: variant_name,
+                variant_name,
                 fields,
             });
         }
