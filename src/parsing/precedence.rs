@@ -63,7 +63,7 @@ impl Precedence {
             TokenKind::If => ParseHandler {
                 prefix: Some(Parser::if_expr),
                 infix: None,
-                precedence: Precedence::None,
+                precedence: Precedence::Primary,
             },
             TokenKind::Else => ParseHandler::NONE,
             TokenKind::Loop => ParseHandler {

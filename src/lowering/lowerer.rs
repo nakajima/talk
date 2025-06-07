@@ -619,7 +619,7 @@ impl Lowerer {
             Ty::Enum(sym, _generics) => {
                 // Since we got called directly from lower_expr, this is variant that doesn't
                 // have any attached values.
-                
+
                 self.lower_enum_construction(*sym, name, &typed_expr.ty, &[])
             }
             _ => todo!("lower_member: {:?}", typed_expr),
@@ -706,6 +706,8 @@ impl Lowerer {
             panic!("Did not get binary expr");
         };
 
+        let operand_ty = self.source_file.type_for(lhs);
+
         let operand_1 = self.lower_expr(&lhs).unwrap();
         let operand_2 = self.lower_expr(&rhs).unwrap();
         let return_reg = self.allocate_register();
@@ -716,6 +718,7 @@ impl Lowerer {
             Minus => Instr::Sub(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
             Star => Instr::Mul(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
             Slash => Instr::Div(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
+            EqualsEquals => Instr::Eq(return_reg, operand_ty.to_ir(), operand_1, operand_2),
             _ => panic!("Cannot lower binary operation: {:?}", op),
         };
 

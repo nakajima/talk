@@ -293,7 +293,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn if_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::If)?;
 
-        let condition = self.parse_with_precedence(Precedence::Any)?;
+        let condition = self.parse_with_precedence(Precedence::Assignment)?;
         let body = self.block(can_assign)?;
 
         if self.did_match(TokenKind::Else)? {

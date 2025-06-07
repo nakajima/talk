@@ -9,6 +9,7 @@ use crate::{
     parser::ExprID,
     prelude::PRELUDE,
     source_file::SourceFile,
+    token_kind::TokenKind,
 };
 
 use super::{
@@ -89,7 +90,7 @@ impl Scheme {
 #[derive(Default, Debug)]
 pub struct TypeChecker;
 
-fn validate_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
+fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
     if let Some(expected) = expected {
         match (&actual, expected) {
             (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => (),
@@ -146,15 +147,18 @@ impl TypeChecker {
         log::trace!("Inferring {:?}", expr);
 
         let ty = match &expr {
-            Expr::LiteralTrue | Expr::LiteralFalse => validate_expected(expected, Ty::Bool),
+            Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
             Expr::If(condition, consequence, alternative) => {
                 let ty = self.infer_if(condition, consequence, alternative, env, source_file)?;
-                validate_expected(expected, ty)
+                println!("expected: {:?}", expected);
+                println!("ty: {:?}", ty);
+
+                checked_expected(expected, ty)
             }
             Expr::Call(callee, args) => self.infer_call(env, callee, args, expected, source_file),
-            Expr::LiteralInt(_) => validate_expected(expected, Ty::Int),
-            Expr::LiteralFloat(_) => validate_expected(expected, Ty::Float),
+            Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
+            Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
             Expr::TypeRepr(name, generics, is_type_parameter) => {
                 self.infer_type_repr(env, name, generics, is_type_parameter, source_file)
@@ -193,8 +197,8 @@ impl TypeChecker {
             }
             Expr::Tuple(types) => self.infer_tuple(types, env, source_file),
             Expr::Unary(_token_kind, rhs) => self.infer_unary(rhs, expected, env, source_file),
-            Expr::Binary(lhs, _token_kind, rhs) => {
-                self.infer_binary(id, lhs, rhs, expected, env, source_file)
+            Expr::Binary(lhs, op, rhs) => {
+                self.infer_binary(id, lhs, rhs, op, expected, env, source_file)
             }
             Expr::Block(items) => self.infer_block(id, env, items, expected, source_file),
             Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
@@ -631,18 +635,33 @@ impl TypeChecker {
 
     fn infer_binary(
         &self,
-        id: &ExprID,
-        lhs: &ExprID,
-        rhs: &ExprID,
-        expected: &Option<Ty>,
+        _id: &ExprID,
+        lhs_id: &ExprID,
+        rhs_id: &ExprID,
+        op: &TokenKind,
+        _expected: &Option<Ty>,
         env: &mut Environment,
         source_file: &SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let lhs = self.infer_node(lhs, env, expected, source_file)?;
-        let rhs = self.infer_node(rhs, env, expected, source_file)?;
+        let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
+        let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
         env.constraints
-            .push(Constraint::Equality(*id, lhs.clone(), rhs));
-        Ok(lhs)
+            .push(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
+
+        // TODO: For now we're just gonna hardcode these
+        use TokenKind::*;
+        match op {
+            // Bool ops
+            EqualsEquals => Ok(Ty::Bool),
+            BangEquals => Ok(Ty::Bool),
+            Greater => Ok(Ty::Bool),
+            GreaterEquals => Ok(Ty::Bool),
+            Less => Ok(Ty::Bool),
+            LessEquals => Ok(Ty::Bool),
+
+            // Same type ops
+            _ => Ok(lhs),
+        }
     }
 
     fn infer_block(
@@ -998,7 +1017,7 @@ impl TypeChecker {
                     name: Some(enum_id),
                     variants: variant_defs,
                     type_parameters: generic_vars,
-                    methods
+                    methods,
                 });
 
                 let typed_expr = TypedExpr::new(*id, expr.clone(), enum_ty.clone());
@@ -1803,7 +1822,10 @@ mod tests {
             panic!();
         };
         assert_eq!(enum_def.methods.len(), 2);
-        assert_eq!(enum_def.methods[0], Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::at(1), vec![]))));
+        assert_eq!(
+            enum_def.methods[0],
+            Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::at(1), vec![])))
+        );
         assert_eq!(enum_def.methods[1], Ty::Func(vec![], Box::new(Ty::Int)));
     }
 }

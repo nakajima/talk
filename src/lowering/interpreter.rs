@@ -460,10 +460,12 @@ mod tests {
                 func factorial(n) {
                     if n == 1 {
                         return n
+                    } else {
+                        n * factorial(n - 1)
                     }
-
-                    factorial(n - 1)
                 }
+
+                factorial(5)
         "
             )
             .unwrap()
