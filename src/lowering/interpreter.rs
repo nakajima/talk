@@ -28,11 +28,12 @@ pub struct IRInterpreter {
     stack: Vec<StackFrame>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
+    Enum { tag: u16, values: Vec<Value> },
     Void,
 }
 
@@ -41,7 +42,7 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-            _ => Err(InterpreterError::TypeError(*self, *other)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
         }
     }
 
@@ -49,7 +50,7 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-            _ => Err(InterpreterError::TypeError(*self, *other)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
         }
     }
 
@@ -57,7 +58,7 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-            _ => Err(InterpreterError::TypeError(*self, *other)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
         }
     }
 
@@ -65,7 +66,7 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-            _ => Err(InterpreterError::TypeError(*self, *other)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
         }
     }
 }
@@ -115,7 +116,7 @@ impl IRInterpreter {
         });
 
         for (i, arg) in args.iter().enumerate() {
-            self.set_register_value(&Register(i as u32), *arg);
+            self.set_register_value(&Register(i as u32), arg.clone());
         }
 
         loop {
@@ -251,10 +252,32 @@ impl IRInterpreter {
                     Value::Bool(self.register_value(&op1) == self.register_value(&op2)),
                 );
             }
-            Instr::TagVariant(_, _, _, _) => todo!(),
-            Instr::GetEnumTag(_, _) => todo!(),
+            Instr::TagVariant(dest, _, tag, values) => {
+                self.set_register_value(
+                    &dest,
+                    Value::Enum {
+                        tag,
+                        values: values.iter().map(|r| self.register_value(r)).collect(),
+                    },
+                );
+            }
+            Instr::GetEnumTag(dest, enum_reg) => {
+                let Value::Enum { tag, .. } = self.register_value(&enum_reg) else {
+                    panic!("did not find enum in register #{:?}", enum_reg);
+                };
+
+                self.set_register_value(&dest, Value::Int(tag as i64));
+            }
+            Instr::GetEnumValue(dest, _, enum_reg, _tag, value) => {
+                // Tag would be useful if we needed to know about memory layout but since we're
+                // just using objects who cares
+                let Value::Enum { values, .. } = self.register_value(&enum_reg) else {
+                    panic!("did not find enum in register #{:?}", enum_reg);
+                };
+
+                self.set_register_value(&dest, values[value as usize].clone());
+            }
             Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
-            Instr::GetEnumValue(_register, _, _register1, _, _) => todo!(),
         }
 
         self.stack.last_mut().unwrap().pc += 1;
@@ -277,13 +300,13 @@ impl IRInterpreter {
     }
 
     fn register_value(&self, register: &Register) -> Value {
-        *self
-            .stack
+        self.stack
             .last()
             .expect("Stack underflow")
             .registers
             .get(register)
             .unwrap_or_else(|| panic!("No value found for register: {:?}", register))
+            .clone()
     }
 
     fn load_function(&self, name: &str) -> Option<IRFunction> {
