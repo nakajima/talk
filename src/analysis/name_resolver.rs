@@ -132,7 +132,7 @@ impl NameResolver {
                     params,
                     body,
                     ret,
-                    name
+                    name,
                 } => {
                     if !self.type_symbol_stack.is_empty() && name.is_none() {
                         panic!("missing method name");
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn ensures_methods_have_names() {
-        let resolved = resolve(
+        resolve(
             "
         enum Fizz {
             func() {
