@@ -214,7 +214,7 @@ impl<'a> Parser<'a> {
 
             return Ok(expr::Pattern::Variant {
                 enum_name: Some(Name::Raw(name)),
-                variant_name: Name::Raw(variant_name),
+                variant_name: variant_name,
                 fields,
             });
         }
@@ -238,7 +238,7 @@ impl<'a> Parser<'a> {
 
             return Ok(expr::Pattern::Variant {
                 enum_name: None,
-                variant_name: Name::Raw(variant_name),
+                variant_name: variant_name,
                 fields,
             });
         }
@@ -1361,7 +1361,7 @@ mod tests {
             *parsed.get(&2).unwrap(),
             Pattern(crate::expr::Pattern::Variant {
                 enum_name: None,
-                variant_name: Name::Raw("foo".into()),
+                variant_name: "foo".into(),
                 fields: vec![1]
             })
         );
@@ -1373,7 +1373,7 @@ mod tests {
             *parsed.get(&5).unwrap(),
             Pattern(crate::expr::Pattern::Variant {
                 enum_name: None,
-                variant_name: Name::Raw("bar".into()),
+                variant_name: "bar".into(),
                 fields: vec![]
             })
         );
@@ -1491,7 +1491,7 @@ mod pattern_parsing_tests {
             parse_pattern("Fizz.buzz"),
             Pattern::Variant {
                 enum_name: Some(Name::Raw("Fizz".into())),
-                variant_name: Name::Raw("buzz".into()),
+                variant_name: "buzz".into(),
                 fields: vec![]
             }
         );
@@ -1500,7 +1500,7 @@ mod pattern_parsing_tests {
             parse_pattern(".foo"),
             Pattern::Variant {
                 enum_name: None,
-                variant_name: Name::Raw("foo".into()),
+                variant_name: "foo".into(),
                 fields: vec![]
             }
         );

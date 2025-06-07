@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use crate::lowering::lowerer::{
-    BasicBlock, BasicBlockID, IRFunction, IRProgram, Instr, RefKind, Register,
+use crate::lowering::{
+    instr::Instr,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, RefKind, Register},
 };
 
 #[derive(Debug)]
@@ -251,7 +252,9 @@ impl IRInterpreter {
                 );
             }
             Instr::TagVariant(_, _, _, _) => todo!(),
+            Instr::GetEnumTag(_, _) => todo!(),
             Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
+            Instr::GetEnumValue(_register, _, _register1, _, _) => todo!(),
         }
 
         self.stack.last_mut().unwrap().pc += 1;

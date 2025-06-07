@@ -1,5 +1,6 @@
-use crate::lowering::lowerer::{
-    BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Instr, RefKind, Register,
+use crate::lowering::{
+    instr::Instr,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, RefKind, Register},
 };
 
 pub fn print(program: &IRProgram) -> String {
@@ -214,6 +215,23 @@ fn format_instruction(instruction: &Instr) -> String {
                 format_ir_ty(ty),
                 format_register(op1),
                 format_register(op2)
+            )
+        }
+        Instr::GetEnumTag(dest, tag) => {
+            format!(
+                "{} = gettag {}",
+                format_register(dest),
+                format_register(tag)
+            )
+        }
+        Instr::GetEnumValue(dest, ty, scrutinee, tag, index) => {
+            format!(
+                "{} = getval {} {} {} {}",
+                format_register(dest),
+                format_ir_ty(ty),
+                format_register(scrutinee),
+                tag,
+                index
             )
         }
         _ => todo!("{:?}", instruction),

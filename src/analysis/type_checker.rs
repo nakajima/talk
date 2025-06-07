@@ -823,9 +823,6 @@ impl TypeChecker {
                 ..
             } => {
                 // The expected type should be an Enum type
-                println!("Pattern Variant: {:?}({:?})", variant_name, fields);
-
-                // if let Ty::Enum(enum_id, type_args) =
                 match expected {
                     Ty::Enum(enum_id, type_args) => {
                         // Look up the enum definition to find this variant
@@ -833,11 +830,7 @@ impl TypeChecker {
                             // Find the variant by name
                             if let Some(variant) = enum_def.variants.iter().find(|v| {
                                 // Match variant name (comparing the raw string)
-                                if let Name::Raw(name_str) = variant_name {
-                                    v.name == *name_str
-                                } else {
-                                    false
-                                }
+                                v.name == *variant_name
                             }) {
                                 // Now we have the variant definition and the concrete type arguments
                                 // We need to substitute the enum's type parameters with the actual type args

@@ -33,6 +33,18 @@ pub struct EnumDef {
     pub methods: Vec<Ty>,
 }
 
+impl EnumDef {
+    pub(crate) fn tag_with_variant_for(&self, name: &str) -> (u16, &EnumVariant) {
+        for (i, variant) in self.variants.iter().enumerate() {
+            if variant.name == name {
+                return (i as u16, variant);
+            }
+        }
+
+        panic!("no variant named {:?} for {:?}", name, self.name)
+    }
+}
+
 pub type TypeParams = Vec<Ty>;
 
 #[derive(Debug, Clone)]
