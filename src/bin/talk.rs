@@ -35,7 +35,7 @@ fn main() {
         let mut solver = ConstraintSolver::new(&mut inferred);
         solver.solve().unwrap();
 
-        lowering::ir::Lowerer::new(inferred).lower().unwrap()
+        lowering::lowerer::Lowerer::new(inferred).lower().unwrap()
     }
 
     // You can check for the existence of subcommands, and if found use their

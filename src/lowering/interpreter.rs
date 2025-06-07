@@ -176,7 +176,7 @@ impl IRInterpreter {
 
                 for (reg, pred) in &predecessors {
                     if frame.pred == Some(*pred) {
-                        println!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
+                        log::trace!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
                         self.set_register_value(&dest, self.register_value(reg));
                         self.stack.last_mut().unwrap().pc += 1;
                         return Ok(None);

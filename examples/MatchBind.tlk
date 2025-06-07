@@ -1,0 +1,10 @@
+enum Maybe<T> {
+  case definitely(T), nope
+}
+
+let maybe = Maybe.definitely(123)
+
+match maybe {
+  .definitely(x) -> x,
+  .nope -> 0
+}

@@ -1263,6 +1263,25 @@ mod tests {
     }
 
     #[test]
+    fn infers_let_with_enum_case() {
+        let checked = check(
+            "
+        enum Maybe<T> {
+          case definitely(T), nope
+        }
+
+        let maybe = Maybe.definitely(123)
+        maybe
+        ",
+        );
+
+        assert_eq!(
+            checked.type_for(checked.root_ids()[2]),
+            Ty::Enum(SymbolID::at(1), vec![Ty::Int]),
+        );
+    }
+
+    #[test]
     fn infers_identity() {
         let checker = check(
             "
