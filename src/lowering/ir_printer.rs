@@ -201,16 +201,23 @@ fn format_instruction(instruction: &Instr) -> String {
             tag,
             format_args(values),
             {
-                let strings = generics
-                    .iter()
-                    .map(format_ir_ty)
-                    .collect::<Vec<String>>();
+                let strings = generics.iter().map(format_ir_ty).collect::<Vec<String>>();
                 strings.join(", ")
             }
         ),
+        Instr::TagVariant(_, _, _, _) => todo!(),
         Instr::Eq(dest, ty, op1, op2) => {
             format!(
                 "{} = eq {} {} {}",
+                format_register(dest),
+                format_ir_ty(ty),
+                format_register(op1),
+                format_register(op2)
+            )
+        }
+        Instr::Ne(dest, ty, op1, op2) => {
+            format!(
+                "{} = ne {} {} {}",
                 format_register(dest),
                 format_ir_ty(ty),
                 format_register(op1),
@@ -234,7 +241,42 @@ fn format_instruction(instruction: &Instr) -> String {
                 index
             )
         }
-        _ => todo!("{:?}", instruction),
+        Instr::LessThan(register, irtype, register1, register2) => {
+            format!(
+                "{} = lt {} {} {};",
+                format_register(register),
+                format_ir_ty(irtype),
+                format_register(register1),
+                format_register(register2)
+            )
+        }
+        Instr::LessThanEq(register, irtype, register1, register2) => {
+            format!(
+                "{} = lte {} {} {};",
+                format_register(register),
+                format_ir_ty(irtype),
+                format_register(register1),
+                format_register(register2)
+            )
+        }
+        Instr::GreaterThan(register, irtype, register1, register2) => {
+            format!(
+                "{} = gt {} {} {};",
+                format_register(register),
+                format_ir_ty(irtype),
+                format_register(register1),
+                format_register(register2)
+            )
+        }
+        Instr::GreaterThanEq(register, irtype, register1, register2) => {
+            format!(
+                "{} = gte {} {} {};",
+                format_register(register),
+                format_ir_ty(irtype),
+                format_register(register1),
+                format_register(register2)
+            )
+        }
     }
 }
 

@@ -718,7 +718,15 @@ impl Lowerer {
             Minus => Instr::Sub(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
             Star => Instr::Mul(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
             Slash => Instr::Div(return_reg, typed_expr.ty.to_ir(), operand_1, operand_2),
+            BangEquals => Instr::Ne(return_reg, operand_ty.to_ir(), operand_1, operand_2),
             EqualsEquals => Instr::Eq(return_reg, operand_ty.to_ir(), operand_1, operand_2),
+
+            Less => Instr::LessThan(return_reg, operand_ty.to_ir(), operand_1, operand_2),
+            LessEquals => Instr::LessThanEq(return_reg, operand_ty.to_ir(), operand_1, operand_2),
+            Greater => Instr::GreaterThan(return_reg, operand_ty.to_ir(), operand_1, operand_2),
+            GreaterEquals => {
+                Instr::GreaterThanEq(return_reg, operand_ty.to_ir(), operand_1, operand_2)
+            }
             _ => panic!("Cannot lower binary operation: {:?}", op),
         };
 

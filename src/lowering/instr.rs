@@ -14,6 +14,11 @@ pub enum Instr {
     Phi(Register, IRType, Vec<(Register, BasicBlockID)>),
     Ref(Register, IRType, RefKind),
     Eq(Register, IRType, Register, Register),
+    Ne(Register, IRType, Register, Register),
+    LessThan(Register, IRType, Register, Register),
+    LessThanEq(Register, IRType, Register, Register),
+    GreaterThan(Register, IRType, Register, Register),
+    GreaterThanEq(Register, IRType, Register, Register),
     Call {
         dest_reg: Option<Register>,
         callee: String,

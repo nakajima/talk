@@ -69,6 +69,38 @@ impl Value {
             _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
         }
     }
+
+    fn gt(&self, other: &Value) -> Result<Value, InterpreterError> {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+        }
+    }
+
+    fn gte(&self, other: &Value) -> Result<Value, InterpreterError> {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+        }
+    }
+
+    fn lt(&self, other: &Value) -> Result<Value, InterpreterError> {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+        }
+    }
+
+    fn lte(&self, other: &Value) -> Result<Value, InterpreterError> {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
+            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+        }
+    }
 }
 
 impl IRInterpreter {
@@ -252,6 +284,12 @@ impl IRInterpreter {
                     Value::Bool(self.register_value(&op1) == self.register_value(&op2)),
                 );
             }
+            Instr::Ne(dest, _, op1, op2) => {
+                self.set_register_value(
+                    &dest,
+                    Value::Bool(self.register_value(&op1) != self.register_value(&op2)),
+                );
+            }
             Instr::TagVariant(dest, _, tag, values) => {
                 self.set_register_value(
                     &dest,
@@ -278,6 +316,30 @@ impl IRInterpreter {
                 self.set_register_value(&dest, values[value as usize].clone());
             }
             Instr::Unreachable => return Err(InterpreterError::UnreachableReached),
+            Instr::LessThan(dest, _irtype, a, b) => {
+                self.set_register_value(
+                    &dest,
+                    self.register_value(&a).lt(&self.register_value(&b))?,
+                );
+            }
+            Instr::LessThanEq(dest, _irtype, a, b) => {
+                self.set_register_value(
+                    &dest,
+                    self.register_value(&a).lte(&self.register_value(&b))?,
+                );
+            }
+            Instr::GreaterThan(dest, _irtype, a, b) => {
+                self.set_register_value(
+                    &dest,
+                    self.register_value(&a).gt(&self.register_value(&b))?,
+                );
+            }
+            Instr::GreaterThanEq(dest, _irtype, a, b) => {
+                self.set_register_value(
+                    &dest,
+                    self.register_value(&a).gte(&self.register_value(&b))?,
+                );
+            }
         }
 
         self.stack.last_mut().unwrap().pc += 1;
@@ -470,5 +532,24 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn interprets_simple_binary_ops() {
+        assert_eq!(Value::Bool(true), interpret("1 < 2").unwrap());
+        assert_eq!(Value::Bool(true), interpret("1 <= 2").unwrap());
+        assert_eq!(Value::Bool(false), interpret("2 < 1").unwrap());
+        assert_eq!(Value::Bool(false), interpret("2 <= 1").unwrap());
+
+        assert_eq!(Value::Bool(false), interpret("1 > 2").unwrap());
+        assert_eq!(Value::Bool(false), interpret("1 >= 2").unwrap());
+        assert_eq!(Value::Bool(true), interpret("2 > 1").unwrap());
+        assert_eq!(Value::Bool(true), interpret("2 >= 1").unwrap());
+
+        assert_eq!(Value::Bool(true), interpret("1 == 1").unwrap());
+        assert_eq!(Value::Bool(false), interpret("1 == 2").unwrap());
+
+        assert_eq!(Value::Bool(true), interpret("1 != 2").unwrap());
+        assert_eq!(Value::Bool(false), interpret("1 != 1").unwrap());
     }
 }
