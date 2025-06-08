@@ -59,7 +59,7 @@ pub struct Token {
 pub struct Lexer<'a> {
     pub code: &'a str,
     chars: Peekable<Chars<'a>>,
-    current: usize,
+    pub current: usize,
     started: usize,
 }
 
@@ -177,9 +177,6 @@ impl<'a> Lexer<'a> {
             "ret" => Tokind::Ret,
             "true" => Tokind::True,
             "false" => Tokind::False,
-            "jump" => Tokind::Jump,
-            "jump_if" => Tokind::JumpIf,
-            "jump_unless" => Tokind::JumpUnless,
             "unreachable" => Tokind::Unreachable,
             "phi" => Tokind::Phi,
             "call" => Tokind::Call,

@@ -3,6 +3,10 @@ name = "talk"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+quote = "1.0.40"
+regex = "1.11.1"
+syn = { version = "1", features = ["extra-traits", "full"] }
 
 [dev-dependencies]
 ctor = "0.4.2"
@@ -14,6 +18,8 @@ clap = { version = "4.5.39", features = ["derive"], optional = true }
 lazy_static = "1.5.0"
 log = "0.4.27"
 env_logger = "0.11.8"
+ir-macro = { path = "./ir-macro" }
+regex = "1"
 
 [features]
 # default = ["cli"]

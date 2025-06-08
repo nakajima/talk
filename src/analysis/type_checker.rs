@@ -151,8 +151,6 @@ impl TypeChecker {
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
             Expr::If(condition, consequence, alternative) => {
                 let ty = self.infer_if(condition, consequence, alternative, env, source_file)?;
-                println!("expected: {:?}", expected);
-                println!("ty: {:?}", ty);
 
                 checked_expected(expected, ty)
             }

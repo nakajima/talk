@@ -41,7 +41,7 @@ fn print_func_def(func: &IRFunction) -> String {
     format!(
         "func {}{}",
         func.name,
-        print_func_sig(func.args(), func.ret())
+        print_func_sig_with_args(func.args(), func.ret())
     )
 }
 
@@ -55,10 +55,30 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
             res.push_str(", ");
         }
 
+        res.push_str(&format!("{}", &format_ir_ty(arg),));
+    }
+
+    res.push(')');
+    res.push(' ');
+    res.push_str(&format_ir_ty(ret));
+
+    res
+}
+
+fn print_func_sig_with_args(args: &[IRType], ret: &IRType) -> String {
+    let mut res = String::new();
+
+    res.push('(');
+
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            res.push_str(", ");
+        }
+
         res.push_str(&format!(
             "{} {}",
             &format_ir_ty(arg),
-            format_register(&Register(i as u32)),
+            &format_register(&Register(i as u32))
         ));
     }
 
@@ -69,7 +89,7 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
     res
 }
 
-fn format_ir_ty(ty: &IRType) -> String {
+pub fn format_ir_ty(ty: &IRType) -> String {
     match ty {
         IRType::Bool => "bool".into(),
         IRType::Void => "void".into(),
@@ -88,7 +108,24 @@ fn format_ir_ty(ty: &IRType) -> String {
     }
 }
 
-fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
+pub fn format_optional_register(reg: &Option<Register>) -> String {
+    match reg {
+        Some(reg) => format_register(reg),
+        None => "void".into(),
+    }
+}
+
+pub fn format_registers(args: &Vec<Register>) -> String {
+    format_args(args)
+}
+
+pub fn format_ref_kind(kind: &RefKind) -> String {
+    match kind {
+        RefKind::Func(name) => name.into(),
+    }
+}
+
+pub fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
     printer.puts(&format!("{}:", format_block_id(&block.id)));
     printer.indent_level += 1;
 
@@ -99,188 +136,11 @@ fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
     printer.indent_level -= 1;
 }
 
-fn format_instruction(instruction: &Instr) -> String {
-    match instruction {
-        Instr::ConstantInt(register, val) => {
-            format!("{} = int {};", format_register(register), val)
-        }
-        Instr::ConstantFloat(register, val) => {
-            format!("{} = float {};", format_register(register), val)
-        }
-        Instr::ConstantBool(register, val) => {
-            format!("{} = bool {};", format_register(register), val)
-        }
-        Instr::Add(dest, ty, lhs, rhs) => {
-            format!(
-                "{} = add {} {}, {};",
-                format_register(dest),
-                format_ir_ty(ty),
-                format_register(lhs),
-                format_register(rhs)
-            )
-        }
-        Instr::Sub(dest, ty, lhs, rhs) => format!(
-            "{} = sub {} {}, {};",
-            format_register(dest),
-            format_ir_ty(ty),
-            format_register(lhs),
-            format_register(rhs)
-        ),
-        Instr::Mul(dest, ty, lhs, rhs) => format!(
-            "{} = mul {} {}, {};",
-            format_register(dest),
-            format_ir_ty(ty),
-            format_register(lhs),
-            format_register(rhs)
-        ),
-        Instr::Div(dest, ty, lhs, rhs) => format!(
-            "{} = div {} {}, {};",
-            format_register(dest),
-            format_ir_ty(ty),
-            format_register(lhs),
-            format_register(rhs)
-        ),
-        Instr::StoreLocal(_register, _irtype, _register1) => todo!(),
-        Instr::LoadLocal(_register, _irtype, _register1) => todo!(),
-        Instr::Phi(register, irtype, items) => {
-            let phi_args = items
-                .iter()
-                .map(|(reg, bb)| format!("{}: {}", format_block_id(bb), format_register(reg)))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            format!(
-                "{} = phi {} [{}];",
-                format_register(register),
-                format_ir_ty(irtype),
-                phi_args
-            )
-        }
-        Instr::Ref(register, _ty, RefKind::Func(name)) => {
-            format!("{} = {};", format_register(register), name)
-        }
-        Instr::Call {
-            dest_reg,
-            callee,
-            args,
-            ty: ret,
-        } => format!(
-            "{} = call {} {}{};",
-            if let Some(dest) = dest_reg {
-                format_register(dest)
-            } else {
-                "void".into()
-            },
-            format_ir_ty(ret),
-            callee,
-            format_args(args)
-        ),
-        Instr::JumpUnless(register, basic_block_id) => format!(
-            "jump_unless {} {};",
-            format_register(register),
-            format_block_id(basic_block_id)
-        ),
-        Instr::JumpIf(register, basic_block_id) => format!(
-            "jump_if {} {};",
-            format_register(register),
-            format_block_id(basic_block_id)
-        ),
-        Instr::Ret(ret) => format!(
-            "ret{};",
-            if let Some((ty, register)) = ret {
-                format!(" {} {}", format_ir_ty(ty), format_register(register))
-            } else {
-                "".into()
-            }
-        ),
-        Instr::Unreachable => "unreachable".to_string(),
-        Instr::Jump(basic_block_id) => format!("jump {}", basic_block_id.0),
-        Instr::TagVariant(dest, IRType::Enum(generics), tag, values) => format!(
-            "{} = tag {} [{}] {}",
-            format_register(dest),
-            tag,
-            format_args(values),
-            {
-                let strings = generics.iter().map(format_ir_ty).collect::<Vec<String>>();
-                strings.join(", ")
-            }
-        ),
-        Instr::TagVariant(_, _, _, _) => todo!(),
-        Instr::Eq(dest, ty, op1, op2) => {
-            format!(
-                "{} = eq {} {} {}",
-                format_register(dest),
-                format_ir_ty(ty),
-                format_register(op1),
-                format_register(op2)
-            )
-        }
-        Instr::Ne(dest, ty, op1, op2) => {
-            format!(
-                "{} = ne {} {} {}",
-                format_register(dest),
-                format_ir_ty(ty),
-                format_register(op1),
-                format_register(op2)
-            )
-        }
-        Instr::GetEnumTag(dest, tag) => {
-            format!(
-                "{} = gettag {}",
-                format_register(dest),
-                format_register(tag)
-            )
-        }
-        Instr::GetEnumValue(dest, ty, scrutinee, tag, index) => {
-            format!(
-                "{} = getval {} {} {} {}",
-                format_register(dest),
-                format_ir_ty(ty),
-                format_register(scrutinee),
-                tag,
-                index
-            )
-        }
-        Instr::LessThan(register, irtype, register1, register2) => {
-            format!(
-                "{} = lt {} {} {};",
-                format_register(register),
-                format_ir_ty(irtype),
-                format_register(register1),
-                format_register(register2)
-            )
-        }
-        Instr::LessThanEq(register, irtype, register1, register2) => {
-            format!(
-                "{} = lte {} {} {};",
-                format_register(register),
-                format_ir_ty(irtype),
-                format_register(register1),
-                format_register(register2)
-            )
-        }
-        Instr::GreaterThan(register, irtype, register1, register2) => {
-            format!(
-                "{} = gt {} {} {};",
-                format_register(register),
-                format_ir_ty(irtype),
-                format_register(register1),
-                format_register(register2)
-            )
-        }
-        Instr::GreaterThanEq(register, irtype, register1, register2) => {
-            format!(
-                "{} = gte {} {} {};",
-                format_register(register),
-                format_ir_ty(irtype),
-                format_register(register1),
-                format_register(register2)
-            )
-        }
-    }
+pub fn format_instruction(instruction: &Instr) -> String {
+    format!("{}", instruction)
 }
 
-fn format_args(args: &Vec<Register>) -> String {
+pub fn format_args(args: &Vec<Register>) -> String {
     let mut res = String::new();
 
     res.push('(');
@@ -296,11 +156,11 @@ fn format_args(args: &Vec<Register>) -> String {
     res
 }
 
-fn format_register(register: &Register) -> String {
+pub fn format_register(register: &Register) -> String {
     format!("%{}", register.0)
 }
 
-fn format_block_id(id: &BasicBlockID) -> String {
+pub fn format_block_id(id: &BasicBlockID) -> String {
     if id.0 == 0 {
         "entry".to_string()
     } else {
@@ -348,8 +208,8 @@ mod tests {
 
                 func @main() void
                   entry:
-                    %0 = @_5_add;
-                    ret (int %0) int %0;
+                    %0 = ref (int) int @_5_add;
+                    ret (int) int %0;
 
                 "#
             )

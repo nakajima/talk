@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::lowering::{
     instr::Instr,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, RefKind, Register},
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, RefKind, Register, RetVal},
 };
 
 #[derive(Debug)]
@@ -206,7 +206,7 @@ impl IRInterpreter {
             Instr::Phi(dest, _, predecessors) => {
                 let frame = self.stack.last_mut().expect("stack underflow");
 
-                for (reg, pred) in &predecessors {
+                for (reg, pred) in &predecessors.0 {
                     if frame.pred == Some(*pred) {
                         log::trace!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
                         self.set_register_value(&dest, self.register_value(reg));
@@ -228,18 +228,16 @@ impl IRInterpreter {
                 args,
                 ..
             } => {
-                let Some(callee) = self.load_function(&callee) else {
+                let Some(callee) = self.load_function(&callee.0) else {
                     return Err(InterpreterError::CalleeNotFound);
                 };
 
                 let res = self.execute_function(
                     callee,
-                    args.iter().map(|r| self.register_value(r)).collect(),
+                    args.0.iter().map(|r| self.register_value(r)).collect(),
                 )?;
 
-                if let Some(dest_reg) = dest_reg {
-                    self.set_register_value(&dest_reg, res);
-                }
+                self.set_register_value(&dest_reg, res);
             }
             Instr::JumpUnless(cond, jump_to) => {
                 if Value::Bool(false) == self.register_value(&cond) {
@@ -251,12 +249,12 @@ impl IRInterpreter {
                     return Ok(None);
                 }
             }
-            Instr::Ret(Some((_, reg))) => {
+            Instr::Ret(RetVal(Some((_, reg)))) => {
                 let retval = self.register_value(&reg);
                 self.stack.pop();
                 return Ok(Some(retval));
             }
-            Instr::Ret(None) => {
+            Instr::Ret(RetVal(None)) => {
                 self.stack.pop();
                 return Ok(Some(Value::Void));
             }
@@ -295,7 +293,7 @@ impl IRInterpreter {
                     &dest,
                     Value::Enum {
                         tag,
-                        values: values.iter().map(|r| self.register_value(r)).collect(),
+                        values: values.0.iter().map(|r| self.register_value(r)).collect(),
                     },
                 );
             }
