@@ -1,6 +1,7 @@
 use std::{
     fmt::Debug,
     iter::Peekable,
+    num::ParseIntError,
     str::{Chars, FromStr},
 };
 
@@ -14,6 +15,12 @@ use crate::lowering::{
 pub enum ParserError {
     UnexpectedToken(Vec<Tokind>, Tokind),
     UnexpectedEOF,
+}
+
+impl From<ParseIntError> for ParserError {
+    fn from(_: ParseIntError) -> Self {
+        ParserError::UnexpectedEOF
+    }
 }
 
 impl std::fmt::Display for ParserError {
@@ -39,7 +46,7 @@ impl FromStr for FuncName {
 pub fn parse_type_from_chars(chars: &mut Peekable<Chars>) -> Result<Option<IRType>, ParserError> {
     let mut arg = vec![];
     while let Some(ch) = chars.next() {
-        println!("matching: {}", ch);
+        log::trace!("matching: {}", ch);
         match ch {
             ',' => {
                 return Ok(Some(IRType::from_str(
@@ -201,8 +208,6 @@ impl<'a> Parser<'a> {
             {
                 break;
             }
-
-            dbg!(&self.current);
         }
 
         // self.advance();
@@ -224,7 +229,7 @@ impl<'a> Parser<'a> {
         self.consume(Tokind::Semicolon).ok();
 
         let line_str = &self.lexer.code[start_pos..self.lexer.current].trim();
-        println!("attempting to parse: {:?}", line_str);
+        log::trace!("attempting to parse: {:?}", line_str);
 
         if line_str.trim().is_empty() {
             return Ok(None);
@@ -390,7 +395,7 @@ mod tests {
             instr::{FuncName, Instr},
             lowerer::{
                 BasicBlockID, IRError, IRProgram, IRType, Lowerer, PhiPredecessors, RefKind,
-                Register, RetVal,
+                Register,
             },
             parser::parser::parse,
         },
@@ -431,7 +436,7 @@ mod tests {
         );
         assert_eq!(
             bb.instructions[3],
-            Instr::Ret(RetVal(Some((IRType::Int, Register(3)))))
+            Instr::Ret(IRType::Int, Some(Register(3)))
         );
     }
 
@@ -499,17 +504,17 @@ mod tests {
             %3 = sub int %1, %2;
             %4 = mul int %1, %2;
             %5 = div int %1, %2;
-            %6 = eq int %3 %5;
-            %7 = @my_other_func;
-            %8 = tag 0 [(%1)] int;
-            %9 = gettag %8;
-            %10 = getval int %8 0 0;
+            %6 = eq int %3, %5;
+            %7 = ref () int @my_other_func;
+            %8 = tagvar int 0 (%1);
+            %9 = gettagof %8;
+            %10 = enumvalue int %8 0 0;
             jump #1;
           #1:
-            jump_unless %6 #2;
-            ret;
+            jmpnl %6 #2;
+            ret void;
           #2:
-            ret;
+            ret void;
         "#
         ))
         .unwrap()
@@ -546,7 +551,7 @@ mod tests {
             entry_bb.instructions[7],
             Instr::Ref(
                 Register(7),
-                IRType::Func(vec![], IRType::Void.into()),
+                IRType::Func(vec![], IRType::Int.into()),
                 RefKind::Func("@my_other_func".to_string())
             )
         );
@@ -573,11 +578,11 @@ mod tests {
             bb1.instructions[0],
             Instr::JumpUnless(Register(6), BasicBlockID(2))
         );
-        assert_eq!(bb1.instructions[1], Instr::Ret(RetVal(None)));
+        assert_eq!(bb1.instructions[1], Instr::Ret(IRType::Void, None));
 
         let bb2 = &func.blocks[2];
         assert_eq!(bb2.id, BasicBlockID(2));
-        assert_eq!(bb2.instructions[0], Instr::Ret(RetVal(None)));
+        assert_eq!(bb2.instructions[0], Instr::Ret(IRType::Void, None));
     }
 
     #[test]

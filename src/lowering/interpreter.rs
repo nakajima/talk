@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::lowering::{
     instr::Instr,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, RefKind, Register, RetVal},
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, RefKind, Register},
 };
 
 #[derive(Debug)]
@@ -148,7 +148,7 @@ impl IRInterpreter {
         });
 
         for (i, arg) in args.iter().enumerate() {
-            self.set_register_value(&Register(i as u32), arg.clone());
+            self.set_register_value(&Register(i as i32), arg.clone());
         }
 
         loop {
@@ -249,14 +249,15 @@ impl IRInterpreter {
                     return Ok(None);
                 }
             }
-            Instr::Ret(RetVal(Some((_, reg)))) => {
-                let retval = self.register_value(&reg);
-                self.stack.pop();
-                return Ok(Some(retval));
-            }
-            Instr::Ret(RetVal(None)) => {
-                self.stack.pop();
-                return Ok(Some(Value::Void));
+            Instr::Ret(_ret, reg) => {
+                if let Some(reg) = reg {
+                    let retval = self.register_value(&reg);
+                    self.stack.pop();
+                    return Ok(Some(retval));
+                } else {
+                    self.stack.pop();
+                    return Ok(Some(Value::Void));
+                }
             }
             Instr::Jump(jump_to) => {
                 let id = self.current_basic_block().id;

@@ -1,13 +1,10 @@
 // build.rs
+use quote::{ToTokens, quote};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
-use syn::Fields;
-
-// Add to your [build-dependencies] in Cargo.toml:
-// syn = { version = "1.0", features = ["full"] }
-// quote = "1.0"
-// regex = "1.5"
+use syn::{Fields, GenericArgument, PathArguments, Type};
 
 fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
@@ -15,22 +12,39 @@ fn main() {
 
     let instr_file_path = "src/lowering/instr.rs";
     println!("cargo:rerun-if-changed={}", instr_file_path);
+    println!("cargo:rerun-if-changed=build.rs");
 
     let content = fs::read_to_string(instr_file_path).unwrap();
+    let file = syn::parse_file(&content).expect("Failed to parse src/lowering/instr.rs");
 
-    let generated_code = match syn::parse_file(&content) {
-        Ok(file) => generate_impls(&file).unwrap_or_else(|e| {
-            panic!("Failed to generate impls for Instr: {}", e);
-        }),
-        Err(e) => {
-            panic!("Failed to parse src/lowering/instr.rs: {}", e);
-        }
-    };
+    let generated_code = generate_impls(&file).unwrap_or_else(|e| {
+        panic!("Failed to generate impls for Instr: {}", e);
+    });
 
-    fs::write(&dest_path, generated_code).unwrap();
+    fs::write(&dest_path, generated_code.to_string()).unwrap();
 }
 
-fn generate_impls(file: &syn::File) -> Result<String, Box<dyn std::error::Error>> {
+fn get_option_inner_type(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty {
+        if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+            let segment = &type_path.path.segments[0];
+            if segment.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if args.args.len() == 1 {
+                        if let GenericArgument::Type(inner_ty) = &args.args[0] {
+                            return Some(inner_ty);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn generate_impls(
+    file: &syn::File,
+) -> Result<proc_macro2::TokenStream, Box<dyn std::error::Error>> {
     let instr_enum = file
         .items
         .iter()
@@ -45,178 +59,265 @@ fn generate_impls(file: &syn::File) -> Result<String, Box<dyn std::error::Error>
         .ok_or("Could not find 'enum Instr' in src/lowering/instr.rs")?;
 
     let display_impl = generate_display_impl(instr_enum);
-    let from_str_impl = generate_from_str_impl(instr_enum); // Now fully implemented
+    let from_str_impl = generate_from_str_impl(instr_enum);
 
-    Ok(format!("{}\n{}", display_impl, from_str_impl))
+    Ok(quote! {
+        #display_impl
+        #from_str_impl
+    })
 }
 
 fn get_doc_attr(attrs: &[syn::Attribute]) -> Option<String> {
-    for attr in attrs {
-        // Check for the built-in `#[doc]` attribute
+    attrs.iter().find_map(|attr| {
         if attr.path.is_ident("doc") {
-            // It's structured as `#[doc = "..."]`, which is a NameValue
             if let Ok(syn::Meta::NameValue(nv)) = attr.parse_meta() {
                 if let syn::Lit::Str(lit) = nv.lit {
-                    // Return the trimmed string content
                     return Some(lit.value().trim().to_string());
                 }
             }
         }
-    }
-    None
+        None
+    })
 }
 
-fn generate_display_impl(instr_enum: &syn::ItemEnum) -> String {
-    let mut match_arms = String::new();
+fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
+    let match_arms = instr_enum.variants.iter().map(|variant| {
+        let variant_ident = &variant.ident;
+        let format_str = get_doc_attr(&variant.attrs)
+            .unwrap_or_else(|| panic!("Variant {} is missing doc attribute", variant_ident));
 
-    for variant in &instr_enum.variants {
-        let variant_name = &variant.ident;
-        let mut format_str = get_doc_attr(&variant.attrs)
-            .unwrap_or_else(|| panic!("Variant {} is missing a #[text] attribute", variant_name));
-
-        let (_field_names, field_pattern) = match &variant.fields {
-            Fields::Named(fields) => {
-                let names: Vec<_> = fields
-                    .named
+        let (field_idents, fields_are_named) = match &variant.fields {
+            Fields::Named(f) => (
+                f.named
                     .iter()
-                    .map(|f| f.ident.as_ref().unwrap().to_string())
-                    .collect();
-                for name in &names {
-                    let placeholder = format!("${}", name);
-                    format_str = format_str.replace(&placeholder, &format!("{{{}}}", name));
-                }
-                let field_pattern = format!("{{ {} }}", names.join(", "));
-                (names, field_pattern)
-            }
-            Fields::Unnamed(fields) => {
-                let names: Vec<_> = (0..fields.unnamed.len())
-                    .map(|i| format!("v{}", i))
-                    .collect();
-                for (i, name) in names.iter().enumerate() {
-                    let placeholder = format!("${}", i);
-                    format_str = format_str.replace(&placeholder, &format!("{{{}}}", name));
-                }
-                let field_pattern = format!("({})", names.join(", "));
-                (names, field_pattern)
-            }
-            Fields::Unit => (vec![], "".to_string()),
+                    .map(|field| field.ident.as_ref().unwrap().clone())
+                    .collect(),
+                true,
+            ),
+            Fields::Unnamed(f) => (
+                (0..f.unnamed.len())
+                    .map(|i| syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site()))
+                    .collect(),
+                false,
+            ),
+            Fields::Unit => (vec![], true),
+        };
+        let field_types: Vec<_> = match &variant.fields {
+            Fields::Named(f) => f.named.iter().map(|field| &field.ty).collect(),
+            Fields::Unnamed(f) => f.unnamed.iter().map(|field| &field.ty).collect(),
+            Fields::Unit => vec![],
+        };
+        let field_pattern = if fields_are_named {
+            quote! { { #( #field_idents ),* } }
+        } else {
+            quote! { ( #( #field_idents ),* ) }
         };
 
-        // let format_args = field_names.join(", ");
-        match_arms.push_str(&format!(
-            "            Self::{}{} => write!(f, \"{}\"),\n",
-            variant_name, field_pattern, format_str
-        ));
-    }
+        let mut write_ops = Vec::new();
+        let mut last_end = 0;
+        let placeholder_re = regex::Regex::new(r"\$\w+").unwrap();
 
-    format!(
-        "// This file is @generated by build.rs. Do not edit manually.\n\
-         use std::fmt;\n\
-         use crate::lowering::lowerer::*;
-         use crate::lowering::instr::*;\n\n\
-         impl fmt::Display for Instr {{\n\
-         \tfn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {{\n\
-         \t\tmatch self {{\n\
-         {}\
-         \t\t}}\n\
-         \t}}\n\
-         }}",
-        match_arms
-    )
+        for mat in placeholder_re.find_iter(&format_str) {
+            if mat.start() > last_end {
+                let literal = &format_str[last_end..mat.start()];
+                write_ops.push(quote! { write!(f, #literal)?; });
+            }
+
+            let placeholder_name = &mat.as_str()[1..];
+            let (field_idx, field_ident) = if let Ok(idx) = placeholder_name.parse::<usize>() {
+                (idx, &field_idents[idx])
+            } else {
+                field_idents
+                    .iter()
+                    .enumerate()
+                    .find(|(_, ident)| ident.to_string() == placeholder_name)
+                    .map(|(i, ident)| (i, ident))
+                    .expect(&format!(
+                        "Named placeholder '{}' not found in variant '{}'",
+                        placeholder_name, variant_ident
+                    ))
+            };
+
+            let field_ty = field_types[field_idx];
+
+            if get_option_inner_type(field_ty).is_some() {
+                write_ops.push(quote! {
+                   if let Some(val) = &#field_ident {
+                       write!(f, "{}", val)?;
+                   }
+                });
+            } else {
+                write_ops.push(quote! { write!(f, "{}", #field_ident)?; });
+            }
+            last_end = mat.end();
+        }
+
+        if last_end < format_str.len() {
+            let literal = &format_str[last_end..];
+            write_ops.push(quote! { write!(f, #literal)?; });
+        }
+
+        quote! {
+            Self::#variant_ident #field_pattern => {
+                #( #write_ops )*
+                Ok(())
+            }
+        }
+    });
+
+    quote! {
+        use std::fmt;
+        use crate::lowering::lowerer::*;
+        use crate::lowering::instr::*;
+
+        impl fmt::Display for Instr {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    #( #match_arms ),*
+                }
+            }
+        }
+    }
 }
 
-fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> String {
-    let mut parser_arms = String::new();
-    let placeholder_re = regex::Regex::new(r"\$([a-zA-Z0-9_]+)").unwrap();
+fn regex_for_type(ty: &Type) -> &'static str {
+    let type_str = ty.to_token_stream().to_string();
+    match type_str.as_str() {
+        "Register" => r"(%\d+)",
+        "i64" | "u16" => r"(-?\d+)",
+        "f64" => r"(-?\d+\.\d+)",
+        "bool" => r"(true|false)",
+        "BasicBlockID" => r"(#\d+|entry)",
+        "RegisterList" => r"((?:%\d+(?:,\s*%\d+)*)?)",
 
-    for variant in &instr_enum.variants {
-        let variant_name = &variant.ident;
-        let format_str = get_doc_attr(&variant.attrs).unwrap();
+        // FIX: Use a specific regex for types that start with '@'
+        "RefKind" | "FuncName" => r"(@\S+)",
+
+        // FIX: Use a non-greedy "match anything" for IRType. This works because
+        // the following patterns (like RefKind or Register) are specific enough
+        // to stop this one from consuming the whole line.
+        "IRType" => r"(.*?)",
+
+        "String" => r"(\S+)",
+        "PhiPredecessors" => r"(\[.*?\])",
+        "RetVal" => r"(.+)",
+        _ => r"(\S+)", // Default fallback
+    }
+}
+// In build.rs
+fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
+    let parser_arms = instr_enum.variants.iter().map(|variant| {
+        let variant_ident = &variant.ident;
+        let format_str = get_doc_attr(&variant.attrs).expect("Missing doc format string");
+
+        let placeholder_re = regex::Regex::new(r"\$([a-zA-Z0-9_]+)").unwrap();
+
+        let field_map: HashMap<String, &Type> = match &variant.fields {
+            Fields::Named(f) => f.named.iter().map(|field| (field.ident.as_ref().unwrap().to_string(), &field.ty)).collect(),
+            Fields::Unnamed(f) => f.unnamed.iter().enumerate().map(|(i, field)| (i.to_string(), &field.ty)).collect(),
+            Fields::Unit => HashMap::new(),
+        };
 
         let mut regex_str = String::from(r"^\s*");
         let mut last_end = 0;
-        let mut captures = vec![];
+        let mut placeholder_to_idx: HashMap<String, usize> = HashMap::new();
+        let mut cap_idx: usize = 1;
 
         for mat in placeholder_re.find_iter(&format_str) {
-            regex_str.push_str(&regex::escape(&format_str[last_end..mat.start()]));
-            // Use non-greedy capture for everything.
-            // Be aware that complex arguments with spaces might need better handling
-            // in their FromStr impls or more specific regexes here.
-            regex_str.push_str(r"\s*([^(]+?)\s*");
+            let literal_part = &format_str[last_end..mat.start()];
+            let placeholder_name = mat.as_str()[1..].to_string();
+
+            let field_type = field_map.get(&placeholder_name)
+                .unwrap_or_else(|| panic!("Placeholder ${} has no corresponding field in variant {}", placeholder_name, variant_ident));
+
+            if let Some(inner_ty) = get_option_inner_type(field_type) {
+                let group = format!("{}{}", regex::escape(literal_part), regex_for_type(inner_ty));
+                regex_str.push_str(&format!("(?:{})?", group));
+            } else {
+                regex_str.push_str(&regex::escape(literal_part));
+                regex_str.push_str(regex_for_type(field_type));
+            }
+
+            // FIX: This is the logic that correctly populates the map.
+            // The stray `cap_idx_counter` is removed.
+            placeholder_to_idx.insert(placeholder_name.clone(), cap_idx);
+            cap_idx += 1;
             last_end = mat.end();
-            captures.push(mat.as_str()[1..].to_string());
         }
         regex_str.push_str(&regex::escape(&format_str[last_end..]));
-        regex_str.push_str(r"\s*;?\s*$"); // Optional semicolon at the end
+        regex_str.push_str(r"\s*;?\s*$");
 
-        let mut parsers = String::new();
-        let mut constructor_args = String::new();
-        use syn::__private::ToTokens;
-
-        match &variant.fields {
+        let (constructor, parsers) = match &variant.fields {
             Fields::Named(fields) => {
-                let mut args = vec![];
-                for (i, cap_name) in captures.iter().enumerate() {
-                    let field = fields
-                        .named
-                        .iter()
-                        .find(|f| f.ident.as_ref().unwrap() == cap_name)
-                        .unwrap();
-                    let ty_str = field.ty.to_token_stream().to_string();
-                    parsers.push_str(&format!(
-                        "let {name} = caps.get({idx}).unwrap().as_str().trim().parse::<{ty}>().map_err(|e| e.to_string())?;\n",
-                        name = cap_name,
-                        idx = i + 1,
-                        ty = ty_str
-                    ));
-                    args.push(cap_name.clone());
-                }
-                constructor_args = format!("{{ {} }}", args.join(", "));
-            }
+                let field_parsers = fields.named.iter().map(|field| {
+                    let field_ident = field.ident.as_ref().unwrap();
+                    let field_ty = &field.ty;
+                    let cap_idx = placeholder_to_idx.get(&field_ident.to_string()).unwrap();
+
+                    if let Some(inner_ty) = get_option_inner_type(field_ty) {
+                        quote! {
+                            let #field_ident: #field_ty = caps.get(#cap_idx)
+                                .and_then(|m| m.as_str().trim().parse::<#inner_ty>().ok());
+                        }
+                    } else {
+                        quote! {
+                            let #field_ident: #field_ty = caps.get(#cap_idx).unwrap().as_str().trim().parse()
+                                .map_err(|e: <#field_ty as FromStr>::Err| format!("Could not parse '{}' from capture '{}': {}", stringify!(#field_ident), caps.get(#cap_idx).unwrap().as_str(), e.to_string()))?;
+                        }
+                    }
+                });
+                let field_names = fields.named.iter().map(|f| f.ident.as_ref().unwrap());
+                (quote! { { #( #field_names ),* } }, quote! { #( #field_parsers )* })
+            },
             Fields::Unnamed(fields) => {
-                let mut args = vec![];
-                for (i, field) in fields.unnamed.iter().enumerate() {
-                    let ty_str = field.ty.to_token_stream().to_string();
-                    parsers.push_str(&format!(
-                        "let v{i} = caps.get({idx}).unwrap().as_str().trim().parse::<{ty}>().map_err(|e| e.to_string())?;\n",
-                        i = i,
-                        idx = i + 1,
-                        ty = ty_str
-                    ));
-                    args.push(format!("v{}", i));
-                }
-                constructor_args = format!("({})", args.join(", "));
+                let var_parsers = fields.unnamed.iter().enumerate().map(|(i, field)| {
+                    let var_name = syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site());
+                    let field_ty = &field.ty;
+                    let cap_idx = placeholder_to_idx.get(&i.to_string()).unwrap();
+
+                    if let Some(inner_ty) = get_option_inner_type(field_ty) {
+                        quote! {
+                            let #var_name: #field_ty = caps.get(#cap_idx)
+                                .and_then(|m| m.as_str().trim().parse::<#inner_ty>().ok());
+                        }
+                    } else {
+                        quote! {
+                            let #var_name: #field_ty = caps.get(#cap_idx).unwrap().as_str().trim().parse()
+                                .map_err(|e: <#field_ty as FromStr>::Err| format!("Could not parse argument {} from capture '{}': {}", #i, caps.get(#cap_idx).unwrap().as_str(), e.to_string()))?;
+                        }
+                    }
+                });
+                let var_names = (0..fields.unnamed.len()).map(|i| syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site()));
+                (quote! { ( #( #var_names ),* ) }, quote! { #( #var_parsers )* })
+            },
+            Fields::Unit => (quote! {}, quote! {}),
+        };
+
+        quote! {
+            let re = regex::Regex::new(#regex_str).unwrap();
+            if let Some(caps) = re.captures(s) {
+                #parsers
+                return Ok(Self::#variant_ident #constructor);
             }
-            Fields::Unit => {}
         }
+    });
 
-        parser_arms.push_str(&format!(
-            "let re = regex::Regex::new(r#\"{}\"#).unwrap();\n\
-             if let Some(caps) = re.captures(s) {{\n\
-             log::trace!(\"regex parsing: {{:?}}\", caps);\n\
-             \t{}\
-             \treturn Ok(Self::{}{});\n\
-             }}\n",
-            regex_str, parsers, variant_name, constructor_args
-        ));
+    quote! {
+        use std::str::FromStr;
+        use std::string::ToString;
+        use regex::Regex;
+
+        impl FromStr for Instr {
+            type Err = String;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                use crate::lowering::instr::*;
+                use crate::lowering::lowerer::*;
+
+                #( #parser_arms )*
+
+                Err(format!("Could not parse '{}' as an instruction.", s))
+            }
+        }
     }
-
-    format!(
-        "
-    use std::str::FromStr;
-    use regex::Regex;
-
-    impl FromStr for Instr {{
-        type Err = String;
-
-        fn from_str(s: &str) -> Result<Self, Self::Err> {{
-            use crate::lowering::instr::*;
-            use std::string::ToString;
-            {}
-            Err(format!(\"Could not parse instruction: '{{}}'\", s))
-        }}
-    }}
-    ",
-        parser_arms
-    )
 }

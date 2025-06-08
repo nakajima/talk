@@ -530,6 +530,7 @@ dependencies = [
  "lazy_static",
  "log",
  "prettydiff",
+ "proc-macro2",
  "quote",
  "regex",
  "syn 1.0.109",

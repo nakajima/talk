@@ -1,5 +1,5 @@
 use crate::lowering::lowerer::{
-    BasicBlockID, IRType, PhiPredecessors, RefKind, Register, RegisterList, RetVal,
+    BasicBlockID, IRType, PhiPredecessors, RefKind, Register, RegisterList,
 };
 
 // Newtypes for complex arguments to make formatting unambiguous
@@ -62,9 +62,9 @@ pub enum Instr {
     #[doc = "$dest_reg = call $ty $callee($args);"]
     Call {
         dest_reg: Register,
+        ty: IRType,
         callee: FuncName,
         args: RegisterList,
-        ty: IRType,
     },
 
     #[doc = "$0 = gettagof $1;"]
@@ -88,8 +88,8 @@ pub enum Instr {
     ),
 
     // Flow control
-    #[doc = "ret $0;"]
-    Ret(RetVal),
+    #[doc = "ret $0 $1;"]
+    Ret(IRType, Option<Register>),
 
     #[doc = "jump $0;"]
     Jump(BasicBlockID),

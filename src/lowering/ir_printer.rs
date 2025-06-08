@@ -78,7 +78,7 @@ fn print_func_sig_with_args(args: &[IRType], ret: &IRType) -> String {
         res.push_str(&format!(
             "{} {}",
             &format_ir_ty(arg),
-            &format_register(&Register(i as u32))
+            &format_register(&Register(i as i32))
         ));
     }
 

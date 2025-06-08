@@ -20,7 +20,7 @@ use crate::{
 pub enum IRError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
-pub struct Register(pub u32);
+pub struct Register(pub i32);
 impl FromStr for Register {
     type Err = ParseIntError;
 
@@ -45,8 +45,17 @@ pub enum RefKind {
 impl FromStr for RefKind {
     type Err = ParserError;
 
-    fn from_str(_s: &str) -> Result<Self, Self::Err> {
-        todo!()
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // The string representation of a RefKind::Func is just the function name,
+        // which starts with '@'.
+        if s.starts_with('@') {
+            Ok(RefKind::Func(s.to_string()))
+        } else {
+            Err(ParserError::UnexpectedToken(
+                vec![],
+                crate::lowering::parser::lexer::Tokind::Identifier(s.to_string()),
+            ))
+        }
     }
 }
 
@@ -105,23 +114,43 @@ impl FromStr for IRType {
     type Err = ParserError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let cleaned = s.replace(",", "");
-        let mut parts = cleaned.split_whitespace();
-        let Some(part) = parts.next() else {
-            return Err(ParserError::UnexpectedEOF);
-        };
-        match part.chars().peekable().peek() {
-            Some(ch) => match ch {
-                'v' => return Ok(IRType::Void),
-                'i' => return Ok(IRType::Int),
-                'f' => return Ok(IRType::Int),
-                'b' => return Ok(IRType::Bool),
-                '(' => return Ok(IRType::Func(vec![], IRType::Void.into())),
-                'T' => return Ok(IRType::TypeVar("T".into())),
-                't' => return Ok(IRType::Enum(vec![])),
-                _ => panic!("i dont understand: {:?}", s),
-            },
-            _ => panic!("i really dont understand: {:?}", s),
+        let s = s.trim();
+
+        // Handle function types like "(int, float) int"
+        if s.starts_with('(') {
+            let Some(end_of_args) = s.rfind(')') else {
+                return Err(ParserError::UnexpectedEOF);
+            };
+
+            // Split into argument part and return type part
+            let (args_str, ret_str) = s.split_at(end_of_args + 1);
+
+            // Recursively parse arguments inside the parentheses
+            let args_inner = &args_str[1..args_str.len() - 1];
+            let mut args = vec![];
+            if !args_inner.is_empty() {
+                for arg_part in args_inner.split(',') {
+                    args.push(IRType::from_str(arg_part.trim())?);
+                }
+            }
+
+            // Recursively parse the return type
+            let ret_ty = IRType::from_str(ret_str.trim())?;
+            Ok(IRType::Func(args, Box::new(ret_ty)))
+        } else {
+            // Handle simple, non-function types
+            match s {
+                "void" => Ok(IRType::Void),
+                "int" => Ok(IRType::Int),
+                "float" => Ok(IRType::Float),
+                "bool" => Ok(IRType::Bool),
+                "enum" => Ok(IRType::Enum(vec![])), // Basic enum
+                _ if s.starts_with('T') => Ok(IRType::TypeVar(s.to_string())),
+                _ => Err(ParserError::UnexpectedToken(
+                    vec![],
+                    crate::lowering::parser::lexer::Tokind::Identifier(s.to_string()),
+                )),
+            }
         }
     }
 }
@@ -168,7 +197,11 @@ impl FromStr for BasicBlockID {
     type Err = ParserError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(BasicBlockID(str::parse(&s[1..]).unwrap()))
+        if s == "entry" {
+            Ok(BasicBlockID(0))
+        } else {
+            Ok(BasicBlockID(str::parse(&s[1..]).unwrap()))
+        }
     }
 }
 
@@ -196,14 +229,14 @@ pub struct PhiPredecessors(pub Vec<(Register, BasicBlockID)>);
 
 impl std::fmt::Display for PhiPredecessors {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("{")?;
+        f.write_str("[")?;
         for (i, (reg, id)) in self.0.iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{reg}: {id}")?;
+            write!(f, "{id}: {reg}")?;
         }
-        f.write_str("}")?;
+        f.write_str("]")?;
         Ok(())
     }
 }
@@ -211,91 +244,32 @@ impl std::fmt::Display for PhiPredecessors {
 impl FromStr for PhiPredecessors {
     type Err = ParserError;
 
-    fn from_str(_s: &str) -> Result<Self, Self::Err> {
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RetVal(pub Option<(IRType, Register)>);
-
-impl FromStr for RetVal {
-    type Err = ParserError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut chars = s.trim().chars().peekable();
-        let ty = match chars.next() {
-            Some(ch) => match ch {
-                '(' => {
-                    let mut types = vec![];
+        let inner = s
+            .trim()
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .ok_or(ParserError::UnexpectedEOF)?;
 
-                    while let Some(ty) = parse_type_from_chars(&mut chars)? {
-                        types.push(ty);
-                        match chars.peek() {
-                            Some(ch) => match ch {
-                                ',' => break,
-                                ')' => break,
-                                _ => (),
-                            },
-                            None => break,
-                        }
-                    }
-
-                    let ret = parse_type_from_chars(&mut chars)?;
-
-                    IRType::Func(types, ret.unwrap().into())
-                }
-                'v' => {
-                    chars.next(); // o
-                    chars.next(); // i
-                    chars.next(); // d
-                    IRType::Void
-                }
-                'i' => {
-                    chars.next(); // n
-                    chars.next(); // t
-                    IRType::Int
-                }
-                'f' => {
-                    chars.next(); // l
-                    chars.next(); // o
-                    chars.next(); // a
-                    chars.next(); // t
-                    IRType::Float
-                }
-                'b' => {
-                    chars.next(); // o
-                    chars.next(); // o
-                    chars.next(); // l
-                    IRType::Bool
-                }
-                'T' => {
-                    let mut ty = vec!['T'];
-                    while let Some(ch) = chars.next() {
-                        if ch.is_numeric() { ty.push(ch) } else { break }
-                    }
-                    IRType::TypeVar(ty.iter().collect::<String>())
-                }
-                _ => panic!("nope"),
-            },
-            _ => panic!("nope"),
-        };
-
-        let reg = Register::from_str(&chars.collect::<String>().trim()).unwrap();
-
-        Ok(RetVal(Some((ty, reg))))
-    }
-}
-
-impl std::fmt::Display for RetVal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some((ty, reg)) = &self.0 {
-            write!(f, "{ty} {reg}")?;
-        } else {
-            write!(f, "void")?;
+        if inner.trim().is_empty() {
+            return Ok(PhiPredecessors(vec![]));
         }
 
-        Ok(())
+        inner
+            .split(',')
+            .map(|pair_str| {
+                let mut parts = pair_str.trim().splitn(2, ':');
+
+                let bb_str = parts.next().ok_or(ParserError::UnexpectedEOF)?.trim();
+                let reg_str = parts.next().ok_or(ParserError::UnexpectedEOF)?.trim();
+
+                let bb = bb_str.parse::<BasicBlockID>()?;
+                let reg = reg_str.parse::<Register>().map_err(ParserError::from)?;
+
+                Ok((reg, bb))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(PhiPredecessors)
     }
 }
 
@@ -320,34 +294,24 @@ impl std::fmt::Display for RegisterList {
     }
 }
 
+// Replace the old implementation with this one.
 impl FromStr for RegisterList {
     type Err = ParserError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut chars = s.chars().peekable();
-        println!("RegisterList from {:?}", s);
-        let mut args = vec![];
-        while chars.next() != Some(')') {
-            let _ = (&mut chars).skip_while(|c| c.is_whitespace());
-
-            chars
-                .next_if_eq(&'%')
-                .unwrap_or_else(|| panic!("didn't get percent"));
-
-            let mut num = String::new();
-            while let Some(ch) = chars.next_if(|c| c.is_numeric()) {
-                num.push(ch);
-            }
-
-            args.push(Register(str::parse(&num).unwrap()));
-
-            let _ = (&mut chars).skip_while(|c| c.is_whitespace());
-            if chars.peek() != Some(&',') {
-                break;
-            }
+        // The input 's' is the content *between* the parentheses, e.g., "%1, %2" or "".
+        let s = s.trim();
+        if s.is_empty() {
+            // Correctly handle the case of zero arguments.
+            return Ok(RegisterList(vec![]));
         }
 
-        Ok(RegisterList(args))
+        // For non-empty arguments, split by comma and parse each part.
+        s.split(',')
+            .map(|part| part.trim().parse::<Register>())
+            .collect::<Result<Vec<Register>, _>>()
+            .map(RegisterList)
+            .map_err(|e| e.into())
     }
 }
 
@@ -443,7 +407,7 @@ impl IRFunction {
 
 #[derive(Debug, Clone, PartialEq)]
 struct RegisterAllocator {
-    next_id: u32,
+    next_id: i32,
 }
 
 impl RegisterAllocator {
@@ -554,13 +518,14 @@ impl Lowerer {
         for (i, id) in body_exprs.iter().enumerate() {
             let ret = if let Some(reg) = self.lower_expr(id) {
                 let ty = self.source_file.typed_expr(id).unwrap().ty.to_ir();
-                Some((ty, reg))
+                (ty, Some(reg))
             } else {
-                None
+                (IRType::Void, None)
             };
 
             if i == body_exprs.len() - 1 {
-                self.current_block_mut().push_instr(Instr::Ret(RetVal(ret)));
+                self.current_block_mut()
+                    .push_instr(Instr::Ret(ret.0, ret.1));
             }
         }
 
@@ -927,11 +892,11 @@ impl Lowerer {
         if let Some(rhs) = rhs {
             let register = self.lower_expr(rhs)?;
             self.current_block_mut()
-                .push_instr(Instr::Ret(RetVal(Some((typed_expr.ty.to_ir(), register)))));
+                .push_instr(Instr::Ret(typed_expr.ty.to_ir(), Some(register)));
             Some(register)
         } else {
             self.current_block_mut()
-                .push_instr(Instr::Ret(RetVal(None)));
+                .push_instr(Instr::Ret(IRType::Void, None));
             None
         }
     }
@@ -1264,7 +1229,7 @@ mod tests {
             ir_printer::print,
             lowerer::{
                 BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
-                PhiPredecessors, RefKind, Register, RegisterList, RetVal,
+                PhiPredecessors, RefKind, Register, RegisterList,
             },
         },
     };
@@ -1309,7 +1274,7 @@ mod tests {
                         id: BasicBlockID(0),
                         instructions: vec![
                             Instr::ConstantInt(Register(0), 123),
-                            Instr::Ret(RetVal(Some((IRType::Int, Register(0)))))
+                            Instr::Ret(IRType::Int, Some(Register(0)))
                         ],
                     }]
                 },
@@ -1324,10 +1289,7 @@ mod tests {
                                 IRType::Func(vec![], IRType::Int.into()),
                                 RefKind::Func("@_5_foo".into()),
                             ),
-                            Instr::Ret(RetVal(Some((
-                                IRType::Func(vec![], IRType::Int.into()),
-                                Register(0)
-                            ))))
+                            Instr::Ret(IRType::Func(vec![], IRType::Int.into()), Some(Register(0)))
                         ],
                     }]
                 },
@@ -1356,9 +1318,9 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
-                            Instr::Ret(RetVal(Some((IRType::Int, Register(0))))),
+                            Instr::Ret(IRType::Int, Some(Register(0))),
                             Instr::ConstantInt(Register(1), 123),
-                            Instr::Ret(RetVal(Some((IRType::Int, Register(1))))),
+                            Instr::Ret(IRType::Int, Some(Register(1))),
                         ],
                     }]
                 },
@@ -1373,10 +1335,10 @@ mod tests {
                                 IRType::Func(vec![IRType::Int], IRType::Int.into()),
                                 RefKind::Func("@_5_foo".into())
                             ),
-                            Instr::Ret(RetVal(Some((
+                            Instr::Ret(
                                 IRType::Func(vec![IRType::Int], IRType::Int.into()),
-                                Register(0)
-                            ))))
+                                Some(Register(0))
+                            )
                         ],
                     }]
                 },
@@ -1398,10 +1360,10 @@ mod tests {
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        instructions: vec![Instr::Ret(RetVal(Some((
+                        instructions: vec![Instr::Ret(
                             IRType::TypeVar("T3".into()),
-                            Register(0)
-                        ))))],
+                            Some(Register(0))
+                        )],
                     }]
                 },
                 IRFunction {
@@ -1425,7 +1387,7 @@ mod tests {
                                 callee: FuncName("@_5_foo".into()),
                                 args: vec![Register(1)].into()
                             },
-                            Instr::Ret(RetVal(Some((IRType::Int, Register(2)))))
+                            Instr::Ret(IRType::Int, Some(Register(2)))
                         ],
                     }]
                 },
@@ -1447,10 +1409,10 @@ mod tests {
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        instructions: vec![Instr::Ret(RetVal(Some((
+                        instructions: vec![Instr::Ret(
                             IRType::TypeVar("T3".into()),
-                            Register(0)
-                        ))))],
+                            Some(Register(0))
+                        )],
                     }]
                 },
                 IRFunction {
@@ -1467,13 +1429,13 @@ mod tests {
                                 ),
                                 RefKind::Func("@_5_foo".into())
                             ),
-                            Instr::Ret(RetVal(Some((
+                            Instr::Ret(
                                 IRType::Func(
                                     vec![IRType::TypeVar("T3".into())],
                                     IRType::TypeVar("T3".into()).into()
                                 ),
-                                Register(0)
-                            ))))
+                                Some(Register(0))
+                            )
                         ],
                     }]
                 },
@@ -1493,7 +1455,7 @@ mod tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 123),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(0)))))
+                        Instr::Ret(IRType::Int, Some(Register(0)))
                     ],
                 }]
             }]
@@ -1512,7 +1474,7 @@ mod tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::ConstantFloat(Register(0), 123.),
-                        Instr::Ret(RetVal(Some((IRType::Float, Register(0)))))
+                        Instr::Ret(IRType::Float, Some(Register(0)))
                     ],
                 }]
             }]
@@ -1532,7 +1494,7 @@ mod tests {
                     instructions: vec![
                         Instr::ConstantBool(Register(0), true),
                         Instr::ConstantBool(Register(1), false),
-                        Instr::Ret(RetVal(Some((IRType::Bool, Register(1))))),
+                        Instr::Ret(IRType::Bool, Some(Register(1))),
                     ],
                 }]
             }]
@@ -1553,7 +1515,7 @@ mod tests {
                         Instr::ConstantInt(Register(0), 1),
                         Instr::ConstantInt(Register(1), 2),
                         Instr::Add(Register(2), IRType::Int, Register(0), Register(1)),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(2)))))
+                        Instr::Ret(IRType::Int, Some(Register(2)))
                     ],
                 }]
             }]
@@ -1574,7 +1536,7 @@ mod tests {
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
                         Instr::Sub(Register(2), IRType::Int, Register(0), Register(1)),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(2)))))
+                        Instr::Ret(IRType::Int, Some(Register(2)))
                     ],
                 }]
             }]
@@ -1595,7 +1557,7 @@ mod tests {
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
                         Instr::Mul(Register(2), IRType::Int, Register(0), Register(1)),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(2)))))
+                        Instr::Ret(IRType::Int, Some(Register(2)))
                     ],
                 }]
             }]
@@ -1616,7 +1578,7 @@ mod tests {
                         Instr::ConstantInt(Register(0), 2),
                         Instr::ConstantInt(Register(1), 1),
                         Instr::Div(Register(2), IRType::Int, Register(0), Register(1)),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(2)))))
+                        Instr::Ret(IRType::Int, Some(Register(2)))
                     ],
                 }]
             }]
@@ -1635,7 +1597,7 @@ mod tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::ConstantInt(Register(0), 123),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(0))))),
+                        Instr::Ret(IRType::Int, Some(Register(0))),
                     ],
                 }]
             }]
@@ -1692,7 +1654,7 @@ mod tests {
                             ]),
                         ),
                         Instr::ConstantInt(Register(4), 789),
-                        Instr::Ret(RetVal(Some((IRType::Int, Register(4))))),
+                        Instr::Ret(IRType::Int, Some(Register(4))),
                     ],
                 },
             ],
@@ -1720,7 +1682,7 @@ mod tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::TagVariant(Register(0), IRType::Enum(vec![]), 1, vec![].into()),
-                        Instr::Ret(RetVal(Some((IRType::Enum(vec![]), Register(0)))))
+                        Instr::Ret(IRType::Enum(vec![]), Some(Register(0)))
                     ],
                 }]
             }]
@@ -1745,7 +1707,7 @@ mod tests {
                             0,
                             RegisterList(vec![Register(0)])
                         ),
-                        Instr::Ret(RetVal(Some((IRType::Enum(vec![IRType::Int]), Register(1)))))
+                        Instr::Ret(IRType::Enum(vec![IRType::Int]), Some(Register(1)))
                     ],
                 }]
             }]
@@ -1797,7 +1759,7 @@ mod tests {
                                     (Register(6), BasicBlockID(3))
                                 ])
                             ),
-                            Instr::Ret(RetVal(Some((IRType::Float, Register(7)))))
+                            Instr::Ret(IRType::Float, Some(Register(7)))
                         ]
                     },
                     BasicBlock {
@@ -1873,7 +1835,7 @@ mod tests {
                                     (Register(9), BasicBlockID(3)), // from .none arm
                                 ])
                             ),
-                            Instr::Ret(RetVal(Some((IRType::Int, Register(10))))),
+                            Instr::Ret(IRType::Int, Some(Register(10))),
                         ]
                     },
                     // Block 2: Body for .some(x) -> x
@@ -1951,7 +1913,7 @@ mod tests {
                                     (Register(8), BasicBlockID(3))
                                 ])
                             ),
-                            Instr::Ret(RetVal(Some((IRType::Int, Register(9)))))
+                            Instr::Ret(IRType::Int, Some(Register(9)))
                         ]
                     },
                     BasicBlock {
