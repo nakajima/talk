@@ -167,7 +167,6 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
 
     quote! {
         use std::fmt;
-        use crate::lowering::lowerer::*;
         use crate::lowering::instr::*;
 
         impl fmt::Display for Instr {
@@ -295,6 +294,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
 
         quote! {
             let re = regex::Regex::new(#regex_str).unwrap();
+            #[allow(unused)]
             if let Some(caps) = re.captures(s) {
                 #parsers
                 return Ok(Self::#variant_ident #constructor);
@@ -305,7 +305,6 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
     quote! {
         use std::str::FromStr;
         use std::string::ToString;
-        use regex::Regex;
 
         impl FromStr for Instr {
             type Err = String;

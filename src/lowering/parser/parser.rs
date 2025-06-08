@@ -15,6 +15,7 @@ use crate::lowering::{
 pub enum ParserError {
     UnexpectedToken(Vec<Tokind>, Tokind),
     UnexpectedEOF,
+    Instruction(String),
 }
 
 impl From<ParseIntError> for ParserError {
@@ -240,9 +241,10 @@ impl<'a> Parser<'a> {
             .trim()
             .parse::<Instr>()
             .map_err(|e| {
-                panic!("Failed to parse instruction: '{}', error: {}", line_str, e);
-                // You would ideally have a more specific error here.
-                ParserError::UnexpectedEOF
+                ParserError::Instruction(format!(
+                    "Failed to parse instruction: '{}', error: {}",
+                    line_str, e
+                ))
             })
             .map(|i| Some(i))
     }

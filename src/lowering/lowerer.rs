@@ -6,7 +6,7 @@ use crate::{
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::{FuncName, Instr},
-        parser::parser::{ParserError, parse_type_from_chars},
+        parser::parser::ParserError,
     },
     name::Name,
     parser::ExprID,
