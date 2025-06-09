@@ -205,15 +205,31 @@ fn regex_for_type(ty: &Type) -> &'static str {
 }
 // In build.rs
 fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
-    let parser_arms = instr_enum.variants.iter().map(|variant| {
-        let variant_ident = &variant.ident;
-        let format_str = get_doc_attr(&variant.attrs).expect("Missing doc format string");
+    let mut static_regexes = Vec::new();
+    let mut parser_arms = Vec::new();
 
+    for variant in &instr_enum.variants {
+        let variant_ident = &variant.ident;
+        let static_re_ident = syn::Ident::new(
+            &format!("RE_{}", variant_ident.to_string().to_uppercase()),
+            proc_macro2::Span::call_site(),
+        );
+
+        let format_str = get_doc_attr(&variant.attrs).expect("Missing doc format string");
         let placeholder_re = regex::Regex::new(r"\$([a-zA-Z0-9_]+)").unwrap();
 
         let field_map: HashMap<String, &Type> = match &variant.fields {
-            Fields::Named(f) => f.named.iter().map(|field| (field.ident.as_ref().unwrap().to_string(), &field.ty)).collect(),
-            Fields::Unnamed(f) => f.unnamed.iter().enumerate().map(|(i, field)| (i.to_string(), &field.ty)).collect(),
+            Fields::Named(f) => f
+                .named
+                .iter()
+                .map(|field| (field.ident.as_ref().unwrap().to_string(), &field.ty))
+                .collect(),
+            Fields::Unnamed(f) => f
+                .unnamed
+                .iter()
+                .enumerate()
+                .map(|(i, field)| (i.to_string(), &field.ty))
+                .collect(),
             Fields::Unit => HashMap::new(),
         };
 
@@ -226,25 +242,39 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             let literal_part = &format_str[last_end..mat.start()];
             let placeholder_name = mat.as_str()[1..].to_string();
 
-            let field_type = field_map.get(&placeholder_name)
-                .unwrap_or_else(|| panic!("Placeholder ${} has no corresponding field in variant {}", placeholder_name, variant_ident));
+            let field_type = field_map.get(&placeholder_name).unwrap_or_else(|| {
+                panic!(
+                    "Placeholder ${} has no corresponding field in variant {}",
+                    placeholder_name, variant_ident
+                )
+            });
 
             if let Some(inner_ty) = get_option_inner_type(field_type) {
-                let group = format!("{}{}", regex::escape(literal_part), regex_for_type(inner_ty));
+                let group = format!(
+                    "{}{}",
+                    regex::escape(literal_part),
+                    regex_for_type(inner_ty)
+                );
                 regex_str.push_str(&format!("(?:{})?", group));
             } else {
                 regex_str.push_str(&regex::escape(literal_part));
                 regex_str.push_str(regex_for_type(field_type));
             }
 
-            // FIX: This is the logic that correctly populates the map.
-            // The stray `cap_idx_counter` is removed.
             placeholder_to_idx.insert(placeholder_name.clone(), cap_idx);
             cap_idx += 1;
             last_end = mat.end();
         }
         regex_str.push_str(&regex::escape(&format_str[last_end..]));
         regex_str.push_str(r"\s*;?\s*$");
+
+        static_regexes.push(quote! {
+            static #static_re_ident: Lazy<Regex> = Lazy::new(|| {
+                Regex::new(#regex_str).unwrap_or_else(|e| {
+                    panic!("Failed to compile regex for {}: {}\\nRegex: {}", stringify!(#variant_ident), e, #regex_str);
+                })
+            });
+        });
 
         let (constructor, parsers) = match &variant.fields {
             Fields::Named(fields) => {
@@ -266,8 +296,11 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                     }
                 });
                 let field_names = fields.named.iter().map(|f| f.ident.as_ref().unwrap());
-                (quote! { { #( #field_names ),* } }, quote! { #( #field_parsers )* })
-            },
+                (
+                    quote! { { #( #field_names ),* } },
+                    quote! { #( #field_parsers )* },
+                )
+            }
             Fields::Unnamed(fields) => {
                 let var_parsers = fields.unnamed.iter().enumerate().map(|(i, field)| {
                     let var_name = syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site());
@@ -286,25 +319,32 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                         }
                     }
                 });
-                let var_names = (0..fields.unnamed.len()).map(|i| syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site()));
-                (quote! { ( #( #var_names ),* ) }, quote! { #( #var_parsers )* })
-            },
+                let var_names = (0..fields.unnamed.len())
+                    .map(|i| syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site()));
+                (
+                    quote! { ( #( #var_names ),* ) },
+                    quote! { #( #var_parsers )* },
+                )
+            }
             Fields::Unit => (quote! {}, quote! {}),
         };
 
-        quote! {
-            let re = regex::Regex::new(#regex_str).unwrap();
+        parser_arms.push(quote! {
             #[allow(unused)]
-            if let Some(caps) = re.captures(s) {
+            if let Some(caps) = #static_re_ident.captures(s) {
                 #parsers
                 return Ok(Self::#variant_ident #constructor);
             }
-        }
-    });
+        });
+    }
 
     quote! {
         use std::str::FromStr;
         use std::string::ToString;
+        use once_cell::sync::Lazy;
+        use regex::Regex;
+
+        #(#static_regexes)*
 
         impl FromStr for Instr {
             type Err = String;
@@ -313,7 +353,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                 use crate::lowering::instr::*;
                 use crate::lowering::lowerer::*;
 
-                #( #parser_arms )*
+                #(#parser_arms)*
 
                 Err(format!("Could not parse '{}' as an instruction.", s))
             }
