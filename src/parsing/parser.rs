@@ -554,11 +554,18 @@ impl<'a> Parser<'a> {
 
         self.skip_newlines();
 
-        if self.did_match(TokenKind::LeftParen)? {
+        let var = if self.did_match(TokenKind::LeftParen)? {
             self.skip_newlines();
-            self.call(can_assign, variable)
+            self.call(can_assign, variable)?
         } else {
-            Ok(variable)
+            variable
+        };
+
+        if can_assign && self.did_match(TokenKind::Equals)? {
+            let rhs = self.parse_with_precedence(Precedence::Assignment)?;
+            self.add_expr(Expr::Assignment(var, rhs))
+        } else {
+            Ok(var)
         }
     }
 
@@ -619,8 +626,7 @@ impl<'a> Parser<'a> {
     pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
         log::trace!(
             "Parsing {:?} with precedence: {:?}",
-            self.current,
-            precedence
+            self.current, precedence
         );
         self.skip_newlines();
 
@@ -1559,6 +1565,18 @@ mod tests {
         );
 
         parsed.unwrap();
+    }
+
+    #[test]
+    fn parses_variable_assignment() {
+        let parsed = parse(
+            "
+            foo = 123
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Assignment(0, 1));
     }
 }
 

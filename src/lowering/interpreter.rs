@@ -559,8 +559,8 @@ mod tests {
             Value::Int(3),
             interpret(
                 "
-        func makeCounter() {
-			let mut count = 0
+    func makeCounter() {
+			let count = 0
 
 			return func() {
 				count = count + 1
@@ -570,8 +570,8 @@ mod tests {
 
 		let counter = makeCounter()
 		counter()
-        counter()
-        counter()
+    counter()
+    counter()
         "
             )
             .unwrap()
