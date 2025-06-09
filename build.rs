@@ -130,12 +130,9 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
                 field_idents
                     .iter()
                     .enumerate()
-                    .find(|(_, ident)| ident.to_string() == placeholder_name)
-                    .map(|(i, ident)| (i, ident))
-                    .expect(&format!(
-                        "Named placeholder '{}' not found in variant '{}'",
-                        placeholder_name, variant_ident
-                    ))
+                    .find(|(_, ident)| *ident == placeholder_name)
+                    .unwrap_or_else(|| panic!("Named placeholder '{}' not found in variant '{}'",
+                        placeholder_name, variant_ident))
             };
 
             let field_ty = field_types[field_idx];

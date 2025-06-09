@@ -56,7 +56,7 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
             res.push_str(", ");
         }
 
-        res.push_str(&format!("{}", &format_ir_ty(arg),));
+        res.push_str(&format_ir_ty(arg).to_string());
     }
 
     res.push(')');

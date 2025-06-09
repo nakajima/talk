@@ -77,7 +77,7 @@ impl<'a> ConstraintSolver<'a> {
                             // Look up the enum and find the variant
                             if let Some(_enum_info) = self
                                 .source_file
-                                .type_from_symbol(enum_id, &self.symbol_table)
+                                .type_from_symbol(enum_id, self.symbol_table)
                             {
                                 if let Some(variant_info) = self.find_variant(enum_id, &member_name)
                                 {
@@ -107,7 +107,7 @@ impl<'a> ConstraintSolver<'a> {
                         // This is a valueless constructor like .none
                         if let Some(_enum_info) = self
                             .source_file
-                            .type_from_symbol(enum_id, &self.symbol_table)
+                            .type_from_symbol(enum_id, self.symbol_table)
                         {
                             if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
                                 if variant_info.values.is_empty() {
@@ -133,7 +133,7 @@ impl<'a> ConstraintSolver<'a> {
                         // Look up the enum definition
                         if let Some(enum_info) = self
                             .source_file
-                            .type_from_symbol(enum_id, &self.symbol_table)
+                            .type_from_symbol(enum_id, self.symbol_table)
                         {
                             // Check if this is a variant constructor
                             log::debug!("Enum info: {:?}", enum_info);

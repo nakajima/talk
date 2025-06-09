@@ -438,7 +438,7 @@ impl<'a> Lowerer<'a> {
 
     pub fn lower(mut self, module: &mut IRModule) -> Result<SourceFile<Lowered>, IRError> {
         let (expr_id, did_create) =
-            find_or_create_main(&mut self.source_file, &mut self.symbol_table);
+            find_or_create_main(&mut self.source_file, self.symbol_table);
 
         self.lower_function(&expr_id);
 

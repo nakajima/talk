@@ -32,7 +32,7 @@ impl<Stage> CompilationUnit<Stage> {
             return Ok(self.src_cache.get(path).unwrap());
         }
 
-        let src = std::fs::read_to_string(&path).map_err(CompilationError::IOError)?;
+        let src = std::fs::read_to_string(path).map_err(CompilationError::IOError)?;
         self.src_cache.insert(path.clone(), src);
         Ok(self.src_cache.get(path).expect("src cache bad").as_str())
     }
@@ -60,7 +60,7 @@ impl CompilationUnit<Raw> {
         let mut files = vec![];
         let symbol_table = SymbolTable::default();
         for file in self.input.files.clone() {
-            let file_id = self.input.id(&file).clone();
+            let file_id = self.input.id(&file);
             let source = self.read(&file)?;
             let parsed = parse(source, file_id).map_err(CompilationError::ParserError)?;
             files.push(parsed);

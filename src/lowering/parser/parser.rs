@@ -47,7 +47,7 @@ impl FromStr for FuncName {
 
 pub fn parse_type_from_chars(chars: &mut Peekable<Chars>) -> Result<Option<IRType>, ParserError> {
     let mut arg = vec![];
-    while let Some(ch) = chars.next() {
+    for ch in chars.by_ref() {
         log::trace!("matching: {}", ch);
         match ch {
             ',' => {
@@ -246,7 +246,7 @@ impl<'a> Parser<'a> {
                     line_str, e
                 ))
             })
-            .map(|i| Some(i))
+            .map(Some)
     }
 
     fn register(&mut self) -> Result<Register, ParserError> {

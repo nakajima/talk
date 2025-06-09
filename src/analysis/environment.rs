@@ -67,7 +67,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         let mut env = Self::new();
-        env.import_prelude(&compile_prelude());
+        env.import_prelude(compile_prelude());
         env
     }
 }

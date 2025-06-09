@@ -112,7 +112,7 @@ impl TypeChecker {
         symbol_table: &mut SymbolTable,
         env: &mut Environment,
     ) -> Result<SourceFile<Typed>, TypeError> {
-        env.import_prelude(&compile_prelude());
+        env.import_prelude(compile_prelude());
         self.infer_without_prelude(env, source_file, symbol_table)
     }
 
