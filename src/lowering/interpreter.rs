@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use crate::lowering::{
     instr::Instr,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, RefKind, Register},
+    ir_module::IRModule,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, Register},
 };
 
 #[derive(Debug)]
@@ -24,7 +25,7 @@ struct StackFrame {
 }
 
 pub struct IRInterpreter {
-    program: IRProgram,
+    program: IRModule,
     stack: Vec<StackFrame>,
 }
 
@@ -104,7 +105,7 @@ impl Value {
 }
 
 impl IRInterpreter {
-    pub fn new(program: IRProgram) -> Self {
+    pub fn new(program: IRModule) -> Self {
         Self {
             program,
             stack: vec![],
@@ -387,7 +388,7 @@ mod tests {
         SymbolTable, check,
         lowering::{
             interpreter::{IRInterpreter, InterpreterError, Value},
-            ir_printer::print,
+            ir_module::IRModule,
             lowerer::Lowerer,
         },
     };
@@ -396,11 +397,10 @@ mod tests {
         let typed = check(code).unwrap();
         let mut symbol_table = SymbolTable::default();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        let lowered = lowerer.lower().unwrap();
+        let mut module = IRModule::new();
+        lowerer.lower(&mut module).unwrap();
 
-        println!("{}", print(&lowered));
-
-        IRInterpreter::new(lowered).run()
+        IRInterpreter::new(module).run()
     }
 
     #[test]

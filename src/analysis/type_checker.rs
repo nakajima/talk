@@ -110,32 +110,31 @@ impl TypeChecker {
         &self,
         source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
+        env: &mut Environment,
     ) -> Result<SourceFile<Typed>, TypeError> {
-        let mut env = Environment::new();
-
         env.import_prelude(&compile_prelude());
         self.infer_without_prelude(env, source_file, symbol_table)
     }
 
     pub fn infer_without_prelude(
         &self,
-        mut env: Environment,
+        env: &mut Environment,
         mut source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
     ) -> Result<SourceFile<Typed>, TypeError> {
         let root_ids = source_file.root_ids();
 
-        self.hoist_enums(&root_ids, &mut env, &mut source_file, symbol_table)?;
-        self.hoist_functions(&root_ids, &mut env, &source_file);
+        self.hoist_enums(&root_ids, env, &mut source_file, symbol_table)?;
+        self.hoist_functions(&root_ids, env, &source_file);
 
         let mut typed_roots = vec![];
         for id in &root_ids {
-            self.infer_node(id, &mut env, &None, &source_file)?;
+            self.infer_node(id, env, &None, &source_file)?;
             typed_roots.push(env.typed_exprs.get(id).unwrap().clone())
         }
 
         // Now it's safe to move source_file since env is dropped before this line
-        Ok(source_file.to_typed(typed_roots, env))
+        Ok(source_file.to_typed(typed_roots, env.clone()))
     }
 
     pub fn infer_node(

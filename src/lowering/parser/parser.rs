@@ -7,7 +7,8 @@ use std::{
 
 use crate::lowering::{
     instr::{FuncName, Instr},
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, Register},
+    ir_module::IRModule,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRType, Register},
     parser::lexer::{Lexer, Token, Tokind},
 };
 
@@ -87,7 +88,7 @@ impl<'a> Parser<'a> {
         parser
     }
 
-    fn parse(mut self) -> Result<IRProgram, ParserError> {
+    fn parse(mut self) -> Result<IRModule, ParserError> {
         self.skip_newlines();
         while let Some(current) = self.current.clone() {
             self.skip_newlines();
@@ -102,7 +103,7 @@ impl<'a> Parser<'a> {
             self.skip_newlines();
         }
 
-        Ok(IRProgram {
+        Ok(IRModule {
             functions: self.functions,
         })
     }
@@ -382,7 +383,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(code: &str) -> Result<IRProgram, ParserError> {
+pub fn parse(code: &str) -> Result<IRModule, ParserError> {
     let lexer = Lexer::new(code);
     let parser = Parser::new(lexer);
     parser.parse()
@@ -394,20 +395,20 @@ mod tests {
         SymbolTable, check,
         lowering::{
             instr::{FuncName, Instr},
-            lowerer::{
-                BasicBlockID, IRError, IRProgram, IRType, Lowerer, PhiPredecessors, RefKind,
-                Register,
-            },
+            ir_module::IRModule,
+            lowerer::{BasicBlockID, IRError, IRType, Lowerer, PhiPredecessors, RefKind, Register},
             parser::parser::parse,
         },
     };
     use indoc::formatdoc;
 
-    fn lower(input: &'static str) -> Result<IRProgram, IRError> {
+    fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let typed = check(input).unwrap();
         let mut symbol_table = SymbolTable::default();
+        let mut module = IRModule::new();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        lowerer.lower()
+        lowerer.lower(&mut module)?;
+        Ok(module)
     }
 
     #[test]

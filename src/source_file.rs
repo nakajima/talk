@@ -4,7 +4,6 @@ use crate::{
     FileID, SymbolID, SymbolTable,
     constraint_solver::Constraint,
     environment::{Environment, Scope, TypeDef, TypedExprs},
-    lowering::lowerer::IRFunction,
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
 };
@@ -44,9 +43,7 @@ impl Phase for Typed {
 }
 
 #[derive(Debug, Clone)]
-pub struct LoweredData {
-    pub functions: Vec<IRFunction>,
-}
+pub struct LoweredData {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lowered {}
@@ -168,22 +165,18 @@ impl SourceFile<Typed> {
         self.phase_data.env.direct_callables.get(id).copied()
     }
 
-    pub fn to_lowered(self, functions: Vec<IRFunction>) -> SourceFile<Lowered> {
+    pub fn to_lowered(self) -> SourceFile<Lowered> {
         SourceFile {
             file_id: self.file_id,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: LoweredData { functions },
+            phase_data: LoweredData {},
         }
     }
 }
 
-impl SourceFile<Lowered> {
-    pub fn functions(&self) -> Vec<IRFunction> {
-        self.phase_data.functions.clone()
-    }
-}
+impl SourceFile<Lowered> {}
 
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID

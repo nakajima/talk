@@ -8,6 +8,19 @@ pub struct FileStore {
 }
 
 impl FileStore {
+    pub fn new(files: Vec<PathBuf>) -> Self {
+        let mut store = Self {
+            files: Default::default(),
+            lookup: Default::default(),
+        };
+
+        for file in files {
+            store.add(&file);
+        }
+
+        store
+    }
+
     pub fn add(&mut self, file: &PathBuf) -> FileID {
         if let Some(existing) = self.lookup.get(file) {
             *existing

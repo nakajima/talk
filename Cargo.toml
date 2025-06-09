@@ -23,5 +23,8 @@ ir-macro = { path = "./ir-macro" }
 regex = "1"
 
 [features]
-# default = ["cli"]
+default = ["cli"]
 cli = ["dep:clap"]
+
+[profile.release]
+debug = true

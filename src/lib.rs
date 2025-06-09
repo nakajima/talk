@@ -12,7 +12,7 @@ pub mod analysis;
 pub use analysis::*;
 pub mod parsing;
 pub use parsing::*;
-pub mod driver;
+pub mod compiling;
 pub mod lowering;
 pub mod prelude;
 

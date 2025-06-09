@@ -1,13 +1,8 @@
 #[cfg(feature = "cli")]
 fn main() {
+    use std::path::PathBuf;
+
     use clap::{Parser, Subcommand};
-    use talk::{
-        constraint_solver::ConstraintSolver,
-        lowering::{self, lowerer::IRProgram},
-        name_resolver::NameResolver,
-        parser::parse,
-        type_checker::TypeChecker,
-    };
 
     /// Simple program to greet a person
     #[derive(Parser, Debug)]
@@ -19,50 +14,50 @@ fn main() {
 
     #[derive(Subcommand, Debug)]
     enum Commands {
-        IR { filename: String },
+        IR { filename: PathBuf },
         Parse { filename: String },
-        Run { filename: String },
+        Run { filename: PathBuf },
     }
 
-    env_logger::builder().try_init().is_test(false).unwrap();
+    env_logger::builder().try_init().unwrap();
 
     let cli = Cli::parse();
-
-    fn lower(contents: &str) -> IRProgram {
-        let parsed = parse(&contents).unwrap();
-        let resolved = NameResolver::new().resolve(parsed);
-        let mut inferred = TypeChecker.infer(resolved).unwrap();
-        let mut solver = ConstraintSolver::new(&mut inferred);
-        solver.solve().unwrap();
-
-        lowering::lowerer::Lowerer::new(inferred).lower().unwrap()
-    }
 
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
         Commands::IR { filename } => {
-            use talk::lowering::ir_printer::print;
-            let contents = std::fs::read_to_string(filename).expect("Could not read file");
-            let lowered = lower(&contents);
+            use talk::{compiling::driver::Driver, lowering::ir_printer::print};
+            let driver = Driver::with_files(vec![filename.clone()]);
+            let lowered = driver.lower().unwrap();
 
-            println!("{}", print(&lowered));
-        }
-        Commands::Parse { filename } => {
-            let contents = std::fs::read_to_string(filename).expect("Could not read file");
-            let parsed = parse(&contents).unwrap();
-            for root in parsed.roots() {
-                println!("{:#?}", root);
+            for unit in lowered {
+                println!("{}", print(&unit.stage.module));
             }
         }
+        Commands::Parse {
+            filename: _filename,
+        } => {
+            // let contents = std::fs::read_to_string(filename).expect("Could not read file");
+            // let parsed = parse(&contents).unwrap();
+            // for root in parsed.roots() {
+            //     println!("{:#?}", root);
+            // }
+            todo!()
+        }
         Commands::Run { filename } => {
+            use talk::compiling::driver::Driver;
+            let driver = Driver::with_files(vec![filename.clone()]);
+            let lowered = driver.lower().unwrap();
+
             use talk::lowering::interpreter::IRInterpreter;
 
-            let contents = std::fs::read_to_string(filename).expect("Could not read file");
-            let lowered = lower(&contents);
-            let mut interpreter = IRInterpreter::new(lowered);
-
-            println!("{:?}", interpreter.run())
+            // let contents = std::fs::read_to_string(filename).expect("Could not read file");
+            // let lowered = lower(&contents);
+            for lowered in lowered {
+                let mut interpreter = IRInterpreter::new(lowered.stage.module);
+                println!("{:?}", interpreter.run());
+            }
         }
     }
 }

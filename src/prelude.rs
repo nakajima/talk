@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 
 use crate::{
@@ -16,7 +17,20 @@ pub struct Prelude {
     pub typed_exprs: TypedExprs,
 }
 
-pub fn compile_prelude_for_name_resolver() -> Prelude {
+lazy_static! {
+    static ref PRELUDE_FOR_NAME_RESOLVER: Prelude = _compile_prelude_for_name_resolver();
+    static ref PRELUDE_TYPED: Prelude = _compile_prelude();
+}
+
+pub fn compile_prelude_for_name_resolver() -> &'static Prelude {
+    &PRELUDE_FOR_NAME_RESOLVER
+}
+
+pub fn compile_prelude() -> &'static Prelude {
+    &PRELUDE_TYPED
+}
+
+pub fn _compile_prelude_for_name_resolver() -> Prelude {
     let source = load_stdlib_module("Optional").unwrap();
     let symbol_table = SymbolTable::default();
     let parsed = parse(source, 0).unwrap();
@@ -30,19 +44,18 @@ pub fn compile_prelude_for_name_resolver() -> Prelude {
     }
 }
 
-pub fn compile_prelude() -> Prelude {
+pub fn _compile_prelude() -> Prelude {
     let source = load_stdlib_module("Optional").unwrap();
     let symbol_table = SymbolTable::default();
     let parsed = parse(source, 0).unwrap();
     let (resolved, mut symbol_table) = NameResolver::new(symbol_table).resolve(parsed);
     let checker = TypeChecker;
+    let mut env = Environment::new();
     let mut inferred = checker
-        .infer_without_prelude(Environment::new(), resolved, &mut symbol_table)
+        .infer_without_prelude(&mut env, resolved, &mut symbol_table)
         .unwrap();
     let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
     solver.solve().unwrap();
-
-    println!("Symbol Table: {:#?}", symbol_table);
 
     let (types, schemes, typed_exprs) = inferred.export();
 

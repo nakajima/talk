@@ -1,9 +1,10 @@
 use crate::lowering::{
     instr::Instr,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRProgram, IRType, RefKind, Register},
+    ir_module::IRModule,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRType, RefKind, Register},
 };
 
-pub fn print(program: &IRProgram) -> String {
+pub fn print(program: &IRModule) -> String {
     let mut printer = IRPrinter::default();
     for func in &program.functions {
         print_func(func, &mut printer);
@@ -175,16 +176,19 @@ mod tests {
     use crate::{
         SymbolTable, check,
         lowering::{
+            ir_module::IRModule,
             ir_printer::print,
-            lowerer::{IRError, IRProgram, Lowerer},
+            lowerer::{IRError, Lowerer},
         },
     };
 
-    fn lower(input: &'static str) -> Result<IRProgram, IRError> {
+    fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let typed = check(input).unwrap();
         let mut symbol_table = SymbolTable::default();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        lowerer.lower()
+        let mut module = IRModule::new();
+        lowerer.lower(&mut module)?;
+        Ok(module)
     }
 
     #[test]

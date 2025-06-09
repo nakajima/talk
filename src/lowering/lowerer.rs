@@ -1,11 +1,12 @@
 use std::{collections::HashMap, num::ParseIntError, ops::AddAssign, str::FromStr};
 
 use crate::{
-    SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
+    Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     environment::TypeDef,
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::{FuncName, Instr},
+        ir_module::IRModule,
         parser::parser::ParserError,
     },
     name::Name,
@@ -177,10 +178,6 @@ impl std::fmt::Display for IRType {
             Self::Enum(_generics) => f.write_str("enum"),
         }
     }
-}
-
-pub struct IRProgram {
-    pub functions: Vec<IRFunction>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
@@ -439,7 +436,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    pub fn lower(mut self) -> Result<IRProgram, IRError> {
+    pub fn lower(mut self, module: &mut IRModule) -> Result<SourceFile<Lowered>, IRError> {
         let (expr_id, did_create) =
             find_or_create_main(&mut self.source_file, &mut self.symbol_table);
 
@@ -456,9 +453,11 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        Ok(IRProgram {
-            functions: self.lowered_functions,
-        })
+        for function in self.lowered_functions {
+            module.functions.push(function)
+        }
+
+        Ok(self.source_file.to_lowered())
     }
 
     fn lower_function(&mut self, expr_id: &ExprID) -> SymbolID {
@@ -1229,19 +1228,22 @@ mod tests {
         SymbolTable, check,
         lowering::{
             instr::FuncName,
+            ir_module::IRModule,
             ir_printer::print,
             lowerer::{
-                BasicBlock, BasicBlockID, IRError, IRFunction, IRProgram, IRType, Instr, Lowerer,
+                BasicBlock, BasicBlockID, IRError, IRFunction, IRType, Instr, Lowerer,
                 PhiPredecessors, RefKind, Register, RegisterList,
             },
         },
     };
 
-    fn lower(input: &'static str) -> Result<IRProgram, IRError> {
+    fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let typed = check(input).unwrap();
         let mut symbol_table = SymbolTable::default();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        lowerer.lower()
+        let mut module = IRModule::new();
+        lowerer.lower(&mut module)?;
+        Ok(module)
     }
 
     macro_rules! assert_lowered_functions {
@@ -1249,7 +1251,7 @@ mod tests {
             match (&$left, &$right) {
                 (left_val, right_val) => {
                     if !(*left_val.functions == *right_val) {
-                        let right_program = IRProgram {
+                        let right_program = IRModule {
                             functions: right_val.clone(),
                         };
 
