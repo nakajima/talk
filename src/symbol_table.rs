@@ -2,7 +2,7 @@ use std::{collections::HashMap, i32};
 
 use crate::{
     parser::ExprID,
-    prelude::compile_prelude,
+    prelude::{compile_prelude, compile_prelude_for_name_resolver},
     type_checker::{Scheme, Ty},
 };
 
@@ -14,7 +14,12 @@ impl SymbolID {
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
 
     // Remove the prelude's symbol offset
-    pub fn at(index: i32) -> SymbolID {
+    pub fn resolved(index: i32) -> SymbolID {
+        SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id())
+    }
+
+    // Remove the prelude's symbol offset
+    pub fn typed(index: i32) -> SymbolID {
         SymbolID(index + compile_prelude().symbols.max_id())
     }
 }
