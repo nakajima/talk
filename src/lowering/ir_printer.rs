@@ -173,7 +173,7 @@ mod tests {
     use indoc::formatdoc;
 
     use crate::{
-        check,
+        SymbolTable, check,
         lowering::{
             ir_printer::print,
             lowerer::{IRError, IRProgram, Lowerer},
@@ -182,7 +182,8 @@ mod tests {
 
     fn lower(input: &'static str) -> Result<IRProgram, IRError> {
         let typed = check(input).unwrap();
-        let lowerer = Lowerer::new(typed);
+        let mut symbol_table = SymbolTable::default();
+        let lowerer = Lowerer::new(typed, &mut symbol_table);
         lowerer.lower()
     }
 

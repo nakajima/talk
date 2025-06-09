@@ -2,7 +2,7 @@ use std::{collections::HashMap, i32};
 
 use crate::{
     parser::ExprID,
-    prelude::PRELUDE,
+    prelude::compile_prelude,
     type_checker::{Scheme, Ty},
 };
 
@@ -15,7 +15,7 @@ impl SymbolID {
 
     // Remove the prelude's symbol offset
     pub fn at(index: i32) -> SymbolID {
-        SymbolID(index + PRELUDE.symbols.max_id())
+        SymbolID(index + compile_prelude().symbols.max_id())
     }
 }
 

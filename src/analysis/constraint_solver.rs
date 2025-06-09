@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    SourceFile, SymbolID, Typed, environment::TypeDef, parser::ExprID, type_checker::TypeError,
+    SourceFile, SymbolID, SymbolTable, Typed, environment::TypeDef, parser::ExprID,
+    type_checker::TypeError,
 };
 
 use super::{
@@ -9,7 +10,7 @@ use super::{
     type_checker::{Ty, TypeVarID},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
@@ -18,14 +19,16 @@ pub enum Constraint {
 
 pub struct ConstraintSolver<'a> {
     source_file: &'a mut SourceFile<Typed>,
+    symbol_table: &'a SymbolTable,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(source_file: &'a mut SourceFile<Typed>) -> Self {
+    pub fn new(source_file: &'a mut SourceFile<Typed>, symbol_table: &'a mut SymbolTable) -> Self {
         Self {
             constraints: source_file.constraints().clone(),
             source_file,
+            symbol_table,
         }
     }
 
@@ -72,7 +75,10 @@ impl<'a> ConstraintSolver<'a> {
                         // something compatible with ret_ty
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
                             // Look up the enum and find the variant
-                            if let Some(_enum_info) = self.source_file.type_from_symbol(enum_id) {
+                            if let Some(_enum_info) = self
+                                .source_file
+                                .type_from_symbol(enum_id, &self.symbol_table)
+                            {
                                 if let Some(variant_info) = self.find_variant(enum_id, &member_name)
                                 {
                                     // Create the constructor type for this variant
@@ -99,7 +105,10 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     Ty::Enum(enum_id, _) => {
                         // This is a valueless constructor like .none
-                        if let Some(_enum_info) = self.source_file.type_from_symbol(enum_id) {
+                        if let Some(_enum_info) = self
+                            .source_file
+                            .type_from_symbol(enum_id, &self.symbol_table)
+                        {
                             if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
                                 if variant_info.values.is_empty() {
                                     // This is a valueless variant, unify with the enum type directly
@@ -122,7 +131,10 @@ impl<'a> ConstraintSolver<'a> {
                 match &receiver_ty {
                     Ty::Enum(enum_id, generics) => {
                         // Look up the enum definition
-                        if let Some(enum_info) = self.source_file.type_from_symbol(enum_id) {
+                        if let Some(enum_info) = self
+                            .source_file
+                            .type_from_symbol(enum_id, &self.symbol_table)
+                        {
                             // Check if this is a variant constructor
                             log::debug!("Enum info: {:?}", enum_info);
                             if let Some(variant_info) = self.find_variant(enum_id, &member_name) {

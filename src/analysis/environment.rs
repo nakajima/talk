@@ -6,7 +6,7 @@ use std::{
 use crate::{
     SymbolID, SymbolTable,
     parser::ExprID,
-    prelude::{PRELUDE, Prelude},
+    prelude::{Prelude, compile_prelude},
     type_checker::Ty,
 };
 
@@ -18,14 +18,14 @@ use super::{
 
 pub type Scope = HashMap<SymbolID, Scheme>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumVariant {
     pub name: String,
     pub values: Vec<Ty>,
     pub constructor_symbol: SymbolID,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumDef {
     pub name: Option<SymbolID>,
     pub type_parameters: TypeParams,
@@ -47,14 +47,14 @@ impl EnumDef {
 
 pub type TypeParams = Vec<Ty>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDef {
     Enum(EnumDef),
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
@@ -67,7 +67,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         let mut env = Self::new();
-        env.import_prelude(&PRELUDE);
+        env.import_prelude(&compile_prelude());
         env
     }
 }

@@ -104,7 +104,6 @@ impl<'a> Parser<'a> {
 
         Ok(IRProgram {
             functions: self.functions,
-            symbol_table: None,
         })
     }
 
@@ -392,7 +391,7 @@ pub fn parse(code: &str) -> Result<IRProgram, ParserError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        check,
+        SymbolTable, check,
         lowering::{
             instr::{FuncName, Instr},
             lowerer::{
@@ -406,7 +405,8 @@ mod tests {
 
     fn lower(input: &'static str) -> Result<IRProgram, IRError> {
         let typed = check(input).unwrap();
-        let lowerer = Lowerer::new(typed);
+        let mut symbol_table = SymbolTable::default();
+        let lowerer = Lowerer::new(typed, &mut symbol_table);
         lowerer.lower()
     }
 

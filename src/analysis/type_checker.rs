@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SymbolID, Typed,
+    NameResolved, SymbolID, SymbolTable, Typed,
     environment::{EnumVariant, free_type_vars},
     expr::{Expr, Pattern},
     match_builtin,
     name::Name,
     parser::ExprID,
-    prelude::PRELUDE,
+    prelude::compile_prelude,
     source_file::SourceFile,
     token_kind::TokenKind,
 };
@@ -53,7 +53,7 @@ pub enum TypeError {
     OccursConflict,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq)]
 pub enum Ty {
     Void,
     Int,
@@ -75,7 +75,7 @@ impl Ty {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme {
     pub ty: Ty,
     pub unbound_vars: Vec<TypeVarID>,
@@ -109,21 +109,23 @@ impl TypeChecker {
     pub fn infer(
         &self,
         source_file: SourceFile<NameResolved>,
+        symbol_table: &mut SymbolTable,
     ) -> Result<SourceFile<Typed>, TypeError> {
         let mut env = Environment::new();
 
-        env.import_prelude(&PRELUDE);
-        self.infer_without_prelude(env, source_file)
+        env.import_prelude(&compile_prelude());
+        self.infer_without_prelude(env, source_file, symbol_table)
     }
 
     pub fn infer_without_prelude(
         &self,
         mut env: Environment,
         mut source_file: SourceFile<NameResolved>,
+        symbol_table: &mut SymbolTable,
     ) -> Result<SourceFile<Typed>, TypeError> {
         let root_ids = source_file.root_ids();
 
-        self.hoist_enums(&root_ids, &mut env, &mut source_file)?;
+        self.hoist_enums(&root_ids, &mut env, &mut source_file, symbol_table)?;
         self.hoist_functions(&root_ids, &mut env, &source_file);
 
         let mut typed_roots = vec![];
@@ -911,6 +913,7 @@ impl TypeChecker {
         root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
+        symbol_table: &mut SymbolTable,
     ) -> Result<(), TypeError> {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
@@ -954,8 +957,8 @@ impl TypeChecker {
                             .collect();
                         let ty = Ty::EnumVariant(enum_id, values.clone());
 
-                        let constructor_symbol = source_file.add_symbol(
-                            name_str.clone(),
+                        let constructor_symbol = symbol_table.add(
+                            &name_str,
                             crate::SymbolKind::VariantConstructor,
                             expr_id,
                         );
@@ -1057,26 +1060,14 @@ impl TypeChecker {
 mod tests {
     use crate::{
         SourceFile, SymbolID, Typed,
-        constraint_solver::ConstraintSolver,
         environment::TypeDef,
         expr::Expr,
         name::Name,
-        name_resolver::NameResolver,
-        parser::parse,
         type_checker::{Ty, TypeVarID, TypeVarKind},
     };
 
-    use super::TypeChecker;
-
     fn check(code: &'static str) -> SourceFile<Typed> {
-        let parsed = parse(code).unwrap();
-        let resolver = NameResolver::default();
-        let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let mut inferred = checker.infer(resolved).unwrap();
-        let mut constraint_solver = ConstraintSolver::new(&mut inferred);
-        constraint_solver.solve().unwrap();
-        inferred
+        crate::check(code).unwrap()
     }
 
     #[test]
@@ -1830,21 +1821,11 @@ mod tests {
 
 #[cfg(test)]
 mod pending {
-    use crate::{
-        constraint_solver::ConstraintSolver, name_resolver::NameResolver, parser::parse,
-        type_checker::TypeError,
-    };
-
-    use super::{Ty, TypeChecker};
+    use super::Ty;
+    use crate::type_checker::TypeError;
 
     fn check_err(code: &'static str) -> Result<Ty, TypeError> {
-        let parsed = parse(code).unwrap();
-        let resolver = NameResolver::default();
-        let resolved = resolver.resolve(parsed);
-        let checker = TypeChecker;
-        let mut inferred = checker.infer(resolved)?;
-        let mut constraint_solver = ConstraintSolver::new(&mut inferred);
-        constraint_solver.solve()?;
+        let inferred = crate::check(code)?;
         Ok(inferred.type_for(inferred.root_ids()[0]))
     }
 

@@ -1,4 +1,4 @@
-use crate::{SourceFile, lexer::Lexer, token::Token, token_kind::TokenKind};
+use crate::{FileID, SourceFile, lexer::Lexer, token::Token, token_kind::TokenKind};
 
 use super::{
     expr::{
@@ -31,9 +31,9 @@ pub enum ParserError {
     ExpectedIdentifier(Option<Token>),
 }
 
-pub fn parse(code: &str) -> Result<SourceFile, ParserError> {
+pub fn parse(code: &str, file_id: FileID) -> Result<SourceFile, ParserError> {
     let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer);
+    let mut parser = Parser::new(lexer, file_id);
 
     parser.parse();
 
@@ -41,12 +41,12 @@ pub fn parse(code: &str) -> Result<SourceFile, ParserError> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer<'a>) -> Self {
+    pub fn new(lexer: Lexer<'a>, file_id: FileID) -> Self {
         Self {
             lexer,
             previous: None,
             current: None,
-            parse_tree: SourceFile::new(),
+            parse_tree: SourceFile::new(file_id),
         }
     }
 
@@ -739,11 +739,16 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{
+        Parsed, SourceFile,
         name::Name,
-        parser::parse,
+        parser::ParserError,
         parsing::expr::Expr::{self, *},
         token_kind::TokenKind,
     };
+
+    fn parse(input: &str) -> Result<SourceFile<Parsed>, ParserError> {
+        super::parse(input, 123)
+    }
 
     #[test]
     fn parses_literal_expr() {
@@ -1536,17 +1541,36 @@ mod tests {
             }
         )
     }
+
+    #[test]
+    fn parses_code() {
+        let parsed = parse(
+            "
+            enum MyEnum {
+                case val(Int)
+            }
+
+            func test(e: MyEnum) {
+                match e {
+                    .val(1) -> 0
+                }
+            }
+        ",
+        );
+
+        parsed.unwrap();
+    }
 }
 
 #[cfg(test)]
 mod pattern_parsing_tests {
-    use crate::{expr::Pattern, lexer::Lexer, name::Name, parser::parse};
+    use crate::{expr::Pattern, lexer::Lexer, name::Name};
 
     use super::Parser;
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, 123);
         parser.advance();
         parser.parse_match_pattern().unwrap()
     }
@@ -1591,24 +1615,5 @@ mod pattern_parsing_tests {
                 fields: vec![]
             }
         );
-    }
-
-    #[test]
-    fn parses_code() {
-        let parsed = parse(
-            "
-            enum MyEnum {
-                case val(Int)
-            }
-
-            func test(e: MyEnum) {
-                match e {
-                    .val(1) -> 0
-                }
-            }
-        ",
-        );
-
-        parsed.unwrap();
     }
 }

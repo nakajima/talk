@@ -384,7 +384,7 @@ impl IRInterpreter {
 #[cfg(test)]
 mod tests {
     use crate::{
-        check,
+        SymbolTable, check,
         lowering::{
             interpreter::{IRInterpreter, InterpreterError, Value},
             ir_printer::print,
@@ -394,7 +394,8 @@ mod tests {
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
         let typed = check(code).unwrap();
-        let lowerer = Lowerer::new(typed);
+        let mut symbol_table = SymbolTable::default();
+        let lowerer = Lowerer::new(typed, &mut symbol_table);
         let lowered = lowerer.lower().unwrap();
 
         println!("{}", print(&lowered));

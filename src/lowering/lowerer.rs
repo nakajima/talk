@@ -181,7 +181,6 @@ impl std::fmt::Display for IRType {
 
 pub struct IRProgram {
     pub functions: Vec<IRFunction>,
-    pub symbol_table: Option<SymbolTable>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
@@ -423,23 +422,26 @@ impl RegisterAllocator {
     }
 }
 
-pub struct Lowerer {
+pub struct Lowerer<'a> {
     source_file: SourceFile<Typed>,
     current_functions: Vec<CurrentFunction>,
     lowered_functions: Vec<IRFunction>,
+    symbol_table: &'a mut SymbolTable,
 }
 
-impl Lowerer {
-    pub fn new(source_file: SourceFile<Typed>) -> Self {
+impl<'a> Lowerer<'a> {
+    pub fn new(source_file: SourceFile<Typed>, symbol_table: &'a mut SymbolTable) -> Self {
         Self {
             source_file,
             current_functions: vec![],
             lowered_functions: Default::default(),
+            symbol_table,
         }
     }
 
     pub fn lower(mut self) -> Result<IRProgram, IRError> {
-        let (expr_id, did_create) = find_or_create_main(&mut self.source_file);
+        let (expr_id, did_create) =
+            find_or_create_main(&mut self.source_file, &mut self.symbol_table);
 
         self.lower_function(&expr_id);
 
@@ -456,7 +458,6 @@ impl Lowerer {
 
         Ok(IRProgram {
             functions: self.lowered_functions,
-            symbol_table: Some(self.source_file.symbol_table()),
         })
     }
 
@@ -484,11 +485,10 @@ impl Lowerer {
         let name = match name {
             Some(Name::Resolved(_, _)) => name.clone().unwrap(),
             None => {
-                let name_str = format!("fn{}", self.source_file.symbol_table().max_id() + 1);
-                let symbol =
-                    self.source_file
-                        .symbol_table()
-                        .add(&name_str, SymbolKind::CustomType, 12345);
+                let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
+                let symbol = self
+                    .symbol_table
+                    .add(&name_str, SymbolKind::CustomType, 12345);
 
                 Name::Resolved(symbol, name_str)
             }
@@ -1153,7 +1153,10 @@ impl Lowerer {
     }
 }
 
-fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
+fn find_or_create_main(
+    source_file: &mut SourceFile<Typed>,
+    symbol_table: &mut SymbolTable,
+) -> (ExprID, bool) {
     for root in source_file.typed_roots() {
         if let TypedExpr {
             expr:
@@ -1206,8 +1209,8 @@ fn find_or_create_main(source_file: &mut SourceFile<Typed>) -> (ExprID, bool) {
         },
     );
 
-    source_file.set(
-        SymbolID::GENERATED_MAIN,
+    symbol_table.import(
+        &SymbolID::GENERATED_MAIN,
         SymbolInfo {
             name: "@main".into(),
             kind: SymbolKind::Func,
@@ -1223,7 +1226,7 @@ mod tests {
     use prettydiff::diff_lines;
 
     use crate::{
-        check,
+        SymbolTable, check,
         lowering::{
             instr::FuncName,
             ir_printer::print,
@@ -1236,7 +1239,8 @@ mod tests {
 
     fn lower(input: &'static str) -> Result<IRProgram, IRError> {
         let typed = check(input).unwrap();
-        let lowerer = Lowerer::new(typed);
+        let mut symbol_table = SymbolTable::default();
+        let lowerer = Lowerer::new(typed, &mut symbol_table);
         lowerer.lower()
     }
 
@@ -1247,7 +1251,6 @@ mod tests {
                     if !(*left_val.functions == *right_val) {
                         let right_program = IRProgram {
                             functions: right_val.clone(),
-                            symbol_table: None,
                         };
 
                         panic!(

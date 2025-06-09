@@ -24,7 +24,7 @@ fn main() {
         Run { filename: String },
     }
 
-    env_logger::builder().try_init().unwrap();
+    env_logger::builder().try_init().is_test(false).unwrap();
 
     let cli = Cli::parse();
 

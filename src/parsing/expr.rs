@@ -4,13 +4,13 @@ use super::{name::Name, parser::ExprID};
 
 pub type VarDepth = u32;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExprMeta {
     pub start: Token,
     pub end: Token,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
     // Literals that must match exactly
     LiteralInt(String),
@@ -37,7 +37,7 @@ pub enum Pattern {
     // PatternRef(Box<Pattern>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     LiteralInt(String),
     LiteralFloat(String),

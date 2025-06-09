@@ -10,16 +10,18 @@ pub mod typed_expr;
 #[cfg(test)]
 pub fn check(input: &'static str) -> Result<SourceFile<Typed>, TypeError> {
     use crate::{
-        constraint_solver::ConstraintSolver, name_resolver::NameResolver, parser::parse,
-        type_checker::TypeChecker,
+        SymbolTable, constraint_solver::ConstraintSolver, name_resolver::NameResolver,
+        parser::parse, type_checker::TypeChecker,
     };
 
-    let parsed = parse(input).unwrap();
+    let mut symbol_table = SymbolTable::default();
+
+    let parsed = parse(input, 123).unwrap();
     let resolver = NameResolver::default();
-    let resolved = resolver.resolve(parsed);
+    let resolved = resolver.resolve(parsed, &mut symbol_table);
     let checker = TypeChecker;
-    let mut inferred = checker.infer(resolved)?;
-    let mut constraint_solver = ConstraintSolver::new(&mut inferred);
+    let mut inferred = checker.infer(resolved, &mut symbol_table)?;
+    let mut constraint_solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
     constraint_solver.solve()?;
     Ok(inferred)
 }

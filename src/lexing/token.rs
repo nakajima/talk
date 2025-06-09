@@ -1,6 +1,6 @@
 use super::token_kind::TokenKind;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Token {
     pub kind: TokenKind,
     pub start: usize,

@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum TokenKind {
     // Control flow
     If,

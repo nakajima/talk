@@ -8,7 +8,7 @@ use crate::expr::Expr::*;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
-use crate::prelude::PRELUDE;
+use crate::prelude::compile_prelude;
 use crate::source_file::SourceFile;
 
 pub struct NameResolver {
@@ -21,7 +21,8 @@ pub struct NameResolver {
 
 impl Default for NameResolver {
     fn default() -> Self {
-        let symbol_table = PRELUDE.symbols.clone();
+        let prelude = compile_prelude();
+        let symbol_table = prelude.symbols.clone();
         let initial_scope = symbol_table.build_name_scope();
 
         NameResolver {
@@ -44,14 +45,23 @@ impl NameResolver {
         }
     }
 
-    pub fn resolve(mut self, mut source_file: SourceFile) -> SourceFile<NameResolved> {
-        self.resolve_nodes(&source_file.root_ids(), &mut source_file);
-        source_file.to_resolved(self.symbol_table)
+    pub fn resolve(
+        mut self,
+        mut source_file: SourceFile,
+        symbol_table: &mut SymbolTable,
+    ) -> SourceFile<NameResolved> {
+        self.resolve_nodes(&source_file.root_ids(), &mut source_file, symbol_table);
+        source_file.to_resolved()
     }
 
-    fn resolve_nodes(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
+    fn resolve_nodes(
+        &mut self,
+        node_ids: &[ExprID],
+        source_file: &mut SourceFile,
+        symbol_table: &mut SymbolTable,
+    ) {
         // 1) First pass: Hoist enums and their variants
-        self.hoist_enums(node_ids, source_file);
+        self.hoist_enums(node_ids, source_file, symbol_table);
 
         // 1) Hoist all funcs in this block before any recursion
         self.hoist_funcs(node_ids, source_file);
@@ -65,26 +75,26 @@ impl NameResolver {
                 LiteralTrue | LiteralFalse => continue,
                 Return(rhs) => {
                     if let Some(rhs) = rhs {
-                        self.resolve_nodes(&[rhs], source_file);
+                        self.resolve_nodes(&[rhs], source_file, symbol_table);
                     }
                 }
                 If(condi, conseq, alt) => {
                     if let Some(alt) = alt {
-                        self.resolve_nodes(&[condi, conseq, alt], source_file);
+                        self.resolve_nodes(&[condi, conseq, alt], source_file, symbol_table);
                     } else {
-                        self.resolve_nodes(&[condi, conseq], source_file);
+                        self.resolve_nodes(&[condi, conseq], source_file, symbol_table);
                     }
                 }
                 Loop(cond, body) => {
                     if let Some(cond) = cond {
-                        self.resolve_nodes(&[cond, body], source_file);
+                        self.resolve_nodes(&[cond, body], source_file, symbol_table);
                     } else {
-                        self.resolve_nodes(&[body], source_file);
+                        self.resolve_nodes(&[body], source_file, symbol_table);
                     }
                 }
                 Member(receiver, _member) => {
                     if let Some(receiver) = receiver {
-                        self.resolve_nodes(&[receiver], source_file);
+                        self.resolve_nodes(&[receiver], source_file, symbol_table);
                     }
                 }
                 Let(name, rhs) => {
@@ -98,7 +108,7 @@ impl NameResolver {
                     };
 
                     if let Some(rhs) = rhs {
-                        self.resolve_nodes(&[rhs], source_file);
+                        self.resolve_nodes(&[rhs], source_file, symbol_table);
                     }
 
                     source_file.nodes[*node_id as usize] = Let(name, rhs);
@@ -107,24 +117,24 @@ impl NameResolver {
                     let mut to_resolve = args.clone();
                     to_resolve.push(callee);
 
-                    self.resolve_nodes(&to_resolve, source_file);
+                    self.resolve_nodes(&to_resolve, source_file, symbol_table);
                 }
                 Assignment(lhs, rhs) => {
-                    self.resolve_nodes(&[lhs, rhs], source_file);
+                    self.resolve_nodes(&[lhs, rhs], source_file, symbol_table);
                 }
                 Unary(_, expr_id) => {
-                    self.resolve_nodes(&[expr_id], source_file);
+                    self.resolve_nodes(&[expr_id], source_file, symbol_table);
                 }
                 Binary(lhs, _, rhs) => {
-                    self.resolve_nodes(&[lhs, rhs], source_file);
+                    self.resolve_nodes(&[lhs, rhs], source_file, symbol_table);
                 }
                 Tuple(items) => {
-                    self.resolve_nodes(&items, source_file);
+                    self.resolve_nodes(&items, source_file, symbol_table);
                 }
                 Block(items) => {
                     self.start_scope();
                     self.hoist_funcs(&items, source_file);
-                    self.resolve_nodes(&items, source_file);
+                    self.resolve_nodes(&items, source_file, symbol_table);
                     self.end_scope();
                 }
                 Func {
@@ -140,7 +150,7 @@ impl NameResolver {
 
                     self.start_scope();
 
-                    self.resolve_nodes(&generics, source_file);
+                    self.resolve_nodes(&generics, source_file, symbol_table);
 
                     for param in &params {
                         let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param) else {
@@ -150,7 +160,7 @@ impl NameResolver {
                         self.declare(name.clone(), SymbolKind::Param, node_id);
 
                         if let Some(ty_id) = ty_id {
-                            self.resolve_nodes(&[*ty_id], source_file);
+                            self.resolve_nodes(&[*ty_id], source_file, symbol_table);
                         }
                     }
 
@@ -161,12 +171,12 @@ impl NameResolver {
                         to_resolve.push(ret);
                     }
 
-                    self.resolve_nodes(&to_resolve, source_file);
+                    self.resolve_nodes(&to_resolve, source_file, symbol_table);
                     self.end_scope();
                 }
                 Parameter(name, ty_repr) => {
                     if let Some(ty_repr) = ty_repr {
-                        self.resolve_nodes(&[ty_repr], source_file)
+                        self.resolve_nodes(&[ty_repr], source_file, symbol_table)
                     };
 
                     match name {
@@ -235,14 +245,14 @@ impl NameResolver {
                     );
 
                     // Recursively resolve any type arguments within this TypeRepr.
-                    self.resolve_nodes(&generics, source_file);
+                    self.resolve_nodes(&generics, source_file, symbol_table);
                 }
                 FuncTypeRepr(args, ret, _) => {
-                    self.resolve_nodes(&args, source_file);
-                    self.resolve_nodes(&[ret], source_file);
+                    self.resolve_nodes(&args, source_file, symbol_table);
+                    self.resolve_nodes(&[ret], source_file, symbol_table);
                 }
                 TupleTypeRepr(types, _) => {
-                    self.resolve_nodes(&types, source_file);
+                    self.resolve_nodes(&types, source_file, symbol_table);
                 }
                 EnumDecl(name, generics, body) => {
                     match name {
@@ -259,29 +269,30 @@ impl NameResolver {
                         _ => continue,
                     }
 
-                    self.resolve_nodes(&generics, source_file);
-                    self.resolve_nodes(&[body], source_file);
+                    self.resolve_nodes(&generics, source_file, symbol_table);
+                    self.resolve_nodes(&[body], source_file, symbol_table);
                     self.type_symbol_stack.pop();
                 }
                 EnumVariant(_, values) => {
-                    self.resolve_nodes(&values, source_file);
+                    self.resolve_nodes(&values, source_file, symbol_table);
                 }
                 Match(scrutinee, arms) => {
                     // Resolve the scrutinee expression
-                    self.resolve_nodes(&[scrutinee], source_file);
+                    self.resolve_nodes(&[scrutinee], source_file, symbol_table);
                     // Each arm will manage its own scope for pattern bindings.
                     // The Match expression itself doesn't introduce a new scope for *bindings*
                     // that span across arms or affect expressions outside the match.
-                    self.resolve_nodes(&arms, source_file);
+                    self.resolve_nodes(&arms, source_file, symbol_table);
                 }
                 MatchArm(pattern, body) => {
                     self.start_scope(); // New scope for this arm's bindings
-                    self.resolve_nodes(&[pattern], source_file);
-                    self.resolve_nodes(&[body], source_file);
+                    self.resolve_nodes(&[pattern], source_file, symbol_table);
+                    self.resolve_nodes(&[body], source_file, symbol_table);
                     self.end_scope();
                 }
                 Pattern(pattern) => {
-                    let pattern = self.resolve_pattern(&pattern, source_file, node_id);
+                    let pattern =
+                        self.resolve_pattern(&pattern, source_file, node_id, symbol_table);
                     source_file.nodes[*node_id as usize] = Pattern(pattern);
                 }
                 PatternVariant(_, _, _items) => todo!(),
@@ -312,7 +323,12 @@ impl NameResolver {
         }
     }
 
-    fn hoist_enums(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
+    fn hoist_enums(
+        &mut self,
+        node_ids: &[ExprID],
+        source_file: &mut SourceFile,
+        symbol_table: &mut SymbolTable,
+    ) {
         for id in node_ids {
             let Some(EnumDecl(Name::Raw(name_str), generics, body_expr)) =
                 source_file.get(id).cloned()
@@ -323,14 +339,14 @@ impl NameResolver {
             // Declare the enum type
             let enum_symbol = self.declare(name_str.clone(), SymbolKind::Enum, id);
 
-            self.resolve_nodes(&generics, source_file);
+            self.resolve_nodes(&generics, source_file, symbol_table);
 
             source_file.nodes[*id as usize] =
                 EnumDecl(Name::Resolved(enum_symbol, name_str), generics, body_expr);
 
             // Hoist variants
             self.type_symbol_stack.push(enum_symbol);
-            self.hoist_enum_members(&body_expr, source_file);
+            self.hoist_enum_members(&body_expr, source_file, symbol_table);
             self.type_symbol_stack.pop();
         }
     }
@@ -340,6 +356,7 @@ impl NameResolver {
         pattern: &Pattern,
         source_file: &mut SourceFile,
         node_id: &ExprID,
+        symbol_table: &mut SymbolTable,
     ) -> Pattern {
         match pattern {
             Pattern::Bind(Name::Raw(name_str)) => {
@@ -358,7 +375,7 @@ impl NameResolver {
                     None
                 };
 
-                self.resolve_nodes(fields, source_file);
+                self.resolve_nodes(fields, source_file, symbol_table);
 
                 // let fields = fields
                 //     .iter()
@@ -391,7 +408,12 @@ impl NameResolver {
     }
 
     // New helper method to hoist enum variants
-    fn hoist_enum_members(&mut self, body_expr_id: &ExprID, source_file: &mut SourceFile) {
+    fn hoist_enum_members(
+        &mut self,
+        body_expr_id: &ExprID,
+        source_file: &mut SourceFile,
+        symbol_table: &mut SymbolTable,
+    ) {
         let Block(items) = source_file.get(body_expr_id).unwrap().clone() else {
             panic!("Expected Block for enum body");
         };
@@ -400,7 +422,7 @@ impl NameResolver {
             let variant_expr = source_file.get(variant_id).unwrap().clone();
 
             if let EnumVariant(Name::Raw(variant_name), field_types) = variant_expr {
-                self.resolve_nodes(&field_types, source_file);
+                self.resolve_nodes(&field_types, source_file, symbol_table);
 
                 // Update the AST
                 source_file.nodes[*variant_id as usize] =
@@ -408,7 +430,7 @@ impl NameResolver {
             }
         }
 
-        self.resolve_nodes(&items, source_file);
+        self.resolve_nodes(&items, source_file, symbol_table);
     }
 
     // Helper method to get enum symbol from variant symbol
@@ -460,9 +482,10 @@ mod tests {
     use crate::{expr::Expr, parser::parse};
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
-        let tree = parse(code).expect("parse failed");
+        let mut symbol_table = SymbolTable::default();
+        let tree = parse(code, 123).expect("parse failed");
         let resolver = NameResolver::default();
-        resolver.resolve(tree)
+        resolver.resolve(tree, &mut symbol_table)
     }
 
     #[test]
@@ -634,9 +657,7 @@ mod tests {
     fn block_scoping_prevents_let_leak() {
         // parse a block with a single let,
         // followed by a bare `x` at top level:
-        let tree = parse("{ let x = 123 } x").unwrap();
-        let resolver = NameResolver::default();
-        let tree = resolver.resolve(tree);
+        let tree = resolve("{ let x = 123 } x");
 
         // The first root is the Block, the second is the Variable("x")
         let roots = tree.root_ids();

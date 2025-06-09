@@ -4,12 +4,15 @@ pub mod source_file;
 pub use source_file::*;
 pub mod symbol_table;
 pub use symbol_table::*;
+pub mod file_store;
+pub use file_store::*;
 pub mod lexing;
 pub use lexing::*;
 pub mod analysis;
 pub use analysis::*;
 pub mod parsing;
 pub use parsing::*;
+pub mod driver;
 pub mod lowering;
 pub mod prelude;
 
@@ -17,6 +20,7 @@ pub mod prelude;
 #[ctor::ctor]
 fn init_logger() {
     // .is_test(true) silences the “already initialized” panic
+    println!("wtf");
     let _ = env_logger::builder().is_test(true).try_init();
 }
 

@@ -1,4 +1,3 @@
-use lazy_static::lazy_static;
 use std::collections::HashMap;
 
 use crate::{
@@ -10,10 +9,6 @@ use crate::{
     type_checker::{Scheme, TypeChecker, TypeDefs},
 };
 
-lazy_static! {
-    pub static ref PRELUDE: Prelude = compile_prelude();
-}
-
 pub struct Prelude {
     pub symbols: SymbolTable,
     pub types: TypeDefs,
@@ -21,21 +16,22 @@ pub struct Prelude {
     pub typed_exprs: TypedExprs,
 }
 
-fn compile_prelude() -> Prelude {
+pub fn compile_prelude() -> Prelude {
     let source = load_stdlib_module("Optional").unwrap();
-    let parsed = parse(source).unwrap();
-    let resolved = NameResolver::new().resolve(parsed);
+    let mut symbol_table = SymbolTable::default();
+    let parsed = parse(source, 0).unwrap();
+    let resolved = NameResolver::new().resolve(parsed, &mut symbol_table);
     let checker = TypeChecker;
     let mut inferred = checker
-        .infer_without_prelude(Environment::new(), resolved)
+        .infer_without_prelude(Environment::new(), resolved, &mut symbol_table)
         .unwrap();
-    let mut solver = ConstraintSolver::new(&mut inferred);
+    let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
     solver.solve().unwrap();
 
-    let (symbols, types, schemes, typed_exprs) = inferred.export();
+    let (types, schemes, typed_exprs) = inferred.export();
 
     Prelude {
-        symbols,
+        symbols: symbol_table,
         types,
         schemes,
         typed_exprs,

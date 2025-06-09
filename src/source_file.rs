@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    SymbolID, SymbolInfo, SymbolKind,
+    FileID, SymbolID, SymbolTable,
     constraint_solver::Constraint,
     environment::{Environment, Scope, TypeDef, TypedExprs},
     lowering::lowerer::IRFunction,
-    symbol_table::SymbolTable,
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
 };
@@ -15,28 +14,27 @@ use super::{
     parser::ExprID,
 };
 
-pub trait Phase {
+pub trait Phase: Eq {
     type Data: Clone;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed;
 impl Phase for Parsed {
     type Data = (); // No extra data for parsed
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameResolved;
 impl Phase for NameResolved {
-    type Data = SymbolTable; // Symbol table only after name resolution
+    type Data = (); // No extra data for name resolved (it just transforms the symbol table)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Typed;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedInfo {
-    pub symbol_table: SymbolTable,
     pub roots: Vec<TypedExpr>,
     pub env: Environment,
 }
@@ -47,18 +45,18 @@ impl Phase for Typed {
 
 #[derive(Debug, Clone)]
 pub struct LoweredData {
-    pub symbol_table: SymbolTable,
     pub functions: Vec<IRFunction>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Lowered;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lowered {}
 impl Phase for Lowered {
     type Data = LoweredData;
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, PartialEq, Eq, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
+    pub file_id: FileID,
     roots: Vec<ExprID>,
     pub(crate) nodes: Vec<Expr>,
     pub(crate) meta: Vec<ExprMeta>,
@@ -66,8 +64,9 @@ pub struct SourceFile<P: Phase = Parsed> {
 }
 
 impl SourceFile {
-    pub fn new() -> Self {
+    pub fn new(file_id: FileID) -> Self {
         Self {
+            file_id,
             roots: vec![],
             nodes: vec![],
             meta: vec![],
@@ -77,40 +76,30 @@ impl SourceFile {
 }
 
 impl SourceFile<Parsed> {
-    pub fn to_resolved(self, symbol_table: SymbolTable) -> SourceFile<NameResolved> {
+    pub fn to_resolved(self) -> SourceFile<NameResolved> {
         SourceFile {
+            file_id: self.file_id,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: symbol_table,
+            phase_data: (),
         }
     }
 }
 
 impl SourceFile<NameResolved> {
-    pub fn add_symbol(&mut self, name: String, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
-        self.phase_data.add(&name, kind, expr_id)
-    }
-
     pub fn to_typed(self, roots: Vec<TypedExpr>, env: Environment) -> SourceFile<Typed> {
         SourceFile {
+            file_id: self.file_id,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: TypedInfo {
-                symbol_table: self.phase_data,
-                roots,
-                env,
-            },
+            phase_data: TypedInfo { roots, env },
         }
     }
 }
 
 impl SourceFile<Typed> {
-    pub fn set(&mut self, symbol_id: SymbolID, info: SymbolInfo) {
-        self.phase_data.symbol_table.import(&symbol_id, info);
-    }
-
     pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr) {
         self.phase_data.env.typed_exprs.insert(id, typed_expr);
     }
@@ -151,8 +140,8 @@ impl SourceFile<Typed> {
         self.phase_data.env.typed_exprs.get(&id).unwrap().ty.clone()
     }
 
-    pub fn type_from_symbol(&self, symbol_id: &SymbolID) -> Option<Ty> {
-        if let Some(info) = self.phase_data.symbol_table.get(symbol_id) {
+    pub fn type_from_symbol(&self, symbol_id: &SymbolID, symbol_table: &SymbolTable) -> Option<Ty> {
+        if let Some(info) = symbol_table.get(symbol_id) {
             return Some(self.type_for(info.expr_id));
         }
 
@@ -163,17 +152,12 @@ impl SourceFile<Typed> {
         self.phase_data.env.constraints.clone()
     }
 
-    pub fn symbol_table(&self) -> SymbolTable {
-        self.phase_data.symbol_table.clone()
-    }
-
-    pub fn export(self) -> (SymbolTable, TypeDefs, Scope, TypedExprs) {
-        let symbols = self.phase_data.symbol_table;
+    pub fn export(self) -> (TypeDefs, Scope, TypedExprs) {
         let type_defs = self.phase_data.env.types;
         let typed_exprs = self.phase_data.env.typed_exprs;
         let scope = self.phase_data.env.scopes[0].clone();
 
-        (symbols, type_defs, scope, typed_exprs)
+        (type_defs, scope, typed_exprs)
     }
 
     pub fn register_direct_callable(&mut self, id: ExprID, symbol_id: SymbolID) {
@@ -186,21 +170,12 @@ impl SourceFile<Typed> {
 
     pub fn to_lowered(self, functions: Vec<IRFunction>) -> SourceFile<Lowered> {
         SourceFile {
+            file_id: self.file_id,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: LoweredData {
-                symbol_table: self.phase_data.symbol_table,
-                functions,
-            },
+            phase_data: LoweredData { functions },
         }
-    }
-
-    pub fn symbol_info(&self, symbol_id: &SymbolID) -> &SymbolInfo {
-        self.phase_data
-            .symbol_table
-            .get(symbol_id)
-            .unwrap_or_else(|| panic!("Did not find symbol info for {:?}", symbol_id))
     }
 }
 
@@ -208,17 +183,6 @@ impl SourceFile<Lowered> {
     pub fn functions(&self) -> Vec<IRFunction> {
         self.phase_data.functions.clone()
     }
-
-    // pub fn functions_by_symbol_id(&self) -> HashMap<SymbolID, IRFunction> {
-    //     self.phase_data
-    //         .functions
-    //         .clone()
-    //         .iter()
-    //         .fold(Default::default(), |mut r, f| {
-    //             r.insert(f.symbol_id, f.clone());
-    //             r
-    //         })
-    // }
 }
 
 impl<P: Phase> SourceFile<P> {

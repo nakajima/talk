@@ -2,7 +2,7 @@ use crate::{expr::Expr, parser::ExprID};
 
 use super::type_checker::Ty;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedExpr {
     pub id: ExprID,
     pub expr: Expr,
