@@ -372,14 +372,14 @@ impl<'a> Parser<'a> {
     pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.advance();
 
-        match self
+        match &self
             .previous
-            .clone()
+            .as_ref()
             .expect("got into #literal without having a token")
             .kind
         {
-            TokenKind::Int(val) => self.add_expr(LiteralInt(val)),
-            TokenKind::Float(val) => self.add_expr(LiteralFloat(val)),
+            TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone())),
+            TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone())),
             TokenKind::Func => self.func(),
             _ => unreachable!("didn't get a literal"),
         }
@@ -661,7 +661,7 @@ impl<'a> Parser<'a> {
         }
 
         #[allow(clippy::expect_fun_call)]
-        Ok(lhs.expect(&format!("did not get lhs: {:?}", self.current)))
+        Ok(lhs.unwrap_or_else(|| panic!("did not get lhs: {:?}", self.current)))
     }
 
     // MARK: Helpers
