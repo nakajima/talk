@@ -552,4 +552,29 @@ mod tests {
         assert_eq!(Value::Bool(true), interpret("1 != 2").unwrap());
         assert_eq!(Value::Bool(false), interpret("1 != 1").unwrap());
     }
+
+    #[test]
+    fn interprets_closure() {
+        assert_eq!(
+            Value::Int(3),
+            interpret(
+                "
+        func makeCounter() {
+			let mut count = 0
+
+			return func() {
+				count = count + 1
+				return count
+			}
+		}
+
+		let counter = makeCounter()
+		counter()
+        counter()
+        counter()
+        "
+            )
+            .unwrap()
+        )
+    }
 }
