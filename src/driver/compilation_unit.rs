@@ -34,6 +34,7 @@ impl<Stage> CompilationUnit<Stage> {
 
 pub struct Raw {}
 
+#[allow(unused)]
 pub struct CompilationUnit<Stage = Raw> {
     src_cache: HashMap<PathBuf, String>,
     input: FileStore,
@@ -62,6 +63,7 @@ impl CompilationUnit<Raw> {
     }
 }
 
+#[allow(unused)]
 pub struct Parsed {
     symbol_table: SymbolTable,
     files: Vec<SourceFile<source_file::Parsed>>,
@@ -74,7 +76,7 @@ impl CompilationUnit<Parsed> {
 }
 
 pub struct Resolved {
-    symbol_table: SymbolTable,
+    _symbol_table: SymbolTable,
 }
 
 impl CompilationUnit<Resolved> {
@@ -84,8 +86,8 @@ impl CompilationUnit<Resolved> {
 }
 
 pub struct Typed {
-    symbol_table: SymbolTable,
-    environment: Environment,
+    _symbol_table: SymbolTable,
+    _environment: Environment,
 }
 
 impl CompilationUnit<Typed> {

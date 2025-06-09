@@ -20,7 +20,6 @@ pub mod prelude;
 #[ctor::ctor]
 fn init_logger() {
     // .is_test(true) silences the “already initialized” panic
-    println!("wtf");
     let _ = env_logger::builder().is_test(true).try_init();
 }
 

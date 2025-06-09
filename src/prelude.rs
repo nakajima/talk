@@ -28,6 +28,8 @@ pub fn compile_prelude() -> Prelude {
     let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
     solver.solve().unwrap();
 
+    println!("Symbol Table: {:?}", symbol_table);
+
     let (types, schemes, typed_exprs) = inferred.export();
 
     Prelude {
