@@ -448,19 +448,21 @@ mod tests {
 
     #[test]
     fn interprets_call() {
-        assert_eq!(
-            Value::Int(6),
-            interpret(
-                "
+        for _ in 0..1000 {
+            assert_eq!(
+                Value::Int(6),
+                interpret(
+                    "
         func add(x, y) {
             x + y
         }
 
         add(add(1, 2), 3)
         "
-            )
-            .unwrap()
-        );
+                )
+                .unwrap()
+            );
+        }
     }
 
     #[test]
@@ -483,42 +485,47 @@ mod tests {
 
     #[test]
     fn interprets_simple_match() {
-        assert_eq!(
-            Value::Int(456),
-            interpret(
-                "
+        for _ in 0..1000 {
+            assert_eq!(
+                Value::Int(456),
+                interpret(
+                    "
             match 1 {
                 0 -> 123,
                 1 -> 456
             }
         "
-            )
-            .unwrap()
-        );
+                )
+                .unwrap()
+            );
+        }
     }
 
     #[test]
     fn interprets_builtin_optional() {
-        assert_eq!(
-            Value::Int(123),
-            interpret(
-                "
+        for _ in 0..1000 {
+            assert_eq!(
+                Value::Int(123),
+                interpret(
+                    "
             match Optional.some(123) {
                 .some(x) -> x,
                 .none -> 0
             }
         "
-            )
-            .unwrap()
-        );
+                )
+                .unwrap()
+            );
+        }
     }
 
     #[test]
     fn interprets_recursion() {
-        assert_eq!(
-            Value::Int(120),
-            interpret(
-                "
+        for _ in 0..1000 {
+            assert_eq!(
+                Value::Int(120),
+                interpret(
+                    "
                 func factorial(n) {
                     if n == 1 {
                         return n
@@ -529,9 +536,10 @@ mod tests {
 
                 factorial(5)
         "
-            )
-            .unwrap()
-        );
+                )
+                .unwrap()
+            );
+        }
     }
 
     #[test]

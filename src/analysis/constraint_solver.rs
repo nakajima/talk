@@ -181,7 +181,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         enum_id: &SymbolID,
         // `instance_generics` are the type arguments for this specific instance of the enum,
-        // e.g., for Option<Int>, this would be [TypeVar(that_will_become_Int)].
+        // so like for Option<Int>, this would be [TypeVar(that_will_become_Int)].
         // These are ALREADY FRESHLY INSTANTIATED from the enum's scheme by the caller (TypeChecker).
         instance_generics: &[Ty],
         variant_info: &EnumVariant, // variant_info.values refers to original enum type params (e.g. T from Option<T>)
@@ -262,7 +262,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
-        if depth > 1000 {
+        if depth > 100 {
             return ty.clone();
         }
 

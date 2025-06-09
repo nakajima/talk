@@ -203,6 +203,7 @@ fn regex_for_type(ty: &Type) -> &'static str {
         _ => r"(\S+)", // Default fallback
     }
 }
+
 // In build.rs
 fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream {
     let mut static_regexes = Vec::new();
