@@ -1,18 +1,15 @@
-// The interpreter is just meant to be a temporary proof of concept before doing some
-// actual optimizations and real lowering to something like LLVM or ASM or something.
-
 use std::collections::HashMap;
 
 use crate::lowering::{
-    instr::{Callee, Instr},
+    instr::Instr,
     ir_module::IRModule,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, Register, RegisterList},
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, Register},
 };
 
 #[derive(Debug)]
 pub enum InterpreterError {
     NoMainFunc,
-    CalleeNotFound(Callee),
+    CalleeNotFound,
     PredecessorNotFound,
     TypeError(Value, Value),
     UnreachableReached,
@@ -30,11 +27,7 @@ struct StackFrame {
 pub struct IRInterpreter {
     program: IRModule,
     stack: Vec<StackFrame>,
-    heap: Vec<Value>,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Address(usize);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -42,10 +35,6 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Enum { tag: u16, values: Vec<Value> },
-    Closure(String, Vec<Address>),
-    Struct(Vec<Value>),
-    Pointer(Address),
-    FuncRef(String),
     Void,
 }
 
@@ -120,7 +109,6 @@ impl IRInterpreter {
         Self {
             program,
             stack: vec![],
-            heap: vec![],
         }
     }
 
@@ -156,7 +144,7 @@ impl IRInterpreter {
             pred: None,
             block_idx: 0,
             pc: 0,
-            function: function.clone(),
+            function,
             registers: Default::default(),
         });
 
@@ -232,10 +220,8 @@ impl IRInterpreter {
 
                 return Err(InterpreterError::PredecessorNotFound);
             }
-            Instr::Ref(dest, _, RefKind::Func(name)) => {
-                let addr = self.heap.len();
-                self.heap.push(Value::FuncRef(name));
-                self.set_register_value(&dest, Value::Pointer(Address(addr)));
+            Instr::Ref(_dest, _, RefKind::Func(name)) => {
+                let _func = self.load_function(&name);
             }
             Instr::Call {
                 dest_reg,
@@ -243,40 +229,14 @@ impl IRInterpreter {
                 args,
                 ..
             } => {
-                let (found_callee, env) = match &callee {
-                    Callee::FuncName(name) => (self.load_function(&name), None),
-                    Callee::Register(reg) => match self.register_value(&reg) {
-                        Value::Closure(name, env) => {
-                            let func = self.load_function(&name);
-                            (func, Some(env))
-                        }
-                        Value::Pointer(addr) => {
-                            let Value::FuncRef(name) = &self.heap[addr.0] else {
-                                panic!("did not find func ref at pointer");
-                            };
-                            let func = self.load_function(&name);
-                            (func, None)
-                        }
-                        _ => panic!("{:?} not callable", self.register_value(&reg)),
-                    },
+                let Some(callee) = self.load_function(&callee.0) else {
+                    return Err(InterpreterError::CalleeNotFound);
                 };
 
-                let Some(callee) = found_callee else {
-                    return Err(InterpreterError::CalleeNotFound(callee));
-                };
-
-                let mut args: Vec<Value> = args.0.iter().map(|r| self.register_value(r)).collect();
-
-                if let Some(env) = env {
-                    if !env.is_empty() {
-                        args.insert(
-                            0,
-                            Value::Struct(env.into_iter().map(Value::Pointer).collect()),
-                        );
-                    }
-                }
-
-                let res = self.execute_function(callee, args)?;
+                let res = self.execute_function(
+                    callee,
+                    args.0.iter().map(|r| self.register_value(r)).collect(),
+                )?;
 
                 self.set_register_value(&dest_reg, res);
             }
@@ -380,88 +340,7 @@ impl IRInterpreter {
                     self.register_value(&a).gte(&self.register_value(&b))?,
                 );
             }
-            Instr::MakeClosure {
-                dest,
-                func,
-                captures,
-            } => {
-                let addresses = captures
-                    .0
-                    .iter()
-                    .map(|c| {
-                        let Value::Pointer(addr) = self.register_value(c) else {
-                            panic!("invalid pointer: {:?}", self.register_value(c));
-                        };
-
-                        addr
-                    })
-                    .collect();
-
-                let closure = Value::Closure(func.0, addresses);
-                self.set_register_value(&dest, closure);
-            }
-            Instr::ReadCapture { dest, env, index } => {
-                let Value::Struct(env) = self.register_value(&env) else {
-                    panic!("invalid env");
-                };
-
-                let Value::Pointer(addr) = env[index] else {
-                    panic!("Bad pointer: {:?}", env[index]);
-                };
-
-                let deref = &self.heap[addr.0];
-
-                self.set_register_value(&dest, deref.clone());
-            }
-            Instr::WriteCapture { env, index, value } => {
-                let Value::Struct(env) = self.register_value(&env) else {
-                    panic!("invalid env");
-                };
-
-                let Value::Pointer(addr) = env[index] else {
-                    panic!("Bad pointer: {:?}", env[index]);
-                };
-
-                self.heap[addr.0] = self.register_value(&value)
-            }
-            Instr::StorePointer { pointer, val, .. } => {
-                let Value::Pointer(addr) = self.register_value(&pointer) else {
-                    panic!("Bad pointer: {:?}", self.register_value(&pointer));
-                };
-
-                self.heap[addr.0] = self.register_value(&val)
-            }
-            Instr::MakeBox(dest, _, boxee) => {
-                let addr = self.heap.len();
-                self.heap.push(self.register_value(&boxee));
-                self.set_register_value(&dest, Value::Pointer(Address(addr)));
-            }
-            Instr::LoadBox(dest, _, ptr_reg) => {
-                let val = match self.register_value(&ptr_reg) {
-                    Value::Pointer(idx) => &self.heap[idx.0],
-                    _ => panic!(
-                        "No value found in heap at addr {:?}",
-                        self.register_value(&ptr_reg)
-                    ),
-                };
-
-                self.set_register_value(&dest, val.clone());
-            }
-            Instr::MakeStruct { dest, values } => {
-                self.set_register_value(&dest, Value::Struct(self.register_values(&values)));
-            }
-            Instr::GetFieldOf {
-                dest,
-                structure,
-                index,
-                ..
-            } => {
-                let Value::Struct(struct_val) = self.register_value(&structure) else {
-                    panic!("Did not find struct in reg: {}", structure)
-                };
-
-                self.set_register_value(&dest, struct_val[index].clone());
-            }
+            _ => todo!("Don't know how to execute {:?}", instr),
         }
 
         self.stack.last_mut().unwrap().pc += 1;
@@ -493,10 +372,6 @@ impl IRInterpreter {
             .clone()
     }
 
-    fn register_values(&self, registers: &RegisterList) -> Vec<Value> {
-        registers.0.iter().map(|r| self.register_value(r)).collect()
-    }
-
     fn load_function(&self, name: &str) -> Option<IRFunction> {
         for func in &self.program.functions.clone() {
             if func.name == name {
@@ -511,22 +386,20 @@ impl IRInterpreter {
 #[cfg(test)]
 mod tests {
     use crate::{
-        check_with_symbols,
+        SymbolTable, check,
         lowering::{
             interpreter::{IRInterpreter, InterpreterError, Value},
             ir_module::IRModule,
-            ir_printer::print,
             lowerer::Lowerer,
         },
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
-        let (typed, mut symbol_table) = check_with_symbols(code).unwrap();
+        let typed = check(code).unwrap();
+        let mut symbol_table = SymbolTable::default();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
         lowerer.lower(&mut module).unwrap();
-
-        println!("{}", print(&module));
 
         IRInterpreter::new(module).run()
     }
@@ -687,10 +560,10 @@ mod tests {
             Value::Int(3),
             interpret(
                 "
-        func makeCounter() {
+    func makeCounter() {
 			let count = 0
 
-			return func capturer() {
+			return func() {
 				count = count + 1
 				return count
 			}
@@ -698,8 +571,8 @@ mod tests {
 
 		let counter = makeCounter()
 		counter()
-        counter()
-        counter()
+    counter()
+    counter()
         "
             )
             .unwrap()

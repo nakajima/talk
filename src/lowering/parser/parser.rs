@@ -127,8 +127,9 @@ impl<'a> Parser<'a> {
         Ok(IRFunction {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
-            captures: vec![],
             blocks,
+            env_reg: Register(0),
+            env_ty: IRType::Struct(vec![]), //FIXME
         })
     }
 
@@ -395,7 +396,7 @@ mod tests {
     use crate::{
         SymbolTable, check,
         lowering::{
-            instr::{Callee, Instr},
+            instr::{FuncName, Instr},
             ir_module::IRModule,
             lowerer::{BasicBlockID, IRError, IRType, Lowerer, PhiPredecessors, RefKind, Register},
             parser::parser::parse,
@@ -478,7 +479,7 @@ mod tests {
             bb1.instructions[0],
             Instr::Call {
                 dest_reg: Register(1),
-                callee: Callee::FuncName("@foo".to_string()),
+                callee: FuncName("@foo".to_string()),
                 args: vec![].into(),
                 ty: IRType::Int,
             }
@@ -502,7 +503,7 @@ mod tests {
             r#"
         func @test() void
           entry:
-            %0 = float 3.15;
+            %0 = float 3.14;
             %1 = int 10;
             %2 = int 5;
             %3 = sub int %1, %2;
@@ -528,7 +529,7 @@ mod tests {
         assert_eq!(entry_bb.id, BasicBlockID(0));
         assert_eq!(
             entry_bb.instructions[0],
-            Instr::ConstantFloat(Register(0), 3.15)
+            Instr::ConstantFloat(Register(0), 3.14)
         );
         assert_eq!(
             entry_bb.instructions[1],
