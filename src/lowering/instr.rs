@@ -1,10 +1,39 @@
+use std::{fmt::Display, str::FromStr};
+
 use crate::lowering::lowerer::{
-    BasicBlockID, IRType, PhiPredecessors, RefKind, Register, RegisterList,
+    BasicBlockID, IRError, IRType, PhiPredecessors, RefKind, Register, RegisterList,
 };
 
 // Newtypes for complex arguments to make formatting unambiguous
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncName(pub String);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Callee {
+    FuncName(String),
+    Register(Register),
+}
+
+impl Display for Callee {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FuncName(name) => write!(f, "{}", name),
+            Self::Register(reg) => write!(f, "{}", reg),
+        }
+    }
+}
+
+impl FromStr for Callee {
+    type Err = IRError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().chars().next() {
+            Some('@') => Ok(Self::FuncName(s.to_string())),
+            Some('%') => Ok(Self::Register(Register::from_str(s)?)),
+            _ => Err(IRError::CannotParse),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instr {
@@ -16,6 +45,12 @@ pub enum Instr {
 
     #[doc = "$0 = bool $1;"]
     ConstantBool(Register, bool),
+
+    #[doc = "$0 = store $1 $2;"]
+    MakeBox(Register, IRType, Register),
+
+    #[doc = "$0 = load $1 $2;"]
+    LoadBox(Register, IRType, Register),
 
     #[doc = "$0 = add $1 $2, $3;"]
     Add(Register, IRType, Register, Register),
@@ -29,10 +64,10 @@ pub enum Instr {
     #[doc = "$0 = div $1 $2, $3;"]
     Div(Register, IRType, Register, Register),
 
-    #[doc = "store $1 $0, $2;"]
+    #[doc = "$0 = stlocal $1 $2;"]
     StoreLocal(Register, IRType, Register),
 
-    #[doc = "load $1 $0, $2;"]
+    #[doc = "$0 = ldlocal $1 $2;"]
     LoadLocal(Register, IRType, Register),
 
     #[doc = "$0 = phi $1 $2;"]
@@ -59,11 +94,59 @@ pub enum Instr {
     #[doc = "$0 = gte $1 $2, $3;"]
     GreaterThanEq(Register, IRType, Register, Register),
 
+    #[doc = "$dest = mkclsr $func ($captures);"]
+    MakeClosure {
+        dest: Register,
+        func: FuncName,
+        captures: RegisterList,
+    },
+
+    // #[doc = "$dest = callclsr $closure ($args);"]
+    // CallClosure {
+    //     dest: Register,
+    //     closure: Register,
+    //     args: RegisterList,
+    // },
+    #[doc = "$dest = rcp $env $index;"]
+    ReadCapture {
+        dest: Register,
+        env: Register,
+        index: usize,
+    },
+
+    #[doc = "$dest = struct {{$values}};"]
+    MakeStruct {
+        dest: Register,
+        values: RegisterList,
+    },
+
+    #[doc = "$dest = getfieldof $ty $structure $index;"]
+    GetFieldOf {
+        dest: Register,
+        ty: IRType,
+        structure: Register,
+        index: usize,
+    },
+
+    #[doc = "wcp $env $index $value;"]
+    WriteCapture {
+        env: Register,
+        index: usize,
+        value: Register,
+    },
+
+    #[doc = "store $ty $pointer $val;"]
+    StorePointer {
+        ty: IRType,
+        pointer: Register,
+        val: Register,
+    },
+
     #[doc = "$dest_reg = call $ty $callee($args);"]
     Call {
         dest_reg: Register,
         ty: IRType,
-        callee: FuncName,
+        callee: Callee,
         args: RegisterList,
     },
 

@@ -43,6 +43,7 @@ pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
     pub expr_id: ExprID,
+    pub is_captured: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +65,7 @@ impl Default for SymbolTable {
                 name: "Int".into(),
                 kind: SymbolKind::BuiltinType,
                 expr_id: -1,
+                is_captured: false,
             },
         );
 
@@ -73,6 +75,7 @@ impl Default for SymbolTable {
                 name: "Float".into(),
                 kind: SymbolKind::BuiltinType,
                 expr_id: -2,
+                is_captured: false,
             },
         );
 
@@ -141,6 +144,10 @@ impl SymbolTable {
         self.next_id
     }
 
+    pub fn mark_as_captured(&mut self, symbol_id: &SymbolID) {
+        self.symbols.get_mut(symbol_id).unwrap().is_captured = true;
+    }
+
     pub fn add(&mut self, name: &str, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
         self.next_id += 1;
         let symbol_id = SymbolID(self.next_id);
@@ -150,6 +157,7 @@ impl SymbolTable {
                 name: name.to_string(),
                 kind,
                 expr_id,
+                is_captured: false,
             },
         );
 

@@ -24,7 +24,7 @@ regex = "1"
 once_cell = "1.21.3"
 
 [features]
-default = ["cli"]
+# default = ["cli"]
 cli = ["dep:clap"]
 
 [profile.release]

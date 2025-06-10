@@ -1,11 +1,11 @@
-use std::{collections::HashMap, num::ParseIntError, ops::AddAssign, str::FromStr};
+use std::{collections::HashMap, fmt::Display, ops::AddAssign, str::FromStr};
 
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     environment::TypeDef,
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
-        instr::{FuncName, Instr},
+        instr::{Callee, FuncName, Instr},
         ir_module::IRModule,
         parser::parser::ParserError,
     },
@@ -18,15 +18,23 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub enum IRError {}
+pub enum IRError {
+    CannotParse,
+}
+
+impl Display for IRError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Register(pub i32);
 impl FromStr for Register {
-    type Err = ParseIntError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let reg = Register(str::parse(&s[1..])?);
+        let reg = Register(str::parse(&s[1..]).map_err(|_| IRError::CannotParse)?);
         Ok(reg)
     }
 }
@@ -107,8 +115,10 @@ pub enum IRType {
     Float,
     Bool,
     Func(Vec<IRType>, Box<IRType>),
-    TypeVar(String), // Add other types as needed
+    TypeVar(String),
     Enum(Vec<IRType>),
+    Struct(Vec<IRType>),
+    Pointer(Box<IRType>),
 }
 
 impl FromStr for IRType {
@@ -176,6 +186,16 @@ impl std::fmt::Display for IRType {
             }
             Self::TypeVar(name) => f.write_str(name),
             Self::Enum(_generics) => f.write_str("enum"),
+            Self::Struct(values) => write!(
+                f,
+                "{{{}}}",
+                values
+                    .iter()
+                    .map(|a| format!("{}", a))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Self::Pointer(t) => write!(f, "&{}", t),
         }
     }
 }
@@ -190,7 +210,7 @@ impl AddAssign<u32> for BasicBlockID {
 }
 
 impl FromStr for BasicBlockID {
-    type Err = ParserError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "entry" {
@@ -238,14 +258,14 @@ impl std::fmt::Display for PhiPredecessors {
 }
 
 impl FromStr for PhiPredecessors {
-    type Err = ParserError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let inner = s
             .trim()
             .strip_prefix('[')
             .and_then(|s| s.strip_suffix(']'))
-            .ok_or(ParserError::UnexpectedEOF)?;
+            .ok_or(IRError::CannotParse)?;
 
         if inner.trim().is_empty() {
             return Ok(PhiPredecessors(vec![]));
@@ -256,11 +276,11 @@ impl FromStr for PhiPredecessors {
             .map(|pair_str| {
                 let mut parts = pair_str.trim().splitn(2, ':');
 
-                let bb_str = parts.next().ok_or(ParserError::UnexpectedEOF)?.trim();
-                let reg_str = parts.next().ok_or(ParserError::UnexpectedEOF)?.trim();
+                let bb_str = parts.next().ok_or(IRError::CannotParse)?.trim();
+                let reg_str = parts.next().ok_or(IRError::CannotParse)?.trim();
 
                 let bb = bb_str.parse::<BasicBlockID>()?;
-                let reg = reg_str.parse::<Register>().map_err(ParserError::from)?;
+                let reg = reg_str.parse::<Register>()?;
 
                 Ok((reg, bb))
             })
@@ -292,7 +312,7 @@ impl std::fmt::Display for RegisterList {
 
 // Replace the old implementation with this one.
 impl FromStr for RegisterList {
-    type Err = ParserError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // The input 's' is the content *between* the parentheses, e.g., "%1, %2" or "".
@@ -307,16 +327,32 @@ impl FromStr for RegisterList {
             .map(|part| part.trim().parse::<Register>())
             .collect::<Result<Vec<Register>, _>>()
             .map(RegisterList)
-            .map_err(|e| e.into())
+            .map_err(|_| IRError::CannotParse)
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum SymbolValue {
+    Register(Register),
+    Capture(usize),
+}
+
+impl SymbolValue {
+    fn register(&self) -> &Register {
+        match self {
+            Self::Register(reg) => reg,
+            _ => panic!("tried to get a register from a capture: {:?}", self),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct CurrentFunction {
     current_block_idx: usize,
     next_block_id: BasicBlockID,
     blocks: Vec<BasicBlock>,
     pub registers: RegisterAllocator,
-    pub symbol_registers: HashMap<SymbolID, Register>,
+    pub symbol_registers: HashMap<SymbolID, SymbolValue>,
 }
 
 impl CurrentFunction {
@@ -355,7 +391,7 @@ impl CurrentFunction {
     }
 
     #[track_caller]
-    fn register_symbol(&mut self, symbol_id: SymbolID, register: Register) {
+    fn register_symbol(&mut self, symbol_id: SymbolID, register: SymbolValue) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!(
@@ -369,7 +405,7 @@ impl CurrentFunction {
         self.symbol_registers.insert(symbol_id, register);
     }
 
-    fn lookup_symbol(&self, symbol_id: &SymbolID) -> &Register {
+    fn lookup_symbol(&self, symbol_id: &SymbolID) -> &SymbolValue {
         self.symbol_registers
             .get(symbol_id)
             .unwrap_or_else(|| panic!("No register found for symbol: {:?}", symbol_id))
@@ -381,6 +417,7 @@ pub struct IRFunction {
     pub ty: IRType,
     pub name: String,
     pub blocks: Vec<BasicBlock>,
+    pub captures: Vec<IRType>,
 }
 
 impl IRFunction {
@@ -437,8 +474,14 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower(mut self, module: &mut IRModule) -> Result<SourceFile<Lowered>, IRError> {
-        let (expr_id, did_create) =
-            find_or_create_main(&mut self.source_file, self.symbol_table);
+        let (expr_id, did_create) = find_or_create_main(&mut self.source_file, self.symbol_table);
+
+        if did_create {
+            // We need to push our generated main func
+            self.current_functions.push(CurrentFunction::new());
+            let bbid = self.new_basic_block();
+            self.set_current_block(bbid);
+        }
 
         self.lower_function(&expr_id);
 
@@ -460,7 +503,7 @@ impl<'a> Lowerer<'a> {
         Ok(self.source_file.to_lowered())
     }
 
-    fn lower_function(&mut self, expr_id: &ExprID) -> SymbolID {
+    fn lower_function(&mut self, expr_id: &ExprID) -> (Option<Register>, SymbolID) {
         let typed_expr = self
             .source_file
             .typed_expr(expr_id)
@@ -470,6 +513,7 @@ impl<'a> Lowerer<'a> {
             ref name,
             ref params,
             ref body,
+            ref captures,
             ..
         } = typed_expr.expr
         else {
@@ -479,8 +523,7 @@ impl<'a> Lowerer<'a> {
             );
         };
 
-        self.current_functions.push(CurrentFunction::new());
-
+        // Make sure we always have a name, even when it's an anonymouse func
         let name = match name {
             Some(Name::Resolved(_, _)) => name.clone().unwrap(),
             None => {
@@ -494,7 +537,52 @@ impl<'a> Lowerer<'a> {
             _ => todo!(),
         };
 
-        log::trace!("lowering {:?}", name);
+        let Name::Resolved(self_symbol, _) = &name else {
+            panic!("unresolved")
+        };
+
+        let self_name = name.mangled(&typed_expr.ty);
+
+        // If we've got captures, we gotta stash those away. We're already
+        // assuming they're on the heap.
+        let mut capture_registers = vec![];
+        for capture in captures {
+            let value = if capture == self_symbol {
+                let reg = self.allocate_register();
+                self.push_instr(Instr::Ref(
+                    reg,
+                    typed_expr.ty.to_ir(),
+                    RefKind::Func(self_name.clone()),
+                ));
+
+                self.current_func_mut()
+                    .register_symbol(*capture, SymbolValue::Register(reg));
+
+                SymbolValue::Register(reg)
+            } else {
+                *self.current_func().lookup_symbol(capture)
+            };
+
+            let register = match value {
+                SymbolValue::Register(reg) => reg,
+                SymbolValue::Capture(_) => todo!(),
+            };
+            capture_registers.push(register);
+        }
+
+        let environment_reg = self.allocate_register();
+        self.push_instr(Instr::MakeStruct {
+            dest: environment_reg,
+            values: RegisterList(capture_registers),
+        });
+
+        self.current_functions.push(CurrentFunction::new());
+
+        // Define the captures in the new func scope
+        for (i, capture) in captures.iter().enumerate() {
+            self.current_func_mut()
+                .register_symbol(*capture, SymbolValue::Capture(i));
+        }
 
         let Some(Expr::Block(body_exprs)) = self.source_file.get(body).cloned() else {
             panic!("did not get body")
@@ -503,6 +591,9 @@ impl<'a> Lowerer<'a> {
         let id = self.new_basic_block();
         self.set_current_block(id);
 
+        // Allocate our env reg
+        let _env_register = self.allocate_register();
+
         for param in params {
             let Expr::Parameter(Name::Resolved(symbol, _), _) =
                 self.source_file.get(param).unwrap().clone()
@@ -510,8 +601,9 @@ impl<'a> Lowerer<'a> {
                 panic!("didn't get parameter")
             };
 
-            let register = self.current_func_mut().registers.allocate();
-            self.current_func_mut().register_symbol(symbol, register);
+            let register = self.allocate_register();
+            self.current_func_mut()
+                .register_symbol(symbol, SymbolValue::Register(register));
         }
 
         for (i, id) in body_exprs.iter().enumerate() {
@@ -523,8 +615,14 @@ impl<'a> Lowerer<'a> {
             };
 
             if i == body_exprs.len() - 1 {
-                self.current_block_mut()
-                    .push_instr(Instr::Ret(ret.0, ret.1));
+                // if we already have a ret at the end, don't add another one
+                if !matches!(
+                    self.current_block_mut().instructions.last(),
+                    Some(Instr::Ret(_, _))
+                ) {
+                    self.current_block_mut()
+                        .push_instr(Instr::Ret(ret.0, ret.1));
+                }
             }
         }
 
@@ -532,6 +630,20 @@ impl<'a> Lowerer<'a> {
             ty: typed_expr.ty.to_ir(),
             name: name.mangled(&typed_expr.ty),
             blocks: self.current_func_mut().blocks.clone(),
+            captures: captures
+                .iter()
+                .map(|c| {
+                    self.source_file
+                        .type_from_symbol(c, self.symbol_table)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "could not find type for symbol: {:?} in {:?}",
+                                c, self.symbol_table
+                            )
+                        })
+                        .to_ir()
+                })
+                .collect(),
         };
         self.lowered_functions.push(func.clone());
         self.current_functions.pop();
@@ -540,7 +652,36 @@ impl<'a> Lowerer<'a> {
             panic!("no symbol")
         };
 
-        symbol
+        if captures.is_empty() {
+            let register = self.allocate_register();
+            self.current_func_mut()
+                .register_symbol(symbol, SymbolValue::Register(register));
+
+            self.push_instr(Instr::Ref(
+                register,
+                typed_expr.ty.to_ir(),
+                RefKind::Func(name.mangled(&typed_expr.ty)),
+            ));
+
+            return (Some(register), symbol);
+        } else {
+            let register = self.allocate_register();
+
+            println!("######## making closure: {:?}", name);
+
+            self.push_instr(Instr::MakeClosure {
+                dest: register,
+                func: FuncName(name.mangled(&typed_expr.ty)),
+                captures: RegisterList(
+                    captures
+                        .iter()
+                        .map(|c| *self.current_func().lookup_symbol(c).register())
+                        .collect(),
+                ),
+            });
+
+            (Some(register), symbol)
+        }
     }
 
     fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
@@ -556,23 +697,7 @@ impl<'a> Lowerer<'a> {
             Expr::If(_, _, _) => self.lower_if(expr_id),
             Expr::Block(_) => self.lower_block(expr_id),
             Expr::Call(callee, args) => self.lower_call(callee, args, typed_expr.ty),
-            Expr::Func { name, .. } => {
-                let symbol_id = self.lower_function(expr_id);
-                let reg = self.current_func_mut().registers.allocate();
-                self.current_func_mut().register_symbol(symbol_id, reg);
-
-                let name = match name {
-                    Some(name) => name.mangled(&typed_expr.ty),
-                    None => format!("F{}", symbol_id.0),
-                };
-
-                self.current_block_mut().push_instr(Instr::Ref(
-                    reg,
-                    typed_expr.ty.to_ir(),
-                    RefKind::Func(name),
-                ));
-                Some(reg)
-            }
+            Expr::Func { .. } => self.lower_function(expr_id).0,
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(_, name) => self.lower_member(expr_id, &name),
@@ -742,7 +867,7 @@ impl<'a> Lowerer<'a> {
                             i as u16,
                         ));
                         self.current_func_mut()
-                            .register_symbol(symbol_id, value_reg);
+                            .register_symbol(symbol_id, SymbolValue::Register(value_reg));
                     }
                     // Handle nested patterns recursively here.
                 }
@@ -964,17 +1089,52 @@ impl<'a> Lowerer<'a> {
         Some(return_reg)
     }
 
+    // FIXME: Needs to handle closures
     fn lower_assignment(&mut self, lhs: &ExprID, rhs: &ExprID) -> Option<Register> {
         let rhs = self
             .lower_expr(rhs)
             .expect("Did not get rhs for assignment");
 
-        match self.source_file.get(lhs).unwrap().clone() {
+        let lhs_typed_expr = self.source_file.typed_expr(lhs).unwrap();
+        match lhs_typed_expr.expr.clone() {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
-                self.current_func_mut().register_symbol(symbol_id, rhs);
+                if self.symbol_table.get(&symbol_id).unwrap().is_captured {
+                    let pointer_reg = self.allocate_register();
+                    self.push_instr(Instr::MakeBox(pointer_reg, lhs_typed_expr.ty.to_ir(), rhs));
+                    self.current_func_mut()
+                        .register_symbol(symbol_id, SymbolValue::Register(pointer_reg));
+                } else {
+                    self.current_func_mut()
+                        .register_symbol(symbol_id, SymbolValue::Register(rhs));
+                }
                 None
             }
-            _ => todo!(),
+            Expr::Variable(Name::Resolved(symbol_id, _), _) => {
+                if self.symbol_table.get(&symbol_id).unwrap().is_captured {
+                    match self.current_func().lookup_symbol(&symbol_id) {
+                        SymbolValue::Register(reg) => self.push_instr(Instr::StorePointer {
+                            ty: lhs_typed_expr.ty.to_ir(),
+                            pointer: *reg,
+                            val: rhs,
+                        }),
+                        SymbolValue::Capture(index) => {
+                            self.push_instr(Instr::WriteCapture {
+                                env: Register(0),
+                                index: *index,
+                                value: rhs,
+                            });
+                        }
+                    }
+                } else {
+                    let reg = *self.current_func().lookup_symbol(&symbol_id).register();
+                    let new_reg = self.allocate_register();
+                    self.push_instr(Instr::StoreLocal(new_reg, lhs_typed_expr.ty.to_ir(), reg));
+                    self.current_func_mut()
+                        .register_symbol(symbol_id, SymbolValue::Register(new_reg));
+                }
+                None
+            }
+            _ => todo!(""),
         }
     }
 
@@ -1002,7 +1162,18 @@ impl<'a> Lowerer<'a> {
             panic!("Unresolved variable: {:?}", name)
         };
 
-        Some(*self.current_func_mut().lookup_symbol(symbol_id))
+        match *self.current_func_mut().lookup_symbol(symbol_id) {
+            SymbolValue::Register(reg) => Some(reg),
+            SymbolValue::Capture(index) => {
+                let dest = self.allocate_register();
+                self.push_instr(Instr::ReadCapture {
+                    dest,
+                    env: Register(0),
+                    index,
+                });
+                Some(dest)
+            }
+        }
     }
 
     fn lower_if(&mut self, expr_id: &ExprID) -> Option<Register> {
@@ -1077,46 +1248,19 @@ impl<'a> Lowerer<'a> {
             return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
         }
 
-        let name_str = match &callee_typed_expr.expr {
-            Expr::Variable(name, _) => {
-                // Check if the type of this variable is indeed a function
-                if !matches!(callee_typed_expr.ty, Ty::Func(_, _)) {
-                    panic!(
-                        "Attempting to call a non-function variable: {:?}",
-                        callee_typed_expr
-                    );
-                }
+        let callee_reg = self
+            .lower_expr(&callee)
+            .expect("Callee expression did not produce a value");
 
-                name.mangled(&callee_typed_expr.ty)
-            }
-            Expr::Func { name, .. } => {
-                let sym = self.lower_function(&callee);
-
-                if let Some(Name::Resolved(_, name_str)) = name {
-                    name_str.to_string()
-                } else {
-                    Name::Resolved(sym, format!("fn{}", sym.0)).mangled(&callee_typed_expr.ty)
-                }
-            }
-            // Later, you might handle other forms of callees, like Expr::Member for methods,
-            // or expressions that evaluate to function pointers/closures.
-            _ => panic!(
-                "Unsupported callee expression type: {:?}, {:?}, (ty: {:?})",
-                callee_typed_expr.expr, callee_typed_expr.ty, ty
-            ),
-        };
-
-        // 3. Allocate Destination Register for Return Value (if not void)
         let dest_reg = self.allocate_register();
 
-        self.current_block_mut().push_instr(Instr::Call {
+        self.push_instr(Instr::Call {
             ty: ty.to_ir(),
-            dest_reg, // clone if Register is Copy, else it's fine
-            callee: FuncName(name_str.to_string()),
+            dest_reg,
+            callee: Callee::Register(callee_reg),
             args: RegisterList(arg_registers),
         });
 
-        // 5. Return the destination register
         Some(dest_reg)
     }
 
@@ -1126,6 +1270,10 @@ impl<'a> Lowerer<'a> {
 
     fn allocate_register(&mut self) -> Register {
         self.current_func_mut().registers.allocate()
+    }
+
+    fn current_func(&self) -> &CurrentFunction {
+        self.current_functions.last().unwrap()
     }
 
     fn current_func_mut(&mut self) -> &mut CurrentFunction {
@@ -1189,6 +1337,7 @@ fn find_or_create_main(
         params: vec![],
         body: body_id,
         ret: None,
+        captures: vec![],
     };
 
     source_file.set_typed_expr(
@@ -1214,6 +1363,7 @@ fn find_or_create_main(
             name: "@main".into(),
             kind: SymbolKind::Func,
             expr_id: SymbolID::GENERATED_MAIN.0,
+            is_captured: false,
         },
     );
 
@@ -1225,9 +1375,9 @@ mod tests {
     use prettydiff::diff_lines;
 
     use crate::{
-        SymbolTable, check,
+        check_with_symbols,
         lowering::{
-            instr::FuncName,
+            instr::{Callee, FuncName},
             ir_module::IRModule,
             ir_printer::print,
             lowerer::{
@@ -1238,8 +1388,8 @@ mod tests {
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::default();
+        let (typed, mut symbol_table) = check_with_symbols(input).unwrap();
+
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
         lowerer.lower(&mut module)?;
@@ -1267,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_nested_function() {
+    fn lowers_function() {
         let lowered = lower("func foo() { 123 }").unwrap();
         assert_lowered_functions!(
             lowered,
@@ -1275,26 +1425,28 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Int.into()),
                     name: "@_5_foo".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
-                            Instr::ConstantInt(Register(0), 123),
-                            Instr::Ret(IRType::Int, Some(Register(0)))
+                            Instr::ConstantInt(Register(1), 123),
+                            Instr::Ret(IRType::Int, Some(Register(1)))
                         ],
                     }]
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
                     name: "@main".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
                             Instr::Ref(
-                                Register(0),
+                                Register(1),
                                 IRType::Func(vec![], IRType::Int.into()),
                                 RefKind::Func("@_5_foo".into()),
                             ),
-                            Instr::Ret(IRType::Func(vec![], IRType::Int.into()), Some(Register(0)))
+                            Instr::Ret(IRType::Func(vec![], IRType::Int.into()), Some(Register(1)))
                         ],
                     }]
                 },
@@ -1320,6 +1472,7 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                     name: "@_5_foo".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -1332,6 +1485,7 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
                     name: "@main".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -1363,6 +1517,7 @@ mod tests {
                         IRType::TypeVar("T3".into()).into()
                     ),
                     name: "@_5_foo".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![Instr::Ret(
@@ -1374,6 +1529,7 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
                     name: "@main".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -1389,7 +1545,7 @@ mod tests {
                             Instr::Call {
                                 ty: IRType::Int,
                                 dest_reg: Register(2),
-                                callee: FuncName("@_5_foo".into()),
+                                callee: Callee::Register(Register(0)),
                                 args: vec![Register(1)].into()
                             },
                             Instr::Ret(IRType::Int, Some(Register(2)))
@@ -1411,6 +1567,7 @@ mod tests {
                         vec![IRType::TypeVar("T3".into())],
                         IRType::TypeVar("T3".into()).into()
                     ),
+                    captures: vec![],
                     name: "@_5_foo".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
@@ -1423,6 +1580,7 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
                     name: "@main".into(),
+                    captures: vec![],
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -1456,6 +1614,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1475,6 +1634,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1494,6 +1654,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1514,6 +1675,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1535,6 +1697,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1556,6 +1719,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1577,6 +1741,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1598,6 +1763,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1627,6 +1793,7 @@ mod tests {
         let expected = vec![IRFunction {
             ty: IRType::Func(vec![], IRType::Void.into()),
             name: "@main".into(),
+            captures: vec![],
             blocks: vec![
                 // if block
                 BasicBlock {
@@ -1683,6 +1850,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1702,6 +1870,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1724,7 +1893,7 @@ mod tests {
         let lowered = lower(
             "
         match 123 {
-            123 -> 3.14,
+            123 -> 3.15,
             456 -> 2.71
         }
         ",
@@ -1735,6 +1904,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![
                     BasicBlock {
                         id: BasicBlockID(0),
@@ -1770,7 +1940,7 @@ mod tests {
                     BasicBlock {
                         id: BasicBlockID(2),
                         instructions: vec![
-                            Instr::ConstantFloat(Register(3), 3.14),
+                            Instr::ConstantFloat(Register(3), 3.15),
                             Instr::Jump(BasicBlockID(1))
                         ]
                     },
@@ -1802,6 +1972,7 @@ mod tests {
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
+                captures: vec![],
                 blocks: vec![
                     // Block 0: Dispatch
                     BasicBlock {
@@ -1883,6 +2054,7 @@ mod tests {
             lowered,
             vec![IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
+                captures: vec![],
                 name: "@main".into(),
                 blocks: vec![
                     BasicBlock {
@@ -1937,6 +2109,60 @@ mod tests {
                     },
                 ]
             }]
+        )
+    }
+
+    #[test]
+    fn lowers_closure() {
+        let lowered = lower(
+            "
+        let y = 123
+        func foo(x) { x + y }
+        ",
+        )
+        .unwrap();
+        assert_lowered_functions!(
+            lowered,
+            vec![
+                IRFunction {
+                    ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                    name: "@_5_foo".into(),
+                    captures: vec![IRType::Int],
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            Instr::ReadCapture {
+                                dest: Register(2),
+                                env: Register(0),
+                                index: 0
+                            },
+                            Instr::Add(Register(3), IRType::Int, Register(1), Register(2)),
+                            Instr::Ret(IRType::Int, Some(Register(3)))
+                        ],
+                    }]
+                },
+                IRFunction {
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
+                    captures: vec![],
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            Instr::ConstantInt(Register(0), 123),
+                            Instr::MakeBox(Register(1), IRType::Int, Register(0)),
+                            Instr::MakeClosure {
+                                dest: Register(3),
+                                func: FuncName("@_5_foo".into()),
+                                captures: RegisterList(vec![Register(1)])
+                            },
+                            Instr::Ret(
+                                IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                                Some(Register(3))
+                            )
+                        ],
+                    }]
+                },
+            ]
         )
     }
 }

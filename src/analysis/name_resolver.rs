@@ -18,6 +18,9 @@ pub struct NameResolver {
 
     // For resolving `self` references
     type_symbol_stack: Vec<SymbolID>,
+
+    // For resolving captures
+    func_stack: Vec<(ExprID /* func expr id */, usize /* scope depth */)>,
 }
 
 impl Default for NameResolver {
@@ -30,6 +33,7 @@ impl Default for NameResolver {
             symbol_table,
             scopes: vec![initial_scope],
             type_symbol_stack: vec![],
+            func_stack: vec![],
         }
     }
 }
@@ -42,6 +46,7 @@ impl NameResolver {
             symbol_table,
             scopes: vec![initial_scope],
             type_symbol_stack: vec![],
+            func_stack: vec![],
         }
     }
 
@@ -137,11 +142,13 @@ impl NameResolver {
                     body,
                     ret,
                     name,
+                    ..
                 } => {
                     if !self.type_symbol_stack.is_empty() && name.is_none() {
                         panic!("missing method name");
                     }
 
+                    self.func_stack.push((*node_id, self.scopes.len()));
                     self.start_scope();
 
                     self.resolve_nodes(&generics, source_file);
@@ -167,6 +174,7 @@ impl NameResolver {
 
                     self.resolve_nodes(&to_resolve, source_file);
                     self.end_scope();
+                    self.func_stack.pop();
                 }
                 Parameter(name, ty_repr) => {
                     if let Some(ty_repr) = ty_repr {
@@ -175,7 +183,7 @@ impl NameResolver {
 
                     match name {
                         Name::Raw(name_str) => {
-                            let symbol_id = self.lookup(&name_str);
+                            let (symbol_id, _) = self.lookup(&name_str);
                             source_file.nodes[*node_id as usize] =
                                 Parameter(Name::Resolved(symbol_id, name_str), ty_repr);
                         }
@@ -192,8 +200,26 @@ impl NameResolver {
                                     .expect("used self outside of type"),
                             )
                         } else {
-                            let symbol_id = self.lookup(&name_str);
+                            let (symbol_id, depth) = self.lookup(&name_str);
                             log::trace!("Replacing variable {} with {:?}", name_str, symbol_id);
+
+                            // Check to see if this is a capture
+                            if let Some((func_id, func_depth)) = self.func_stack.last() {
+                                if &depth < func_depth {
+                                    let Func { captures, .. } =
+                                        source_file.get_mut(func_id).unwrap()
+                                    else {
+                                        unreachable!()
+                                    };
+
+                                    if !captures.contains(&symbol_id) {
+                                        captures.push(symbol_id);
+                                    }
+
+                                    self.symbol_table.mark_as_captured(&symbol_id);
+                                }
+                            }
+
                             Name::Resolved(symbol_id, name_str)
                         };
 
@@ -223,7 +249,7 @@ impl NameResolver {
                             } else {
                                 // Usage site of a type name (e.g., T in `case some(T)`, or `Int`)
                                 // Look up an existing symbol.
-                                let symbol_id = self.lookup(&raw_name_str);
+                                let (symbol_id, _) = self.lookup(&raw_name_str);
                                 Name::Resolved(symbol_id, raw_name_str)
                             }
                         }
@@ -301,6 +327,7 @@ impl NameResolver {
                 params,
                 body,
                 ret,
+                captures,
             } = source_file.get(id).unwrap().clone()
             {
                 let symbol_id = self.declare(name.clone(), SymbolKind::Func, id);
@@ -311,6 +338,7 @@ impl NameResolver {
                     params,
                     body,
                     ret,
+                    captures,
                 };
             }
         }
@@ -443,13 +471,17 @@ impl NameResolver {
         symbol_id
     }
 
-    fn lookup(&self, name: &str) -> SymbolID {
+    fn lookup(&self, name: &str) -> (SymbolID, usize /* depth */) {
         // self.scopes.last().unwrap().get(name)
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|frame| frame.get(name).copied())
-            .unwrap_or(SymbolID(0))
+        for (i, scope) in self.scopes.iter().rev().enumerate() {
+            if let Some(symbol_id) = scope.get(name) {
+                // The depth of the scope where the variable was found
+                let found_depth = self.scopes.len() - 1 - i;
+                return (*symbol_id, found_depth);
+            }
+        }
+
+        (SymbolID(0), 0)
     }
 
     fn start_scope(&mut self) {
@@ -471,6 +503,12 @@ mod tests {
         let tree = parse(code, 123).expect("parse failed");
         let resolver = NameResolver::default();
         resolver.resolve(tree).0
+    }
+
+    fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
+        let tree = parse(code, 123).expect("parse failed");
+        let resolver = NameResolver::default();
+        resolver.resolve(tree)
     }
 
     #[test]
@@ -761,6 +799,44 @@ mod tests {
             }
         }
         ",
+        );
+    }
+
+    #[test]
+    fn resolves_captures() {
+        let (resolved, symbol_table) = resolve_with_symbols(
+            "
+        let count = 0
+        func counter() {
+            count
+            count
+        }
+        ",
+        );
+
+        assert_eq!(*resolved.roots()[0].unwrap(), Assignment(0, 1),);
+        assert_eq!(
+            *resolved.get(&0).unwrap(),
+            Let(Name::Resolved(SymbolID::resolved(2), "count".into()), None)
+        );
+
+        assert!(
+            symbol_table
+                .get(&SymbolID::resolved(2))
+                .unwrap()
+                .is_captured
+        );
+
+        assert_eq!(
+            *resolved.roots()[1].unwrap(),
+            Func {
+                name: Some(Name::Resolved(SymbolID::resolved(1), "counter".into())),
+                generics: vec![],
+                params: vec![],
+                body: 5,
+                ret: None,
+                captures: vec![SymbolID::resolved(2)],
+            }
         );
     }
 }

@@ -1,4 +1,4 @@
-use crate::{token::Token, token_kind::TokenKind};
+use crate::{SymbolID, token::Token, token_kind::TokenKind};
 
 use super::{name::Name, parser::ExprID};
 
@@ -79,6 +79,7 @@ pub enum Expr {
         params: Vec<ExprID>, /* params tuple */
         body: ExprID,        /* body */
         ret: Option<ExprID>, /* return type */
+        captures: Vec<SymbolID>,
     },
     Parameter(Name /* name */, Option<ExprID> /* TypeRepr */),
 

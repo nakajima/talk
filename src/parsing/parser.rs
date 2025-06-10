@@ -449,6 +449,7 @@ impl<'a> Parser<'a> {
             params,
             body,
             ret: ret.transpose()?,
+            captures: vec![],
         })?;
 
         if self.did_match(TokenKind::LeftParen)? {
@@ -626,7 +627,8 @@ impl<'a> Parser<'a> {
     pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
         log::trace!(
             "Parsing {:?} with precedence: {:?}",
-            self.current, precedence
+            self.current,
+            precedence
         );
         self.skip_newlines();
 
@@ -992,7 +994,8 @@ mod tests {
                 generics: vec![],
                 params: vec![],
                 body: 0,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
         assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
@@ -1016,7 +1019,8 @@ mod tests {
                 generics: vec![],
                 params: vec![0],
                 body: 2,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
     }
@@ -1033,7 +1037,8 @@ mod tests {
                 generics: vec![],
                 params: vec![],
                 body: 0,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
         assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
@@ -1056,7 +1061,8 @@ mod tests {
                 generics: vec![0],
                 params: vec![1],
                 body: 4,
-                ret: Some(2)
+                ret: Some(2),
+                captures: vec![],
             }
         );
 
@@ -1079,7 +1085,8 @@ mod tests {
                 generics: vec![],
                 params: vec![],
                 body: 0,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
 
@@ -1091,7 +1098,8 @@ mod tests {
                 generics: vec![],
                 params: vec![],
                 body: 2,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
         assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![]));
@@ -1109,7 +1117,8 @@ mod tests {
                 generics: vec![],
                 params: vec![0, 1],
                 body: 2,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
     }
@@ -1125,7 +1134,8 @@ mod tests {
                 generics: vec![],
                 params: vec![1],
                 body: 2,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
 
@@ -1203,7 +1213,8 @@ mod tests {
                 generics: vec![],
                 params: vec![],
                 body: 2,
-                ret: Some(0)
+                ret: Some(0),
+                captures: vec![],
             }
         );
     }
@@ -1457,7 +1468,8 @@ mod tests {
                 generics: vec![],
                 params: vec![3],
                 body: 4,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
 
@@ -1493,7 +1505,8 @@ mod tests {
                 generics: vec![],
                 params: vec![2],
                 body: 3,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         );
 
@@ -1543,7 +1556,8 @@ mod tests {
                 generics: vec![],
                 params: vec![],
                 body: 4,
-                ret: None
+                ret: None,
+                captures: vec![],
             }
         )
     }

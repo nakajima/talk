@@ -42,7 +42,7 @@ fn print_func_def(func: &IRFunction) -> String {
     format!(
         "func {}{}",
         func.name,
-        print_func_sig_with_args(func.args(), func.ret())
+        print_func_sig_with_args(func.args(), &func.captures, func.ret())
     )
 }
 
@@ -66,20 +66,27 @@ fn print_func_sig(args: &[IRType], ret: &IRType) -> String {
     res
 }
 
-fn print_func_sig_with_args(args: &[IRType], ret: &IRType) -> String {
+fn print_func_sig_with_args(args: &[IRType], captures: &[IRType], ret: &IRType) -> String {
     let mut res = String::new();
 
     res.push('(');
 
+    let offset = if captures.is_empty() {
+        0
+    } else {
+        res.push_str("env %0");
+        1
+    };
+
     for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
+        if (i + offset) > 0 {
             res.push_str(", ");
         }
 
         res.push_str(&format!(
             "{} {}",
             &format_ir_ty(arg),
-            &format_register(&Register(i as i32))
+            &format_register(&Register((i + offset) as i32))
         ));
     }
 
@@ -98,6 +105,7 @@ pub fn format_ir_ty(ty: &IRType) -> String {
         IRType::Float => "float".into(),
         IRType::Func(args, ret) => print_func_sig(args, ret),
         IRType::TypeVar(name) => name.into(),
+        IRType::Struct(values) => format!("{{{:?}}}", values),
         IRType::Enum(types) => format!(
             "enum({})",
             types
@@ -106,6 +114,7 @@ pub fn format_ir_ty(ty: &IRType) -> String {
                 .collect::<Vec<String>>()
                 .join(", ")
         ),
+        IRType::Pointer(t) => format!("&{}", t)
     }
 }
 

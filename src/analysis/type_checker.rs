@@ -174,6 +174,7 @@ impl TypeChecker {
                 params,
                 body,
                 ret,
+                ..
             } => self.infer_func(
                 id,
                 env,
