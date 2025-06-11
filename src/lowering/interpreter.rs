@@ -27,7 +27,11 @@ struct StackFrame {
 pub struct IRInterpreter {
     program: IRModule,
     stack: Vec<StackFrame>,
+    heap: Vec<Value>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pointer(usize);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -36,6 +40,8 @@ pub enum Value {
     Bool(bool),
     Enum { tag: u16, values: Vec<Value> },
     Void,
+    Struct(Vec<Value>),
+    Pointer(Pointer),
 }
 
 impl Value {
@@ -109,6 +115,7 @@ impl IRInterpreter {
         Self {
             program,
             stack: vec![],
+            heap: vec![],
         }
     }
 
@@ -342,12 +349,57 @@ impl IRInterpreter {
                     self.register_value(&a).gte(&self.register_value(&b))?,
                 );
             }
-            _ => todo!("Don't know how to execute {:?}", instr),
+            Instr::Alloc { dest, .. } => {
+                let ptr = self.alloc();
+                self.set_register_value(&dest, Value::Pointer(ptr));
+            }
+            Instr::Store { val, location, .. } => {
+                let Value::Pointer(ptr) = self.register_value(&location) else {
+                    panic!("no pointer at location: {}", location)
+                };
+
+                self.store(&ptr, self.register_value(&val))
+            },
+            Instr::Load { dest, addr, .. } => {
+                let Value::Pointer(ptr) = self.register_value(&addr) else {
+                    panic!("no pointer at location: {}", addr)
+                };
+
+                let val = self.load(ptr);
+                self.set_register_value(&dest, val.clone());
+            },
+            Instr::GetElementPointer {
+                dest,
+                from,
+                ty,
+                index,
+            } => todo!(),
+            Instr::MakeStruct { dest, ty, values } => todo!(),
+            Instr::GetValueOf {
+                dest,
+                ty,
+                structure,
+                index,
+            } => todo!(),
         }
 
         self.stack.last_mut().unwrap().pc += 1;
 
         Ok(None)
+    }
+
+    fn alloc(&mut self) -> Pointer {
+        let i = self.heap.len();
+        self.heap.push(Value::Void);
+        Pointer(i)
+    }
+
+    fn load(&self, pointer: Pointer) -> &Value {
+        &self.heap[pointer.0]
+    }
+
+    fn store(&mut self, ptr: &Pointer, val: Value) {
+        self.heap[ptr.0] = val;
     }
 
     fn current_basic_block(&self) -> &BasicBlock {

@@ -1079,9 +1079,9 @@ impl<'a> Lowerer<'a> {
         Some(return_reg)
     }
 
-    fn lower_assignment(&mut self, lhs: &ExprID, rhs: &ExprID) -> Option<Register> {
+    fn lower_assignment(&mut self, lhs: &ExprID, rhs_id: &ExprID) -> Option<Register> {
         let rhs = self
-            .lower_expr(rhs)
+            .lower_expr(rhs_id)
             .expect("Did not get rhs for assignment");
 
         match self.source_file.get(lhs).unwrap().clone() {
@@ -1089,6 +1089,42 @@ impl<'a> Lowerer<'a> {
                 self.current_func_mut()
                     .register_symbol(symbol_id, rhs.into());
                 None
+            }
+            Expr::Variable(Name::Resolved(symbol, _), _) => {
+                let value = self
+                    .lookup_register(&symbol)
+                    .expect("didn't get lhs for assignment")
+                    .clone();
+
+                match value {
+                    SymbolValue::Register(_reg) => {
+                        let new_reg = self.allocate_register();
+                        self.push_instr(Instr::StoreLocal(
+                            new_reg,
+                            self.source_file.type_for(*rhs_id).to_ir(),
+                            rhs,
+                        ));
+                        self.current_func_mut()
+                            .register_symbol(symbol, new_reg.into());
+                        None
+                    }
+                    SymbolValue::Capture(idx, ty) => {
+                        let capture_ptr = self.allocate_register();
+                        self.push_instr(Instr::GetElementPointer {
+                            dest: capture_ptr,
+                            from: Register(0),
+                            ty: ty.clone(),
+                            index: idx.clone(),
+                        });
+                        self.push_instr(Instr::Store {
+                            ty: ty.clone(),
+                            val: rhs,
+                            location: capture_ptr,
+                        });
+
+                        None
+                    }
+                }
             }
             _ => todo!(),
         }
