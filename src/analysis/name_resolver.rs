@@ -71,6 +71,7 @@ impl NameResolver {
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
+                LiteralArray(items) => self.resolve_nodes(&items, source_file),
                 LiteralTrue | LiteralFalse => continue,
                 Return(rhs) => {
                     if let Some(rhs) = rhs {
@@ -205,19 +206,19 @@ impl NameResolver {
 
                             // Check to see if this is a capture
                             if let Some((func_id, func_depth)) = self.func_stack.last()
-                                && &depth < func_depth {
-                                    let Func { captures, .. } =
-                                        source_file.get_mut(func_id).unwrap()
-                                    else {
-                                        unreachable!()
-                                    };
+                                && &depth < func_depth
+                            {
+                                let Func { captures, .. } = source_file.get_mut(func_id).unwrap()
+                                else {
+                                    unreachable!()
+                                };
 
-                                    if !captures.contains(&symbol_id) {
-                                        captures.push(symbol_id);
-                                    }
-
-                                    self.symbol_table.mark_as_captured(&symbol_id);
+                                if !captures.contains(&symbol_id) {
+                                    captures.push(symbol_id);
                                 }
+
+                                self.symbol_table.mark_as_captured(&symbol_id);
+                            }
 
                             Name::Resolved(symbol_id, name_str)
                         };

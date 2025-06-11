@@ -549,6 +549,19 @@ impl<'a> Parser<'a> {
         self.add_expr(Expr::Block(items))
     }
 
+    pub(crate) fn array_literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::LeftBracket)?;
+        self.skip_newlines();
+
+        let mut items = vec![];
+        while !self.did_match(TokenKind::RightBracket)? {
+            items.push(self.parse_with_precedence(Precedence::None)?);
+            self.consume(TokenKind::Comma).ok();
+        }
+
+        self.add_expr(Expr::LiteralArray(items))
+    }
+
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
         let (name, _) = self.try_identifier().unwrap();
         let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None))?;
@@ -679,10 +692,11 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone()
-            && let TokenKind::Identifier(ref name) = current.kind {
-                self.advance();
-                return Some((name.to_string(), current));
-            };
+            && let TokenKind::Identifier(ref name) = current.kind
+        {
+            self.advance();
+            return Some((name.to_string(), current));
+        };
 
         None
     }
@@ -700,10 +714,11 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone()
-            && current.kind == expected {
-                self.advance();
-                return Ok(true);
-            };
+            && current.kind == expected
+        {
+            self.advance();
+            return Ok(true);
+        };
 
         Ok(false)
     }
@@ -713,10 +728,11 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone()
-            && current.kind == expected {
-                self.advance();
-                return Ok(current);
-            };
+            && current.kind == expected
+        {
+            self.advance();
+            return Ok(current);
+        };
 
         Err(ParserError::UnexpectedToken(
             vec![expected],
@@ -1643,6 +1659,40 @@ mod pattern_parsing_tests {
                 variant_name: "foo".into(),
                 fields: vec![]
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod arrays {
+    use crate::{expr::Expr, parser::parse};
+
+    #[test]
+    fn parses_array_literal() {
+        let parsed = parse("[1, 2, 3]", 0).unwrap();
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::LiteralArray(vec!(0, 1, 2))
+        );
+
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("2".into()));
+        assert_eq!(*parsed.get(&2).unwrap(), Expr::LiteralInt("3".into()));
+    }
+
+    #[test]
+    fn parses_array_literal_with_newlines() {
+        let parsed = parse(
+            "[
+          1,
+        2, 3
+        ]",
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::LiteralArray(vec!(0, 1, 2))
         );
     }
 }

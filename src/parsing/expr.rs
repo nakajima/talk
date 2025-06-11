@@ -39,6 +39,7 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
+    LiteralArray(Vec<ExprID>),
     LiteralInt(String),
     LiteralFloat(String),
     LiteralTrue,

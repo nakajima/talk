@@ -27,6 +27,7 @@ impl Precedence {
     }
 }
 
+#[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct ParseHandler<'a> {
     pub(crate) prefix: Option<fn(&mut Parser<'a>, bool) -> Result<ExprID, ParserError>>,
@@ -108,16 +109,22 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
+            TokenKind::LeftBracket => ParseHandler {
+                prefix: Some(Parser::array_literal),
+                infix: None,
+                precedence: Precedence::Call,
+            },
+
             TokenKind::Int(_) => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
-                precedence: Precedence::None,
+                precedence: Precedence::Primary,
             },
 
             TokenKind::Float(_) => ParseHandler {
                 prefix: Some(Parser::literal),
                 infix: None,
-                precedence: Precedence::None,
+                precedence: Precedence::Primary,
             },
 
             TokenKind::Plus => ParseHandler {

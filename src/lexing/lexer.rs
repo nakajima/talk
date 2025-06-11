@@ -87,13 +87,16 @@ impl<'a> Lexer<'a> {
             '}' => self.make(RightBrace),
             '(' => self.make(LeftParen),
             ')' => self.make(RightParen),
+            '[' => self.make(LeftBracket),
+            ']' => self.make(RightBracket),
             '\n' => self.make(Newline),
             '_' => {
                 if let Some(next) = self.chars.peek()
-                    && (*next == '_' || next.is_alphanumeric()) {
-                        let ident = self.identifier(self.current - 1);
-                        return self.make(ident);
-                    }
+                    && (*next == '_' || next.is_alphanumeric())
+                {
+                    let ident = self.identifier(self.current - 1);
+                    return self.make(ident);
+                }
 
                 self.make(Underscore)
             }
