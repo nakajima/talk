@@ -69,6 +69,13 @@ pub enum Instr {
         location: Register,
     },
 
+    #[doc = "$dest = load $ty $addr;"]
+    Load {
+        dest: Register,
+        ty: IRType,
+        addr: Register,
+    },
+
     #[doc = "$dest = getelementptr $ty $from $index;"]
     GetElementPointer {
         dest: Register,
