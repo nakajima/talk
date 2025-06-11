@@ -128,7 +128,6 @@ impl<'a> Parser<'a> {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
             blocks,
-            env_reg: Register(0),
             env_ty: IRType::Struct(vec![]), //FIXME
         })
     }

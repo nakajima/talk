@@ -70,7 +70,6 @@ fn print_func_sig_with_args(args: &[IRType], env_ty: &IRType, ret: &IRType) -> S
     let mut res = String::new();
 
     res.push('(');
-
     res.push_str(&format!("{} %0", env_ty));
 
     for (i, arg) in args.iter().enumerate() {

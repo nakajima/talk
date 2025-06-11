@@ -59,6 +59,24 @@ pub enum Instr {
     #[doc = "$0 = gte $1 $2, $3;"]
     GreaterThanEq(Register, IRType, Register, Register),
 
+    #[doc = "$dest = alloc $ty;"]
+    Alloc { dest: Register, ty: IRType },
+
+    #[doc = "store $ty $val $location;"]
+    Store {
+        ty: IRType,
+        val: Register,
+        location: Register,
+    },
+
+    #[doc = "$dest = getelementptr $ty $from $index;"]
+    GetElementPointer {
+        dest: Register,
+        from: Register,
+        ty: IRType,
+        index: usize,
+    },
+
     #[doc = "$dest = struct $ty {{$values}};"]
     MakeStruct {
         dest: Register,
