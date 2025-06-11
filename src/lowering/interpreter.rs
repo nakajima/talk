@@ -175,7 +175,7 @@ impl IRInterpreter {
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
         log::trace!("Reg: {:?}", self.stack.last().unwrap().registers);
-        log::trace!("{:?}", instr);
+        log::trace!("{instr:?}");
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -244,8 +244,7 @@ impl IRInterpreter {
                 let callee_name = match callee_value {
                     Value::Func(name) => name,
                     _ => panic!(
-                        "Interpreter error: Expected a function in the callee register, but got {:?}.",
-                        callee_value
+                        "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
                     ),
                 };
 
@@ -331,7 +330,7 @@ impl IRInterpreter {
             }
             Instr::GetEnumTag(dest, enum_reg) => {
                 let Value::Enum { tag, .. } = self.register_value(&enum_reg) else {
-                    panic!("did not find enum in register #{:?}", enum_reg);
+                    panic!("did not find enum in register #{enum_reg:?}");
                 };
 
                 self.set_register_value(&dest, Value::Int(tag as i64));
@@ -340,7 +339,7 @@ impl IRInterpreter {
                 // Tag would be useful if we needed to know about memory layout but since we're
                 // just using objects who cares
                 let Value::Enum { values, .. } = self.register_value(&enum_reg) else {
-                    panic!("did not find enum in register #{:?}", enum_reg);
+                    panic!("did not find enum in register #{enum_reg:?}");
                 };
 
                 self.set_register_value(&dest, values[value as usize].clone());
@@ -376,14 +375,14 @@ impl IRInterpreter {
             }
             Instr::Store { val, location, .. } => {
                 let Value::Pointer(ptr) = self.register_value(&location) else {
-                    panic!("no pointer at location: {}", location)
+                    panic!("no pointer at location: {location}")
                 };
 
                 self.store(&ptr, self.register_value(&val))
             }
             Instr::Load { dest, addr, .. } => {
                 let Value::Pointer(ptr) = self.register_value(&addr) else {
-                    panic!("no pointer at location: {}", addr)
+                    panic!("no pointer at location: {addr}")
                 };
 
                 let val = self.load(ptr);
@@ -427,7 +426,7 @@ impl IRInterpreter {
     fn load(&self, pointer: Pointer) -> &Value {
         if let Some(offset) = pointer.1 {
             let Value::Struct(vals) = &self.heap[pointer.0] else {
-                panic!("invalid index for pointer: {:?}", pointer);
+                panic!("invalid index for pointer: {pointer:?}");
             };
 
             &vals[offset]
@@ -457,7 +456,7 @@ impl IRInterpreter {
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
-        log::trace!("set {:?} to {:?}", register, value);
+        log::trace!("set {register:?} to {value:?}");
         self.stack
             .last_mut()
             .expect("Stack underflow")

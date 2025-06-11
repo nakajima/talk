@@ -90,7 +90,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
-        log::debug!("Adding expr: {:?}", expr);
+        log::debug!("Adding expr: {expr:?}");
 
         let token = self.current.clone().unwrap();
 
@@ -153,7 +153,7 @@ impl<'a> Parser<'a> {
         let mut items: Vec<ExprID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             let pattern = self.parse_match_pattern()?;
-            log::trace!("parsed pattern: {:?}", pattern);
+            log::trace!("parsed pattern: {pattern:?}");
             let pattern_id = self.add_expr(Pattern(pattern))?;
             self.consume(TokenKind::Arrow)?;
             let body = self.parse_with_precedence(Precedence::Primary)?;
@@ -678,12 +678,11 @@ impl<'a> Parser<'a> {
     pub(super) fn try_identifier(&mut self) -> Option<(String, Token)> {
         self.skip_newlines();
 
-        if let Some(current) = self.current.clone() {
-            if let TokenKind::Identifier(ref name) = current.kind {
+        if let Some(current) = self.current.clone()
+            && let TokenKind::Identifier(ref name) = current.kind {
                 self.advance();
                 return Some((name.to_string(), current));
             };
-        }
 
         None
     }
@@ -700,12 +699,11 @@ impl<'a> Parser<'a> {
     pub(super) fn did_match(&mut self, expected: TokenKind) -> Result<bool, ParserError> {
         self.skip_newlines();
 
-        if let Some(current) = self.current.clone() {
-            if current.kind == expected {
+        if let Some(current) = self.current.clone()
+            && current.kind == expected {
                 self.advance();
                 return Ok(true);
             };
-        }
 
         Ok(false)
     }
@@ -714,12 +712,11 @@ impl<'a> Parser<'a> {
     pub(super) fn consume(&mut self, expected: TokenKind) -> Result<Token, ParserError> {
         self.skip_newlines();
 
-        if let Some(current) = self.current.clone() {
-            if current.kind == expected {
+        if let Some(current) = self.current.clone()
+            && current.kind == expected {
                 self.advance();
                 return Ok(current);
             };
-        }
 
         Err(ParserError::UnexpectedToken(
             vec![expected],

@@ -189,7 +189,7 @@ impl std::fmt::Display for IRType {
                     f,
                     "({}) {}",
                     args.iter()
-                        .map(|a| format!("{}", a))
+                        .map(|a| format!("{a}"))
                         .collect::<Vec<String>>()
                         .join(", "),
                     ret
@@ -202,7 +202,7 @@ impl std::fmt::Display for IRType {
                 "{{{}}}",
                 types
                     .iter()
-                    .map(|t| format!("{}", t))
+                    .map(|t| format!("{t}"))
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
@@ -619,7 +619,7 @@ impl<'a> Lowerer<'a> {
             _ => todo!(),
         };
 
-        log::trace!("lowering {:?}", name);
+        log::trace!("lowering {name:?}");
 
         let Some(Expr::Block(body_exprs)) = self.source_file.get(body).cloned() else {
             panic!("did not get body")
@@ -769,7 +769,7 @@ impl<'a> Lowerer<'a> {
     ) -> (Register, BasicBlockID) {
         let typed_arm = self.source_file.typed_expr(expr_id).unwrap();
         let Expr::MatchArm(pattern_id, body_id) = typed_arm.expr else {
-            panic!("Didn't get match arm: {:?}", typed_arm);
+            panic!("Didn't get match arm: {typed_arm:?}");
         };
 
         // This is the new, more powerful pattern lowering logic.
@@ -857,7 +857,7 @@ impl<'a> Lowerer<'a> {
                                     .position(|t| t == &var)
                                 // t == var.0)
                                 else {
-                                    panic!("unable to determine enum generic: {:?}", var)
+                                    panic!("unable to determine enum generic: {var:?}")
                                 };
 
                                 enum_generics[generic_pos].clone()
@@ -907,7 +907,7 @@ impl<'a> Lowerer<'a> {
     fn _lower_pattern(&mut self, pattern_id: &ExprID) -> Register {
         let pattern_typed_expr = self.source_file.typed_expr(pattern_id).unwrap();
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
-            panic!("Didn't get pattern for match arm: {:?}", pattern_typed_expr)
+            panic!("Didn't get pattern for match arm: {pattern_typed_expr:?}")
         };
 
         match pattern {
@@ -943,7 +943,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let Some(TypeDef::Enum(type_def)) = self.source_file.type_def(&enum_id).cloned()
                 else {
-                    panic!("didn't get type def for {:?}", enum_id);
+                    panic!("didn't get type def for {enum_id:?}");
                 };
 
                 let tag = type_def
@@ -988,7 +988,7 @@ impl<'a> Lowerer<'a> {
         args: &[Register],
     ) -> Option<Register> {
         let Some(TypeDef::Enum(type_def)) = self.source_file.type_def(&enum_id).cloned() else {
-            panic!("didn't get type def for {:?}", enum_id);
+            panic!("didn't get type def for {enum_id:?}");
         };
 
         let mut tag: Option<u16> = None;
@@ -1087,7 +1087,7 @@ impl<'a> Lowerer<'a> {
             GreaterEquals => {
                 Instr::GreaterThanEq(return_reg, operand_ty.to_ir(), operand_1, operand_2)
             }
-            _ => panic!("Cannot lower binary operation: {:?}", op),
+            _ => panic!("Cannot lower binary operation: {op:?}"),
         };
 
         self.current_block_mut().push_instr(instr);
@@ -1130,7 +1130,7 @@ impl<'a> Lowerer<'a> {
                             dest: capture_ptr,
                             from: Register(0),
                             ty: ty.clone(),
-                            index: idx.clone(),
+                            index: idx,
                         });
                         self.push_instr(Instr::Store {
                             ty: ty.clone(),
@@ -1167,7 +1167,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_variable(&mut self, name: &Name) -> Option<Register> {
         let Name::Resolved(symbol_id, _) = name else {
-            panic!("Unresolved variable: {:?}", name)
+            panic!("Unresolved variable: {name:?}")
         };
 
         let value = self
@@ -1176,14 +1176,14 @@ impl<'a> Lowerer<'a> {
             .clone();
 
         match value {
-            SymbolValue::Register(reg) => Some(reg.clone()),
+            SymbolValue::Register(reg) => Some(reg),
             SymbolValue::Capture(idx, ty) => {
                 let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
                     dest: env_ptr,
                     from: Register(0),
                     ty: IRType::closure(),
-                    index: idx.clone(),
+                    index: idx,
                 });
 
                 let reg = self.allocate_register();
@@ -1372,11 +1372,9 @@ fn find_or_create_main(
                 },
             ..
         } = root
-        {
-            if name == "main" {
+            && name == "main" {
                 return (root.id, false);
             }
-        }
     }
 
     // We didn't find a main, we have to generate one

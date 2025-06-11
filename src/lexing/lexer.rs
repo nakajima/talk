@@ -89,12 +89,11 @@ impl<'a> Lexer<'a> {
             ')' => self.make(RightParen),
             '\n' => self.make(Newline),
             '_' => {
-                if let Some(next) = self.chars.peek() {
-                    if *next == '_' || next.is_alphanumeric() {
+                if let Some(next) = self.chars.peek()
+                    && (*next == '_' || next.is_alphanumeric()) {
                         let ident = self.identifier(self.current - 1);
                         return self.make(ident);
                     }
-                }
 
                 self.make(Underscore)
             }

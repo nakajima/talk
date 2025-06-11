@@ -27,7 +27,7 @@ impl From<ParseIntError> for ParserError {
 
 impl std::fmt::Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -48,7 +48,7 @@ impl FromStr for FuncName {
 pub fn parse_type_from_chars(chars: &mut Peekable<Chars>) -> Result<Option<IRType>, ParserError> {
     let mut arg = vec![];
     for ch in chars.by_ref() {
-        log::trace!("matching: {}", ch);
+        log::trace!("matching: {ch}");
         match ch {
             ',' => {
                 return Ok(Some(IRType::from_str(
@@ -231,7 +231,7 @@ impl<'a> Parser<'a> {
         self.consume(Tokind::Semicolon).ok();
 
         let line_str = &self.lexer.code[start_pos..self.lexer.current].trim();
-        log::trace!("attempting to parse: {:?}", line_str);
+        log::trace!("attempting to parse: {line_str:?}");
 
         if line_str.trim().is_empty() {
             return Ok(None);
@@ -243,8 +243,7 @@ impl<'a> Parser<'a> {
             .parse::<Instr>()
             .map_err(|e| {
                 ParserError::Instruction(format!(
-                    "Failed to parse instruction: '{}', error: {}",
-                    line_str, e
+                    "Failed to parse instruction: '{line_str}', error: {e}"
                 ))
             })
             .map(Some)
@@ -307,12 +306,11 @@ impl<'a> Parser<'a> {
     pub(super) fn did_match(&mut self, expected: Tokind) -> Result<bool, ParserError> {
         self.skip_newlines();
 
-        if let Some(current) = self.current.clone() {
-            if current.kind == expected {
+        if let Some(current) = self.current.clone()
+            && current.kind == expected {
                 self.advance();
                 return Ok(true);
             };
-        }
 
         Ok(false)
     }
@@ -382,12 +380,11 @@ impl<'a> Parser<'a> {
     pub(super) fn consume(&mut self, expected: Tokind) -> Result<Token, ParserError> {
         self.skip_newlines();
 
-        if let Some(current) = self.current.clone() {
-            if current.kind == expected {
+        if let Some(current) = self.current.clone()
+            && current.kind == expected {
                 self.advance();
                 return Ok(current);
             };
-        }
 
         Err(ParserError::UnexpectedToken(
             vec![expected],

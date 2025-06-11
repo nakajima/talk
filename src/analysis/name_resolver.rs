@@ -67,7 +67,7 @@ impl NameResolver {
 
         for node_id in node_ids {
             let expr = &mut source_file.get_mut(node_id).unwrap();
-            log::trace!("Resolving: {:?}", expr);
+            log::trace!("Resolving: {expr:?}");
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
@@ -201,11 +201,11 @@ impl NameResolver {
                             )
                         } else {
                             let (symbol_id, depth) = self.lookup(&name_str);
-                            log::trace!("Replacing variable {} with {:?}", name_str, symbol_id);
+                            log::trace!("Replacing variable {name_str} with {symbol_id:?}");
 
                             // Check to see if this is a capture
-                            if let Some((func_id, func_depth)) = self.func_stack.last() {
-                                if &depth < func_depth {
+                            if let Some((func_id, func_depth)) = self.func_stack.last()
+                                && &depth < func_depth {
                                     let Func { captures, .. } =
                                         source_file.get_mut(func_id).unwrap()
                                     else {
@@ -218,7 +218,6 @@ impl NameResolver {
 
                                     self.symbol_table.mark_as_captured(&symbol_id);
                                 }
-                            }
 
                             Name::Resolved(symbol_id, name_str)
                         };
@@ -229,10 +228,7 @@ impl NameResolver {
                 },
                 TypeRepr(name, generics, is_type_parameter_decl) => {
                     log::trace!(
-                        "Resolving TypeRepr: {:?}, generics: {:?}, is_param_decl: {}",
-                        name,
-                        generics,
-                        is_type_parameter_decl
+                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {is_type_parameter_decl}"
                     );
 
                     let resolved_name_for_node = match name.clone() {

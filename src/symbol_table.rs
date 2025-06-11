@@ -165,9 +165,9 @@ impl SymbolTable {
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
-        log::warn!("Lookup: {:?}", name);
+        log::warn!("Lookup: {name:?}");
         for (id, info) in &self.symbols {
-            log::warn!("Looking up: {:?}, {:?}", id, info);
+            log::warn!("Looking up: {id:?}, {info:?}");
             if info.name == name {
                 return Some(*id);
             }

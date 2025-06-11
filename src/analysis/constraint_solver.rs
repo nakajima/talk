@@ -58,7 +58,7 @@ impl<'a> ConstraintSolver<'a> {
                 let rhs = Self::apply(&rhs, substitutions, 0);
 
                 Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
-                    log::error!("{:?}", err);
+                    log::error!("{err:?}");
                     err
                 })?;
 
@@ -78,8 +78,7 @@ impl<'a> ConstraintSolver<'a> {
                             if let Some(_enum_info) = self
                                 .source_file
                                 .type_from_symbol(enum_id, self.symbol_table)
-                            {
-                                if let Some(variant_info) = self.find_variant(enum_id, &member_name)
+                                && let Some(variant_info) = self.find_variant(enum_id, &member_name)
                                 {
                                     // Create the constructor type for this variant
                                     let constructor_ty = self.create_variant_constructor_type(
@@ -100,7 +99,6 @@ impl<'a> ConstraintSolver<'a> {
 
                                     self.source_file.define(node_id, constructor_ty);
                                 }
-                            }
                         }
                     }
                     Ty::Enum(enum_id, _) => {
@@ -108,14 +106,11 @@ impl<'a> ConstraintSolver<'a> {
                         if let Some(_enum_info) = self
                             .source_file
                             .type_from_symbol(enum_id, self.symbol_table)
-                        {
-                            if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
-                                if variant_info.values.is_empty() {
+                            && let Some(variant_info) = self.find_variant(enum_id, &member_name)
+                                && variant_info.values.is_empty() {
                                     // This is a valueless variant, unify with the enum type directly
                                     self.source_file.define(node_id, result_ty.clone());
                                 }
-                            }
-                        }
                     }
                     _ => {
                         // Unknown result type, leave as type variable for now
@@ -136,10 +131,10 @@ impl<'a> ConstraintSolver<'a> {
                             .type_from_symbol(enum_id, self.symbol_table)
                         {
                             // Check if this is a variant constructor
-                            log::debug!("Enum info: {:?}", enum_info);
+                            log::debug!("Enum info: {enum_info:?}");
                             if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
                                 // Create the constructor type
-                                log::debug!("Variant info: {:?}", variant_info);
+                                log::debug!("Variant info: {variant_info:?}");
 
                                 let variant_ty = self.create_variant_constructor_type(
                                     enum_id,
@@ -153,19 +148,17 @@ impl<'a> ConstraintSolver<'a> {
                                 Self::normalize_substitutions(substitutions);
                                 self.source_file.define(node_id, variant_ty);
                             } else {
-                                log::debug!("Could not find variant named {:?}", member_name);
+                                log::debug!("Could not find variant named {member_name:?}");
                             }
                             // Future: Check for methods, fields, etc.
                         } else {
-                            log::debug!("Could not find type from symbol: {:?}", enum_id);
+                            log::debug!("Could not find type from symbol: {enum_id:?}");
                         }
                     }
                     // Future: Handle other receiver types (structs, etc.)
                     _ => {
                         log::debug!(
-                            "For now just unify with the result type: {:?}, {:?}",
-                            node_id,
-                            result_ty
+                            "For now just unify with the result type: {node_id:?}, {result_ty:?}"
                         );
                         // For now, just unify with the result type
                         self.source_file.define(node_id, result_ty);
@@ -191,8 +184,7 @@ impl<'a> ConstraintSolver<'a> {
         let enum_def = match self.source_file.type_def(enum_id) {
             Some(TypeDef::Enum(ed)) => ed,
             _ => panic!(
-                "EnumDef not found for {:?} during variant constructor creation",
-                enum_id
+                "EnumDef not found for {enum_id:?} during variant constructor creation"
             ),
         };
 
@@ -209,8 +201,7 @@ impl<'a> ConstraintSolver<'a> {
             } else {
                 // This indicates an issue with how EnumDef.type_parameters were stored, they should be TypeVars.
                 log::error!(
-                    "Formal type parameter in EnumDef was not a TypeVar: {:?}",
-                    formal_param_ty
+                    "Formal type parameter in EnumDef was not a TypeVar: {formal_param_ty:?}"
                 );
             }
         }
@@ -253,7 +244,7 @@ impl<'a> ConstraintSolver<'a> {
         };
         log::debug!("Variants: {:?}", enum_def.variants);
         for variant in enum_def.variants.iter() {
-            log::debug!("Checking variant: {:?}", variant);
+            log::debug!("Checking variant: {variant:?}");
             if variant.name == *name {
                 return Some(variant.clone());
             }
@@ -344,7 +335,7 @@ impl<'a> ConstraintSolver<'a> {
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
-        log::trace!("Unifying: {:?} and {:?}", lhs, rhs);
+        log::trace!("Unifying: {lhs:?} and {rhs:?}");
 
         match (
             Self::apply(lhs, substitutions, 0),
@@ -385,14 +376,14 @@ impl<'a> ConstraintSolver<'a> {
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                Self::unify(&*lhs_func, &*rhs_func, substitutions)?;
+                Self::unify(&lhs_func, &rhs_func, substitutions)?;
                 Ok(())
             }
             (func, Ty::Closure { func: closure, .. })
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _)) =>
             {
-                Self::unify(&func, &*closure, substitutions)?;
+                Self::unify(&func, &closure, substitutions)?;
                 Ok(())
             }
             (Ty::Enum(_, lhs_types), Ty::Enum(_, rhs_types))
@@ -425,7 +416,7 @@ impl<'a> ConstraintSolver<'a> {
                     || Self::occurs_check(v, returning, substitutions);
 
                 if oh {
-                    log::error!("occur check failed: {:?}", ty);
+                    log::error!("occur check failed: {ty:?}");
                 }
 
                 oh

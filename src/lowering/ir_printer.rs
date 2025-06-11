@@ -50,7 +50,7 @@ fn print_func_sig_with_args(args: &[IRType], env_ty: &IRType, ret: &IRType) -> S
     let mut res = String::new();
 
     res.push('(');
-    res.push_str(&format!("{} %0", env_ty));
+    res.push_str(&format!("{env_ty} %0"));
 
     for (i, arg) in args.iter().enumerate() {
         // if i > 0 {
@@ -72,7 +72,7 @@ fn print_func_sig_with_args(args: &[IRType], env_ty: &IRType, ret: &IRType) -> S
 }
 
 pub fn format_ir_ty(ty: &IRType) -> String {
-    format!("{}", ty)
+    format!("{ty}")
 }
 
 pub fn format_optional_register(reg: &Option<Register>) -> String {
@@ -104,7 +104,7 @@ pub fn print_basic_block(block: &BasicBlock, printer: &mut IRPrinter) {
 }
 
 pub fn format_instruction(instruction: &Instr) -> String {
-    format!("{}", instruction)
+    format!("{instruction}")
 }
 
 pub fn format_args(args: &Vec<Register>) -> String {

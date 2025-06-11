@@ -36,7 +36,7 @@ impl FileStore {
         *self
             .lookup
             .get(file)
-            .unwrap_or_else(|| panic!("File not found: {:?}", file))
+            .unwrap_or_else(|| panic!("File not found: {file:?}"))
     }
 
     pub fn lookup(&self, id: FileID) -> &PathBuf {

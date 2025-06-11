@@ -11,34 +11,30 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("instr_impls.rs");
 
     let instr_file_path = "src/lowering/instr.rs";
-    println!("cargo:rerun-if-changed={}", instr_file_path);
+    println!("cargo:rerun-if-changed={instr_file_path}");
     println!("cargo:rerun-if-changed=build.rs");
 
     let content = fs::read_to_string(instr_file_path).unwrap();
     let file = syn::parse_file(&content).expect("Failed to parse src/lowering/instr.rs");
 
     let generated_code = generate_impls(&file).unwrap_or_else(|e| {
-        panic!("Failed to generate impls for Instr: {}", e);
+        panic!("Failed to generate impls for Instr: {e}");
     });
 
     fs::write(&dest_path, generated_code.to_string()).unwrap();
 }
 
 fn get_option_inner_type(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty {
-        if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+    if let Type::Path(type_path) = ty
+        && type_path.qself.is_none() && type_path.path.segments.len() == 1 {
             let segment = &type_path.path.segments[0];
-            if segment.ident == "Option" {
-                if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if args.args.len() == 1 {
-                        if let GenericArgument::Type(inner_ty) = &args.args[0] {
+            if segment.ident == "Option"
+                && let PathArguments::AngleBracketed(args) = &segment.arguments
+                    && args.args.len() == 1
+                        && let GenericArgument::Type(inner_ty) = &args.args[0] {
                             return Some(inner_ty);
                         }
-                    }
-                }
-            }
         }
-    }
     None
 }
 
@@ -49,11 +45,10 @@ fn generate_impls(
         .items
         .iter()
         .find_map(|item| {
-            if let syn::Item::Enum(e) = item {
-                if e.ident == "Instr" {
+            if let syn::Item::Enum(e) = item
+                && e.ident == "Instr" {
                     return Some(e);
                 }
-            }
             None
         })
         .ok_or("Could not find 'enum Instr' in src/lowering/instr.rs")?;
@@ -69,13 +64,11 @@ fn generate_impls(
 
 fn get_doc_attr(attrs: &[syn::Attribute]) -> Option<String> {
     attrs.iter().find_map(|attr| {
-        if attr.path.is_ident("doc") {
-            if let Ok(syn::Meta::NameValue(nv)) = attr.parse_meta() {
-                if let syn::Lit::Str(lit) = nv.lit {
+        if attr.path.is_ident("doc")
+            && let Ok(syn::Meta::NameValue(nv)) = attr.parse_meta()
+                && let syn::Lit::Str(lit) = nv.lit {
                     return Some(lit.value().trim().to_string());
                 }
-            }
-        }
         None
     })
 }
@@ -84,7 +77,7 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
     let match_arms = instr_enum.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
         let format_str = get_doc_attr(&variant.attrs)
-            .unwrap_or_else(|| panic!("Variant {} is missing doc attribute", variant_ident));
+            .unwrap_or_else(|| panic!("Variant {variant_ident} is missing doc attribute"));
 
         let (field_idents, fields_are_named) = match &variant.fields {
             Fields::Named(f) => (
@@ -96,7 +89,7 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
             ),
             Fields::Unnamed(f) => (
                 (0..f.unnamed.len())
-                    .map(|i| syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site()))
+                    .map(|i| syn::Ident::new(&format!("v{i}"), proc_macro2::Span::call_site()))
                     .collect(),
                 false,
             ),
@@ -133,8 +126,7 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
                     .find(|(_, ident)| *ident == placeholder_name)
                     .unwrap_or_else(|| {
                         panic!(
-                            "Named placeholder '{}' not found in variant '{}'",
-                            placeholder_name, variant_ident
+                            "Named placeholder '{placeholder_name}' not found in variant '{variant_ident}'"
                         )
                     })
             };
@@ -246,8 +238,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
 
             let field_type = field_map.get(&placeholder_name).unwrap_or_else(|| {
                 panic!(
-                    "Placeholder ${} has no corresponding field in variant {}",
-                    placeholder_name, variant_ident
+                    "Placeholder ${placeholder_name} has no corresponding field in variant {variant_ident}"
                 )
             });
 
@@ -257,7 +248,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                     regex::escape(literal_part),
                     regex_for_type(inner_ty)
                 );
-                regex_str.push_str(&format!("(?:{})?", group));
+                regex_str.push_str(&format!("(?:{group})?"));
             } else {
                 regex_str.push_str(&regex::escape(literal_part));
                 regex_str.push_str(regex_for_type(field_type));
@@ -305,7 +296,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             }
             Fields::Unnamed(fields) => {
                 let var_parsers = fields.unnamed.iter().enumerate().map(|(i, field)| {
-                    let var_name = syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site());
+                    let var_name = syn::Ident::new(&format!("v{i}"), proc_macro2::Span::call_site());
                     let field_ty = &field.ty;
                     let cap_idx = placeholder_to_idx.get(&i.to_string()).unwrap();
 
@@ -322,7 +313,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                     }
                 });
                 let var_names = (0..fields.unnamed.len())
-                    .map(|i| syn::Ident::new(&format!("v{}", i), proc_macro2::Span::call_site()));
+                    .map(|i| syn::Ident::new(&format!("v{i}"), proc_macro2::Span::call_site()));
                 (
                     quote! { ( #( #var_names ),* ) },
                     quote! { #( #var_parsers )* },

@@ -149,7 +149,7 @@ impl TypeChecker {
         source_file: &SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let expr = source_file.get(id).unwrap().clone();
-        log::trace!("Inferring {:?}", expr);
+        log::trace!("Inferring {expr:?}");
 
         let ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
@@ -363,8 +363,7 @@ impl TypeChecker {
                         // This should ideally be an error or a placeholder needing resolution.
                         // For now, create a type variable, similar to previous behavior.
                         log::warn!(
-                            "Encountered unresolved raw type name in usage: {:?}",
-                            raw_name
+                            "Encountered unresolved raw type name in usage: {raw_name:?}"
                         );
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
                     }
@@ -406,15 +405,11 @@ impl TypeChecker {
             // This is for the T in `enum Option<T>`. Name should be resolved by name_resolver.
             let Name::Resolved(symbol_id, _) = name else {
                 panic!(
-                    "Type parameter name {:?} was not resolved during its declaration",
-                    name
+                    "Type parameter name {name:?} was not resolved during its declaration"
                 )
             };
             log::debug!(
-                "Declaring type parameter {:?} ({:?}) with ty {:?}",
-                symbol_id,
-                name,
-                ty
+                "Declaring type parameter {symbol_id:?} ({name:?}) with ty {ty:?}"
             );
             // Type parameters are monomorphic within their defining generic scope.
             // So, references to this type parameter within this scope refer to this 'ty'.
@@ -477,7 +472,7 @@ impl TypeChecker {
             func_var = Some(type_var.clone());
             let scheme = env.generalize(&Ty::TypeVar(type_var));
             env.declare(*symbol_id, scheme);
-            log::debug!("Declared scheme for named func {:?}, {:?}", symbol_id, env);
+            log::debug!("Declared scheme for named func {symbol_id:?}, {env:?}");
         }
 
         env.start_scope();
@@ -621,7 +616,7 @@ impl TypeChecker {
         name: &str,
     ) -> Result<Ty, TypeError> {
         let ty = env.instantiate_symbol(symbol_id);
-        log::trace!("instantiated {:?} ({:?}) with {:?}", symbol_id, name, ty);
+        log::trace!("instantiated {symbol_id:?} ({name:?}) with {ty:?}");
         Ok(ty)
     }
 
@@ -843,14 +838,14 @@ impl TypeChecker {
         expected: &Ty,
         source_file: &SourceFile<NameResolved>,
     ) {
-        log::trace!("Inferring pattern: {:?}", pattern);
+        log::trace!("Inferring pattern: {pattern:?}");
         match pattern {
             Pattern::LiteralInt(_) => (),
             Pattern::LiteralFloat(_) => (),
             Pattern::LiteralTrue => (),
             Pattern::LiteralFalse => (),
             Pattern::Bind(name) => {
-                log::info!("inferring bind pattern: {:?}", name);
+                log::info!("inferring bind pattern: {name:?}");
                 if let Name::Resolved(symbol_id, _) = name {
                     // Use the expected type for this binding
                     let scheme = env.generalize(expected);
@@ -922,7 +917,7 @@ impl TypeChecker {
                                 .unwrap();
                         }
                     }
-                    _ => panic!("Unhandled pattern variant: {:?}", pattern),
+                    _ => panic!("Unhandled pattern variant: {pattern:?}"),
                 }
             }
         }
@@ -952,14 +947,14 @@ impl TypeChecker {
 
                 let enum_ty = Ty::Enum(enum_id, generic_vars.clone());
                 let scheme = env.generalize(&enum_ty);
-                log::trace!("enum scheme: {:?}", scheme);
+                log::trace!("enum scheme: {scheme:?}");
                 env.declare_in_parent(enum_id, scheme);
 
                 let mut methods: Vec<Ty> = vec![];
                 let mut variants: Vec<Ty> = vec![];
                 let mut variant_defs: Vec<EnumVariant> = vec![];
 
-                log::debug!("Generic vars: {:?}", generic_vars);
+                log::debug!("Generic vars: {generic_vars:?}");
                 for expr_id in expr_ids.clone() {
                     let expr = source_file.get(&expr_id).cloned().unwrap();
 
@@ -989,14 +984,13 @@ impl TypeChecker {
 
                         for enum_tp_var_instance in &generic_vars {
                             // Iterate over [TypeVar_for_T]
-                            if let Ty::TypeVar(tv_id) = enum_tp_var_instance {
-                                if ftv_in_enum_ty.contains(tv_id) {
+                            if let Ty::TypeVar(tv_id) = enum_tp_var_instance
+                                && ftv_in_enum_ty.contains(tv_id) {
                                     // Check if T is actually in Option<T> (it is)
                                     if !enum_type_unbound_vars.contains(tv_id) {
                                         enum_type_unbound_vars.push(tv_id.clone());
                                     }
                                 }
-                            }
                         }
 
                         let scheme_for_enum_type =
@@ -1030,9 +1024,7 @@ impl TypeChecker {
                 env.end_scope();
 
                 log::debug!(
-                    "Registering enum {:?}, variants: {:?}",
-                    enum_id,
-                    variant_defs
+                    "Registering enum {enum_id:?}, variants: {variant_defs:?}"
                 );
                 env.register_enum(EnumDef {
                     name: Some(enum_id),
