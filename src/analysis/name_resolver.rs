@@ -619,6 +619,20 @@ mod tests {
     }
 
     #[test]
+    fn resolves_inside_array_literals() {
+        let resolved = resolve(
+            "
+            [a, b, c]
+            ",
+        );
+
+        assert_eq!(
+            *resolved.get(&0).unwrap(),
+            Expr::Variable(Name::Resolved(SymbolID(0), "a".into()), None)
+        );
+    }
+
+    #[test]
     fn resolves_let_expr() {
         let tree = resolve(
             "
