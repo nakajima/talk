@@ -1684,7 +1684,8 @@ mod arrays {
     fn parses_array_literal_with_newlines() {
         let parsed = parse(
             "[
-          1,
+          1
+          ,
         2, 3
         ]",
             0,
