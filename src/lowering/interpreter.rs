@@ -229,16 +229,18 @@ impl IRInterpreter {
                 args,
                 ..
             } => {
-                let Some(callee) = self.load_function(&callee.0) else {
-                    return Err(InterpreterError::CalleeNotFound);
-                };
+                // TODO
+                todo!()
+                // let Some(callee) = self.load_function(&Register(123)) else {
+                //     return Err(InterpreterError::CalleeNotFound);
+                // };
 
-                let res = self.execute_function(
-                    callee,
-                    args.0.iter().map(|r| self.register_value(r)).collect(),
-                )?;
+                // let res = self.execute_function(
+                //     callee,
+                //     args.0.iter().map(|r| self.register_value(r)).collect(),
+                // )?;
 
-                self.set_register_value(&dest_reg, res);
+                // self.set_register_value(&dest_reg, res);
             }
             Instr::JumpUnless(cond, jump_to) => {
                 if Value::Bool(false) == self.register_value(&cond) {

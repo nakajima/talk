@@ -166,6 +166,11 @@ impl Environment {
                     let new_ret = Box::new(walk(*ret, map));
                     Ty::Func(new_params, new_ret)
                 }
+                Ty::Closure { func, captures } => {
+                    let func = Box::new(walk(*func, map));
+                    let captures = captures.iter().map(|p| walk(p.clone(), map)).collect();
+                    Ty::Closure { func, captures }
+                }
                 Ty::Enum(name, generics) => {
                     let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
                     Ty::Enum(name, new_generics)
@@ -238,6 +243,18 @@ impl Environment {
                 let applied_return = self.substitute_ty_with_map(*returning, substitutions);
                 Ty::Func(applied_params, Box::new(applied_return))
             }
+            Ty::Closure { func, captures } => {
+                let func = self
+                    .substitute_ty_with_map(*func, substitutions)
+                    .clone()
+                    .into();
+                let captures = captures
+                    .iter()
+                    .map(|capture| self.substitute_ty_with_map(capture.clone(), substitutions))
+                    .collect();
+
+                Ty::Closure { func, captures }
+            }
             Ty::Enum(name, generics) => {
                 let applied_generics = generics
                     .iter()
@@ -300,6 +317,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
             }
             s.extend(free_type_vars(ret));
         }
+        Ty::Closure { func, .. } => s.extend(free_type_vars(func)),
         Ty::Enum(_, generics) => {
             for generic in generics {
                 s.extend(free_type_vars(generic));

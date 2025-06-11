@@ -307,6 +307,14 @@ impl<'a> ConstraintSolver<'a> {
                     .map(|variant| Self::apply(variant, substitutions, depth + 1))
                     .collect(),
             ),
+            Ty::Closure { func, captures } => {
+                let func = Self::apply(func, substitutions, depth + 1).into();
+                let captures = captures
+                    .iter()
+                    .map(|c| Self::apply(c, substitutions, depth + 1))
+                    .collect();
+                Ty::Closure { func, captures }
+            }
             Ty::Void => ty.clone(),
         }
     }
@@ -374,6 +382,17 @@ impl<'a> ConstraintSolver<'a> {
                 Self::unify(&lhs_returning, &rhs_returning, substitutions)?;
                 Self::normalize_substitutions(substitutions);
 
+                Ok(())
+            }
+            (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
+                Self::unify(&*lhs_func, &*rhs_func, substitutions)?;
+                Ok(())
+            }
+            (func, Ty::Closure { func: closure, .. })
+            | (Ty::Closure { func: closure, .. }, func)
+                if matches!(func, Ty::Func(_, _)) =>
+            {
+                Self::unify(&func, &*closure, substitutions)?;
                 Ok(())
             }
             (Ty::Enum(_, lhs_types), Ty::Enum(_, rhs_types))

@@ -396,7 +396,7 @@ mod tests {
     use crate::{
         SymbolTable, check,
         lowering::{
-            instr::{FuncName, Instr},
+            instr::Instr,
             ir_module::IRModule,
             lowerer::{BasicBlockID, IRError, IRType, Lowerer, PhiPredecessors, RefKind, Register},
             parser::parser::parse,
@@ -479,7 +479,7 @@ mod tests {
             bb1.instructions[0],
             Instr::Call {
                 dest_reg: Register(1),
-                callee: FuncName("@foo".to_string()),
+                callee: Register(123),
                 args: vec![].into(),
                 ty: IRType::Int,
             }

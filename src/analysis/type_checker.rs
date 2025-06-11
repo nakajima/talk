@@ -63,6 +63,10 @@ pub enum Ty {
         FuncParams,    /* params */
         FuncReturning, /* returning */
     ),
+    Closure {
+        func: Box<Ty>, // the func
+        captures: Vec<Ty>,
+    },
     TypeVar(TypeVarID),
     Enum(SymbolID, Vec<Ty>), // enum name + type arguments
     EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
@@ -174,6 +178,7 @@ impl TypeChecker {
                 params,
                 body,
                 ret,
+                captures,
                 ..
             } => self.infer_func(
                 id,
@@ -181,6 +186,7 @@ impl TypeChecker {
                 name,
                 generics,
                 params,
+                captures,
                 body,
                 ret,
                 expected,
@@ -458,6 +464,7 @@ impl TypeChecker {
         name: &Option<Name>,
         generics: &[ExprID],
         params: &[ExprID],
+        captures: &[SymbolID],
         body: &ExprID,
         ret: &Option<ExprID>,
         expected: &Option<Ty>,
@@ -542,25 +549,38 @@ impl TypeChecker {
         env.end_scope();
 
         let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty));
+        let inferred_ty = if captures.is_empty() {
+            func_ty
+        } else {
+            let capture_tys = captures
+                .iter()
+                .map(|c| env.instantiate_symbol(*c))
+                .collect();
+
+            Ty::Closure {
+                func: func_ty.into(),
+                captures: capture_tys,
+            }
+        };
 
         if let Some(func_var) = func_var {
             env.constraints.push(Constraint::Equality(
                 *id,
                 Ty::TypeVar(func_var),
-                func_ty.clone(),
+                inferred_ty.clone(),
             ));
 
             if let Some(Name::Resolved(symbol_id, _)) = name {
                 let scheme = if env.scopes.len() > 1 {
-                    Scheme::new(func_ty.clone(), vec![])
+                    Scheme::new(inferred_ty.clone(), vec![])
                 } else {
-                    env.generalize(&func_ty)
+                    env.generalize(&inferred_ty)
                 };
                 env.scopes.last_mut().unwrap().insert(*symbol_id, scheme);
             }
         }
 
-        Ok(func_ty)
+        Ok(inferred_ty)
     }
 
     fn infer_let(
@@ -1221,9 +1241,13 @@ mod tests {
         assert_eq!(*g_ret, f_args[0].clone());
 
         // the inner function's return (and thus compose's return) is f's return type C
-        let Ty::Func(inner_params, inner_ret) = *return_type else {
+        let Ty::Closure {
+            func: box Ty::Func(inner_params, inner_ret),
+            ..
+        } = *return_type
+        else {
             panic!(
-                "expected `compose` to return a function, got {:?}",
+                "expected `compose` to return a closure, got {:?}",
                 return_type
             );
         };
@@ -1246,7 +1270,13 @@ mod tests {
         // the bare `rec` at the top level should be a Func([α], α)
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(root_id);
-        let Ty::Func(params, ret) = ty else { panic!() };
+        let Ty::Closure {
+            func: box Ty::Func(params, ret),
+            ..
+        } = ty
+        else {
+            panic!()
+        };
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
@@ -1270,7 +1300,10 @@ mod tests {
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(root_id);
         match ty {
-            Ty::Func(params, ret) => {
+            Ty::Closure {
+                func: box Ty::Func(params, ret),
+                ..
+            } => {
                 assert_eq!(params.len(), 1);
                 // both even and odd must have the same input and output type
                 assert_eq!(*ret, Ty::Int);
@@ -1816,6 +1849,26 @@ mod tests {
             Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::typed(1), vec![])))
         );
         assert_eq!(enum_def.methods[1], Ty::Func(vec![], Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn checks_closure() {
+        let checked = check(
+            "
+        let x = 1 
+        func add(y) {
+            x + y
+        }
+        ",
+        );
+
+        assert_eq!(
+            checked.type_for(8),
+            Ty::Closure {
+                func: Ty::Func(vec![Ty::Int], Ty::Int.into()).into(),
+                captures: vec![Ty::Int]
+            }
+        );
     }
 }
 

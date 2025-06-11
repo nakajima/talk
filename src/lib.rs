@@ -1,3 +1,5 @@
+#![feature(box_patterns)]
+
 pub mod builtins;
 pub use builtins::*;
 pub mod source_file;

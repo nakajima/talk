@@ -131,8 +131,12 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
                     .iter()
                     .enumerate()
                     .find(|(_, ident)| *ident == placeholder_name)
-                    .unwrap_or_else(|| panic!("Named placeholder '{}' not found in variant '{}'",
-                        placeholder_name, variant_ident))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Named placeholder '{}' not found in variant '{}'",
+                            placeholder_name, variant_ident
+                        )
+                    })
             };
 
             let field_ty = field_types[field_idx];
@@ -348,7 +352,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
             type Err = String;
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                use crate::lowering::instr::*;
+                // use crate::lowering::instr::*;
                 use crate::lowering::lowerer::*;
 
                 #(#parser_arms)*

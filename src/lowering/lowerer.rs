@@ -86,6 +86,10 @@ impl Ty {
                 IRType::Enum(generics.iter().map(|i| i.to_ir()).collect())
             }
             Ty::EnumVariant(_symbol_id, _items) => todo!(),
+            Ty::Closure { func, captures } => IRType::Closure(
+                func.to_ir().into(),
+                captures.iter().map(Ty::to_ir).collect(),
+            ),
             Ty::Tuple(_items) => todo!(),
         }
     }
@@ -110,6 +114,8 @@ pub enum IRType {
     TypeVar(String), // Add other types as needed
     Enum(Vec<IRType>),
     Struct(Vec<IRType>),
+    Pointer(Box<IRType>),
+    Closure(Box<IRType>, Vec<IRType>),
 }
 
 impl FromStr for IRType {
@@ -186,6 +192,8 @@ impl std::fmt::Display for IRType {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
+            Self::Closure(_, _) => todo!(),
+            IRType::Pointer(ty) => write!(f, "ptr {}", ty),
         }
     }
 }
@@ -1131,34 +1139,15 @@ impl<'a> Lowerer<'a> {
             return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
         }
 
-        let name_str = match &callee_typed_expr.expr {
-            Expr::Variable(name, _) => {
-                // Check if the type of this variable is indeed a function
-                if !matches!(callee_typed_expr.ty, Ty::Func(_, _)) {
-                    panic!(
-                        "Attempting to call a non-function variable: {:?}",
-                        callee_typed_expr
-                    );
-                }
+        let callee = self.lower_expr(&callee).expect("did not get callee");
 
-                name.mangled(&callee_typed_expr.ty)
-            }
-            Expr::Func { name, .. } => {
-                let sym = self.lower_function(&callee);
-
-                if let Some(Name::Resolved(_, name_str)) = name {
-                    name_str.to_string()
-                } else {
-                    Name::Resolved(sym, format!("fn{}", sym.0)).mangled(&callee_typed_expr.ty)
-                }
-            }
-            // Later, you might handle other forms of callees, like Expr::Member for methods,
-            // or expressions that evaluate to function pointers/closures.
-            _ => panic!(
-                "Unsupported callee expression type: {:?}, {:?}, (ty: {:?})",
-                callee_typed_expr.expr, callee_typed_expr.ty, ty
-            ),
-        };
+        // Look up the callee closure
+        let callee_reg = self.allocate_register();
+        // self.push_instr(Instr::LoadLocal(
+        //     callee_reg,
+        //     IRType::Struct(vec![IRType::FuncPointer, IRType::Struct(/* ?? */)]),
+        //     callee,
+        // ));
 
         // Look up the environment so we can pass that in as an argument
 
@@ -1168,7 +1157,7 @@ impl<'a> Lowerer<'a> {
         self.current_block_mut().push_instr(Instr::Call {
             ty: ty.to_ir(),
             dest_reg, // clone if Register is Copy, else it's fine
-            callee: FuncName(name_str.to_string()),
+            callee: callee_reg,
             args: RegisterList(arg_registers),
         });
 
@@ -1475,7 +1464,7 @@ mod tests {
                             Instr::Call {
                                 ty: IRType::Int,
                                 dest_reg: Register(4),
-                                callee: FuncName("@_5_foo".into()),
+                                callee: Register(123),
                                 args: vec![Register(3)].into()
                             },
                             Instr::Ret(IRType::Int, Some(Register(4)))

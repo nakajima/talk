@@ -78,7 +78,7 @@ pub enum Instr {
     Call {
         dest_reg: Register,
         ty: IRType,
-        callee: FuncName,
+        callee: Register,
         args: RegisterList,
     },
 
