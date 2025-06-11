@@ -79,26 +79,26 @@ impl<'a> ConstraintSolver<'a> {
                                 .source_file
                                 .type_from_symbol(enum_id, self.symbol_table)
                                 && let Some(variant_info) = self.find_variant(enum_id, &member_name)
-                                {
-                                    // Create the constructor type for this variant
-                                    let constructor_ty = self.create_variant_constructor_type(
-                                        enum_id,
-                                        ret_generics, // We'll create fresh generics
-                                        &variant_info,
-                                        substitutions,
-                                    );
+                            {
+                                // Create the constructor type for this variant
+                                let constructor_ty = self.create_variant_constructor_type(
+                                    enum_id,
+                                    ret_generics, // We'll create fresh generics
+                                    &variant_info,
+                                    substitutions,
+                                );
 
-                                    // Unify the constructor type with result_ty
-                                    Self::unify(&constructor_ty, &result_ty, substitutions)?;
-                                    Self::normalize_substitutions(substitutions);
+                                // Unify the constructor type with result_ty
+                                Self::unify(&constructor_ty, &result_ty, substitutions)?;
+                                Self::normalize_substitutions(substitutions);
 
-                                    self.source_file.register_direct_callable(
-                                        node_id,
-                                        variant_info.constructor_symbol,
-                                    );
+                                self.source_file.register_direct_callable(
+                                    node_id,
+                                    variant_info.constructor_symbol,
+                                );
 
-                                    self.source_file.define(node_id, constructor_ty);
-                                }
+                                self.source_file.define(node_id, constructor_ty);
+                            }
                         }
                     }
                     Ty::Enum(enum_id, _) => {
@@ -107,10 +107,11 @@ impl<'a> ConstraintSolver<'a> {
                             .source_file
                             .type_from_symbol(enum_id, self.symbol_table)
                             && let Some(variant_info) = self.find_variant(enum_id, &member_name)
-                                && variant_info.values.is_empty() {
-                                    // This is a valueless variant, unify with the enum type directly
-                                    self.source_file.define(node_id, result_ty.clone());
-                                }
+                            && variant_info.values.is_empty()
+                        {
+                            // This is a valueless variant, unify with the enum type directly
+                            self.source_file.define(node_id, result_ty.clone());
+                        }
                     }
                     _ => {
                         // Unknown result type, leave as type variable for now
@@ -183,9 +184,7 @@ impl<'a> ConstraintSolver<'a> {
         // These formal parameters are the Ty::TypeVar created during `hoist_enums`.
         let enum_def = match self.source_file.type_def(enum_id) {
             Some(TypeDef::Enum(ed)) => ed,
-            _ => panic!(
-                "EnumDef not found for {enum_id:?} during variant constructor creation"
-            ),
+            _ => panic!("EnumDef not found for {enum_id:?} during variant constructor creation"),
         };
 
         let mut local_param_to_arg_subst = HashMap::new();
@@ -306,6 +305,7 @@ impl<'a> ConstraintSolver<'a> {
                     .collect();
                 Ty::Closure { func, captures }
             }
+            Ty::Array(ty) => Ty::Array(Self::apply(ty, substitutions, depth + 1).into()),
             Ty::Void => ty.clone(),
         }
     }

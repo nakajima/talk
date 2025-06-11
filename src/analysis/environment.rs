@@ -179,6 +179,7 @@ impl Environment {
                     let new_values = values.iter().map(|g| walk(g.clone(), map)).collect();
                     Ty::EnumVariant(name, new_values)
                 }
+                Ty::Array(ty) => Ty::Array(Box::new(walk(*ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p.clone(), map)).collect()),
                 Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
             }
@@ -275,6 +276,7 @@ impl Environment {
                     .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
                     .collect(),
             ),
+            Ty::Array(ty) => Ty::Array(self.substitute_ty_with_map(*ty, substitutions).into()),
             Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty,
         }
     }

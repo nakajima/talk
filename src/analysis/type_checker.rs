@@ -37,6 +37,7 @@ pub enum TypeVarKind {
     Let,
     TypeRepr(Name),
     Member,
+    Element,
     VariantValue,
     PatternBind(Name),
 }
@@ -71,6 +72,7 @@ pub enum Ty {
     Enum(SymbolID, Vec<Ty>), // enum name + type arguments
     EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
     Tuple(Vec<Ty>),
+    Array(Box<Ty>),
 }
 
 impl Ty {
@@ -221,6 +223,7 @@ impl TypeChecker {
             Expr::Variable(Name::Raw(_), _) => Err(TypeError::Unresolved),
             Expr::Variable(Name::_Self(sym), _) => Ok(env.instantiate_symbol(*sym)),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
+            Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
             _ => panic!("Unhandled expr in type checker: {:?}", expr.clone()),
         }?;
 
@@ -231,6 +234,27 @@ impl TypeChecker {
         };
         env.typed_exprs.insert(*id, typed_expr);
         Ok(ty)
+    }
+
+    fn infer_array(
+        &self,
+        items: &[ExprID],
+        env: &mut Environment,
+        expected: &Option<Ty>,
+        source_file: &SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let mut tys: Vec<Ty> = vec![];
+        for i in items {
+            tys.push(self.infer_node(i, env, expected, source_file)?.clone());
+        }
+
+        // TODO: error when the tys don't match
+        let ty = tys
+            .into_iter()
+            .last()
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
+
+        Ok(Ty::Array(Box::new(ty)))
     }
 
     fn infer_return(
@@ -362,9 +386,7 @@ impl TypeChecker {
                         // Attempting to use an unresolved raw name as a type.
                         // This should ideally be an error or a placeholder needing resolution.
                         // For now, create a type variable, similar to previous behavior.
-                        log::warn!(
-                            "Encountered unresolved raw type name in usage: {raw_name:?}"
-                        );
+                        log::warn!("Encountered unresolved raw type name in usage: {raw_name:?}");
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
                     }
                 }
@@ -404,13 +426,9 @@ impl TypeChecker {
         if *is_type_parameter {
             // This is for the T in `enum Option<T>`. Name should be resolved by name_resolver.
             let Name::Resolved(symbol_id, _) = name else {
-                panic!(
-                    "Type parameter name {name:?} was not resolved during its declaration"
-                )
+                panic!("Type parameter name {name:?} was not resolved during its declaration")
             };
-            log::debug!(
-                "Declaring type parameter {symbol_id:?} ({name:?}) with ty {ty:?}"
-            );
+            log::debug!("Declaring type parameter {symbol_id:?} ({name:?}) with ty {ty:?}");
             // Type parameters are monomorphic within their defining generic scope.
             // So, references to this type parameter within this scope refer to this 'ty'.
             env.declare(symbol_id, Scheme::new(ty.clone(), vec![]));
@@ -985,12 +1003,13 @@ impl TypeChecker {
                         for enum_tp_var_instance in &generic_vars {
                             // Iterate over [TypeVar_for_T]
                             if let Ty::TypeVar(tv_id) = enum_tp_var_instance
-                                && ftv_in_enum_ty.contains(tv_id) {
-                                    // Check if T is actually in Option<T> (it is)
-                                    if !enum_type_unbound_vars.contains(tv_id) {
-                                        enum_type_unbound_vars.push(tv_id.clone());
-                                    }
+                                && ftv_in_enum_ty.contains(tv_id)
+                            {
+                                // Check if T is actually in Option<T> (it is)
+                                if !enum_type_unbound_vars.contains(tv_id) {
+                                    enum_type_unbound_vars.push(tv_id.clone());
                                 }
+                            }
                         }
 
                         let scheme_for_enum_type =
@@ -1023,9 +1042,7 @@ impl TypeChecker {
                 }
                 env.end_scope();
 
-                log::debug!(
-                    "Registering enum {enum_id:?}, variants: {variant_defs:?}"
-                );
+                log::debug!("Registering enum {enum_id:?}, variants: {variant_defs:?}");
                 env.register_enum(EnumDef {
                     name: Some(enum_id),
                     variants: variant_defs,
@@ -1860,6 +1877,20 @@ mod tests {
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into()).into(),
                 captures: vec![Ty::Int]
             }
+        );
+    }
+
+    #[test]
+    fn checks_array() {
+        let checked = check(
+            "
+            [1,2,3]
+        ",
+        );
+
+        assert_eq!(
+            checked.type_for(checked.root_ids()[0]),
+            Ty::Array(Box::new(Ty::Int))
         );
     }
 }

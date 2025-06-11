@@ -86,6 +86,7 @@ impl Ty {
             Ty::EnumVariant(_symbol_id, _items) => todo!(),
             Ty::Closure { func, .. } => func.to_ir(),
             Ty::Tuple(_items) => todo!(),
+            Ty::Array(_) => todo!(),
         }
     }
 }
@@ -1372,9 +1373,10 @@ fn find_or_create_main(
                 },
             ..
         } = root
-            && name == "main" {
-                return (root.id, false);
-            }
+            && name == "main"
+        {
+            return (root.id, false);
+        }
     }
 
     // We didn't find a main, we have to generate one
