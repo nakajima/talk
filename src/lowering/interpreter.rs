@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::lowering::{
     instr::Instr,
     ir_module::IRModule,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, Register},
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRType, RefKind, Register, RegisterList},
 };
 
 #[derive(Debug)]
@@ -31,7 +31,7 @@ pub struct IRInterpreter {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Pointer(usize);
+pub struct Pointer(usize, Option<usize>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -42,6 +42,7 @@ pub enum Value {
     Void,
     Struct(Vec<Value>),
     Pointer(Pointer),
+    Func(String),
 }
 
 impl Value {
@@ -173,6 +174,7 @@ impl IRInterpreter {
 
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
+        log::trace!("Reg: {:?}", self.stack.last().unwrap().registers);
         log::trace!("{:?}", instr);
 
         match instr {
@@ -227,8 +229,8 @@ impl IRInterpreter {
 
                 return Err(InterpreterError::PredecessorNotFound);
             }
-            Instr::Ref(_dest, _, RefKind::Func(name)) => {
-                let _func = self.load_function(&name);
+            Instr::Ref(dest, _, RefKind::Func(name)) => {
+                self.set_register_value(&dest, Value::Func(name));
             }
             Instr::Call {
                 dest_reg,
@@ -349,8 +351,8 @@ impl IRInterpreter {
                     self.register_value(&a).gte(&self.register_value(&b))?,
                 );
             }
-            Instr::Alloc { dest, .. } => {
-                let ptr = self.alloc();
+            Instr::Alloc { dest, ty } => {
+                let ptr = self.alloc(ty);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, .. } => {
@@ -359,7 +361,7 @@ impl IRInterpreter {
                 };
 
                 self.store(&ptr, self.register_value(&val))
-            },
+            }
             Instr::Load { dest, addr, .. } => {
                 let Value::Pointer(ptr) = self.register_value(&addr) else {
                     panic!("no pointer at location: {}", addr)
@@ -367,14 +369,24 @@ impl IRInterpreter {
 
                 let val = self.load(ptr);
                 self.set_register_value(&dest, val.clone());
-            },
+            }
             Instr::GetElementPointer {
-                dest,
-                from,
-                ty,
-                index,
-            } => todo!(),
-            Instr::MakeStruct { dest, ty, values } => todo!(),
+                dest, from, index, ..
+            } => {
+                let Value::Pointer(ptr) = self.register_value(&from) else {
+                    panic!(
+                        "no pointer found in register: {} in {:?}",
+                        from,
+                        self.stack.last().unwrap().registers
+                    );
+                };
+
+                self.set_register_value(&dest, Value::Pointer(Pointer(ptr.0, Some(index))));
+            }
+            Instr::MakeStruct { dest, values, .. } => {
+                let structure = Value::Struct(self.register_values(&values));
+                self.set_register_value(&dest, structure);
+            }
             Instr::GetValueOf {
                 dest,
                 ty,
@@ -388,18 +400,41 @@ impl IRInterpreter {
         Ok(None)
     }
 
-    fn alloc(&mut self) -> Pointer {
+    fn alloc(&mut self, ty: IRType) -> Pointer {
         let i = self.heap.len();
-        self.heap.push(Value::Void);
-        Pointer(i)
+        let initial_value = match ty {
+            IRType::Struct(vals) => Value::Struct(vals.iter().map(|_| Value::Void).collect()),
+            _ => Value::Void,
+        };
+        self.heap.push(initial_value);
+        Pointer(i, None)
     }
 
     fn load(&self, pointer: Pointer) -> &Value {
-        &self.heap[pointer.0]
+        if let Some(offset) = pointer.1 {
+            let Value::Struct(vals) = &self.heap[pointer.0] else {
+                panic!("invalid index for pointer: {:?}", pointer);
+            };
+
+            &vals[offset]
+        } else {
+            &self.heap[pointer.0]
+        }
     }
 
-    fn store(&mut self, ptr: &Pointer, val: Value) {
-        self.heap[ptr.0] = val;
+    fn store(&mut self, pointer: &Pointer, val: Value) {
+        if let Some(offset) = pointer.1 {
+            let Value::Struct(vals) = &mut self.heap[pointer.0] else {
+                panic!(
+                    "invalid index for pointer: {:?}\nheap: {:?}",
+                    pointer, self.heap
+                );
+            };
+
+            vals[offset] = val
+        } else {
+            self.heap[pointer.0] = val
+        }
     }
 
     fn current_basic_block(&self) -> &BasicBlock {
@@ -416,13 +451,27 @@ impl IRInterpreter {
             .insert(*register, value);
     }
 
+    fn register_values(&self, registers: &RegisterList) -> Vec<Value> {
+        registers
+            .0
+            .iter()
+            .map(|r| self.register_value(r).clone())
+            .collect()
+    }
+
     fn register_value(&self, register: &Register) -> Value {
         self.stack
             .last()
             .expect("Stack underflow")
             .registers
             .get(register)
-            .unwrap_or_else(|| panic!("No value found for register: {:?}", register))
+            .unwrap_or_else(|| {
+                panic!(
+                    "No value found for register: {:?}, {:?}",
+                    register,
+                    self.stack.last().unwrap().registers
+                )
+            })
             .clone()
     }
 
