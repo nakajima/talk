@@ -14,6 +14,8 @@ pub enum Tokind {
     RightParen,
     LeftBracket,
     RightBracket,
+    LeftBrace,
+    RightBrace,
     Func,
     Equals,
     Colon,
@@ -45,6 +47,8 @@ pub enum Tokind {
     Sub,
     Mul,
     Div,
+    Struct,
+    Ptr,
     EOF,
 }
 
@@ -115,6 +119,8 @@ impl<'a> Lexer<'a> {
         match char {
             '[' => self.make(Tokind::LeftBracket),
             ']' => self.make(Tokind::RightBracket),
+            '{' => self.make(Tokind::LeftBrace),
+            '}' => self.make(Tokind::RightBrace),
             ',' => self.make(Tokind::Comma),
             '(' => self.make(Tokind::LeftParen),
             ')' => self.make(Tokind::RightParen),
@@ -125,6 +131,15 @@ impl<'a> Lexer<'a> {
             '#' => self.make(Tokind::Hash),
             '=' => self.make(Tokind::Equals),
             '\n' => self.make(Tokind::Newline),
+
+            'a'..='z' | 'A'..='Z' => {
+                let ident = self.identifier(self.current - 1);
+                self.make(ident)
+            }
+            '0'..='9' => {
+                let number = self.number(self.current - 1);
+                self.make(number)
+            }
             '_' => {
                 if let Some(next) = self.chars.peek() {
                     if *next == '_' || next.is_alphanumeric() {
@@ -134,14 +149,6 @@ impl<'a> Lexer<'a> {
                 }
 
                 self.make(Tokind::Underscore)
-            }
-            'a'..='z' | 'A'..='Z' => {
-                let ident = self.identifier(self.current - 1);
-                self.make(ident)
-            }
-            '0'..='9' => {
-                let number = self.number(self.current - 1);
-                self.make(number)
             }
             _ => Err(LexerError::UnexpectedInput(char)),
         }
@@ -188,6 +195,7 @@ impl<'a> Lexer<'a> {
             "sub" => Tokind::Sub,
             "mul" => Tokind::Mul,
             "div" => Tokind::Div,
+            "struct" => Tokind::Struct,
             _ => Tokind::Identifier(self.code[start_idx..=end_idx].to_string()),
         }
     }

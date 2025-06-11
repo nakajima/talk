@@ -4,14 +4,9 @@ use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     environment::TypeDef,
     expr::{Expr, ExprMeta, Pattern},
-    lowering::{
-        instr::{FuncName, Instr},
-        ir_module::IRModule,
-        parser::parser::ParserError,
-    },
+    lowering::{instr::Instr, ir_module::IRModule, parser::parser::ParserError},
     name::Name,
     parser::ExprID,
-    symbol_table,
     token::Token,
     token_kind::TokenKind,
     type_checker::Ty,
@@ -19,7 +14,9 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub enum IRError {}
+pub enum IRError {
+    ParseError,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Register(pub i32);
@@ -149,6 +146,18 @@ impl FromStr for IRType {
             // Recursively parse the return type
             let ret_ty = IRType::from_str(ret_str.trim())?;
             Ok(IRType::Func(args, Box::new(ret_ty)))
+        } else if s.starts_with('{') {
+            // Recursively parse arguments inside the parentheses
+            let args_inner = &s[1..s.len() - 1];
+            let mut args = vec![];
+            if !args_inner.is_empty() {
+                for arg_part in args_inner.split(',') {
+                    args.push(IRType::from_str(arg_part.trim())?);
+                }
+            }
+
+            // Recursively parse the return type
+            Ok(IRType::Struct(args))
         } else {
             // Handle simple, non-function types
             match s {
@@ -156,6 +165,7 @@ impl FromStr for IRType {
                 "int" => Ok(IRType::Int),
                 "float" => Ok(IRType::Float),
                 "bool" => Ok(IRType::Bool),
+                "ptr" => Ok(IRType::Pointer),
                 "enum" => Ok(IRType::Enum(vec![])), // Basic enum
                 _ if s.starts_with('T') => Ok(IRType::TypeVar(s.to_string())),
                 _ => Err(ParserError::UnexpectedToken(
@@ -189,7 +199,7 @@ impl std::fmt::Display for IRType {
             Self::Enum(_generics) => f.write_str("enum"),
             Self::Struct(types) => write!(
                 f,
-                "struct {{{}}}",
+                "{{{}}}",
                 types
                     .iter()
                     .map(|t| format!("{}", t))
@@ -352,7 +362,6 @@ struct CurrentFunction {
     current_block_idx: usize,
     next_block_id: BasicBlockID,
     blocks: Vec<BasicBlock>,
-    env_reg: Register,
     env_ty: IRType,
     pub registers: RegisterAllocator,
     pub symbol_registers: HashMap<SymbolID, SymbolValue>,
@@ -360,7 +369,7 @@ struct CurrentFunction {
 
 impl CurrentFunction {
     #[track_caller]
-    fn new(env_reg: Register, env_ty: IRType) -> Self {
+    fn new(env_ty: IRType) -> Self {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
@@ -369,7 +378,6 @@ impl CurrentFunction {
             next_block_id: BasicBlockID(0),
             current_block_idx: 0,
             blocks: Default::default(),
-            env_reg,
             env_ty,
             registers: RegisterAllocator::new(),
             symbol_registers: Default::default(),
@@ -483,7 +491,7 @@ impl<'a> Lowerer<'a> {
         if did_create {
             // Make sure we have a current function
             self.current_functions
-                .push(CurrentFunction::new(Register(0), IRType::Struct(vec![])));
+                .push(CurrentFunction::new(IRType::Struct(vec![])));
 
             // Make sure it has a basic block
             let entry = self.new_basic_block();
@@ -529,6 +537,17 @@ impl<'a> Lowerer<'a> {
                 self.source_file.get(expr_id)
             );
         };
+
+        let closure_ptr = self.allocate_register();
+        self.push_instr(Instr::Alloc {
+            dest: closure_ptr,
+            ty: IRType::closure(),
+        });
+
+        if let Some(Name::Resolved(symbol, _)) = name {
+            self.current_func_mut()
+                .register_symbol(*symbol, SymbolValue::Register(closure_ptr));
+        }
 
         let (capture_types, capture_registers) = if let Ty::Closure {
             captures: capture_types,
@@ -579,7 +598,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.current_functions
-            .push(CurrentFunction::new(environment_register, environment_type));
+            .push(CurrentFunction::new(environment_type));
 
         // Now that we're in the block, register the captures
         for (i, capture) in captures.iter().enumerate() {
@@ -666,12 +685,6 @@ impl<'a> Lowerer<'a> {
             RefKind::Func(name.mangled(&typed_expr.ty)),
         ));
 
-        // making the closure
-        let closure_ptr = self.allocate_register();
-        self.push_instr(Instr::Alloc {
-            dest: closure_ptr,
-            ty: IRType::closure(),
-        });
         let env_ptr = self.allocate_register();
         let fn_ptr = self.allocate_register();
         self.push_instr(Instr::GetElementPointer {
@@ -697,6 +710,9 @@ impl<'a> Lowerer<'a> {
             val: func_ref_reg,
             location: fn_ptr,
         });
+
+        self.current_func_mut()
+            .register_symbol(symbol, SymbolValue::Register(closure_ptr));
 
         closure_ptr
     }
@@ -1162,12 +1178,19 @@ impl<'a> Lowerer<'a> {
         match value {
             SymbolValue::Register(reg) => Some(reg.clone()),
             SymbolValue::Capture(idx, ty) => {
-                let reg = self.allocate_register();
+                let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
-                    dest: reg,
+                    dest: env_ptr,
                     from: Register(0),
-                    ty: ty.clone(),
+                    ty: IRType::closure(),
                     index: idx.clone(),
+                });
+
+                let reg = self.allocate_register();
+                self.push_instr(Instr::Load {
+                    dest: reg,
+                    ty,
+                    addr: env_ptr,
                 });
 
                 Some(reg)
@@ -1285,7 +1308,7 @@ impl<'a> Lowerer<'a> {
         self.current_block_mut().push_instr(Instr::Call {
             ty: ty.to_ir(),
             dest_reg, // clone if Register is Copy, else it's fine
-            callee: func_reg,
+            callee: func_reg.into(),
             args: RegisterList(arg_registers),
         });
 
@@ -1413,6 +1436,7 @@ mod tests {
     use crate::{
         SymbolTable, check,
         lowering::{
+            instr::Callee,
             ir_module::IRModule,
             ir_printer::print,
             lowerer::{
@@ -1440,7 +1464,7 @@ mod tests {
                             functions: right_val.clone(),
                         };
 
-                        println!("\n\n\n{:#?}\n{:#?}\n\n\n", &left_val.functions, right_val);
+                        //println!("\n\n\n{:#?}\n{:#?}\n\n\n", &left_val.functions, right_val);
 
                         panic!(
                             "{}\n{}",
@@ -1481,52 +1505,188 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
-                            Instr::MakeStruct {
+                            Instr::Alloc {
                                 dest: Register(1),
+                                ty: IRType::closure()
+                            },
+                            Instr::MakeStruct {
+                                dest: Register(2),
                                 ty: IRType::EMPTY_STRUCT,
                                 values: RegisterList::EMPTY
                             },
                             Instr::Alloc {
-                                dest: Register(2),
+                                dest: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
-                                val: Register(1),
-                                location: Register(2),
+                                val: Register(2),
+                                location: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Ref(
-                                Register(3),
+                                Register(4),
                                 foo_func_type.clone(),
                                 RefKind::Func("@_5_foo".into())
                             ),
-                            Instr::Alloc {
-                                dest: Register(4),
-                                ty: IRType::closure()
-                            },
                             Instr::GetElementPointer {
                                 dest: Register(5),
-                                from: Register(4),
+                                from: Register(1),
                                 index: 1,
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
-                                from: Register(4),
+                                from: Register(1),
                                 index: 0,
                                 ty: IRType::closure()
                             },
                             Instr::Store {
-                                val: Register(2),
+                                val: Register(3),
                                 location: Register(5),
                                 ty: IRType::Pointer
                             },
                             Instr::Store {
-                                val: Register(3),
+                                val: Register(4),
                                 location: Register(6),
                                 ty: IRType::Pointer
                             },
-                            Instr::Ret(IRType::Pointer, Some(Register(4))),
+                            Instr::Ret(IRType::Pointer, Some(Register(1))),
+                        ],
+                    }],
+                    env_ty: IRType::EMPTY_STRUCT,
+                },
+            ]
+        )
+    }
+
+    #[test]
+    fn lowers_recursion() {
+        let lowered = lower(
+            "
+        func foo(x) {
+            foo(x)
+        }
+        ",
+        )
+        .unwrap();
+
+        assert_lowered_functions!(
+            lowered,
+            vec![
+                IRFunction {
+                    ty: IRType::Func(
+                        vec![IRType::TypeVar("T3".into())],
+                        Box::new(IRType::TypeVar("T4".into()))
+                    ),
+                    name: "@_5_foo".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            Instr::GetElementPointer {
+                                dest: Register(2),
+                                from: Register(0),
+                                ty: IRType::closure(),
+                                index: 0
+                            },
+                            Instr::Load {
+                                dest: Register(3),
+                                ty: IRType::TypeVar("T6".into()),
+                                addr: Register(2)
+                            },
+                            Instr::GetElementPointer {
+                                dest: Register(4),
+                                from: Register(3),
+                                ty: IRType::closure(),
+                                index: 0
+                            },
+                            Instr::Load {
+                                dest: Register(5),
+                                ty: IRType::Func(
+                                    vec![IRType::TypeVar("T3".into())],
+                                    IRType::TypeVar("T4".into()).into()
+                                ),
+                                addr: Register(4)
+                            },
+                            Instr::GetElementPointer {
+                                dest: Register(6),
+                                from: Register(3),
+                                ty: IRType::closure(),
+                                index: 1
+                            },
+                            Instr::Load {
+                                dest: Register(7),
+                                ty: IRType::Pointer,
+                                addr: Register(6)
+                            },
+                            Instr::Call {
+                                dest_reg: Register(8),
+                                ty: IRType::TypeVar("T4".into()),
+                                callee: Callee::Register(Register(5)),
+                                args: RegisterList(vec![Register(7), Register(1)])
+                            },
+                            // The `return x` becomes a Ret instruction using the argument register.
+                            // In our calling convention, the env is %0, so x is %1.
+                            Instr::Ret(IRType::TypeVar("T4".into()), Some(Register(8))),
+                        ],
+                    }],
+                    env_ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                },
+                IRFunction {
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            Instr::Alloc {
+                                dest: Register(1),
+                                ty: IRType::closure()
+                            },
+                            // This sequence is now identical to your working test case.
+                            Instr::MakeStruct {
+                                dest: Register(2),
+                                ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                                values: RegisterList(vec![Register(1)])
+                            },
+                            Instr::Alloc {
+                                dest: Register(3),
+                                ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                            },
+                            Instr::Store {
+                                val: Register(2),
+                                location: Register(3),
+                                ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                            },
+                            Instr::Ref(
+                                Register(4),
+                                IRType::Func(
+                                    vec![IRType::TypeVar("T3".into())],
+                                    IRType::TypeVar("T4".into()).into()
+                                ),
+                                RefKind::Func("@_5_foo".into())
+                            ),
+                            Instr::GetElementPointer {
+                                dest: Register(5),
+                                from: Register(1),
+                                index: 1,
+                                ty: IRType::closure()
+                            },
+                            Instr::GetElementPointer {
+                                dest: Register(6),
+                                from: Register(1),
+                                index: 0,
+                                ty: IRType::closure()
+                            },
+                            Instr::Store {
+                                val: Register(3),
+                                location: Register(5),
+                                ty: IRType::Pointer
+                            },
+                            Instr::Store {
+                                val: Register(4),
+                                location: Register(6),
+                                ty: IRType::Pointer
+                            },
+                            Instr::Ret(IRType::Pointer, Some(Register(1))),
                         ],
                     }],
                     env_ty: IRType::EMPTY_STRUCT,
@@ -1575,53 +1735,53 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
+                            Instr::Alloc {
+                                dest: Register(1),
+                                ty: IRType::closure()
+                            },
                             // This sequence is now identical to your working test case.
                             Instr::MakeStruct {
-                                dest: Register(1),
+                                dest: Register(2),
                                 ty: IRType::EMPTY_STRUCT,
                                 values: RegisterList::EMPTY
                             },
                             Instr::Alloc {
-                                dest: Register(2),
+                                dest: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
-                                val: Register(1),
-                                location: Register(2),
+                                val: Register(2),
+                                location: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Ref(
-                                Register(3),
+                                Register(4),
                                 foo_func_type.clone(),
                                 RefKind::Func("@_5_foo".into())
                             ),
-                            Instr::Alloc {
-                                dest: Register(4),
-                                ty: IRType::closure()
-                            },
                             Instr::GetElementPointer {
                                 dest: Register(5),
-                                from: Register(4),
+                                from: Register(1),
                                 index: 1,
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
-                                from: Register(4),
+                                from: Register(1),
                                 index: 0,
                                 ty: IRType::closure()
                             },
                             Instr::Store {
-                                val: Register(2),
+                                val: Register(3),
                                 location: Register(5),
                                 ty: IRType::Pointer
                             },
                             Instr::Store {
-                                val: Register(3),
+                                val: Register(4),
                                 location: Register(6),
                                 ty: IRType::Pointer
                             },
-                            Instr::Ret(IRType::Pointer, Some(Register(4))),
+                            Instr::Ret(IRType::Pointer, Some(Register(1))),
                         ],
                     }],
                     env_ty: IRType::EMPTY_STRUCT,
@@ -1660,49 +1820,48 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
-                            // === Part 1: Create the closure for `foo` ===
-                            Instr::MakeStruct {
+                            Instr::Alloc {
                                 dest: Register(1),
+                                ty: IRType::closure()
+                            },
+                            Instr::MakeStruct {
+                                dest: Register(2),
                                 ty: IRType::EMPTY_STRUCT,
                                 values: RegisterList::EMPTY
                             },
                             Instr::Alloc {
-                                dest: Register(2),
+                                dest: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
-                                val: Register(1),
-                                location: Register(2),
+                                val: Register(2),
+                                location: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Ref(
-                                Register(3),
+                                Register(4),
                                 foo_func_type.clone(),
                                 RefKind::Func("@_5_foo".into())
                             ),
-                            Instr::Alloc {
-                                dest: Register(4),
-                                ty: IRType::closure()
-                            },
                             Instr::GetElementPointer {
                                 dest: Register(5),
-                                from: Register(4),
+                                from: Register(1),
                                 index: 1,
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
-                                from: Register(4),
+                                from: Register(1),
                                 index: 0,
                                 ty: IRType::closure()
                             },
                             Instr::Store {
-                                val: Register(2),
+                                val: Register(3),
                                 location: Register(5),
                                 ty: IRType::Pointer
                             },
                             Instr::Store {
-                                val: Register(3),
+                                val: Register(4),
                                 location: Register(6),
                                 ty: IRType::Pointer
                             },
@@ -1716,7 +1875,7 @@ mod tests {
                             // You need to introduce a Load instruction here.
                             Instr::GetElementPointer {
                                 dest: Register(8),
-                                from: Register(3),
+                                from: Register(1),
                                 index: 0,
                                 ty: IRType::closure()
                             },
@@ -1727,7 +1886,7 @@ mod tests {
                             }, // Load the func_ptr
                             Instr::GetElementPointer {
                                 dest: Register(10),
-                                from: Register(3),
+                                from: Register(1),
                                 index: 1,
                                 ty: IRType::closure()
                             },
@@ -1740,7 +1899,7 @@ mod tests {
                             Instr::Call {
                                 dest_reg: Register(12),
                                 ty: IRType::Int,
-                                callee: Register(9), // The loaded function pointer
+                                callee: Register(9).into(), // The loaded function pointer
                                 args: RegisterList(vec![Register(11), Register(7)]), // (env_ptr, arg)
                             },
                             // 4. Return the result of the call.
@@ -1780,65 +1939,65 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
+                            // Alloc the closure
+                            Instr::Alloc {
+                                dest: Register(1),
+                                ty: IRType::closure()
+                            },
                             // Create the env
                             Instr::MakeStruct {
-                                dest: Register(1),
+                                dest: Register(2),
                                 ty: IRType::EMPTY_STRUCT,
                                 values: RegisterList::EMPTY
                             },
                             // Alloc space for it
                             Instr::Alloc {
-                                dest: Register(2),
+                                dest: Register(3),
                                 ty: IRType::EMPTY_STRUCT,
                             },
                             // Store the env
                             Instr::Store {
                                 ty: IRType::EMPTY_STRUCT,
-                                val: Register(1),
-                                location: Register(2)
+                                val: Register(2),
+                                location: Register(3)
                             },
                             // Get the fn
                             Instr::Ref(
-                                Register(3),
+                                Register(4),
                                 IRType::Func(
                                     vec![IRType::TypeVar("T3".into())],
                                     IRType::TypeVar("T3".into()).into()
                                 ),
                                 RefKind::Func("@_5_foo".into())
                             ),
-                            // Alloc the closure
-                            Instr::Alloc {
-                                dest: Register(4),
-                                ty: IRType::closure()
-                            },
                             // Get a pointer to the env's address in the closure
                             Instr::GetElementPointer {
                                 dest: Register(5),
-                                from: Register(4),
+                                from: Register(1),
                                 ty: IRType::closure(),
                                 index: 1
                             },
                             // Get a pointer to the fn's address in the closure
                             Instr::GetElementPointer {
                                 dest: Register(6),
-                                from: Register(4),
+                                from: Register(1),
                                 ty: IRType::closure(),
                                 index: 0
                             },
                             // Store the env into the closure
                             Instr::Store {
                                 ty: IRType::Pointer,
-                                val: Register(2),
+                                val: Register(3),
                                 location: Register(5)
                             },
                             // Store the fn into the closure
                             Instr::Store {
                                 ty: IRType::Pointer,
-                                val: Register(3),
+                                val: Register(4),
                                 location: Register(6)
                             },
                             // Return a pointer to the closure
-                            Instr::Ret(IRType::Pointer, Some(Register(4)))
+                            Instr::Ret(IRType::Pointer, Some(Register(1)))
                         ],
                     }],
                     env_ty: IRType::Struct(vec![])
@@ -2423,12 +2582,17 @@ mod tests {
                         instructions: vec![
                             Instr::GetElementPointer {
                                 dest: Register(2),
-                                ty: IRType::Int,
+                                ty: IRType::closure(),
                                 from: Register(0),
                                 index: 0
                             },
-                            Instr::Add(Register(3), IRType::Int, Register(2), Register(1)),
-                            Instr::Ret(IRType::Int, Some(Register(3))),
+                            Instr::Load {
+                                dest: Register(3),
+                                ty: IRType::Int,
+                                addr: Register(2)
+                            },
+                            Instr::Add(Register(4), IRType::Int, Register(3), Register(1)),
+                            Instr::Ret(IRType::Int, Some(Register(4))),
                         ],
                     }],
                     env_ty: env_struct_type.clone(),
@@ -2442,63 +2606,57 @@ mod tests {
                             // === Part 1: Setup `let x = 1` and environment ===
                             // The environment struct now holds the VALUE of x, not a pointer.
                             Instr::ConstantInt(Register(1), 1),
-                            Instr::MakeStruct {
+                            Instr::Alloc {
                                 dest: Register(2),
+                                ty: IRType::closure()
+                            },
+                            Instr::MakeStruct {
+                                dest: Register(3),
                                 ty: env_struct_type.clone(),
                                 values: RegisterList(vec![Register(1)])
                             },
                             Instr::Alloc {
-                                dest: Register(3),
+                                dest: Register(4),
                                 ty: env_struct_type.clone()
                             },
                             Instr::Store {
-                                val: Register(2),
-                                location: Register(3),
+                                val: Register(3),
+                                location: Register(4),
                                 ty: env_struct_type.clone()
                             },
-                            // %3 is now the env_ptr.
-
-                            // === Part 2: Create the `add` closure ===
                             Instr::Ref(
-                                Register(4),
+                                Register(5),
                                 add_func_type.clone(),
                                 RefKind::Func("@_5_add".into())
                             ),
-                            Instr::Alloc {
-                                dest: Register(5),
-                                ty: IRType::closure()
-                            },
                             // Adhering to your specified GEP -> Store order
                             Instr::GetElementPointer {
                                 dest: Register(6),
-                                from: Register(5),
+                                from: Register(2),
                                 index: 1,
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(7),
-                                from: Register(5),
+                                from: Register(2),
                                 index: 0,
                                 ty: IRType::closure()
                             },
                             Instr::Store {
-                                val: Register(3),
+                                val: Register(4),
                                 location: Register(6),
                                 ty: IRType::Pointer
                             },
                             Instr::Store {
-                                val: Register(4),
+                                val: Register(5),
                                 location: Register(7),
                                 ty: IRType::Pointer
                             },
-                            // %5 is the pointer to the `add` closure.
-
-                            // === Part 3: Call `add(2)` ===
                             Instr::ConstantInt(Register(8), 2), // The argument `y`.
                             // Unpack the closure
                             Instr::GetElementPointer {
                                 dest: Register(9),
-                                from: Register(4),
+                                from: Register(2),
                                 index: 0,
                                 ty: IRType::closure()
                             },
@@ -2509,7 +2667,7 @@ mod tests {
                             },
                             Instr::GetElementPointer {
                                 dest: Register(11),
-                                from: Register(4),
+                                from: Register(2),
                                 index: 1,
                                 ty: IRType::closure()
                             },
@@ -2522,7 +2680,7 @@ mod tests {
                             Instr::Call {
                                 dest_reg: Register(13),
                                 ty: IRType::Int,
-                                callee: Register(10),
+                                callee: Register(10).into(),
                                 args: RegisterList(vec![Register(12), Register(8)]),
                             },
                             Instr::Ret(IRType::Int, Some(Register(13))),

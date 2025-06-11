@@ -336,10 +336,24 @@ impl<'a> Parser<'a> {
                     self.advance();
                     IRType::Void
                 }
+                Tokind::Ptr => {
+                    self.advance();
+                    IRType::Pointer
+                }
                 Tokind::LeftParen => {
                     let params = self.parameters()?.into_iter().map(|p| p.1).collect();
                     let ret = self.type_repr()?;
                     IRType::Func(params, ret.into())
+                }
+                Tokind::LeftBrace => {
+                    let mut types = vec![];
+                    self.consume(Tokind::LeftBrace).ok();
+                    while !self.did_match(Tokind::RightBrace)? {
+                        types.push(self.type_repr()?);
+                        self.consume(Tokind::Comma).ok();
+                    }
+
+                    IRType::Struct(types)
                 }
                 _ => todo!("{:?}", tok.kind),
             },
@@ -351,6 +365,7 @@ impl<'a> Parser<'a> {
                         Tokind::Bool,
                         Tokind::Void,
                         Tokind::LeftParen,
+                        Tokind::LeftBrace,
                     ],
                     self.current
                         .as_ref()
@@ -478,7 +493,7 @@ mod tests {
             bb1.instructions[0],
             Instr::Call {
                 dest_reg: Register(1),
-                callee: Register(123),
+                callee: "@foo".into(),
                 args: vec![].into(),
                 ty: IRType::Int,
             }
@@ -599,6 +614,7 @@ mod tests {
         .unwrap();
 
         let func = crate::lowering::ir_printer::print(&program);
+        // println!("{}", func);
         let parsed = parse(&func).unwrap();
 
         assert_eq!(parsed.functions.len(), 2);

@@ -238,18 +238,37 @@ impl IRInterpreter {
                 args,
                 ..
             } => {
-                // TODO
-                todo!()
-                // let Some(callee) = self.load_function(&Register(123)) else {
-                //     return Err(InterpreterError::CalleeNotFound);
-                // };
+                // 1. The `callee` register holds a `Value::Func` variant containing the mangled name
+                //    of the function to be called. We first get this value.
+                let callee_value = self.register_value(&callee.try_register().unwrap());
+                let callee_name = match callee_value {
+                    Value::Func(name) => name,
+                    _ => panic!(
+                        "Interpreter error: Expected a function in the callee register, but got {:?}.",
+                        callee_value
+                    ),
+                };
 
-                // let res = self.execute_function(
-                //     callee,
-                //     args.0.iter().map(|r| self.register_value(r)).collect(),
-                // )?;
+                // 2. We use the function name to look up the corresponding `IRFunction`
+                //    definition from the program's module.
+                let Some(function_to_call) = self.load_function(&callee_name) else {
+                    return Err(InterpreterError::CalleeNotFound);
+                };
 
-                // self.set_register_value(&dest_reg, res);
+                // 3. The `args` list contains the registers for the arguments. The first argument
+                //    is always the environment pointer for the closure, followed by the
+                //    user-specified arguments. We resolve these registers to their current values.
+                let arg_values = self.register_values(&args);
+
+                // 4. We call `execute_function`, which handles pushing a new stack frame,
+                //    running the function's code, and returning the result. This is a synchronous
+                //    operation within the interpreter.
+                let result = self.execute_function(function_to_call, arg_values)?;
+
+                // 5. Once the function returns, `execute_function` pops the callee's stack frame.
+                //    We are now back in the caller's frame. We take the return value and
+                //    store it in the destination register specified by the `Call` instruction.
+                self.set_register_value(&dest_reg, result);
             }
             Instr::JumpUnless(cond, jump_to) => {
                 if Value::Bool(false) == self.register_value(&cond) {
@@ -387,12 +406,7 @@ impl IRInterpreter {
                 let structure = Value::Struct(self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
-            Instr::GetValueOf {
-                dest,
-                ty,
-                structure,
-                index,
-            } => todo!(),
+            Instr::GetValueOf { .. } => todo!(),
         }
 
         self.stack.last_mut().unwrap().pc += 1;
@@ -503,6 +517,8 @@ mod tests {
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
         lowerer.lower(&mut module).unwrap();
+
+        // println!("{}", print(&module));
 
         IRInterpreter::new(module).run()
     }

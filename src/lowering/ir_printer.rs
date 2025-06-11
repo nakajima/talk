@@ -46,26 +46,6 @@ fn print_func_def(func: &IRFunction) -> String {
     )
 }
 
-fn print_func_sig(args: &[IRType], env_ty: &IRType, ret: &IRType) -> String {
-    let mut res = String::new();
-
-    res.push('(');
-
-    for (i, arg) in args.iter().enumerate() {
-        if i > 0 {
-            res.push_str(", ");
-        }
-
-        res.push_str(&format_ir_ty(arg).to_string());
-    }
-
-    res.push(')');
-    res.push(' ');
-    res.push_str(&format_ir_ty(ret));
-
-    res
-}
-
 fn print_func_sig_with_args(args: &[IRType], env_ty: &IRType, ret: &IRType) -> String {
     let mut res = String::new();
 
@@ -157,8 +137,6 @@ pub fn format_block_id(id: &BasicBlockID) -> String {
 
 #[cfg(test)]
 mod tests {
-    use indoc::formatdoc;
-
     use crate::{
         SymbolTable, check,
         lowering::{
@@ -188,22 +166,27 @@ mod tests {
 
         let func = print(&program);
         assert_eq!(
-            func,
-            formatdoc!(
-                r#"
-                func @_5_add(int %0) int
-                  entry:
-                    %1 = int 1;
-                    %2 = add int %1, %0;
-                    ret int %2;
+            func.trim(),
+            r#"func @_5_add({} %0, int %0) int
+  entry:
+    %2 = int 1;
+    %3 = add int %2, %1;
+    ret int %3;
 
-                func @main() void
-                  entry:
-                    %0 = ref (int) int @_5_add;
-                    ret (int) int %0;
-
+func @main({} %0) void
+  entry:
+    %1 = alloc {ptr, ptr};
+    %2 = struct {} ();
+    %3 = alloc {};
+    store {} %2 %3;
+    %4 = ref (int) int @_5_add;
+    %5 = getelementptr {ptr, ptr} %1 1;
+    %6 = getelementptr {ptr, ptr} %1 0;
+    store ptr %3 %5;
+    store ptr %4 %6;
+    ret ptr %1;
                 "#
-            )
+            .trim()
         )
     }
 }

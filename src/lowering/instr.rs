@@ -1,10 +1,60 @@
+use std::{fmt::Display, str::FromStr};
+
 use crate::lowering::lowerer::{
-    BasicBlockID, IRType, PhiPredecessors, RefKind, Register, RegisterList,
+    self, BasicBlockID, IRError, IRType, PhiPredecessors, RefKind, Register, RegisterList,
 };
 
 // Newtypes for complex arguments to make formatting unambiguous
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncName(pub String);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Callee {
+    Register(Register),
+    Name(String),
+}
+
+impl From<&str> for Callee {
+    fn from(value: &str) -> Self {
+        Self::Name(value.to_string())
+    }
+}
+
+impl Display for Callee {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Name(name) => write!(f, "{}", name),
+            Self::Register(reg) => write!(f, "{}", reg),
+        }
+    }
+}
+
+impl FromStr for Callee {
+    type Err = <lowerer::Register as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(if s.trim().starts_with("@") {
+            Callee::Name(s.trim().into())
+        } else {
+            Callee::Register(Register::from_str(s.trim())?)
+        })
+    }
+}
+
+impl From<Register> for Callee {
+    fn from(value: Register) -> Self {
+        Self::Register(value)
+    }
+}
+
+impl Callee {
+    pub fn try_register(&self) -> Result<Register, IRError> {
+        match self {
+            Self::Register(reg) => Ok(*reg),
+            _ => Err(IRError::ParseError),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instr {
@@ -84,7 +134,7 @@ pub enum Instr {
         index: usize,
     },
 
-    #[doc = "$dest = struct $ty {{$values}};"]
+    #[doc = "$dest = struct $ty ($values);"]
     MakeStruct {
         dest: Register,
         ty: IRType,
@@ -103,7 +153,7 @@ pub enum Instr {
     Call {
         dest_reg: Register,
         ty: IRType,
-        callee: Register,
+        callee: Callee,
         args: RegisterList,
     },
 
