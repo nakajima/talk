@@ -418,7 +418,7 @@ mod tests {
         let mut module = IRModule::new();
         lowerer.lower(&mut module).unwrap();
 
-        // println!("{}", crate::lowering::ir_printer::print(&module));
+        println!("{}", crate::lowering::ir_printer::print(&module));
 
         IRInterpreter::new(module).run()
     }

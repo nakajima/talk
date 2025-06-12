@@ -445,10 +445,21 @@ impl<'a> Lowerer<'a> {
             ..
         } = &typed_expr.ty
         {
+            let Name::Resolved(self_symbol, _) = self.resolve_name(name.clone()) else {
+                panic!("no symbol: {:?}", name)
+            };
+
             // Define an environment object for our captures. If there aren't any captures we don't care,
             // we're going to do it anyway. Maybe we can optimize it out later? I don't know if we'll have time.
             let mut capture_registers = vec![];
-            for capture in captures {
+            let mut captured_ir_types = vec![];
+            for (i, capture) in captures.iter().enumerate() {
+                //     // It's recursive so we just need to pass the pointer
+                //     capture_registers.push(closure_ptr);
+
+                //     continue;
+                // }
+
                 let SymbolValue::Register(register) = self
                     .lookup_register(capture)
                     .expect("could not find register for capture")
@@ -456,12 +467,15 @@ impl<'a> Lowerer<'a> {
                     todo!("don't know how to handle captured captures yet")
                 };
                 capture_registers.push(*register);
+
+                if *capture == self_symbol {
+                    captured_ir_types.push(IRType::Pointer);
+                } else {
+                    captured_ir_types.push(capture_types[i].to_ir());
+                }
             }
 
-            (
-                capture_types.iter().map(Ty::to_ir).collect(),
-                capture_registers,
-            )
+            (captured_ir_types, capture_registers)
         } else {
             (vec![], vec![])
         };
@@ -497,18 +511,7 @@ impl<'a> Lowerer<'a> {
                 .register_symbol(*capture, SymbolValue::Capture(i, capture_types[i].clone()));
         }
 
-        let name = match name {
-            Some(Name::Resolved(_, _)) => name.clone().unwrap(),
-            None => {
-                let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
-                let symbol = self
-                    .symbol_table
-                    .add(&name_str, SymbolKind::CustomType, 12345);
-
-                Name::Resolved(symbol, name_str)
-            }
-            _ => todo!(),
-        };
+        let name = self.resolve_name(name.clone());
 
         log::trace!("lowering {name:?}");
 
@@ -1266,6 +1269,20 @@ impl<'a> Lowerer<'a> {
         self.current_func_mut().add_block(block);
         id
     }
+
+    fn resolve_name(&mut self, name: Option<Name>) -> Name {
+        match name {
+            Some(Name::Resolved(_, _)) => name.unwrap(),
+            None => {
+                let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
+                let symbol = self
+                    .symbol_table
+                    .add(&name_str, SymbolKind::CustomType, 12345);
+                Name::Resolved(symbol, name_str)
+            }
+            _ => todo!(),
+        }
+    }
 }
 
 fn find_or_create_main(
@@ -1498,7 +1515,7 @@ mod tests {
                             },
                             Instr::Load {
                                 dest: Register(3),
-                                ty: IRType::TypeVar("T6".into()),
+                                ty: IRType::Pointer,
                                 addr: Register(2)
                             },
                             Instr::GetElementPointer {
@@ -1537,7 +1554,7 @@ mod tests {
                             Instr::Ret(IRType::TypeVar("T4".into()), Some(Register(8))),
                         ],
                     }],
-                    env_ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                    env_ty: IRType::Struct(vec![IRType::Pointer]),
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -1552,17 +1569,17 @@ mod tests {
                             // This sequence is now identical to your working test case.
                             Instr::MakeStruct {
                                 dest: Register(2),
-                                ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                                ty: IRType::Struct(vec![IRType::Pointer]),
                                 values: RegisterList(vec![Register(1)])
                             },
                             Instr::Alloc {
                                 dest: Register(3),
-                                ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                                ty: IRType::Struct(vec![IRType::Pointer]),
                             },
                             Instr::Store {
                                 val: Register(2),
                                 location: Register(3),
-                                ty: IRType::Struct(vec![IRType::TypeVar("T6".into())]),
+                                ty: IRType::Struct(vec![IRType::Pointer]),
                             },
                             Instr::Ref(
                                 Register(4),

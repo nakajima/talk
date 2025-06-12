@@ -32,8 +32,8 @@ impl IRType {
             IRType::Float => 8,
             IRType::Bool => 1,
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
-            IRType::TypeVar(_) => todo!(),
-            IRType::Enum(irtypes) => 1 + irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
+            IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
+            IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
             IRType::Struct(irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
             IRType::Pointer => 8,
         }

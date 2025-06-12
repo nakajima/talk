@@ -63,7 +63,7 @@ impl Value {
                     vec![0]
                 }
             }
-            Value::Enum { tag, values } => todo!(),
+            Value::Enum { .. } => todo!(),
             Value::Void => todo!(),
             Value::Struct(values) => values.iter().flat_map(|v| v.as_bytes()).collect(),
             Value::Pointer(pointer) => pointer.0.to_le_bytes().to_vec(),
