@@ -1893,6 +1893,13 @@ mod tests {
             Ty::Array(Box::new(Ty::Int))
         );
     }
+
+    #[test]
+    fn resolves_array_builtin() {
+        let checked = check("func c(a: Array<Int>) { a }");
+        println!("{:#?}", checked);
+        assert_eq!(checked.type_for(1), Ty::Array(Box::new(Ty::Int)));
+    }
 }
 
 #[cfg(test)]

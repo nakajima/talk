@@ -850,6 +850,19 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn resolves_array_builtin() {
+        let resolved = resolve("func c() -> Array<Int> {}");
+        assert_eq!(
+            *resolved.get(&1).unwrap(),
+            TypeRepr(Name::Resolved(SymbolID(-4), "Array".into()), vec![0], false)
+        );
+        assert_eq!(
+            *resolved.get(&0).unwrap(),
+            TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+        );
+    }
 }
 
 // TODO:

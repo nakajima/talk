@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    SymbolID, SymbolTable,
+    SymbolID,
     parser::ExprID,
     prelude::{Prelude, compile_prelude},
     type_checker::Ty,
@@ -78,7 +78,7 @@ impl Environment {
             typed_exprs: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
-            scopes: vec![SymbolTable::default_env_scope()],
+            scopes: vec![crate::builtins::default_env_scope()],
             types: Default::default(),
             direct_callables: Default::default(),
         }

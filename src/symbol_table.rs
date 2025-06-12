@@ -3,7 +3,6 @@ use std::{collections::HashMap, i32};
 use crate::{
     parser::ExprID,
     prelude::{compile_prelude, compile_prelude_for_name_resolver},
-    type_checker::{Scheme, Ty},
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -59,25 +58,7 @@ impl Default for SymbolTable {
             next_id: Default::default(),
         };
 
-        table.symbols.insert(
-            SymbolID(-1),
-            SymbolInfo {
-                name: "Int".into(),
-                kind: SymbolKind::BuiltinType,
-                expr_id: -1,
-                is_captured: false,
-            },
-        );
-
-        table.symbols.insert(
-            SymbolID(-2),
-            SymbolInfo {
-                name: "Float".into(),
-                kind: SymbolKind::BuiltinType,
-                expr_id: -2,
-                is_captured: false,
-            },
-        );
+        crate::builtins::import_symbols(&mut table);
 
         table
     }
@@ -86,22 +67,6 @@ impl Default for SymbolTable {
 impl SymbolTable {
     pub fn import(&mut self, symbol_id: &SymbolID, info: SymbolInfo) {
         self.symbols.insert(*symbol_id, info);
-    }
-
-    pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
-        let mut scope = HashMap::new();
-        scope.insert(SymbolID(-1), Scheme::new(Ty::Int, vec![]));
-        scope.insert(SymbolID(-2), Scheme::new(Ty::Float, vec![]));
-        scope.insert(SymbolID(-3), Scheme::new(Ty::Bool, vec![]));
-        scope
-    }
-
-    pub fn default_name_scope() -> HashMap<String, SymbolID> {
-        let mut scope = HashMap::new();
-        scope.insert("Int".to_string(), SymbolID(-1));
-        scope.insert("Float".to_string(), SymbolID(-2));
-        scope.insert("Bool".to_string(), SymbolID(-3));
-        scope
     }
 
     pub fn with_prelude(prelude_symbols: &HashMap<SymbolID, SymbolInfo>) -> Self {
@@ -126,11 +91,11 @@ impl SymbolTable {
 
     // Convert symbols to initial name scope
     pub fn build_name_scope(&self) -> HashMap<String, SymbolID> {
-        let mut scope = Self::default_name_scope(); // Builtins like Int, Float
+        let mut scope = crate::builtins::default_name_scope(); // Builtins like Int, Float
 
         // Add all symbols to name->id mapping
         for (id, info) in &self.symbols {
-            scope.insert(info.name.clone(), *id);
+            scope.insert(info.name.to_string(), *id);
         }
 
         scope
