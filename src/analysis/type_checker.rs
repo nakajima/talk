@@ -1052,8 +1052,6 @@ impl TypeChecker {
                     unreachable!()
                 };
 
-                println!("hoisting {name_str} {enum_id:?}");
-
                 env.start_scope();
                 let mut generic_vars = vec![];
                 for generic_id in generics {
@@ -2004,6 +2002,26 @@ mod tests {
     fn checks_array_builtin() {
         let checked = check("func c(a: Array<Int>) { a }");
         assert_eq!(checked.type_for(1), Ty::Array(Box::new(Ty::Int)));
+    }
+
+    #[test]
+    fn checks_arrays_with_polymorphism() {
+        let checked = check(
+            "
+        func identity(a) { a }
+        identity([1,2,3])
+        identity([1.0, 2.0, 3.0])
+        ",
+        );
+
+        assert_eq!(
+            checked.type_for(checked.root_ids()[1]),
+            Ty::Array(Ty::Int.into())
+        );
+        assert_eq!(
+            checked.type_for(checked.root_ids()[2]),
+            Ty::Array(Ty::Float.into())
+        );
     }
 }
 
