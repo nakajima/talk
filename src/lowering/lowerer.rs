@@ -1179,6 +1179,10 @@ impl<'a> Lowerer<'a> {
             panic!("Unresolved variable: {name:?}")
         };
 
+        if crate::builtins::is_builtin_func(symbol_id) {
+            return super::builtins::lower_builtin(symbol_id, self).unwrap();
+        }
+
         let value = self
             .lookup_register(symbol_id)
             .expect("no value for name")
@@ -1285,6 +1289,8 @@ impl<'a> Lowerer<'a> {
             return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
         }
 
+        println!("lower_call callee: {:?}", callee_typed_expr);
+
         let callee = self.lower_expr(&callee).expect("did not get callee");
 
         let func_ptr = self.allocate_register();
@@ -1335,7 +1341,7 @@ impl<'a> Lowerer<'a> {
         self.current_block_mut().push_instr(instr);
     }
 
-    fn allocate_register(&mut self) -> Register {
+    pub(super) fn allocate_register(&mut self) -> Register {
         self.current_func_mut().registers.allocate()
     }
 
@@ -2526,50 +2532,6 @@ mod tests {
         )
     }
 
-    // #[test]
-    // fn lowers_captured_value() {
-    //     let lowered = lower(
-    //         "
-    //     let x = 1
-    //     func add(y) { x + y }
-    //     add(2)
-    //     ",
-    //     )
-    //     .unwrap();
-    //     assert_lowered_functions!(
-    //         lowered,
-    //         vec![
-    //             IRFunction {
-    //                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
-    //                 name: "@_5_aadd".into(),
-    //                 blocks: vec![BasicBlock {
-    //                     id: BasicBlockID(0),
-    //                     instructions: vec![Instr::Ret(IRType::Int, Some(Register(1)))],
-    //                 }],
-    //                 env_ty: IRType::Struct(vec![])
-    //             },
-    //             IRFunction {
-    //                 ty: IRType::Func(vec![], IRType::Void.into()),
-    //                 name: "@main".into(),
-    //                 blocks: vec![BasicBlock {
-    //                     id: BasicBlockID(0),
-    //                     instructions: vec![
-    //                         Instr::Ref(
-    //                             Register(1),
-    //                             IRType::Func(vec![IRType::Int], IRType::Int.into()),
-    //                             RefKind::Func("@_5_foo".into())
-    //                         ),
-    //                         Instr::Ret(
-    //                             IRType::Func(vec![IRType::Int], IRType::Int.into()),
-    //                             Some(Register(1))
-    //                         )
-    //                     ],
-    //                 }],
-    //                 env_ty: IRType::Struct(vec![])
-    //             },
-    //         ]
-    //     )
-    // }
     #[test]
     fn lowers_captured_value() {
         let lowered = lower(
@@ -2703,6 +2665,29 @@ mod tests {
                     env_ty: IRType::EMPTY_STRUCT,
                 },
             ]
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn lowers_array_init() {
+        let lowered = lower("let x = __init_array<Int>(4)").unwrap();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        Instr::ConstantInt(Register(1), 2),
+                        Instr::ConstantInt(Register(2), 1),
+                        Instr::Sub(Register(3), IRType::Int, Register(1), Register(2)),
+                        Instr::Ret(IRType::Int, Some(Register(3)))
+                    ],
+                }],
+                env_ty: IRType::Struct(vec![])
+            }],
         )
     }
 }

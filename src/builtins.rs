@@ -150,6 +150,16 @@ pub fn match_builtin(name: &Name) -> Option<Ty> {
     None
 }
 
+pub fn is_builtin_func(symbol_id: &SymbolID) -> bool {
+    for builtin in builtins() {
+        if SymbolID(builtin.id) == *symbol_id {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{check, type_checker::Ty};
