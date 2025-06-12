@@ -1046,8 +1046,7 @@ impl TypeChecker {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
 
-            if let Expr::EnumDecl(Name::Resolved(enum_id, name_str), generics, body) = expr.clone()
-            {
+            if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
                 let Some(Expr::Block(expr_ids)) = source_file.get(&body) else {
                     unreachable!()
                 };
