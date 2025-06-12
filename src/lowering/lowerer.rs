@@ -75,7 +75,7 @@ impl Ty {
             Ty::Int => IRType::Int,
             Ty::Bool => IRType::Bool,
             Ty::Float => IRType::Float,
-            Ty::Func(items, ty, generics) => IRType::Func(
+            Ty::Func(items, ty, _generics) => IRType::Func(
                 items.iter().map(|t| t.to_ir()).collect(),
                 Box::new(ty.to_ir()),
             ),
@@ -735,7 +735,7 @@ impl<'a> Lowerer<'a> {
                 callee,
                 type_args,
                 args,
-            } => self.lower_call(callee, args, typed_expr.ty),
+            } => self.lower_call(callee, type_args, args, typed_expr.ty),
             Expr::Func { .. } => Some(self.lower_function(expr_id)),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
@@ -1255,7 +1255,13 @@ impl<'a> Lowerer<'a> {
         Some(phi_dest_reg)
     }
 
-    fn lower_call(&mut self, callee: ExprID, args: Vec<ExprID>, ty: Ty) -> Option<Register> {
+    fn lower_call(
+        &mut self,
+        callee: ExprID,
+        _type_args: Vec<ExprID>,
+        args: Vec<ExprID>,
+        ty: Ty,
+    ) -> Option<Register> {
         let mut arg_registers = vec![];
         for arg in args {
             if let Some(arg_reg) = self.lower_expr(&arg) {
