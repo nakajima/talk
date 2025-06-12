@@ -9,7 +9,7 @@ use crate::lowering::{
     instr::{FuncName, Instr},
     ir_module::IRModule,
     lowerer::{BasicBlock, BasicBlockID, IRFunction, IRType, Register},
-    parser::lexer::{Lexer, Token, Tokind},
+    parsing::lexer::{Lexer, Token, Tokind},
 };
 
 #[derive(Debug)]
@@ -410,7 +410,7 @@ mod tests {
             instr::Instr,
             ir_module::IRModule,
             lowerer::{BasicBlockID, IRError, IRType, Lowerer, PhiPredecessors, RefKind, Register},
-            parser::parser::parse,
+            parsing::parser::parse,
         },
     };
     use indoc::formatdoc;

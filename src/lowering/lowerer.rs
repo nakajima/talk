@@ -4,7 +4,7 @@ use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     environment::TypeDef,
     expr::{Expr, ExprMeta, Pattern},
-    lowering::{instr::Instr, ir_module::IRModule, parser::parser::ParserError},
+    lowering::{instr::Instr, ir_module::IRModule, parsing::parser::ParserError},
     name::Name,
     parser::ExprID,
     token::Token,
@@ -52,7 +52,7 @@ impl FromStr for RefKind {
         } else {
             Err(ParserError::UnexpectedToken(
                 vec![],
-                crate::lowering::parser::lexer::Tokind::Identifier(s.to_string()),
+                crate::lowering::parsing::lexer::Tokind::Identifier(s.to_string()),
             ))
         }
     }
@@ -172,7 +172,7 @@ impl FromStr for IRType {
                 _ if s.starts_with('T') => Ok(IRType::TypeVar(s.to_string())),
                 _ => Err(ParserError::UnexpectedToken(
                     vec![],
-                    crate::lowering::parser::lexer::Tokind::Identifier(s.to_string()),
+                    crate::lowering::parsing::lexer::Tokind::Identifier(s.to_string()),
                 )),
             }
         }

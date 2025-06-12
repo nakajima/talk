@@ -29,3 +29,6 @@ cli = ["dep:clap"]
 
 [profile.release]
 debug = true
+
+[lints.clippy]
+approx_constant = "allow"

@@ -82,7 +82,7 @@ pub fn format_optional_register(reg: &Option<Register>) -> String {
     }
 }
 
-pub fn format_registers(args: &Vec<Register>) -> String {
+pub fn format_registers(args: &[Register]) -> String {
     format_args(args)
 }
 
@@ -107,7 +107,7 @@ pub fn format_instruction(instruction: &Instr) -> String {
     format!("{instruction}")
 }
 
-pub fn format_args(args: &Vec<Register>) -> String {
+pub fn format_args(args: &[Register]) -> String {
     let mut res = String::new();
 
     res.push('(');
