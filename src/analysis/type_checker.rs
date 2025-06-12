@@ -334,15 +334,13 @@ impl TypeChecker {
             inferred_type_args.push(self.infer_node(type_arg, env, expected, source_file)?);
         }
 
-        println!("type arg: {:?}", inferred_type_args);
-
         let mut arg_tys: Vec<Ty> = vec![];
         for arg in args {
             let ty = self.infer_node(arg, env, &None, source_file).unwrap();
             arg_tys.push(ty);
         }
 
-        let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()), vec![]);
+        let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
         let callee_ty = self.infer_node(callee, env, &None, source_file)?;
 
         env.constrain_equality(*callee, expected_callee_ty, callee_ty.clone());
@@ -1318,13 +1316,13 @@ mod tests {
             "
         func fizz<T>(ty: T) { T }
 
-        fizz<Int>()
-        fizz<Bool>()
+        fizz<Int>(123)
+        fizz<Bool>(true)
         ",
         );
 
         assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Bool);
+        assert_eq!(checked.type_for(checked.root_ids()[2]), Ty::Bool);
     }
 
     #[test]
@@ -1895,7 +1893,6 @@ mod tests {
         );
 
         // Should type check without errors - polymorphic function
-        // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
         let Ty::Func(args, ret, _) = checker.type_for(checker.root_ids()[0]) else {
             panic!("did not get func")
         };
@@ -1905,7 +1902,7 @@ mod tests {
             Ty::Enum(
                 SymbolID::OPTIONAL,
                 vec![Ty::TypeVar(TypeVarID(
-                    4,
+                    6,
                     TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(3), "T".into()))
                 ))]
             )
@@ -1914,11 +1911,11 @@ mod tests {
             args[1],
             Ty::Func(
                 vec![Ty::TypeVar(TypeVarID(
-                    4,
+                    6,
                     TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(3), "T".into()))
                 ))],
                 Ty::TypeVar(TypeVarID(
-                    3,
+                    5,
                     TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(2), "U".into()))
                 ))
                 .into(),
@@ -1930,7 +1927,7 @@ mod tests {
             Ty::Enum(
                 SymbolID(1),
                 vec![Ty::TypeVar(TypeVarID(
-                    3,
+                    5,
                     TypeVarKind::TypeRepr(Name::Resolved(SymbolID(6), "U".into()))
                 ))]
             )

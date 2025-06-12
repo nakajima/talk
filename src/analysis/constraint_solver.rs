@@ -69,7 +69,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 // Look for matching constructors based on the result_ty
                 match &result_ty {
-                    Ty::Func(_arg_tys, ret_ty, generics) => {
+                    Ty::Func(_arg_tys, ret_ty, _generics) => {
                         // This is a constructor call like .some(123)
                         // Look for enum constructors named member_name that take arg_tys and return
                         // something compatible with ret_ty
@@ -78,7 +78,8 @@ impl<'a> ConstraintSolver<'a> {
                             if let Some(_enum_info) = self
                                 .source_file
                                 .type_from_symbol(&enum_id, self.symbol_table)
-                                && let Some(variant_info) = self.find_variant(&enum_id, &member_name)
+                                && let Some(variant_info) =
+                                    self.find_variant(&enum_id, &member_name)
                             {
                                 // Create the constructor type for this variant
                                 let constructor_ty = self.create_variant_constructor_type(
@@ -251,6 +252,13 @@ impl<'a> ConstraintSolver<'a> {
         None
     }
 
+    fn apply_multiple(types: &[Ty], substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Vec<Ty> {
+        types
+            .iter()
+            .map(|ty| Self::apply(&ty, substitutions, depth))
+            .collect()
+    }
+
     fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
         if depth > 100 {
             return ty.clone();
@@ -261,14 +269,11 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
             Ty::Func(params, returning, generics) => {
-                let applied_params = params
-                    .iter()
-                    .map(|param| Self::apply(param, substitutions, depth + 1).clone())
-                    .collect();
-
+                let applied_params = Self::apply_multiple(params, substitutions, depth);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
+                let applied_generics = Self::apply_multiple(&generics, substitutions, depth);
 
-                Ty::Func(applied_params, Box::new(applied_return), vec![])
+                Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(type_var) {
@@ -370,10 +375,15 @@ impl<'a> ConstraintSolver<'a> {
                     Ok(())
                 }
             }
-            (Ty::Func(lhs_params, lhs_returning, lhs_gen), Ty::Func(rhs_params, rhs_returning, rhs_gen))
-                if lhs_params.len() == rhs_params.len() =>
-            {
+            (
+                Ty::Func(lhs_params, lhs_returning, lhs_gen),
+                Ty::Func(rhs_params, rhs_returning, rhs_gen),
+            ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
+                    Self::unify(lhs, &rhs, substitutions)?;
+                }
+
+                for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
                     Self::unify(lhs, &rhs, substitutions)?;
                 }
 
@@ -420,8 +430,10 @@ impl<'a> ConstraintSolver<'a> {
                 let oh = params
                     .iter()
                     .any(|param| Self::occurs_check(v, param, substitutions))
-                    || Self::occurs_check(v, returning, substitutions);
-
+                    || Self::occurs_check(v, returning, substitutions)
+                    || generics
+                        .iter()
+                        .any(|generic| Self::occurs_check(v, generic, substitutions));
                 if oh {
                     log::error!("occur check failed: {ty:?}");
                 }

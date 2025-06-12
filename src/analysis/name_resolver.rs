@@ -149,6 +149,7 @@ impl NameResolver {
                     args,
                 } => {
                     let mut to_resolve = args.clone();
+                    to_resolve.extend(type_args);
                     to_resolve.push(callee);
 
                     self.resolve_nodes(&to_resolve, source_file);

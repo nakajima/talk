@@ -216,6 +216,14 @@ impl Environment {
         self.scopes.push(Default::default());
     }
 
+    pub fn specialize(&mut self, scheme: Scheme, type_args: &[Ty]) -> Ty {
+        let mut substitutions = HashMap::new();
+        for (unbound_var, type_arg) in scheme.unbound_vars.iter().zip(type_args.iter()) {
+            substitutions.insert(unbound_var.clone(), type_arg.clone());
+        }
+        self.substitute_ty_with_map(scheme.ty, &substitutions)
+    }
+
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
     pub fn generalize(&self, t: &Ty) -> Scheme {
@@ -253,7 +261,8 @@ impl Environment {
                 Ty::Func(params, ret, generics) => {
                     let new_params = params.iter().map(|p| walk(p.clone(), map)).collect();
                     let new_ret = Box::new(walk(*ret, map));
-                    Ty::Func(new_params, new_ret, generics)
+                    let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
+                    Ty::Func(new_params, new_ret, new_generics)
                 }
                 Ty::Closure { func, captures } => {
                     let func = Box::new(walk(*func, map));
@@ -343,7 +352,11 @@ impl Environment {
                     .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
                     .collect();
                 let applied_return = self.substitute_ty_with_map(*returning, substitutions);
-                Ty::Func(applied_params, Box::new(applied_return), generics)
+                let applied_generics = generics
+                    .iter()
+                    .map(|g| self.substitute_ty_with_map(g.clone(), substitutions))
+                    .collect();
+                Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }
             Ty::Closure { func, captures } => {
                 let func = self
@@ -425,6 +438,11 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
             for param in params {
                 s.extend(free_type_vars(param));
             }
+
+            for generic in generics {
+                s.extend(free_type_vars(generic));
+            }
+
             s.extend(free_type_vars(ret));
         }
         Ty::Closure { func, .. } => s.extend(free_type_vars(func)),
