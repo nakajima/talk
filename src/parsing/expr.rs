@@ -51,6 +51,16 @@ pub enum Expr {
     Call(ExprID, Vec<ExprID>),
     Pattern(Pattern),
     Return(Option<ExprID>),
+    Struct(
+        Name,        /* name */
+        Vec<ExprID>, /* generics */
+        ExprID,      /* body */
+    ),
+    Property {
+        name: Name,
+        type_repr: Option<ExprID>,
+        default_value: Option<ExprID>,
+    },
 
     // A type annotation
     TypeRepr(

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
+    environment::{StructDef, TypeDef, TypeParams},
     name::Name,
     type_checker::{Scheme, TypeVarID, TypeVarKind},
 };
@@ -13,6 +14,7 @@ struct Builtin {
     info: SymbolInfo,
     ty: Ty,
     unbound_vars: Vec<TypeVarID>,
+    type_def: Option<TypeDef>,
 }
 
 fn builtins() -> Vec<Builtin> {
@@ -27,6 +29,7 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Int,
             unbound_vars: vec![],
+            type_def: None,
         },
         Builtin {
             id: -2,
@@ -38,6 +41,7 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Float,
             unbound_vars: vec![],
+            type_def: None,
         },
         Builtin {
             id: -3,
@@ -49,6 +53,7 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Bool,
             unbound_vars: vec![],
+            type_def: None,
         },
         Builtin {
             id: -4,
@@ -60,8 +65,28 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Array(Box::new(Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element)))),
             unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            type_def: Some(TypeDef::Struct(StructDef::new(
+                SymbolID(-4),
+                Some(array_override),
+                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+                Default::default(),
+                Default::default(),
+            ))),
         },
     ]
+}
+fn array_override(generics: &TypeParams) -> Ty {
+    Ty::Array(Box::new(generics[0].clone()))
+}
+
+pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
+    let mut result = HashMap::default();
+    for builtin in builtins() {
+        if let Some(def) = builtin.type_def {
+            result.insert(SymbolID(builtin.id), def);
+        }
+    }
+    result
 }
 
 pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
@@ -90,12 +115,19 @@ pub fn import_symbols(symbol_table: &mut SymbolTable) {
 }
 
 pub fn match_builtin(name: &Name) -> Option<Ty> {
-    let Name::Resolved(id, _) = name else {
-        return None;
-    };
     for builtin in builtins() {
-        if SymbolID(builtin.id) == *id {
-            return Some(builtin.ty);
+        match name {
+            Name::Resolved(id, _) => {
+                if *id == SymbolID(builtin.id) {
+                    return Some(builtin.ty);
+                }
+            }
+            Name::Raw(name_str) => {
+                if &builtin.info.name == name_str {
+                    return Some(builtin.ty);
+                }
+            }
+            _ => todo!(),
         }
     }
 

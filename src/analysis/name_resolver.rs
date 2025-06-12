@@ -73,6 +73,36 @@ impl NameResolver {
                 LiteralFloat(_) => continue,
                 LiteralArray(items) => self.resolve_nodes(&items, source_file),
                 LiteralTrue | LiteralFalse => continue,
+                Struct(name, generics, body) => {
+                    match name {
+                        Name::Raw(name_str) => {
+                            let symbol_id =
+                                self.declare(name_str.clone(), SymbolKind::Struct, node_id);
+                            self.type_symbol_stack.push(symbol_id);
+                            source_file.nodes[*node_id as usize] =
+                                Struct(Name::Resolved(symbol_id, name_str), generics.clone(), body)
+                        }
+                        _ => continue,
+                    }
+
+                    self.resolve_nodes(&generics, source_file);
+                    self.resolve_nodes(&[body], source_file);
+                    self.type_symbol_stack.pop();
+                }
+                Property {
+                    type_repr,
+                    default_value,
+                    ..
+                } => {
+                    let mut to_resolve = vec![];
+                    if let Some(type_repr) = type_repr {
+                        to_resolve.push(type_repr)
+                    }
+                    if let Some(default_value) = default_value {
+                        to_resolve.push(default_value)
+                    }
+                    self.resolve_nodes(&to_resolve, source_file);
+                }
                 Return(rhs) => {
                     if let Some(rhs) = rhs {
                         self.resolve_nodes(&[rhs], source_file);
@@ -388,20 +418,6 @@ impl NameResolver {
                 };
 
                 self.resolve_nodes(fields, source_file);
-
-                // let fields = fields
-                //     .iter()
-                //     .map(|f| {
-
-                //         let Some(Expr::Pattern(pattern)) = source_file.get(*f).clone() else {
-                //             unreachable!()
-                //         };
-
-                //         self.resolve_pattern(pattern, source_file, node_id);
-                //         node_id
-                //     })
-                //     .collect();
-
                 Pattern::Variant {
                     enum_name,
                     variant_name: variant_name.clone(),
@@ -861,6 +877,42 @@ mod tests {
         assert_eq!(
             *resolved.get(&0).unwrap(),
             TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+        );
+    }
+
+    #[test]
+    fn resolves_struct() {
+        let resolved = resolve("struct Person {}");
+        assert_eq!(
+            *resolved.roots()[0].unwrap(),
+            Struct(Name::Resolved(SymbolID(3), "Person".into()), vec![], 0)
+        );
+    }
+
+    #[test]
+    fn resolves_properties() {
+        let resolved = resolve(
+            "
+        struct Person {
+            let age: Int
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved.roots()[0].unwrap(),
+            Struct(Name::Resolved(SymbolID(3), "Person".into()), vec![], 2)
+        );
+        assert_eq!(
+            *resolved.get(&1).unwrap(),
+            Expr::Property {
+                name: "age".into(),
+                type_repr: Some(0),
+                default_value: None
+            }
+        );
+        assert_eq!(
+            *resolved.get(&0).unwrap(),
+            Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
     }
 }

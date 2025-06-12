@@ -104,6 +104,61 @@ impl<'a> Parser<'a> {
 
     // MARK: Expr parsers
 
+    pub(crate) fn struct_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Struct)?;
+
+        let Some((name_str, _)) = self.try_identifier() else {
+            return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+        };
+        let mut generics = vec![];
+        if self.did_match(TokenKind::Less)? {
+            while !self.did_match(TokenKind::Greater)? {
+                generics.push(self.type_repr(true)?);
+                self.consume(TokenKind::Comma).ok();
+            }
+        };
+
+        let body = self.struct_body()?;
+        self.add_expr(Struct(Name::Raw(name_str), generics, body))
+    }
+
+    fn struct_body(&mut self) -> Result<ExprID, ParserError> {
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace)?;
+
+        let mut attributes: Vec<ExprID> = vec![];
+        while !self.did_match(TokenKind::RightBrace)? {
+            if self.peek_is(TokenKind::Let) {
+                attributes.push(self.property()?);
+
+                // attributes.push(item);
+            };
+        }
+
+        self.add_expr(Expr::Block(attributes))
+    }
+
+    pub(crate) fn property(&mut self) -> Result<ExprID, ParserError> {
+        self.consume(TokenKind::Let)?;
+        let name = self.identifier()?;
+        let type_repr = if self.did_match(TokenKind::Colon)? {
+            Some(self.type_repr(false)?)
+        } else {
+            None
+        };
+        let default_value = if self.did_match(TokenKind::Equals)? {
+            Some(self.parse_with_precedence(Precedence::Assignment)?)
+        } else {
+            None
+        };
+
+        self.add_expr(Expr::Property {
+            name: Name::Raw(name),
+            type_repr,
+            default_value,
+        })
+    }
+
     pub(crate) fn enum_decl(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         self.consume(TokenKind::Enum)?;
         self.skip_newlines();
@@ -686,6 +741,18 @@ impl<'a> Parser<'a> {
     }
 
     // MARK: Helpers
+
+    pub(super) fn identifier(&mut self) -> Result<String, ParserError> {
+        self.skip_newlines();
+        if let Some(current) = self.current.clone()
+            && let TokenKind::Identifier(ref name) = current.kind
+        {
+            self.advance();
+            return Ok(name.to_string());
+        };
+
+        Err(ParserError::ExpectedIdentifier(self.current.clone()))
+    }
 
     // Try to get an identifier. If it's a match, return it, otherwise return None
     pub(super) fn try_identifier(&mut self) -> Option<(String, Token)> {
@@ -1695,5 +1762,83 @@ mod arrays {
             *parsed.roots()[0].unwrap(),
             Expr::LiteralArray(vec!(0, 1, 2))
         );
+    }
+}
+
+#[cfg(test)]
+mod structs {
+    use crate::{expr::Expr, name::Name, parser::parse};
+
+    #[test]
+    fn parses_empty_struct_def() {
+        let parsed = parse(
+            "
+        struct Person {}
+        ",
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::Struct(Name::Raw("Person".into()), vec![], 0)
+        );
+    }
+
+    #[test]
+    fn parses_struct_properties() {
+        let parsed = parse(
+            "
+        struct Person {
+            let age: Int
+            let count: Int = 123
+            let height = 456
+        }
+        ",
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::Struct(Name::Raw("Person".into()), vec![], 7)
+        );
+        assert_eq!(*parsed.get(&7).unwrap(), Expr::Block(vec![1, 4, 6]));
+        assert_eq!(
+            *parsed.get(&1).unwrap(),
+            Expr::Property {
+                name: "age".into(),
+                type_repr: Some(0),
+                default_value: None
+            }
+        );
+        assert_eq!(
+            *parsed.get(&0).unwrap(),
+            Expr::TypeRepr("Int".into(), vec![], false)
+        );
+
+        assert_eq!(
+            *parsed.get(&4).unwrap(),
+            Expr::Property {
+                name: "count".into(),
+                type_repr: Some(2),
+                default_value: Some(3)
+            }
+        );
+        assert_eq!(
+            *parsed.get(&2).unwrap(),
+            Expr::TypeRepr("Int".into(), vec![], false)
+        );
+        assert_eq!(*parsed.get(&3).unwrap(), Expr::LiteralInt("123".into()));
+
+        assert_eq!(
+            *parsed.get(&6).unwrap(),
+            Expr::Property {
+                name: "height".into(),
+                type_repr: None,
+                default_value: Some(5)
+            }
+        );
+        assert_eq!(*parsed.get(&5).unwrap(), Expr::LiteralInt("456".into()));
     }
 }

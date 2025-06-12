@@ -87,6 +87,7 @@ impl Ty {
             Ty::Closure { func, .. } => func.to_ir(),
             Ty::Tuple(_items) => todo!(),
             Ty::Array(_) => todo!(),
+            Ty::Struct(_, _) => todo!(),
         }
     }
 }
@@ -809,7 +810,10 @@ impl<'a> Lowerer<'a> {
                     panic!("did not get enum")
                 };
 
-                let TypeDef::Enum(type_def) = self.source_file.type_def(enum_id).cloned().unwrap();
+                let TypeDef::Enum(type_def) = self.source_file.type_def(enum_id).cloned().unwrap()
+                else {
+                    unreachable!()
+                };
 
                 /* ... find variant by name in type_def ... */
                 let (tag, variant_def) = type_def.tag_with_variant_for(&variant_name);

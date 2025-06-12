@@ -54,6 +54,7 @@ pub enum TokenKind {
     LeftBracket,
     RightBracket,
     Comma,
+    Struct,
     Int(String),
     Float(String),
     Identifier(String),

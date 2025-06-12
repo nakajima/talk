@@ -109,6 +109,12 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
+            TokenKind::Struct => ParseHandler {
+                prefix: Some(Parser::struct_expr),
+                infix: None,
+                precedence: Precedence::Call,
+            },
+
             TokenKind::LeftBracket => ParseHandler {
                 prefix: Some(Parser::array_literal),
                 infix: None,

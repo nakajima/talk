@@ -33,6 +33,40 @@ pub struct EnumDef {
     pub methods: Vec<Ty>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructDef {
+    pub type_override: Option<fn(generics: &TypeParams) -> Ty>,
+    pub name: SymbolID,
+    pub type_parameters: TypeParams,
+    pub properties: HashMap<String, Property>,
+    pub methods: HashMap<String, Method>,
+}
+
+impl StructDef {
+    pub fn new(
+        name: SymbolID,
+        type_override: Option<fn(generics: &TypeParams) -> Ty>,
+        type_parameters: TypeParams,
+        properties: HashMap<String, Property>,
+        methods: HashMap<String, Method>,
+    ) -> Self {
+        Self {
+            name,
+            type_override,
+            type_parameters,
+            properties,
+            methods,
+        }
+    }
+    pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
+        if let Some(ty) = self.type_override.clone() {
+            ty(type_parameters)
+        } else {
+            Ty::Struct(self.name, self.type_parameters.clone())
+        }
+    }
+}
+
 impl EnumDef {
     pub(crate) fn tag_with_variant_for(&self, name: &str) -> (u16, &EnumVariant) {
         for (i, variant) in self.variants.iter().enumerate() {
@@ -50,9 +84,34 @@ pub type TypeParams = Vec<Ty>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDef {
     Enum(EnumDef),
+    Struct(StructDef),
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Property {
+    name: String,
+    ty: Ty,
+}
+
+impl Property {
+    pub fn new(name: String, ty: Ty) -> Self {
+        Self { name, ty }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Method {
+    name: String,
+    ty: Ty,
+}
+
+impl Method {
+    pub fn new(name: String, ty: Ty) -> Self {
+        Self { name, ty }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Environment {
@@ -79,7 +138,7 @@ impl Environment {
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
-            types: Default::default(),
+            types: crate::builtins::default_env_types(),
             direct_callables: Default::default(),
         }
     }
@@ -179,6 +238,10 @@ impl Environment {
                     let new_values = values.iter().map(|g| walk(g.clone(), map)).collect();
                     Ty::EnumVariant(name, new_values)
                 }
+                Ty::Struct(sym, generics) => {
+                    let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
+                    Ty::Struct(sym, new_generics)
+                }
                 Ty::Array(ty) => Ty::Array(Box::new(walk(*ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p.clone(), map)).collect()),
                 Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
@@ -213,6 +276,14 @@ impl Environment {
     pub fn register_enum(&mut self, def: EnumDef) {
         self.types
             .insert(def.clone().name.unwrap(), TypeDef::Enum(def));
+    }
+
+    pub fn register_struct(&mut self, def: StructDef) {
+        self.types.insert(def.name, TypeDef::Struct(def));
+    }
+
+    pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {
+        self.types.get(name)
     }
 
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {
@@ -277,6 +348,13 @@ impl Environment {
                     .collect(),
             ),
             Ty::Array(ty) => Ty::Array(self.substitute_ty_with_map(*ty, substitutions).into()),
+            Ty::Struct(sym, generics) => Ty::Struct(
+                sym,
+                generics
+                    .iter()
+                    .map(|t| self.substitute_ty_with_map(t.clone(), substitutions))
+                    .collect(),
+            ),
             Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty,
         }
     }

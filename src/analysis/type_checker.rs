@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
-    environment::{EnumVariant, free_type_vars},
+    environment::{EnumVariant, Method, Property, StructDef, free_type_vars},
     expr::{Expr, Pattern},
     match_builtin,
     name::Name,
@@ -73,6 +73,7 @@ pub enum Ty {
     EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
+    Struct(SymbolID, Vec<Ty> /* generics */),
 }
 
 impl Ty {
@@ -93,7 +94,7 @@ impl Scheme {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct TypeChecker;
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -130,6 +131,7 @@ impl TypeChecker {
     ) -> Result<SourceFile<Typed>, TypeError> {
         let root_ids = source_file.root_ids();
 
+        self.hoist_structs(&root_ids, env, &mut source_file, symbol_table)?;
         self.hoist_enums(&root_ids, env, &mut source_file, symbol_table)?;
         self.hoist_functions(&root_ids, env, &source_file);
 
@@ -391,8 +393,12 @@ impl TypeChecker {
                     }
                 }
             }
-            Name::Resolved(symbol_id, _name_str) => {
-                if *is_type_parameter {
+            Name::Resolved(symbol_id, name_str) => {
+                if let Some(builtin_ty) =
+                    match_builtin(&Name::Resolved(*symbol_id, name_str.clone()))
+                {
+                    builtin_ty
+                } else if *is_type_parameter {
                     // Declaration site of a type parameter (e.g., T in `enum Option<T>`).
                     // Create a new type variable for it.
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
@@ -405,7 +411,7 @@ impl TypeChecker {
             Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id),
         };
 
-        // For generic types like Option<Int>, we need to handle the generics
+        // For explicit lists of generic types like <Int> in Option<Int>, we need to handle the generics
         if !generics.is_empty() && !is_type_parameter {
             // First, infer all the generic arguments
             let mut generic_types = Vec::new();
@@ -416,9 +422,18 @@ impl TypeChecker {
 
             // Now when we have a resolved symbol for a generic type
             if let Name::Resolved(symbol_id, _) = name {
+                let ty = match env.lookup_type(&symbol_id) {
+                    Some(TypeDef::Enum(_)) => Ty::Enum(symbol_id, generic_types),
+                    Some(TypeDef::Struct(def)) => def.type_repr(&generic_types),
+                    _ => panic!(
+                        "Didn't get type for symbol {:?} {:?}",
+                        symbol_id,
+                        env.lookup_enum(&symbol_id)
+                    ),
+                };
+
                 // Instead of just instantiating, we need to build the concrete type
                 // For enums, this means Ty::Enum(symbol_id, generic_types)
-                let ty = Ty::Enum(symbol_id, generic_types);
                 return Ok(ty);
             }
         }
@@ -941,6 +956,86 @@ impl TypeChecker {
         }
     }
 
+    fn hoist_structs(
+        &self,
+        root_ids: &[ExprID],
+        env: &mut Environment,
+        source_file: &SourceFile<NameResolved>,
+        _symbol_table: &mut SymbolTable,
+    ) -> Result<(), TypeError> {
+        for id in root_ids {
+            let expr = source_file.get(id).unwrap().clone();
+            let Expr::Struct(name, generics, body) = expr else {
+                continue;
+            };
+
+            let Name::Resolved(symbol_id, _) = name else {
+                return Err(TypeError::Unresolved);
+            };
+
+            let Some(Expr::Block(expr_ids)) = source_file.get(&body) else {
+                unreachable!()
+            };
+
+            let mut methods: HashMap<String, Method> = Default::default();
+            let mut properties: HashMap<String, Property> = Default::default();
+
+            let type_parameters = generics
+                .iter()
+                .map(|id| self.infer_node(id, env, &None, source_file).unwrap())
+                .collect();
+            log::warn!("{:?}", type_parameters);
+
+            for expr_id in expr_ids {
+                match &source_file.get(expr_id).unwrap() {
+                    Expr::Property {
+                        name,
+                        type_repr,
+                        default_value,
+                    } => {
+                        let mut ty = None;
+                        if let Some(type_repr) = type_repr {
+                            ty = Some(self.infer_node(type_repr, env, &None, source_file)?);
+                        }
+                        if let Some(default_value) = default_value {
+                            ty = Some(self.infer_node(default_value, env, &None, source_file)?);
+                        }
+                        if ty.is_none() {
+                            return Err(TypeError::Unknown("No type for method"));
+                        }
+
+                        let name = match name {
+                            Name::Raw(name_str) => name_str,
+                            Name::Resolved(_, name_str) => name_str,
+                            _ => unreachable!(),
+                        };
+
+                        properties.insert(
+                            name.to_string(),
+                            Property::new(name.to_string(), ty.unwrap()),
+                        );
+                    }
+                    Expr::Func { name, .. } => {
+                        let name = match name {
+                            Some(Name::Raw(name_str)) => name_str,
+                            Some(Name::Resolved(_, name_str)) => name_str,
+                            _ => unreachable!(),
+                        };
+
+                        let ty = self.infer_node(expr_id, env, &None, source_file)?;
+                        methods.insert(name.to_string(), Method::new(name.to_string(), ty));
+                    }
+                    _ => return Err(TypeError::Unknown("Unhandled property")),
+                }
+            }
+
+            let struct_def = StructDef::new(symbol_id, None, type_parameters, properties, methods);
+            env.register_struct(struct_def);
+        }
+
+        Ok(())
+    }
+
     fn hoist_enums(
         &self,
         root_ids: &[ExprID],
@@ -951,10 +1046,13 @@ impl TypeChecker {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
 
-            if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
+            if let Expr::EnumDecl(Name::Resolved(enum_id, name_str), generics, body) = expr.clone()
+            {
                 let Some(Expr::Block(expr_ids)) = source_file.get(&body) else {
                     unreachable!()
                 };
+
+                println!("hoisting {} {:?}", name_str, enum_id);
 
                 env.start_scope();
                 let mut generic_vars = vec![];
@@ -971,6 +1069,14 @@ impl TypeChecker {
                 let mut methods: Vec<Ty> = vec![];
                 let mut variants: Vec<Ty> = vec![];
                 let mut variant_defs: Vec<EnumVariant> = vec![];
+
+                // Register a placeholder
+                env.register_enum(EnumDef {
+                    name: Some(enum_id),
+                    variants: variant_defs.clone(),
+                    type_parameters: generic_vars.clone(),
+                    methods: methods.clone(),
+                });
 
                 log::debug!("Generic vars: {generic_vars:?}");
                 for expr_id in expr_ids.clone() {
@@ -1895,9 +2001,8 @@ mod tests {
     }
 
     #[test]
-    fn resolves_array_builtin() {
+    fn checks_array_builtin() {
         let checked = check("func c(a: Array<Int>) { a }");
-        println!("{:#?}", checked);
         assert_eq!(checked.type_for(1), Ty::Array(Box::new(Ty::Int)));
     }
 }

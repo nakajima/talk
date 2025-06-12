@@ -306,6 +306,13 @@ impl<'a> ConstraintSolver<'a> {
                 Ty::Closure { func, captures }
             }
             Ty::Array(ty) => Ty::Array(Self::apply(ty, substitutions, depth + 1).into()),
+            Ty::Struct(sym, generics) => Ty::Struct(
+                *sym,
+                generics
+                    .iter()
+                    .map(|t| Self::apply(t, substitutions, depth + 1))
+                    .collect(),
+            ),
             Ty::Void => ty.clone(),
         }
     }
