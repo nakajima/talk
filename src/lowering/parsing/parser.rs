@@ -8,7 +8,8 @@ use std::{
 use crate::lowering::{
     instr::{FuncName, Instr},
     ir_module::IRModule,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRType, Register},
+    ir_type::IRType,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, Register},
     parsing::lexer::{Lexer, Token, Tokind},
 };
 
@@ -307,10 +308,11 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone()
-            && current.kind == expected {
-                self.advance();
-                return Ok(true);
-            };
+            && current.kind == expected
+        {
+            self.advance();
+            return Ok(true);
+        };
 
         Ok(false)
     }
@@ -381,10 +383,11 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         if let Some(current) = self.current.clone()
-            && current.kind == expected {
-                self.advance();
-                return Ok(current);
-            };
+            && current.kind == expected
+        {
+            self.advance();
+            return Ok(current);
+        };
 
         Err(ParserError::UnexpectedToken(
             vec![expected],
@@ -409,7 +412,8 @@ mod tests {
         lowering::{
             instr::Instr,
             ir_module::IRModule,
-            lowerer::{BasicBlockID, IRError, IRType, Lowerer, PhiPredecessors, RefKind, Register},
+            ir_type::IRType,
+            lowerer::{BasicBlockID, IRError, Lowerer, PhiPredecessors, RefKind, Register},
             parsing::parser::parse,
         },
     };

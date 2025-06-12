@@ -13,6 +13,6 @@ pub fn lower_builtin(
     }
 }
 
-fn lower_array_init(lowerer: &mut Lowerer) -> Result<Option<Register>, IRError> {
+fn lower_array_init(_lowerer: &mut Lowerer) -> Result<Option<Register>, IRError> {
     Ok(None)
 }

@@ -1,7 +1,8 @@
 use crate::lowering::{
     instr::Instr,
     ir_module::IRModule,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, IRType, RefKind, Register},
+    ir_type::IRType,
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, Register},
 };
 
 pub fn print(program: &IRModule) -> String {

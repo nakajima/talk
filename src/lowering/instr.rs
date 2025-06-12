@@ -1,7 +1,8 @@
 use std::{fmt::Display, str::FromStr};
 
-use crate::lowering::lowerer::{
-    self, BasicBlockID, IRError, IRType, PhiPredecessors, RefKind, Register, RegisterList,
+use crate::lowering::{
+    ir_type::IRType,
+    lowerer::{self, BasicBlockID, IRError, PhiPredecessors, RefKind, Register, RegisterList},
 };
 
 // Newtypes for complex arguments to make formatting unambiguous
