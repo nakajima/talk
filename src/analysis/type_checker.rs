@@ -1,15 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SymbolID, SymbolTable, Typed,
-    environment::{EnumVariant, Method, Property, StructDef, free_type_vars},
-    expr::{Expr, Pattern},
-    match_builtin,
-    name::Name,
-    parser::ExprID,
-    prelude::compile_prelude,
-    source_file::SourceFile,
-    token_kind::TokenKind,
+    environment::{free_type_vars, EnumVariant, Method, Property, StructDef, TypeParams}, expr::{Expr, Pattern}, match_builtin, name::Name, parser::ExprID, prelude::compile_prelude, source_file::SourceFile, token_kind::TokenKind, NameResolved, SymbolID, SymbolTable, Typed
 };
 
 use super::{
@@ -63,6 +55,7 @@ pub enum Ty {
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
+        TypeParams
     ),
     Closure {
         func: Box<Ty>, // the func
@@ -334,7 +327,7 @@ impl TypeChecker {
             arg_tys.push(ty);
         }
 
-        let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()));
+        let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()), vec![]);
         let callee_ty = self.infer_node(callee, env, &None, source_file)?;
 
         env.constraints.push(Constraint::Equality(
@@ -467,7 +460,7 @@ impl TypeChecker {
 
         let inferred_ret = self.infer_node(ret, env, expected, source_file)?;
 
-        let ty = Ty::Func(inferred_args, Box::new(inferred_ret));
+        let ty = Ty::Func(inferred_args, Box::new(inferred_ret), vec![]);
         Ok(ty)
     }
 
@@ -576,7 +569,7 @@ impl TypeChecker {
 
         env.end_scope();
 
-        let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty));
+        let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty),vec![]);
         let inferred_ty = if captures.is_empty() {
             func_ty
         } else {
@@ -1219,7 +1212,7 @@ mod tests {
         let checker = check("func sup(name) { name }\nsup");
         let root_id = checker.root_ids()[0];
 
-        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
+        let Ty::Func(params, return_type, _) = checker.type_for(root_id) else {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
@@ -1232,7 +1225,7 @@ mod tests {
         );
 
         // The second root-expr is the *use* of `sup`.
-        let Ty::Func(params2, return_type2) = checker.type_for(checker.root_ids()[1]) else {
+        let Ty::Func(params2, return_type2, _) = checker.type_for(checker.root_ids()[1]) else {
             panic!(
                 "expected `sup` to be a function, got: {:?}",
                 checker.type_for(checker.root_ids()[1])
@@ -1251,7 +1244,7 @@ mod tests {
     fn checks_a_func_with_return_type() {
         let checker = check("func sup(name) -> Int { name }\n");
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
+        let Ty::Func(params, return_type, _) = checker.type_for(root_id) else {
             panic!("didnt get a func, got: {:#?}", checker.type_for(root_id));
         };
 
@@ -1288,7 +1281,7 @@ mod tests {
         ",
         );
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
+        let Ty::Func(params, return_type, _) = checker.type_for(root_id) else {
             panic!(
                 "expected `applyTwice` to be a function, got: {:?}",
                 checker.type_for(root_id)
@@ -1300,7 +1293,7 @@ mod tests {
 
         // f : A -> A
         match &params[0] {
-            Ty::Func(arg_tys, ret_ty) => {
+            Ty::Func(arg_tys, ret_ty, _) => {
                 assert_eq!(arg_tys.len(), 1);
                 // the return of f must be the same type as x
                 assert_eq!(**ret_ty, params[1].clone());
@@ -1324,7 +1317,7 @@ mod tests {
         ",
         );
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type) = checker.type_for(root_id) else {
+        let Ty::Func(params, return_type, _) = checker.type_for(root_id) else {
             panic!(
                 "expected `compose` to be a function, got: {:?}",
                 checker.type_for(root_id)
@@ -1337,13 +1330,13 @@ mod tests {
         let g_ty = &params[1];
 
         // f : B -> C
-        let Ty::Func(f_args, f_ret) = f_ty.clone() else {
+        let Ty::Func(f_args, f_ret, _) = f_ty.clone() else {
             panic!("did not get func: {:?}", f_ty);
         };
         assert_eq!(f_args.len(), 1);
 
         // g : A -> B
-        let Ty::Func(g_args, g_ret) = g_ty.clone() else {
+        let Ty::Func(g_args, g_ret, _) = g_ty.clone() else {
             panic!("did not get func")
         };
 
@@ -1354,7 +1347,7 @@ mod tests {
 
         // the inner function's return (and thus compose's return) is f's return type C
         let Ty::Closure {
-            func: box Ty::Func(inner_params, inner_ret),
+            func: box Ty::Func(inner_params, inner_ret, _),
             ..
         } = *return_type
         else {
@@ -1383,7 +1376,7 @@ mod tests {
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(root_id);
         let Ty::Closure {
-            func: box Ty::Func(params, ret),
+            func: box Ty::Func(params, ret, _),
             ..
         } = ty
         else {
@@ -1413,7 +1406,7 @@ mod tests {
         let ty = checker.type_for(root_id);
         match ty {
             Ty::Closure {
-                func: box Ty::Func(params, ret),
+                func: box Ty::Func(params, ret, _),
                 ..
             } => {
                 assert_eq!(params.len(), 1);
@@ -1637,7 +1630,7 @@ mod tests {
         // Function should have type Bool -> Int
         let func_ty = checker.type_for(checker.root_ids()[1]);
         match func_ty {
-            Ty::Func(params, ret) => {
+            Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
                 assert_eq!(params[0], Ty::Enum(SymbolID::typed(1), vec![])); // Bool
                 assert_eq!(*ret, Ty::Int);
@@ -1665,7 +1658,7 @@ mod tests {
         // Function should have type Option<Int> -> Int
         let func_ty = checker.type_for(checker.root_ids()[1]);
         match func_ty {
-            Ty::Func(params, ret) => {
+            Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
                 assert_eq!(params[0], Ty::Enum(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
                 assert_eq!(*ret, Ty::Int);
@@ -1824,7 +1817,7 @@ mod tests {
 
         let func_ty = checker.type_for(checker.root_ids()[1]);
         match func_ty {
-            Ty::Func(params, ret) => {
+            Ty::Func(params, ret, _) => {
                 // Input: Either<Int, Float>
                 assert_eq!(
                     params[0],
@@ -1884,7 +1877,7 @@ mod tests {
 
         // Should type check without errors - polymorphic function
         // map : ∀T,U. Option<T> -> (T -> U) -> Option<U>
-        let Ty::Func(args, ret) = checker.type_for(checker.root_ids()[0]) else {
+        let Ty::Func(args, ret, _) = checker.type_for(checker.root_ids()[0]) else {
             panic!("did not get func")
         };
 
@@ -1910,6 +1903,7 @@ mod tests {
                     TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(2), "U".into()))
                 ))
                 .into()
+                ,vec![]
             )
         );
         assert_eq!(
@@ -1958,9 +1952,9 @@ mod tests {
         assert_eq!(enum_def.methods.len(), 2);
         assert_eq!(
             enum_def.methods[0],
-            Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::typed(1), vec![])))
+            Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::typed(1), vec![])), vec![])
         );
-        assert_eq!(enum_def.methods[1], Ty::Func(vec![], Box::new(Ty::Int)));
+        assert_eq!(enum_def.methods[1], Ty::Func(vec![], Box::new(Ty::Int), vec![]));
     }
 
     #[test]
@@ -1977,7 +1971,7 @@ mod tests {
         assert_eq!(
             checked.type_for(8),
             Ty::Closure {
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into()).into(),
+                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
                 captures: vec![Ty::Int]
             }
         );
@@ -2170,7 +2164,7 @@ mod pending {
             123
         }"
             ),
-            Ty::Func(vec![Ty::Int], Ty::Int.into())
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
         );
     }
 

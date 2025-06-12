@@ -220,10 +220,10 @@ impl Environment {
                         Ty::TypeVar(tv)
                     }
                 }
-                Ty::Func(params, ret) => {
+                Ty::Func(params, ret, generics) => {
                     let new_params = params.iter().map(|p| walk(p.clone(), map)).collect();
                     let new_ret = Box::new(walk(*ret, map));
-                    Ty::Func(new_params, new_ret)
+                    Ty::Func(new_params, new_ret, generics)
                 }
                 Ty::Closure { func, captures } => {
                     let func = Box::new(walk(*func, map));
@@ -307,13 +307,13 @@ impl Environment {
                     ty // Not in this substitution map, return as is.
                 }
             }
-            Ty::Func(params, returning) => {
+            Ty::Func(params, returning, generics) => {
                 let applied_params = params
                     .iter()
                     .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
                     .collect();
                 let applied_return = self.substitute_ty_with_map(*returning, substitutions);
-                Ty::Func(applied_params, Box::new(applied_return))
+                Ty::Func(applied_params, Box::new(applied_return), generics)
             }
             Ty::Closure { func, captures } => {
                 let func = self
@@ -391,7 +391,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::TypeVar(v) => {
             s.insert(v.clone());
         }
-        Ty::Func(params, ret) => {
+        Ty::Func(params, ret, generics) => {
             for param in params {
                 s.extend(free_type_vars(param));
             }

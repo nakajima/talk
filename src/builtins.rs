@@ -73,6 +73,22 @@ fn builtins() -> Vec<Builtin> {
                 Default::default(),
             ))),
         },
+        Builtin {
+            id: -5,
+            info: SymbolInfo {
+                name: "__init_array".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -5,
+                is_captured: false,
+            },
+            ty: Ty::Func(
+                vec![Ty::Int /* capacity */],
+                Ty::Array(Box::new(Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element)))).into(),
+                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+            ),
+            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            type_def: None,
+        },
     ]
 }
 fn array_override(generics: &TypeParams) -> Ty {
@@ -132,4 +148,24 @@ pub fn match_builtin(name: &Name) -> Option<Ty> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{check, type_checker::Ty};
+
+    #[test]
+    fn checks_init_array() {
+        let checked = check(
+            "
+        __init_array<Int>(8)
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.type_for(checked.root_ids()[0]),
+            Ty::Array(Ty::Int.into())
+        );
+    }
 }

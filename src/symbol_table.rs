@@ -32,6 +32,7 @@ pub enum SymbolKind {
     EnumVariant(SymbolID),
     Struct,
     BuiltinType,
+    BuiltinFunc,
     CustomType,
     TypeParameter,
     PatternBind,

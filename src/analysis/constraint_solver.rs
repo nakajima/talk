@@ -69,7 +69,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 // Look for matching constructors based on the result_ty
                 match &result_ty {
-                    Ty::Func(_arg_tys, ret_ty) => {
+                    Ty::Func(_arg_tys, ret_ty, generics) => {
                         // This is a constructor call like .some(123)
                         // Look for enum constructors named member_name that take arg_tys and return
                         // something compatible with ret_ty
@@ -77,13 +77,13 @@ impl<'a> ConstraintSolver<'a> {
                             // Look up the enum and find the variant
                             if let Some(_enum_info) = self
                                 .source_file
-                                .type_from_symbol(enum_id, self.symbol_table)
-                                && let Some(variant_info) = self.find_variant(enum_id, &member_name)
+                                .type_from_symbol(&enum_id, self.symbol_table)
+                                && let Some(variant_info) = self.find_variant(&enum_id, &member_name)
                             {
                                 // Create the constructor type for this variant
                                 let constructor_ty = self.create_variant_constructor_type(
-                                    enum_id,
-                                    ret_generics, // We'll create fresh generics
+                                    &enum_id,
+                                    &ret_generics, // We'll create fresh generics
                                     &variant_info,
                                     substitutions,
                                 );
@@ -233,7 +233,7 @@ impl<'a> ConstraintSolver<'a> {
             // If no values, it's not a function, it's just the enum type itself (fully substituted).
             constructor_return_ty
         } else {
-            Ty::Func(constructor_arg_tys, Box::new(constructor_return_ty))
+            Ty::Func(constructor_arg_tys, Box::new(constructor_return_ty), vec![])
         }
     }
 
@@ -260,7 +260,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Int => ty.clone(),
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
-            Ty::Func(params, returning) => {
+            Ty::Func(params, returning, generics) => {
                 let applied_params = params
                     .iter()
                     .map(|param| Self::apply(param, substitutions, depth + 1).clone())
@@ -268,7 +268,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
 
-                Ty::Func(applied_params, Box::new(applied_return))
+                Ty::Func(applied_params, Box::new(applied_return), vec![])
             }
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(type_var) {
@@ -370,7 +370,7 @@ impl<'a> ConstraintSolver<'a> {
                     Ok(())
                 }
             }
-            (Ty::Func(lhs_params, lhs_returning), Ty::Func(rhs_params, rhs_returning))
+            (Ty::Func(lhs_params, lhs_returning, lhs_gen), Ty::Func(rhs_params, rhs_returning, rhs_gen))
                 if lhs_params.len() == rhs_params.len() =>
             {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
@@ -388,7 +388,7 @@ impl<'a> ConstraintSolver<'a> {
             }
             (func, Ty::Closure { func: closure, .. })
             | (Ty::Closure { func: closure, .. }, func)
-                if matches!(func, Ty::Func(_, _)) =>
+                if matches!(func, Ty::Func(_, _, _)) =>
             {
                 Self::unify(&func, &closure, substitutions)?;
                 Ok(())
@@ -415,7 +415,7 @@ impl<'a> ConstraintSolver<'a> {
         let ty = Self::apply(ty, substitutions, 0);
         match &ty {
             Ty::TypeVar(tv) => tv == v,
-            Ty::Func(params, returning) => {
+            Ty::Func(params, returning, generics) => {
                 // check each parameter and the return type
                 let oh = params
                     .iter()

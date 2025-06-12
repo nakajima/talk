@@ -75,7 +75,7 @@ impl Ty {
             Ty::Int => IRType::Int,
             Ty::Bool => IRType::Bool,
             Ty::Float => IRType::Float,
-            Ty::Func(items, ty) => IRType::Func(
+            Ty::Func(items, ty, generics) => IRType::Func(
                 items.iter().map(|t| t.to_ir()).collect(),
                 Box::new(ty.to_ir()),
             ),
@@ -1408,7 +1408,7 @@ fn find_or_create_main(
         TypedExpr {
             id: SymbolID::GENERATED_MAIN.0,
             expr: func_expr.clone(),
-            ty: Ty::Func(vec![], Box::new(Ty::Void)),
+            ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
         },
     );
 
