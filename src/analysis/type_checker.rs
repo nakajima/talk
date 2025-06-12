@@ -984,7 +984,7 @@ impl TypeChecker {
                 .iter()
                 .map(|id| self.infer_node(id, env, &None, source_file).unwrap())
                 .collect();
-            log::warn!("{:?}", type_parameters);
+            log::warn!("{type_parameters:?}");
 
             for expr_id in expr_ids {
                 match &source_file.get(expr_id).unwrap() {
@@ -1052,7 +1052,7 @@ impl TypeChecker {
                     unreachable!()
                 };
 
-                println!("hoisting {} {:?}", name_str, enum_id);
+                println!("hoisting {name_str} {enum_id:?}");
 
                 env.start_scope();
                 let mut generic_vars = vec![];

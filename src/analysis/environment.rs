@@ -59,7 +59,7 @@ impl StructDef {
         }
     }
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
-        if let Some(ty) = self.type_override.clone() {
+        if let Some(ty) = self.type_override {
             ty(type_parameters)
         } else {
             Ty::Struct(self.name, self.type_parameters.clone())
