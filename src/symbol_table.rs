@@ -1,4 +1,4 @@
-use std::{collections::HashMap, i32};
+use std::{collections::HashMap};
 
 use crate::{
     parser::ExprID,

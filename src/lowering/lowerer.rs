@@ -731,7 +731,11 @@ impl<'a> Lowerer<'a> {
             Expr::Variable(name, _) => self.lower_variable(&name),
             Expr::If(_, _, _) => self.lower_if(expr_id),
             Expr::Block(_) => self.lower_block(expr_id),
-            Expr::Call(callee, args) => self.lower_call(callee, args, typed_expr.ty),
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            } => self.lower_call(callee, args, typed_expr.ty),
             Expr::Func { .. } => Some(self.lower_function(expr_id)),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,

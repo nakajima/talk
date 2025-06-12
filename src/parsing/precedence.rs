@@ -57,7 +57,7 @@ impl Precedence {
         Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {
                 prefix: Some(Parser::tuple),
-                infix: Some(Parser::call),
+                infix: Some(Parser::call_infix),
                 precedence: Precedence::Call,
             },
 

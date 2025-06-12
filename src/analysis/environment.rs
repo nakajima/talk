@@ -117,7 +117,7 @@ impl Method {
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
-    pub constraints: Vec<Constraint>,
+    constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub direct_callables: HashMap<ExprID, SymbolID>,
@@ -141,6 +141,36 @@ impl Environment {
             types: crate::builtins::default_env_types(),
             direct_callables: Default::default(),
         }
+    }
+
+    pub fn constraints(&self) -> Vec<Constraint> {
+        self.constraints.clone()
+    }
+
+    #[track_caller]
+    pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::warn!(
+                "constrain_equality {:?} {:?} {:?} from {}:{}",
+                id,
+                lhs,
+                rhs,
+                loc.file(),
+                loc.line()
+            );
+        }
+        self.constraints.push(Constraint::Equality(id, lhs, rhs))
+    }
+
+    pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
+        self.constraints
+            .push(Constraint::UnqualifiedMember(id, name, result_ty))
+    }
+
+    pub fn constrain_member(&mut self, id: ExprID, receiver: Ty, name: String, result_ty: Ty) {
+        self.constraints
+            .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
 
     pub fn import_prelude(&mut self, prelude: &Prelude) {

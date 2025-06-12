@@ -143,7 +143,11 @@ impl NameResolver {
 
                     source_file.nodes[*node_id as usize] = Let(name, rhs);
                 }
-                Call(callee, args) => {
+                Call {
+                    callee,
+                    type_args,
+                    args,
+                } => {
                     let mut to_resolve = args.clone();
                     to_resolve.push(callee);
 
@@ -786,7 +790,14 @@ mod tests {
             EnumVariant(Name::Raw("bar".into()), vec![])
         );
 
-        assert_eq!(*resolved.roots()[1].unwrap(), Call(6, vec![7]));
+        assert_eq!(
+            *resolved.roots()[1].unwrap(),
+            Call {
+                callee: 6,
+                type_args: vec![],
+                args: vec![7]
+            }
+        );
         assert_eq!(
             *resolved.get(&6).unwrap(),
             Expr::Member(Some(5), "foo".into())

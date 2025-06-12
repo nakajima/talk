@@ -1,11 +1,18 @@
 use std::collections::HashMap;
 
 use crate::{
-    environment::{free_type_vars, EnumVariant, Method, Property, StructDef, TypeParams}, expr::{Expr, Pattern}, match_builtin, name::Name, parser::ExprID, prelude::compile_prelude, source_file::SourceFile, token_kind::TokenKind, NameResolved, SymbolID, SymbolTable, Typed
+    NameResolved, SymbolID, SymbolTable, Typed,
+    environment::{EnumVariant, Method, Property, StructDef, free_type_vars},
+    expr::{Expr, Pattern},
+    match_builtin,
+    name::Name,
+    parser::ExprID,
+    prelude::compile_prelude,
+    source_file::SourceFile,
+    token_kind::TokenKind,
 };
 
 use super::{
-    constraint_solver::Constraint,
     environment::{EnumDef, Environment, TypeDef},
     typed_expr::TypedExpr,
 };
@@ -55,7 +62,7 @@ pub enum Ty {
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
-        TypeParams
+        Vec<Ty>,       /* generics */
     ),
     Closure {
         func: Box<Ty>, // the func
@@ -124,7 +131,7 @@ impl TypeChecker {
     ) -> Result<SourceFile<Typed>, TypeError> {
         let root_ids = source_file.root_ids();
 
-        self.hoist_structs(&root_ids, env, &mut source_file, symbol_table)?;
+        self.hoist_structs(&root_ids, env, &source_file, symbol_table)?;
         self.hoist_enums(&root_ids, env, &mut source_file, symbol_table)?;
         self.hoist_functions(&root_ids, env, &source_file);
 
@@ -156,7 +163,11 @@ impl TypeChecker {
 
                 checked_expected(expected, ty)
             }
-            Expr::Call(callee, args) => self.infer_call(env, callee, args, expected, source_file),
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            } => self.infer_call(env, callee, type_args, args, expected, source_file),
             Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
             Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
@@ -294,11 +305,7 @@ impl TypeChecker {
         let consequence = self.infer_node(consequence, env, &None, source_file)?;
         if let Some(alternative_id) = alternative {
             let alternative = self.infer_node(alternative_id, env, &None, source_file)?;
-            env.constraints.push(Constraint::Equality(
-                *alternative_id,
-                consequence.clone(),
-                alternative,
-            ));
+            env.constrain_equality(*alternative_id, consequence.clone(), alternative);
             Ok(consequence)
         } else {
             Ok(consequence.optional())
@@ -309,6 +316,7 @@ impl TypeChecker {
         &self,
         env: &mut Environment,
         callee: &ExprID,
+        type_args: &[ExprID],
         args: &[ExprID],
         expected: &Option<Ty>,
         source_file: &SourceFile<NameResolved>,
@@ -321,6 +329,13 @@ impl TypeChecker {
             Ty::TypeVar(call_return_var)
         };
 
+        let mut inferred_type_args = vec![];
+        for type_arg in type_args {
+            inferred_type_args.push(self.infer_node(type_arg, env, expected, source_file)?);
+        }
+
+        println!("type arg: {:?}", inferred_type_args);
+
         let mut arg_tys: Vec<Ty> = vec![];
         for arg in args {
             let ty = self.infer_node(arg, env, &None, source_file).unwrap();
@@ -330,11 +345,7 @@ impl TypeChecker {
         let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()), vec![]);
         let callee_ty = self.infer_node(callee, env, &None, source_file)?;
 
-        env.constraints.push(Constraint::Equality(
-            *callee,
-            expected_callee_ty,
-            callee_ty.clone(),
-        ));
+        env.constrain_equality(*callee, expected_callee_ty, callee_ty.clone());
 
         Ok(ret_var)
     }
@@ -349,8 +360,7 @@ impl TypeChecker {
         let lhs_ty = self.infer_node(lhs, env, &None, source_file)?;
         let rhs_ty = self.infer_node(rhs, env, &None, source_file)?;
 
-        env.constraints
-            .push(Constraint::Equality(*lhs, lhs_ty.clone(), rhs_ty));
+        env.constrain_equality(*lhs, lhs_ty.clone(), rhs_ty);
 
         Ok(lhs_ty)
     }
@@ -478,6 +488,7 @@ impl TypeChecker {
         Ok(Ty::Tuple(inferred_types))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &self,
         id: &ExprID,
@@ -502,6 +513,11 @@ impl TypeChecker {
         }
 
         env.start_scope();
+
+        let mut inferred_generics = vec![];
+        for generic in generics {
+            inferred_generics.push(self.infer_node(generic, env, expected, source_file)?);
+        }
 
         // Infer generic type parameters
         let mut generic_vars = vec![];
@@ -560,16 +576,12 @@ impl TypeChecker {
         let body_ty = self.infer_node(body, env, &expected_body_ty, source_file)?;
 
         if let Some(ret_type) = ret_ty {
-            env.constraints.push(Constraint::Equality(
-                ret.unwrap(),
-                body_ty.clone(),
-                ret_type,
-            ));
+            env.constrain_equality(ret.unwrap(), body_ty.clone(), ret_type);
         }
 
         env.end_scope();
 
-        let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty),vec![]);
+        let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty), inferred_generics);
         let inferred_ty = if captures.is_empty() {
             func_ty
         } else {
@@ -585,11 +597,7 @@ impl TypeChecker {
         };
 
         if let Some(func_var) = func_var {
-            env.constraints.push(Constraint::Equality(
-                *id,
-                Ty::TypeVar(func_var),
-                inferred_ty.clone(),
-            ));
+            env.constrain_equality(*id, Ty::TypeVar(func_var), inferred_ty.clone());
 
             if let Some(Name::Resolved(symbol_id, _)) = name {
                 let scheme = if env.scopes.len() > 1 {
@@ -674,6 +682,7 @@ impl TypeChecker {
         self.infer_node(rhs, env, expected, source_file)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_binary(
         &self,
         _id: &ExprID,
@@ -686,8 +695,8 @@ impl TypeChecker {
     ) -> Result<Ty, TypeError> {
         let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
         let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
-        env.constraints
-            .push(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
+
+        env.constrain_equality(*lhs_id, lhs.clone(), rhs);
 
         // TODO: For now we're just gonna hardcode these
         use TokenKind::*;
@@ -740,8 +749,7 @@ impl TypeChecker {
 
         let return_ty = if let Some(expected) = expected {
             if return_ty != *expected {
-                env.constraints
-                    .push(Constraint::Equality(*id, return_ty, expected.clone()));
+                env.constrain_equality(*id, return_ty, expected.clone());
             }
 
             expected.clone()
@@ -751,8 +759,7 @@ impl TypeChecker {
 
         // Make sure all return exprs agree
         for (id, ty) in return_exprs {
-            env.constraints
-                .push(Constraint::Equality(id, ty, return_ty.clone()));
+            env.constrain_equality(id, ty, return_ty.clone());
         }
 
         env.end_scope();
@@ -812,11 +819,11 @@ impl TypeChecker {
                 // Create a type variable that will be constrained later
                 let member_var = env.new_type_variable(TypeVarKind::Member);
 
-                env.constraints.push(Constraint::UnqualifiedMember(
+                env.constrain_unqualified_member(
                     *id,
                     member_name.to_string(),
                     Ty::TypeVar(member_var.clone()),
-                ));
+                );
 
                 Ok(Ty::TypeVar(member_var))
             }
@@ -828,12 +835,12 @@ impl TypeChecker {
                 let member_var = env.new_type_variable(TypeVarKind::Member);
 
                 // Add a constraint that links the receiver type to the member
-                env.constraints.push(Constraint::MemberAccess(
+                env.constrain_member(
                     *id,
                     receiver_ty,
                     member_name.to_string(),
                     Ty::TypeVar(member_var.clone()),
-                ));
+                );
 
                 Ok(Ty::TypeVar(member_var))
             }
@@ -1298,11 +1305,26 @@ mod tests {
                 // the return of f must be the same type as x
                 assert_eq!(**ret_ty, params[1].clone());
             }
-            other => panic!("`f` should be a function, got {:?}", other),
+            other => panic!("`f` should be a function, got {other:?}"),
         }
 
         // the overall return type of applyTwice is the same as x
         assert_eq!(return_type, params[1].clone().into());
+    }
+
+    #[test]
+    fn checks_call_with_generics() {
+        let checked = check(
+            "
+        func fizz<T>(ty: T) { T }
+
+        fizz<Int>()
+        fizz<Bool>()
+        ",
+        );
+
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Bool);
     }
 
     #[test]
@@ -1331,7 +1353,7 @@ mod tests {
 
         // f : B -> C
         let Ty::Func(f_args, f_ret, _) = f_ty.clone() else {
-            panic!("did not get func: {:?}", f_ty);
+            panic!("did not get func: {f_ty:?}");
         };
         assert_eq!(f_args.len(), 1);
 
@@ -1351,10 +1373,7 @@ mod tests {
             ..
         } = *return_type
         else {
-            panic!(
-                "expected `compose` to return a closure, got {:?}",
-                return_type
-            );
+            panic!("expected `compose` to return a closure, got {return_type:?}",);
         };
         assert_eq!(inner_params.len(), 1);
         assert_eq!(inner_params[0], g_args[0].clone()); // inner's x : A
@@ -1414,7 +1433,7 @@ mod tests {
                 assert_eq!(*ret, Ty::Int);
                 assert_eq!(params[0].clone(), Ty::Int);
             }
-            other => panic!("expected a function, got {:?}", other),
+            other => panic!("expected a function, got {other:?}"),
         }
     }
 
@@ -1521,7 +1540,7 @@ mod tests {
                 // Should be a type variable for T
                 assert!(matches!(generics[0], Ty::TypeVar(_)));
             }
-            _ => panic!("Expected generic enum type, got {:?}", enum_ty),
+            _ => panic!("Expected generic enum type, got {enum_ty:?}"),
         }
     }
 
@@ -1561,7 +1580,7 @@ mod tests {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics, vec![Ty::Int]);
             }
-            _ => panic!("Expected Option<Int>, got {:?}", call1),
+            _ => panic!("Expected Option<Int>, got {call1:?}"),
         }
 
         // Second call should be Option<Float>
@@ -1571,7 +1590,7 @@ mod tests {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics, vec![Ty::Float]);
             }
-            _ => panic!("Expected Option<Float>, got {:?}", call2),
+            _ => panic!("Expected Option<Float>, got {call2:?}"),
         }
     }
 
@@ -1606,7 +1625,7 @@ mod tests {
                     _ => panic!("Expected Option<Int> as first generic"),
                 }
             }
-            _ => panic!("Expected Result type, got {:?}", result_ty),
+            _ => panic!("Expected Result type, got {result_ty:?}"),
         }
     }
 
@@ -1635,7 +1654,7 @@ mod tests {
                 assert_eq!(params[0], Ty::Enum(SymbolID::typed(1), vec![])); // Bool
                 assert_eq!(*ret, Ty::Int);
             }
-            _ => panic!("Expected function type, got {:?}", func_ty),
+            _ => panic!("Expected function type, got {func_ty:?}"),
         }
     }
 
@@ -1663,7 +1682,7 @@ mod tests {
                 assert_eq!(params[0], Ty::Enum(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
                 assert_eq!(*ret, Ty::Int);
             }
-            _ => panic!("Expected function type, got {:?}", func_ty),
+            _ => panic!("Expected function type, got {func_ty:?}"),
         }
     }
 
@@ -1683,7 +1702,7 @@ mod tests {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics.len(), 1);
             }
-            _ => panic!("Expected List<T> type, got {:?}", enum_ty),
+            _ => panic!("Expected List<T> type, got {enum_ty:?}"),
         }
 
         let Some(Expr::EnumDecl(_, _, body)) = checker.roots()[0] else {
@@ -1710,7 +1729,7 @@ mod tests {
                     _ => panic!("Expected recursive List type"),
                 }
             }
-            _ => panic!("Expected cons variant type, got: {:?}", cons_variant),
+            _ => panic!("Expected cons variant type, got: {cons_variant:?}"),
         }
     }
 
@@ -1852,7 +1871,7 @@ mod tests {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
                 assert_eq!(generics, vec![Ty::Int]);
             }
-            _ => panic!("Expected Optional<Int>, got {:?}", x_ty),
+            _ => panic!("Expected Optional<Int>, got {x_ty:?}"),
         }
 
         // The match should return Int
@@ -1902,8 +1921,8 @@ mod tests {
                     3,
                     TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(2), "U".into()))
                 ))
-                .into()
-                ,vec![]
+                .into(),
+                vec![]
             )
         );
         assert_eq!(
@@ -1924,7 +1943,7 @@ mod tests {
                 assert_eq!(symbol_id, SymbolID::typed(-3)); // Optional's ID
                 assert_eq!(generics, vec![Ty::Int]);
             }
-            _ => panic!("Expected Optional<Int>, got {:?}", call_result),
+            _ => panic!("Expected Optional<Int>, got {call_result:?}"),
         }
     }
 
@@ -1952,9 +1971,16 @@ mod tests {
         assert_eq!(enum_def.methods.len(), 2);
         assert_eq!(
             enum_def.methods[0],
-            Ty::Func(vec![], Box::new(Ty::Enum(SymbolID::typed(1), vec![])), vec![])
+            Ty::Func(
+                vec![],
+                Box::new(Ty::Enum(SymbolID::typed(1), vec![])),
+                vec![]
+            )
         );
-        assert_eq!(enum_def.methods[1], Ty::Func(vec![], Box::new(Ty::Int), vec![]));
+        assert_eq!(
+            enum_def.methods[1],
+            Ty::Func(vec![], Box::new(Ty::Int), vec![])
+        );
     }
 
     #[test]

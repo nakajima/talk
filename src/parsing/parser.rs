@@ -306,9 +306,8 @@ impl<'a> Parser<'a> {
         let (name, _) = self.try_identifier().unwrap();
 
         let member = self.add_expr(Member(None, name))?;
-        if self.did_match(TokenKind::LeftParen)? {
-            self.skip_newlines();
-            self.call(can_assign, member)
+        if let Some(call_id) = self.check_call(member, can_assign)? {
+            Ok(call_id)
         } else {
             Ok(member)
         }
@@ -325,9 +324,8 @@ impl<'a> Parser<'a> {
 
         self.skip_newlines();
 
-        if self.did_match(TokenKind::LeftParen)? {
-            self.skip_newlines();
-            self.call(can_assign, member)
+        if let Some(call_id) = self.check_call(member, can_assign)? {
+            Ok(call_id)
         } else {
             Ok(member)
         }
@@ -507,8 +505,8 @@ impl<'a> Parser<'a> {
             captures: vec![],
         })?;
 
-        if self.did_match(TokenKind::LeftParen)? {
-            self.call(false, func_id)
+        if let Some(call_id) = self.check_call(func_id, false)? {
+            Ok(call_id)
         } else {
             Ok(func_id)
         }
@@ -623,9 +621,8 @@ impl<'a> Parser<'a> {
 
         self.skip_newlines();
 
-        let var = if self.did_match(TokenKind::LeftParen)? {
-            self.skip_newlines();
-            self.call(can_assign, variable)?
+        let var = if let Some(call_id) = self.check_call(variable, can_assign)? {
+            call_id
         } else {
             variable
         };
@@ -638,11 +635,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub(crate) fn call_infix(
+        &mut self,
+        can_assign: bool,
+        callee: ExprID,
+    ) -> Result<ExprID, ParserError> {
+        self.call(can_assign, vec![], callee)
+    }
+
     pub(crate) fn call(
         &mut self,
         _can_assign: bool,
+        type_args: Vec<ExprID>,
         callee: ExprID,
     ) -> Result<ExprID, ParserError> {
+        self.skip_newlines();
         let mut args: Vec<ExprID> = vec![];
 
         if !self.did_match(TokenKind::RightParen)? {
@@ -655,7 +662,11 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::RightParen)?;
         }
 
-        self.add_expr(Expr::Call(callee, args))
+        self.add_expr(Expr::Call {
+            callee,
+            type_args,
+            args,
+        })
     }
 
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -774,6 +785,32 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    pub(super) fn check_call(
+        &mut self,
+        callee: ExprID,
+        can_assign: bool,
+    ) -> Result<Option<ExprID>, ParserError> {
+        if self.did_match(TokenKind::Less)? {
+            let mut generics = vec![];
+            while !self.did_match(TokenKind::Greater)? {
+                self.skip_newlines();
+                generics.push(self.type_repr(false)?);
+                self.skip_newlines();
+            }
+
+            self.consume(TokenKind::LeftParen)?;
+
+            return Ok(Some(self.call(can_assign, generics, callee)?));
+        }
+
+        if self.did_match(TokenKind::LeftParen)? {
+            self.skip_newlines();
+            return Ok(Some(self.call(can_assign, vec![], callee)?));
+        }
+
+        Ok(None)
     }
 
     // Try to get a specific token. If it's a match, return true.
@@ -991,7 +1028,7 @@ mod tests {
         let parsed = parse("(1 + 2)").unwrap();
         let expr = parsed.roots()[0].unwrap();
         let Expr::Tuple(tup) = &expr else {
-            panic!("expected a Tuple, got {:?}", expr);
+            panic!("expected a Tuple, got {expr:?}");
         };
 
         assert_eq!(1, tup.len());
@@ -1155,6 +1192,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_func_call_with_generics() {
+        let parsed = parse("foo<T>()").unwrap();
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::Call {
+                callee: 0,
+                type_args: vec![1],
+                args: vec![]
+            }
+        );
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::TypeRepr("T".into(), vec![], false));
+    }
+
+    #[test]
     fn parses_multiple_roots() {
         let parsed = parse("func hello() {}\nfunc world() {}").unwrap();
         assert_eq!(2, parsed.roots().len());
@@ -1234,7 +1285,12 @@ mod tests {
         let parsed = parse("fizz()").unwrap();
         let expr = parsed.roots()[0].unwrap();
 
-        let Expr::Call(callee_id, args_ids) = expr else {
+        let Expr::Call {
+            callee: callee_id,
+            args: args_ids,
+            ..
+        } = expr
+        else {
             panic!("no call found")
         };
 
@@ -1364,7 +1420,14 @@ mod tests {
     fn parses_empty_enum_instantiation_with_value() {
         let parsed = parse("enum Fizz { case foo(Int) }\nFizz.foo(123)").unwrap();
 
-        assert_eq!(*parsed.roots()[1].unwrap(), Call(5, vec![6]));
+        assert_eq!(
+            *parsed.roots()[1].unwrap(),
+            Call {
+                callee: 5,
+                type_args: vec![],
+                args: vec![6]
+            }
+        );
         assert_eq!(*parsed.get(&5).unwrap(), Member(Some(4), "foo".into()));
         assert_eq!(*parsed.get(&4).unwrap(), Variable("Fizz".into(), None));
     }

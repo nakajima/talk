@@ -48,7 +48,11 @@ pub enum Expr {
     Binary(ExprID, TokenKind, ExprID),
     Tuple(Vec<ExprID>),
     Block(Vec<ExprID>),
-    Call(ExprID, Vec<ExprID>),
+    Call {
+        callee: ExprID,
+        type_args: Vec<ExprID>,
+        args: Vec<ExprID>,
+    },
     Pattern(Pattern),
     Return(Option<ExprID>),
     Struct(

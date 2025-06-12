@@ -146,7 +146,7 @@ impl SourceFile<Typed> {
     }
 
     pub fn constraints(&self) -> Vec<Constraint> {
-        self.phase_data.env.constraints.clone()
+        self.phase_data.env.constraints()
     }
 
     pub fn export(self) -> (TypeDefs, Scope, TypedExprs) {

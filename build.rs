@@ -26,15 +26,18 @@ fn main() {
 
 fn get_option_inner_type(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty
-        && type_path.qself.is_none() && type_path.path.segments.len() == 1 {
-            let segment = &type_path.path.segments[0];
-            if segment.ident == "Option"
-                && let PathArguments::AngleBracketed(args) = &segment.arguments
-                    && args.args.len() == 1
-                        && let GenericArgument::Type(inner_ty) = &args.args[0] {
-                            return Some(inner_ty);
-                        }
+        && type_path.qself.is_none()
+        && type_path.path.segments.len() == 1
+    {
+        let segment = &type_path.path.segments[0];
+        if segment.ident == "Option"
+            && let PathArguments::AngleBracketed(args) = &segment.arguments
+            && args.args.len() == 1
+            && let GenericArgument::Type(inner_ty) = &args.args[0]
+        {
+            return Some(inner_ty);
         }
+    }
     None
 }
 
@@ -46,9 +49,10 @@ fn generate_impls(
         .iter()
         .find_map(|item| {
             if let syn::Item::Enum(e) = item
-                && e.ident == "Instr" {
-                    return Some(e);
-                }
+                && e.ident == "Instr"
+            {
+                return Some(e);
+            }
             None
         })
         .ok_or("Could not find 'enum Instr' in src/lowering/instr.rs")?;
@@ -66,9 +70,10 @@ fn get_doc_attr(attrs: &[syn::Attribute]) -> Option<String> {
     attrs.iter().find_map(|attr| {
         if attr.path.is_ident("doc")
             && let Ok(syn::Meta::NameValue(nv)) = attr.parse_meta()
-                && let syn::Lit::Str(lit) = nv.lit {
-                    return Some(lit.value().trim().to_string());
-                }
+            && let syn::Lit::Str(lit) = nv.lit
+        {
+            return Some(lit.value().trim().to_string());
+        }
         None
     })
 }
@@ -202,6 +207,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
     let mut static_regexes = Vec::new();
     let mut parser_arms = Vec::new();
 
+    let placeholder_re = regex::Regex::new(r"\$([a-zA-Z0-9_]+)").unwrap();
     for variant in &instr_enum.variants {
         let variant_ident = &variant.ident;
         let static_re_ident = syn::Ident::new(
@@ -210,7 +216,6 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
         );
 
         let format_str = get_doc_attr(&variant.attrs).expect("Missing doc format string");
-        let placeholder_re = regex::Regex::new(r"\$([a-zA-Z0-9_]+)").unwrap();
 
         let field_map: HashMap<String, &Type> = match &variant.fields {
             Fields::Named(f) => f
