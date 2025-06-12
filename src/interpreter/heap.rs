@@ -25,22 +25,16 @@ impl Heap {
         Heap::default()
     }
 
-    pub fn alloc(&mut self, ty: &IRType) -> Pointer {
-        if self.next_free_addr + ty.mem_size() > self.capacity {
-            log::trace!(
-                "Need more memory for {:?} {:?}. Allocating",
-                ty,
-                ty.mem_size()
-            );
-            let new_capacity = (self.capacity + ty.mem_size()) * 2;
+    pub fn alloc(&mut self, bytes: usize) -> Pointer {
+        if self.next_free_addr + bytes > self.capacity {
+            let new_capacity = (self.capacity + bytes) * 2;
             self.bytes.resize(new_capacity, 0);
             self.capacity = new_capacity;
             log::trace!("New capacity is {:?}", new_capacity);
         }
 
         let addr = self.next_free_addr;
-        log::trace!("Allocating {:?} at {:?}", ty, addr);
-        self.next_free_addr += ty.mem_size();
+        self.next_free_addr += bytes;
         log::trace!("Next free addr is {:?}", self.next_free_addr);
         Pointer(addr)
     }

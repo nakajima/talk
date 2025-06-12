@@ -70,7 +70,7 @@ impl std::fmt::Display for RefKind {
 }
 
 impl Ty {
-    fn to_ir(&self) -> IRType {
+    pub(super) fn to_ir(&self) -> IRType {
         match self {
             Ty::Void => IRType::Void,
             Ty::Int => IRType::Int,
@@ -359,7 +359,7 @@ impl RegisterAllocator {
 }
 
 pub struct Lowerer<'a> {
-    source_file: SourceFile<Typed>,
+    pub(super) source_file: SourceFile<Typed>,
     current_functions: Vec<CurrentFunction>,
     lowered_functions: Vec<IRFunction>,
     symbol_table: &'a mut SymbolTable,
@@ -432,6 +432,7 @@ impl<'a> Lowerer<'a> {
         let closure_ptr = self.allocate_register();
         self.push_instr(Instr::Alloc {
             dest: closure_ptr,
+            count: 1,
             ty: IRType::closure(),
         });
 
@@ -493,6 +494,7 @@ impl<'a> Lowerer<'a> {
         let env_dest_ptr = self.allocate_register();
         self.push_instr(Instr::Alloc {
             dest: env_dest_ptr,
+            count: 1,
             ty: environment_type.clone(),
         });
 
@@ -1072,10 +1074,6 @@ impl<'a> Lowerer<'a> {
             panic!("Unresolved variable: {name:?}")
         };
 
-        if crate::builtins::is_builtin_func(symbol_id) {
-            return super::builtins::lower_builtin(symbol_id, self).unwrap();
-        }
-
         let value = self
             .lookup_register(symbol_id)
             .expect("no value for name")
@@ -1159,6 +1157,15 @@ impl<'a> Lowerer<'a> {
         args: Vec<ExprID>,
         ty: Ty,
     ) -> Option<Register> {
+        if let Some(Expr::Variable(Name::Resolved(symbol, _), _)) =
+            self.source_file.get(&callee).cloned()
+        {
+            let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
+            if crate::builtins::is_builtin_func(&symbol) {
+                return super::builtins::lower_builtin(&symbol, &callee_typed_expr, &args, self)
+                    .unwrap();
+            }
+        }
         let mut arg_registers = vec![];
         for arg in args {
             if let Some(arg_reg) = self.lower_expr(&arg) {
@@ -1182,7 +1189,9 @@ impl<'a> Lowerer<'a> {
             return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
         }
 
-        let callee = self.lower_expr(&callee).expect("did not get callee");
+        let callee = self
+            .lower_expr(&callee)
+            .unwrap_or_else(|| panic!("did not get callee: {:?}", self.source_file.get(&callee)));
 
         let func_ptr = self.allocate_register();
         let func_reg = self.allocate_register();
@@ -1228,7 +1237,7 @@ impl<'a> Lowerer<'a> {
         Some(dest_reg)
     }
 
-    fn push_instr(&mut self, instr: Instr) {
+    pub(super) fn push_instr(&mut self, instr: Instr) {
         self.current_block_mut().push_instr(instr);
     }
 
@@ -1356,14 +1365,11 @@ fn find_or_create_main(
 
 #[cfg(test)]
 mod tests {
-    use prettydiff::diff_lines;
-
     use crate::{
         SymbolTable, check,
         lowering::{
             instr::Callee,
             ir_module::IRModule,
-            ir_printer::print,
             lowerer::{
                 BasicBlock, BasicBlockID, IRError, IRFunction, IRType, Instr, Lowerer,
                 PhiPredecessors, RefKind, Register, RegisterList,
@@ -1380,6 +1386,7 @@ mod tests {
         Ok(module)
     }
 
+    #[macro_export]
     macro_rules! assert_lowered_functions {
         ($left:expr, $right:expr $(,)?) => {
             match (&$left, &$right) {
@@ -1389,6 +1396,8 @@ mod tests {
                             functions: right_val.clone(),
                         };
 
+                        use crate::lowering::ir_printer::print;
+                        use prettydiff::diff_lines;
                         //println!("\n\n\n{:#?}\n{:#?}\n\n\n", &left_val.functions, right_val);
 
                         panic!(
@@ -1432,7 +1441,8 @@ mod tests {
                         instructions: vec![
                             Instr::Alloc {
                                 dest: Register(1),
-                                ty: IRType::closure()
+                                ty: IRType::closure(),
+                                count: 1
                             },
                             Instr::MakeStruct {
                                 dest: Register(2),
@@ -1441,7 +1451,8 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
-                                ty: IRType::EMPTY_STRUCT
+                                ty: IRType::EMPTY_STRUCT,
+                                count: 1,
                             },
                             Instr::Store {
                                 val: Register(2),
@@ -1564,7 +1575,8 @@ mod tests {
                         instructions: vec![
                             Instr::Alloc {
                                 dest: Register(1),
-                                ty: IRType::closure()
+                                ty: IRType::closure(),
+                                count: 1,
                             },
                             // This sequence is now identical to your working test case.
                             Instr::MakeStruct {
@@ -1574,6 +1586,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
+                                count: 1,
                                 ty: IRType::Struct(vec![IRType::Pointer]),
                             },
                             Instr::Store {
@@ -1662,6 +1675,7 @@ mod tests {
                         instructions: vec![
                             Instr::Alloc {
                                 dest: Register(1),
+                                count: 1,
                                 ty: IRType::closure()
                             },
                             // This sequence is now identical to your working test case.
@@ -1672,6 +1686,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
+                                count: 1,
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
@@ -1747,6 +1762,7 @@ mod tests {
                         instructions: vec![
                             Instr::Alloc {
                                 dest: Register(1),
+                                count: 1,
                                 ty: IRType::closure()
                             },
                             Instr::MakeStruct {
@@ -1756,6 +1772,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
+                                count: 1,
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
@@ -1867,6 +1884,7 @@ mod tests {
                             // Alloc the closure
                             Instr::Alloc {
                                 dest: Register(1),
+                                count: 1,
                                 ty: IRType::closure()
                             },
                             // Create the env
@@ -1878,6 +1896,7 @@ mod tests {
                             // Alloc space for it
                             Instr::Alloc {
                                 dest: Register(3),
+                                count: 1,
                                 ty: IRType::EMPTY_STRUCT,
                             },
                             // Store the env
@@ -2489,6 +2508,7 @@ mod tests {
                             Instr::ConstantInt(Register(1), 1),
                             Instr::Alloc {
                                 dest: Register(2),
+                                count: 1,
                                 ty: IRType::closure()
                             },
                             Instr::MakeStruct {
@@ -2498,6 +2518,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(4),
+                                count: 1,
                                 ty: env_struct_type.clone()
                             },
                             Instr::Store {
@@ -2570,29 +2591,6 @@ mod tests {
                     env_ty: IRType::EMPTY_STRUCT,
                 },
             ]
-        )
-    }
-
-    #[test]
-    #[ignore]
-    fn lowers_array_init() {
-        let lowered = lower("let x = __init_array<Int>(4)").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 2),
-                        Instr::ConstantInt(Register(2), 1),
-                        Instr::Sub(Register(3), IRType::Int, Register(1), Register(2)),
-                        Instr::Ret(IRType::Int, Some(Register(3)))
-                    ],
-                }],
-                env_ty: IRType::Struct(vec![])
-            }],
         )
     }
 }

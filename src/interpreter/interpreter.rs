@@ -306,8 +306,8 @@ impl IRInterpreter {
                     self.register_value(&a).gte(&self.register_value(&b))?,
                 );
             }
-            Instr::Alloc { dest, ty } => {
-                let ptr = self.heap.alloc(&ty);
+            Instr::Alloc { dest, count, ty } => {
+                let ptr = self.heap.alloc(ty.mem_size() * count);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => {
@@ -396,7 +396,7 @@ impl IRInterpreter {
     }
 
     fn load_function(&self, idx: &Pointer) -> Option<IRFunction> {
-        self.program.functions.get(idx.0 as usize).cloned()
+        self.program.functions.get(idx.0).cloned()
     }
 }
 

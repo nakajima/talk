@@ -176,9 +176,9 @@ mod tests {
 
 func @main({} %0) void
   entry:
-    %1 = alloc {ptr, ptr};
+    %1 = alloc {ptr, ptr} 1;
     %2 = struct {} ();
-    %3 = alloc {};
+    %3 = alloc {} 1;
     store {} %2 %3;
     %4 = ref (int) int @_5_add;
     %5 = getelementptr {ptr, ptr} %1 1;

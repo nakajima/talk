@@ -15,6 +15,7 @@ pub enum IRType {
     TypeVar(String),
     Enum(Vec<IRType>),
     Struct(Vec<IRType>),
+    Array { element: Box<IRType>, /* element */ },
     Pointer,
 }
 
@@ -36,6 +37,7 @@ impl IRType {
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
             IRType::Struct(irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
             IRType::Pointer => 8,
+            IRType::Array { .. } => IRType::Pointer.mem_size(),
         }
     }
 
@@ -145,6 +147,7 @@ impl std::fmt::Display for IRType {
                     .join(", ")
             ),
             IRType::Pointer => write!(f, "ptr"),
+            IRType::Array { element } => write!(f, "[{}]", element),
         }
     }
 }

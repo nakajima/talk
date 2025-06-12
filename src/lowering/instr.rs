@@ -110,8 +110,8 @@ pub enum Instr {
     #[doc = "$0 = gte $1 $2, $3;"]
     GreaterThanEq(Register, IRType, Register, Register),
 
-    #[doc = "$dest = alloc $ty;"]
-    Alloc { dest: Register, ty: IRType },
+    #[doc = "$dest = alloc $ty $count;"]
+    Alloc { dest: Register, ty: IRType, count: usize },
 
     #[doc = "store $ty $val $location;"]
     Store {

@@ -8,11 +8,19 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Bool(bool),
-    Enum { tag: u16, values: Vec<Value> },
+    Enum {
+        tag: u16,
+        values: Vec<Value>,
+    },
     Void,
     Struct(Vec<Value>),
     Pointer(Pointer),
     Func(Pointer),
+    Array {
+        elements: Vec<Value>,
+        count: usize,
+        capacity: usize,
+    },
 }
 
 impl Value {
@@ -49,6 +57,23 @@ impl Value {
             IRType::Pointer => {
                 Value::Pointer(Pointer(usize::from_le_bytes(bytes.try_into().unwrap())))
             }
+            IRType::Array { element } => {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&bytes[0..7]);
+                let capacity = usize::from_le_bytes(buf);
+                buf.copy_from_slice(&bytes[8..15]);
+                let count = usize::from_le_bytes(buf);
+                let mut elements: Vec<Value> = vec![];
+                for el_bytes in bytes[16..].chunks_exact(element.mem_size()) {
+                    elements.push(Value::from_bytes(el_bytes, element));
+                }
+
+                Value::Array {
+                    elements,
+                    count,
+                    capacity,
+                }
+            }
         }
     }
 
@@ -68,6 +93,21 @@ impl Value {
             Value::Struct(values) => values.iter().flat_map(|v| v.as_bytes()).collect(),
             Value::Pointer(pointer) => pointer.0.to_le_bytes().to_vec(),
             Value::Func(id) => id.0.to_le_bytes().to_vec(),
+            Value::Array {
+                elements,
+                count,
+                capacity,
+            } => {
+                let mut bytes = capacity.to_le_bytes().to_vec();
+                bytes.extend(count.to_le_bytes());
+                bytes.extend(
+                    elements
+                        .iter()
+                        .flat_map(Value::as_bytes)
+                        .collect::<Vec<u8>>(),
+                );
+                bytes
+            }
         }
     }
 
