@@ -22,10 +22,22 @@ env_logger = "0.11.8"
 #ir-macro = { path = "./ir-macro" }
 regex = "1"
 once_cell = "1.21.3"
+async-lsp = { version = "0.2.2", optional = true, features = [
+  "async-io",
+  "tokio",
+] }
+futures = { version = "0.3.31", optional = true }
+tower = { version = "0.5.2", optional = true }
+tokio = { version = "1.45.1", features = [
+  "macros",
+  "io-util",
+  "rt-multi-thread",
+  "time",
+] }
 
 [features]
-# default = ["cli"]
-cli = ["dep:clap"]
+default = ["cli"]
+cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower"]
 
 [profile.release]
 debug = true
