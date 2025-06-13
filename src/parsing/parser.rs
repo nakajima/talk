@@ -14,7 +14,11 @@ pub type ExprID = i32;
 pub type VariableID = u32;
 
 // for tracking begin/end tokens
-type SourceLocationStack = Vec<Token>;
+pub struct SourceLocationStart {
+    token: Token,
+    identifiers: Vec<Token>,
+}
+pub type SourceLocationStack = Vec<SourceLocationStart>;
 
 // for making sure we've pushed to the location stack
 // it's not copyable so we always need to have one before calling add_expr
@@ -106,25 +110,42 @@ impl<'a> Parser<'a> {
             .source_location_stack
             .pop()
             .unwrap_or_else(|| panic!("unbalanced source location stack. current: {:?}", token));
-        log::trace!("pop location: {:?}", start);
+        log::trace!("pop location: {:?}", start.token);
 
-        let expr_meta = ExprMeta { start, end: token };
+        let expr_meta = ExprMeta {
+            start: start.token,
+            end: token,
+            identifiers: start.identifiers,
+        };
 
         Ok(self.parse_tree.add(expr, expr_meta))
+    }
+
+    fn push_identifier(&mut self, identifier: Token) {
+        if let Some(loc) = self.source_location_stack.last_mut() {
+            loc.identifiers.push(identifier);
+        }
     }
 
     #[must_use]
     fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
         let meta = &self.parse_tree.meta[lhs as usize];
-        self.source_location_stack.push(meta.start.clone());
+        let start = SourceLocationStart {
+            token: meta.start.clone(),
+            identifiers: vec![],
+        };
+        self.source_location_stack.push(start);
         LocToken
     }
 
     #[must_use]
     fn push_source_location(&mut self) -> LocToken {
         log::trace!("push_source_location: {:?}", self.current);
-        self.source_location_stack
-            .push(self.current.clone().unwrap());
+        let start = SourceLocationStart {
+            token: self.current.clone().unwrap(),
+            identifiers: vec![],
+        };
+        self.source_location_stack.push(start);
         LocToken
     }
 
@@ -837,6 +858,7 @@ impl<'a> Parser<'a> {
         if let Some(current) = self.current.clone()
             && let TokenKind::Identifier(ref name) = current.kind
         {
+            self.push_identifier(current.clone());
             self.advance();
             return Ok(name.to_string());
         };
@@ -851,6 +873,7 @@ impl<'a> Parser<'a> {
         if let Some(current) = self.current.clone()
             && let TokenKind::Identifier(ref name) = current.kind
         {
+            self.push_identifier(current.clone());
             self.advance();
             return Some((name.to_string(), current));
         };
@@ -913,6 +936,10 @@ impl<'a> Parser<'a> {
         if let Some(current) = self.current.clone()
             && current.kind == expected
         {
+            if matches!(current.kind, TokenKind::Identifier(_)) {
+                self.push_identifier(current.clone());
+            }
+
             self.advance();
             return Ok(current);
         };
@@ -928,6 +955,10 @@ impl<'a> Parser<'a> {
 
         match self.current.clone() {
             Some(current) => {
+                if matches!(current.kind, TokenKind::Identifier(_)) {
+                    self.push_identifier(current.clone());
+                }
+
                 if possible_tokens.contains(&current.kind) {
                     self.advance();
                     Ok(current)

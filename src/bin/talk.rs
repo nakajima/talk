@@ -16,7 +16,7 @@ async fn main() {
     #[derive(Subcommand, Debug)]
     enum Commands {
         IR { filename: PathBuf },
-        Parse { filename: String },
+        // Parse { filename: String },
         Run { filename: PathBuf },
         Lsp(LspArgs),
     }
@@ -34,28 +34,20 @@ async fn main() {
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
+        // Dump the IR
         Commands::IR { filename } => {
             use talk::{compiling::driver::Driver, lowering::ir_printer::print};
-            let driver = Driver::with_files(vec![filename.clone()]);
+            let mut driver = Driver::with_files(vec![filename.clone()]);
             let lowered = driver.lower().unwrap();
 
             for unit in lowered {
                 println!("{}", print(&unit.stage.module));
             }
         }
-        Commands::Parse {
-            filename: _filename,
-        } => {
-            // let contents = std::fs::read_to_string(filename).expect("Could not read file");
-            // let parsed = parse(&contents).unwrap();
-            // for root in parsed.roots() {
-            //     println!("{:#?}", root);
-            // }
-            todo!()
-        }
+
         Commands::Run { filename } => {
             use talk::compiling::driver::Driver;
-            let driver = Driver::with_files(vec![filename.clone()]);
+            let mut driver = Driver::with_files(vec![filename.clone()]);
             let lowered = driver.lower().unwrap();
 
             use talk::interpreter::interpreter::IRInterpreter;

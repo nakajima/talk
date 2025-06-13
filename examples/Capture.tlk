@@ -1,5 +1,10 @@
 func makeCounter() {
+
   let i = 0
+
+	func foo() {
+		123
+	}
 	
   return func() {
     i = i + 1

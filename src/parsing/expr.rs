@@ -10,6 +10,7 @@ pub type VarDepth = u32;
 pub struct ExprMeta {
     pub start: Token,
     pub end: Token,
+    pub identifiers: Vec<Token>,
 }
 
 impl ExprMeta {

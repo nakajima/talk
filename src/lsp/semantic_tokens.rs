@@ -12,8 +12,8 @@ struct SemanticTokenCollector<'a> {
     tokens: Vec<(Range, SemanticTokenType)>,
 }
 
-pub fn collect(source_file: &SourceFile<Parsed>, source: &str) -> Vec<SemanticToken> {
-    let mut collector = SemanticTokenCollector::new(source_file, source);
+pub fn collect(source_file: SourceFile<Parsed>, source: String) -> Vec<SemanticToken> {
+    let mut collector = SemanticTokenCollector::new(&source_file, &source);
     collector.tokens.clear();
     collector.collect_lexed_tokens();
     collector.collect_parsed_tokens();
@@ -44,6 +44,16 @@ impl<'a> SemanticTokenCollector<'a> {
             .count(); // Also remove the +1 here
 
         Some(Position::new(line as u32, column as u32))
+    }
+
+    fn range_from_token(&self, token: &Token) -> Range {
+        if let Some(start) = self.line_col_for(token.start)
+            && let Some(end) = self.line_col_for(token.end)
+        {
+            Range::new(start, end)
+        } else {
+            Range::new(Position::new(0, 0), Position::new(0, 0))
+        }
     }
 
     fn range_for(&self, expr_id: &ExprID) -> Range {
@@ -134,7 +144,16 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(default_value));
                 }
             }
-            Expr::TypeRepr(_name, items, _) => result.extend(self.tokens_from_exprs(items)),
+            Expr::TypeRepr(_name, items, _) => {
+                if let Some(meta) = self.source_file.meta.get(*expr_id as usize) {
+                    result.extend(
+                        meta.identifiers
+                            .iter()
+                            .map(|i| (self.range_from_token(i), SemanticTokenType::TYPE_PARAMETER)),
+                    )
+                }
+                result.extend(self.tokens_from_exprs(items))
+            }
             Expr::FuncTypeRepr(items, ret, _) => {
                 result.extend(self.tokens_from_exprs(items));
                 result.extend(self.tokens_from_expr(ret));

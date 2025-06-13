@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 pub type FileID = usize;
 
+#[derive(Clone)]
 pub struct FileStore {
     pub files: Vec<PathBuf>,
     lookup: HashMap<PathBuf, FileID>,

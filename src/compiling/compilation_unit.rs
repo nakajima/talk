@@ -43,7 +43,7 @@ pub struct Raw {}
 #[allow(unused)]
 pub struct CompilationUnit<Stage = Raw> {
     src_cache: HashMap<PathBuf, String>,
-    input: FileStore,
+    pub input: FileStore,
     pub stage: Stage,
 }
 
@@ -56,7 +56,7 @@ impl CompilationUnit<Raw> {
         }
     }
 
-    pub fn parse(mut self) -> Result<CompilationUnit<Parsed>, CompilationError> {
+    pub fn parse(&mut self) -> Result<CompilationUnit<Parsed>, CompilationError> {
         let mut files = vec![];
         let symbol_table = SymbolTable::default();
         for file in self.input.files.clone() {
@@ -67,8 +67,8 @@ impl CompilationUnit<Raw> {
         }
 
         Ok(CompilationUnit {
-            src_cache: self.src_cache,
-            input: self.input,
+            src_cache: self.src_cache.clone(),
+            input: self.input.clone(),
             stage: Parsed {
                 symbol_table,
                 files,
@@ -76,7 +76,7 @@ impl CompilationUnit<Raw> {
         })
     }
 
-    pub fn lower(self) -> Result<CompilationUnit<Lowered>, CompilationError> {
+    pub fn lower(&mut self) -> Result<CompilationUnit<Lowered>, CompilationError> {
         let parsed = self.parse()?;
         let resolved = parsed.resolved()?;
         let typed = resolved.typed()?;
@@ -92,6 +92,13 @@ pub struct Parsed {
 }
 
 impl CompilationUnit<Parsed> {
+    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
+        self.stage
+            .files
+            .iter()
+            .find(|f| f.file_id == self.input.id(path))
+    }
+
     pub fn resolved(self) -> Result<CompilationUnit<Resolved>, CompilationError> {
         let mut symbol_table = self.stage.symbol_table;
         let mut files = vec![];
@@ -152,6 +159,13 @@ pub struct Typed {
 }
 
 impl CompilationUnit<Typed> {
+    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
+        self.stage
+            .files
+            .iter()
+            .find(|f| f.file_id == self.input.id(path))
+    }
+
     pub fn lower(self) -> Result<CompilationUnit<Lowered>, CompilationError> {
         let mut symbol_table = self.stage.symbol_table;
         let mut module = IRModule::new();

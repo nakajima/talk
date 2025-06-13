@@ -1,15 +1,18 @@
+use std::collections::HashMap;
 use std::ops::ControlFlow;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    DidChangeConfigurationParams, DidSaveTextDocumentParams, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, MarkedString, MessageType, OneOf,
-    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, MarkedString, MessageType, OneOf, SemanticTokenType,
+    SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
+    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, ShowMessageParams,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -41,6 +44,7 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
 struct ServerState {
     client: ClientSocket,
     counter: i32,
+    src_cache: HashMap<PathBuf, String>,
 }
 
 impl LanguageServer for ServerState {
@@ -81,30 +85,34 @@ impl LanguageServer for ServerState {
         &mut self,
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
-        Box::pin(async move {
-            let source = match std::fs::read_to_string(params.text_document.uri.path()) {
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            return Box::pin(async { Ok(None) });
+        };
+
+        let contents = if let Some(contents) = self.src_cache.get(&path) {
+            contents.clone()
+        } else {
+            match std::fs::read_to_string(params.text_document.uri.path()) {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("Failed to read file: {:?}", e);
-                    return Ok(None); // Return None instead of error
+                    return Box::pin(async { Ok(None) }); // Return None instead of error
                 }
-            };
+            }
+        };
 
-            let source_file = match parse(&source, 0) {
-                Ok(sf) => sf,
-                Err(e) => {
-                    eprintln!("Failed to parse file: {:?}", e);
-                    // Return empty tokens instead of error
-                    return Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-                        result_id: None,
-                        data: vec![],
-                    })));
-                }
-            };
-
+        let source_file = match parse(&contents, 0) {
+            Ok(sf) => sf,
+            Err(e) => {
+                eprintln!("Failed to parse file: {:?}", e);
+                // Return empty tokens instead of error
+                return Box::pin(async { Ok(None) });
+            }
+        };
+        Box::pin(async move {
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                 result_id: None,
-                data: semantic_tokens::collect(&source_file, &source),
+                data: semantic_tokens::collect(source_file, contents),
             })))
         })
     }
@@ -129,7 +137,43 @@ impl LanguageServer for ServerState {
         })
     }
 
-    fn did_save(&mut self, _params: DidSaveTextDocumentParams) -> Self::NotifyResult {
+    fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {
+        eprintln!("DID OPEN: {:?}", params.text_document.uri);
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            return ControlFlow::Continue(());
+        };
+
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            return ControlFlow::Continue(());
+        };
+
+        self.src_cache.insert(path, contents);
+        ControlFlow::Continue(())
+    }
+
+    fn did_save(&mut self, params: DidSaveTextDocumentParams) -> Self::NotifyResult {
+        eprintln!("DID SAVE: {:?}", params.text_document.uri);
+        if let Ok(path) = params.text_document.uri.to_file_path()
+            && let Some(text) = params.text
+        {
+            eprintln!("updating cached value");
+            self.src_cache.insert(path, text.to_string());
+            self.refresh_semantic_tokens();
+        }
+        self.refresh_semantic_tokens();
+        ControlFlow::Continue(())
+    }
+
+    fn did_change(&mut self, params: DidChangeTextDocumentParams) -> Self::NotifyResult {
+        eprintln!("DID CHANGE: {:?}", params.text_document.uri);
+        if let Ok(path) = params.text_document.uri.to_file_path()
+            && let Some(change) = params.content_changes.first()
+        {
+            eprintln!("updating cached value");
+            self.src_cache.insert(path, change.text.to_string());
+            self.refresh_semantic_tokens();
+        }
+
         ControlFlow::Continue(())
     }
 
@@ -152,15 +196,26 @@ struct TickEvent;
 
 impl ServerState {
     fn new_router(client: ClientSocket) -> Router<Self> {
-        let mut router = Router::from_language_server(Self { client, counter: 0 });
+        let mut router = Router::from_language_server(Self {
+            client,
+            counter: 0,
+            src_cache: Default::default(),
+        });
         router.event(Self::on_tick);
         router
     }
 
     fn on_tick(&mut self, _: TickEvent) -> ControlFlow<async_lsp::Result<()>> {
-        log::info!("tick");
+        // log::info!("tick");
         self.counter += 1;
         ControlFlow::Continue(())
+    }
+
+    fn refresh_semantic_tokens(&self) {
+        let mut client = self.client.clone();
+        tokio::spawn(async move {
+            client.semantic_tokens_refresh(()).await.ok();
+        });
     }
 }
 

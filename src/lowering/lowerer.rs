@@ -1306,6 +1306,7 @@ fn find_or_create_main(
         ExprMeta {
             start: Token::GENERATED,
             end: Token::GENERATED,
+            identifiers: vec![],
         },
     );
 
@@ -1332,6 +1333,7 @@ fn find_or_create_main(
         ExprMeta {
             start: Token::GENERATED,
             end: Token::GENERATED,
+            identifiers: vec![],
         },
     );
 
