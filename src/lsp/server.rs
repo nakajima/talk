@@ -6,8 +6,9 @@ use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
     DidChangeConfigurationParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
     HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    MarkedString, MessageType, OneOf, SemanticTokensFullDeltaResult, SemanticTokensParams,
-    ServerCapabilities, ShowMessageParams,
+    MarkedString, MessageType, OneOf, SemanticToken, SemanticTokenType, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
+    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -16,6 +17,21 @@ use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageClient, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
+
+pub const TOKEN_TYPES: &[SemanticTokenType] = &[
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::VARIABLE,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::PARAMETER,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::TYPE,
+    SemanticTokenType::ENUM_MEMBER,
+    SemanticTokenType::STRUCT,
+    SemanticTokenType::ENUM,
+    SemanticTokenType::TYPE_PARAMETER,
+    SemanticTokenType::OPERATOR,
+    SemanticTokenType::METHOD,
+];
 
 struct ServerState {
     client: ClientSocket,
@@ -36,6 +52,19 @@ impl LanguageServer for ServerState {
                 capabilities: ServerCapabilities {
                     hover_provider: Some(HoverProviderCapability::Simple(true)),
                     definition_provider: Some(OneOf::Left(true)),
+                    semantic_tokens_provider: Some(
+                        SemanticTokensServerCapabilities::SemanticTokensOptions(
+                            SemanticTokensOptions {
+                                legend: SemanticTokensLegend {
+                                    token_types: TOKEN_TYPES.to_vec(),
+                                    token_modifiers: vec![],
+                                },
+                                full: Some(SemanticTokensFullOptions::Bool(true)),
+                                range: Some(false),
+                                ..Default::default()
+                            },
+                        ),
+                    ),
                     ..ServerCapabilities::default()
                 },
                 server_info: None,
@@ -46,7 +75,25 @@ impl LanguageServer for ServerState {
     fn semantic_tokens_full(
         &mut self,
         params: SemanticTokensParams,
-    ) -> BoxFuture<'static, Result<Option<SemanticTokensFullDeltaResult>, Self::Error>> {
+    ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
+        Box::pin(async move {
+            let path = params.text_document.uri.to_file_path().unwrap();
+            let source = std::fs::read_to_string(path).unwrap();
+
+            let (source_file, symbol_table) = match crate::check_with_symbols(&source) {
+                Ok(res) => res,
+                Err(err) => {
+                    log::error!("Failed to check file: {err:?}");
+                    return Ok(None);
+                }
+            };
+
+            let tokens = crate::lsp::semantic_tokens::collect(&source_file, &symbol_table, &source);
+            Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                result_id: None,
+                data: tokens,
+            })))
+        })
     }
 
     // fn hover(&mut self, _: HoverParams) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {

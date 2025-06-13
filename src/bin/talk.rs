@@ -3,7 +3,7 @@
 async fn main() {
     use std::path::PathBuf;
 
-    use clap::{Parser, Subcommand};
+    use clap::{Args, Parser, Subcommand};
 
     /// Simple program to greet a person
     #[derive(Parser, Debug)]
@@ -18,7 +18,13 @@ async fn main() {
         IR { filename: PathBuf },
         Parse { filename: String },
         Run { filename: PathBuf },
-        Lsp,
+        Lsp(LspArgs),
+    }
+
+    #[derive(Debug, Args)]
+    struct LspArgs {
+        #[arg(long)]
+        stdio: bool,
     }
 
     env_logger::builder().try_init().unwrap();
@@ -61,7 +67,7 @@ async fn main() {
                 println!("{:?}", interpreter.run());
             }
         }
-        Commands::Lsp => talk::lsp::server::start().await,
+        Commands::Lsp(args) => talk::lsp::server::start().await,
     }
 }
 

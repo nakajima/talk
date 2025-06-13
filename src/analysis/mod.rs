@@ -1,4 +1,3 @@
-#[cfg(test)]
 use crate::{SourceFile, SymbolTable, Typed, type_checker::TypeError};
 
 pub mod constraint_solver;
@@ -8,7 +7,7 @@ pub mod type_checker;
 pub mod typed_expr;
 
 #[cfg(test)]
-pub fn check(input: &'static str) -> Result<SourceFile<Typed>, TypeError> {
+pub fn check(input: &str) -> Result<SourceFile<Typed>, TypeError> {
     use crate::{
         constraint_solver::ConstraintSolver, environment::Environment, name_resolver::NameResolver,
         parser::parse, prelude::compile_prelude, type_checker::TypeChecker,
@@ -26,10 +25,7 @@ pub fn check(input: &'static str) -> Result<SourceFile<Typed>, TypeError> {
     Ok(inferred)
 }
 
-#[cfg(test)]
-pub fn check_with_symbols(
-    input: &'static str,
-) -> Result<(SourceFile<Typed>, SymbolTable), TypeError> {
+pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable), TypeError> {
     use crate::{
         constraint_solver::ConstraintSolver, environment::Environment, name_resolver::NameResolver,
         parser::parse, prelude::compile_prelude, type_checker::TypeChecker,
