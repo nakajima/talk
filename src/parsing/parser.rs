@@ -975,11 +975,11 @@ mod tests {
         let parsed = parse("1 + 2").unwrap();
         let meta = &parsed.meta[parsed.root_ids()[0] as usize];
 
-        assert_eq!(meta.start.start, 1);
+        assert_eq!(meta.start.start, 0);
         assert_eq!(meta.start.end, 1);
-        assert_eq!(meta.end.start, 5);
+        assert_eq!(meta.end.start, 4);
         assert_eq!(meta.end.end, 5);
-        assert_eq!(meta.source_range(), 1..5);
+        assert_eq!(meta.source_range(), 0..5);
     }
 
     #[test]
