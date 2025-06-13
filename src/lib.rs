@@ -17,6 +17,8 @@ pub use parsing::*;
 pub mod compiling;
 pub mod interpreter;
 pub mod lowering;
+#[cfg(feature = "cli")]
+pub mod lsp;
 pub mod prelude;
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 #[cfg(feature = "cli")]
-fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     use std::path::PathBuf;
 
     use clap::{Parser, Subcommand};
@@ -17,6 +18,7 @@ fn main() {
         IR { filename: PathBuf },
         Parse { filename: String },
         Run { filename: PathBuf },
+        Lsp,
     }
 
     env_logger::builder().try_init().unwrap();
@@ -50,7 +52,7 @@ fn main() {
             let driver = Driver::with_files(vec![filename.clone()]);
             let lowered = driver.lower().unwrap();
 
-            use talk::lowering::interpreter::IRInterpreter;
+            use talk::interpreter::interpreter::IRInterpreter;
 
             // let contents = std::fs::read_to_string(filename).expect("Could not read file");
             // let lowered = lower(&contents);
@@ -59,6 +61,7 @@ fn main() {
                 println!("{:?}", interpreter.run());
             }
         }
+        Commands::Lsp => talk::lsp::server::start().await,
     }
 }
 
