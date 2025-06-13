@@ -2,7 +2,8 @@ use crate::lowering::{
     instr::Instr,
     ir_module::IRModule,
     ir_type::IRType,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, Register},
+    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind},
+    register::Register,
 };
 
 pub fn print(program: &IRModule) -> String {
@@ -176,9 +177,9 @@ mod tests {
 
 func @main({} %0) void
   entry:
-    %1 = alloc {ptr, ptr} 1;
+    %1 = alloc {ptr, ptr} ;
     %2 = struct {} ();
-    %3 = alloc {} 1;
+    %3 = alloc {} ;
     store {} %2 %3;
     %4 = ref (int) int @_5_add;
     %5 = getelementptr {ptr, ptr} %1 1;

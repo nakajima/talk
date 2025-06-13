@@ -8,7 +8,8 @@ use crate::{
     lowering::{
         instr::Instr,
         ir_module::IRModule,
-        lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, RefKind, Register, RegisterList},
+        lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, RefKind, RegisterList},
+        register::Register,
     },
 };
 
@@ -307,7 +308,7 @@ impl IRInterpreter {
                 );
             }
             Instr::Alloc { dest, count, ty } => {
-                let ptr = self.heap.alloc(ty.mem_size() * count);
+                let ptr = self.heap.alloc(ty.mem_size() * count.unwrap_or(1));
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => {

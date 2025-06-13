@@ -1,10 +1,13 @@
-use std::{collections::HashMap, num::ParseIntError, ops::AddAssign, str::FromStr};
+use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     environment::TypeDef,
     expr::{Expr, ExprMeta, Pattern},
-    lowering::{instr::Instr, ir_module::IRModule, ir_type::IRType, parsing::parser::ParserError},
+    lowering::{
+        instr::Instr, ir_module::IRModule, ir_type::IRType, parsing::parser::ParserError,
+        register::Register,
+    },
     name::Name,
     parser::ExprID,
     token::Token,
@@ -17,24 +20,6 @@ use crate::{
 pub enum IRError {
     ParseError,
     InvalidPointer(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
-pub struct Register(pub i32);
-impl FromStr for Register {
-    type Err = ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let reg = Register(str::parse(&s[1..])?);
-        Ok(reg)
-    }
-}
-
-impl std::fmt::Display for Register {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("%{}", self.0))?;
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -432,7 +417,7 @@ impl<'a> Lowerer<'a> {
         let closure_ptr = self.allocate_register();
         self.push_instr(Instr::Alloc {
             dest: closure_ptr,
-            count: 1,
+            count: None,
             ty: IRType::closure(),
         });
 
@@ -494,7 +479,7 @@ impl<'a> Lowerer<'a> {
         let env_dest_ptr = self.allocate_register();
         self.push_instr(Instr::Alloc {
             dest: env_dest_ptr,
-            count: 1,
+            count: None,
             ty: environment_type.clone(),
         });
 
@@ -1442,7 +1427,7 @@ mod tests {
                             Instr::Alloc {
                                 dest: Register(1),
                                 ty: IRType::closure(),
-                                count: 1
+                                count: None
                             },
                             Instr::MakeStruct {
                                 dest: Register(2),
@@ -1452,7 +1437,7 @@ mod tests {
                             Instr::Alloc {
                                 dest: Register(3),
                                 ty: IRType::EMPTY_STRUCT,
-                                count: 1,
+                                count: None,
                             },
                             Instr::Store {
                                 val: Register(2),
@@ -1576,7 +1561,7 @@ mod tests {
                             Instr::Alloc {
                                 dest: Register(1),
                                 ty: IRType::closure(),
-                                count: 1,
+                                count: None,
                             },
                             // This sequence is now identical to your working test case.
                             Instr::MakeStruct {
@@ -1586,7 +1571,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
-                                count: 1,
+                                count: None,
                                 ty: IRType::Struct(vec![IRType::Pointer]),
                             },
                             Instr::Store {
@@ -1675,7 +1660,7 @@ mod tests {
                         instructions: vec![
                             Instr::Alloc {
                                 dest: Register(1),
-                                count: 1,
+                                count: None,
                                 ty: IRType::closure()
                             },
                             // This sequence is now identical to your working test case.
@@ -1686,7 +1671,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
-                                count: 1,
+                                count: None,
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
@@ -1762,7 +1747,7 @@ mod tests {
                         instructions: vec![
                             Instr::Alloc {
                                 dest: Register(1),
-                                count: 1,
+                                count: None,
                                 ty: IRType::closure()
                             },
                             Instr::MakeStruct {
@@ -1772,7 +1757,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(3),
-                                count: 1,
+                                count: None,
                                 ty: IRType::EMPTY_STRUCT
                             },
                             Instr::Store {
@@ -1884,7 +1869,7 @@ mod tests {
                             // Alloc the closure
                             Instr::Alloc {
                                 dest: Register(1),
-                                count: 1,
+                                count: None,
                                 ty: IRType::closure()
                             },
                             // Create the env
@@ -1896,7 +1881,7 @@ mod tests {
                             // Alloc space for it
                             Instr::Alloc {
                                 dest: Register(3),
-                                count: 1,
+                                count: None,
                                 ty: IRType::EMPTY_STRUCT,
                             },
                             // Store the env
@@ -2508,7 +2493,7 @@ mod tests {
                             Instr::ConstantInt(Register(1), 1),
                             Instr::Alloc {
                                 dest: Register(2),
-                                count: 1,
+                                count: None,
                                 ty: IRType::closure()
                             },
                             Instr::MakeStruct {
@@ -2518,7 +2503,7 @@ mod tests {
                             },
                             Instr::Alloc {
                                 dest: Register(4),
-                                count: 1,
+                                count: None,
                                 ty: env_struct_type.clone()
                             },
                             Instr::Store {

@@ -2,7 +2,8 @@ use std::{fmt::Display, str::FromStr};
 
 use crate::lowering::{
     ir_type::IRType,
-    lowerer::{self, BasicBlockID, IRError, PhiPredecessors, RefKind, Register, RegisterList},
+    lowerer::{BasicBlockID, IRError, PhiPredecessors, RefKind, RegisterList},
+    register::{self, Register},
 };
 
 // Newtypes for complex arguments to make formatting unambiguous
@@ -31,7 +32,7 @@ impl Display for Callee {
 }
 
 impl FromStr for Callee {
-    type Err = <lowerer::Register as FromStr>::Err;
+    type Err = <register::Register as FromStr>::Err;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(if s.trim().starts_with("@") {
@@ -111,7 +112,11 @@ pub enum Instr {
     GreaterThanEq(Register, IRType, Register, Register),
 
     #[doc = "$dest = alloc $ty $count;"]
-    Alloc { dest: Register, ty: IRType, count: usize },
+    Alloc {
+        dest: Register,
+        ty: IRType,
+        count: Option<usize>,
+    },
 
     #[doc = "store $ty $val $location;"]
     Store {

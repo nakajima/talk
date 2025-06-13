@@ -6,3 +6,4 @@ pub mod ir_printer;
 pub mod ir_type;
 pub mod lowerer;
 pub mod parsing;
+pub mod register;

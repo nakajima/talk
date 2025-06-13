@@ -3,7 +3,8 @@ use crate::{
     expr::Expr,
     lowering::{
         instr::Instr,
-        lowerer::{IRError, Lowerer, Register},
+        lowerer::{IRError, Lowerer},
+        register::Register,
     },
     parser::ExprID,
     type_checker::Ty,
@@ -28,18 +29,19 @@ fn lower_alloc(
     args: &[ExprID],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
-    let Ty::Func(_, _, generics) = &typed_callee.ty else {
+
+    let Ty::Func(_, _, type_params) = &typed_callee.ty else {
         unreachable!()
     };
-    let element_ty = generics[0].to_ir();
+
     let Expr::LiteralInt(val) = lowerer.source_file.get(&args[0]).unwrap() else {
         unreachable!()
     };
 
     lowerer.push_instr(Instr::Alloc {
         dest,
-        ty: element_ty,
-        count: str::parse(val).unwrap(),
+        ty: type_params[0].to_ir(),
+        count: Some(str::parse(val).unwrap()),
     });
 
     Ok(Some(dest))
@@ -53,7 +55,8 @@ mod tests {
             instr::Instr,
             ir_module::IRModule,
             ir_type::IRType,
-            lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, Lowerer, Register},
+            lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, Lowerer},
+            register::Register,
         },
     };
 
@@ -79,8 +82,8 @@ mod tests {
                     instructions: vec![
                         Instr::Alloc {
                             dest: Register(1),
-                            count: 4,
-                            ty: IRType::Int
+                            ty: IRType::Int,
+                            count: Some(4),
                         },
                         Instr::Ret(IRType::Int, Some(Register(1)))
                     ],
