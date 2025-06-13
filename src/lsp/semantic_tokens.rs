@@ -1,13 +1,9 @@
-use std::collections::HashMap;
-
 use crate::{
     Typed,
     expr::{Expr, Pattern},
-    lexing::token::Token,
     name::Name,
     source_file::SourceFile,
     symbol_table::{SymbolInfo, SymbolKind, SymbolTable},
-    token_kind::TokenKind as TalkTokenKind,
 };
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
@@ -175,10 +171,6 @@ impl<'a> SemanticTokenCollector<'a> {
 
         eprintln!("Encoded {} tokens", encoded_tokens.len());
         encoded_tokens
-    }
-
-    fn range_from_token(&self, token: &Token) -> Range {
-        self.range_from_char_span(token.start, token.end)
     }
 
     fn range_from_char_span(&self, start: usize, end: usize) -> Range {

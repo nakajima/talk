@@ -4,17 +4,16 @@ use std::time::Duration;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    DidChangeConfigurationParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    MarkedString, MessageType, OneOf, SemanticToken, SemanticTokenType, SemanticTokens,
-    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
-    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
+    DidChangeConfigurationParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    OneOf, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
-use async_lsp::server::{LifecycleLayer, ResponseFuture};
+use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
-use async_lsp::{ClientSocket, LanguageClient, LanguageServer, ResponseError};
+use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
@@ -33,6 +32,7 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::METHOD,
 ];
 
+#[allow(dead_code)]
 struct ServerState {
     client: ClientSocket,
     counter: i32,

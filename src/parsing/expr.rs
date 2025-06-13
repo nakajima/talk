@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::{SymbolID, token::Token, token_kind::TokenKind};
 
 use super::{name::Name, parser::ExprID};
@@ -8,6 +10,12 @@ pub type VarDepth = u32;
 pub struct ExprMeta {
     pub start: Token,
     pub end: Token,
+}
+
+impl ExprMeta {
+    pub fn source_range(&self) -> Range<usize> {
+        self.start.start..self.end.end
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

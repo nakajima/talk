@@ -67,7 +67,7 @@ async fn main() {
                 println!("{:?}", interpreter.run());
             }
         }
-        Commands::Lsp(args) => talk::lsp::server::start().await,
+        Commands::Lsp(_args) => talk::lsp::server::start().await,
     }
 }
 

@@ -13,11 +13,19 @@ use super::{
 pub type ExprID = i32;
 pub type VariableID = u32;
 
+// for tracking begin/end tokens
+type SourceLocationStack = Vec<Token>;
+
+// for making sure we've pushed to the location stack
+// it's not copyable so we always need to have one before calling add_expr
+pub struct LocToken;
+
 pub struct Parser<'a> {
     pub(crate) lexer: Lexer<'a>,
     pub(crate) previous: Option<Token>,
     pub(crate) current: Option<Token>,
     pub(crate) parse_tree: SourceFile,
+    pub(crate) source_location_stack: SourceLocationStack,
 }
 
 #[derive(Debug)]
@@ -47,6 +55,7 @@ impl<'a> Parser<'a> {
             previous: None,
             current: None,
             parse_tree: SourceFile::new(file_id),
+            source_location_stack: Default::default(),
         }
     }
 
@@ -89,22 +98,40 @@ impl<'a> Parser<'a> {
         self.previous.clone()
     }
 
-    pub(super) fn add_expr(&mut self, expr: Expr) -> Result<ExprID, ParserError> {
+    pub(super) fn add_expr(&mut self, expr: Expr, _loc: LocToken) -> Result<ExprID, ParserError> {
         log::debug!("Adding expr: {expr:?}");
 
         let token = self.current.clone().unwrap();
+        let start = self
+            .source_location_stack
+            .pop()
+            .unwrap_or_else(|| panic!("unbalanced source location stack. current: {:?}", token));
+        log::trace!("pop location: {:?}", start);
 
-        let expr_meta = ExprMeta {
-            start: token.clone(),
-            end: token,
-        };
+        let expr_meta = ExprMeta { start, end: token };
 
         Ok(self.parse_tree.add(expr, expr_meta))
+    }
+
+    #[must_use]
+    fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
+        let meta = &self.parse_tree.meta[lhs as usize];
+        self.source_location_stack.push(meta.start.clone());
+        LocToken
+    }
+
+    #[must_use]
+    fn push_source_location(&mut self) -> LocToken {
+        log::trace!("push_source_location: {:?}", self.current);
+        self.source_location_stack
+            .push(self.current.clone().unwrap());
+        LocToken
     }
 
     // MARK: Expr parsers
 
     pub(crate) fn struct_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Struct)?;
 
         let Some((name_str, _)) = self.try_identifier() else {
@@ -119,10 +146,11 @@ impl<'a> Parser<'a> {
         };
 
         let body = self.struct_body()?;
-        self.add_expr(Struct(Name::Raw(name_str), generics, body))
+        self.add_expr(Struct(Name::Raw(name_str), generics, body), tok)
     }
 
     fn struct_body(&mut self) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
@@ -135,10 +163,11 @@ impl<'a> Parser<'a> {
             };
         }
 
-        self.add_expr(Expr::Block(attributes))
+        self.add_expr(Expr::Block(attributes), tok)
     }
 
     pub(crate) fn property(&mut self) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
         let name = self.identifier()?;
         let type_repr = if self.did_match(TokenKind::Colon)? {
@@ -152,14 +181,18 @@ impl<'a> Parser<'a> {
             None
         };
 
-        self.add_expr(Expr::Property {
-            name: Name::Raw(name),
-            type_repr,
-            default_value,
-        })
+        self.add_expr(
+            Expr::Property {
+                name: Name::Raw(name),
+                type_repr,
+                default_value,
+            },
+            tok,
+        )
     }
 
     pub(crate) fn enum_decl(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Enum)?;
         self.skip_newlines();
 
@@ -176,27 +209,29 @@ impl<'a> Parser<'a> {
         // Consume the block
         let body = self.enum_body()?;
 
-        self.add_expr(EnumDecl(Name::Raw(name), generics, body))
+        self.add_expr(EnumDecl(Name::Raw(name), generics, body), tok)
     }
 
     pub(crate) fn return_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Return)?;
 
         if self.peek_is(TokenKind::Newline) || self.peek_is(TokenKind::RightBrace) {
-            return self.add_expr(Return(None));
+            return self.add_expr(Return(None), tok);
         }
 
         let rhs = self.parse_with_precedence(Precedence::None)?;
-        self.add_expr(Return(Some(rhs)))
+        self.add_expr(Return(Some(rhs)), tok)
     }
 
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Match)?;
 
         let target = self.parse_with_precedence(Precedence::Assignment)?;
         let body = self.match_block()?;
 
-        self.add_expr(Match(target, body))
+        self.add_expr(Match(target, body), tok)
     }
 
     fn match_block(&mut self) -> Result<Vec<ExprID>, ParserError> {
@@ -207,12 +242,14 @@ impl<'a> Parser<'a> {
 
         let mut items: Vec<ExprID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
+            let tok = self.push_source_location();
             let pattern = self.parse_match_pattern()?;
             log::trace!("parsed pattern: {pattern:?}");
-            let pattern_id = self.add_expr(Pattern(pattern))?;
+            let pattern_id = self.add_expr(Pattern(pattern), tok)?;
             self.consume(TokenKind::Arrow)?;
+            let tok = self.push_source_location();
             let body = self.parse_with_precedence(Precedence::Primary)?;
-            items.push(self.add_expr(MatchArm(pattern_id, body))?);
+            items.push(self.add_expr(MatchArm(pattern_id, body), tok)?);
             self.consume(TokenKind::Comma).ok();
         }
 
@@ -262,8 +299,9 @@ impl<'a> Parser<'a> {
             let mut fields: Vec<ExprID> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
+                    let tok = self.push_source_location();
                     let pattern = self.parse_match_pattern()?;
-                    fields.push(self.add_expr(Expr::Pattern(pattern))?);
+                    fields.push(self.add_expr(Expr::Pattern(pattern), tok)?);
                 }
             }
 
@@ -286,8 +324,9 @@ impl<'a> Parser<'a> {
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
                     log::trace!("adding arg: {:?}", self.current);
+                    let tok = self.push_source_location();
                     let pattern = self.parse_match_pattern()?;
-                    fields.push(self.add_expr(Expr::Pattern(pattern))?);
+                    fields.push(self.add_expr(Expr::Pattern(pattern), tok)?);
                 }
             }
 
@@ -302,10 +341,11 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
         let (name, _) = self.try_identifier().unwrap();
 
-        let member = self.add_expr(Member(None, name))?;
+        let member = self.add_expr(Member(None, name), tok)?;
         if let Some(call_id) = self.check_call(member, can_assign)? {
             Ok(call_id)
         } else {
@@ -318,9 +358,10 @@ impl<'a> Parser<'a> {
         can_assign: bool,
         lhs: ExprID,
     ) -> Result<ExprID, ParserError> {
+        let tok = self.push_lhs_location(lhs);
         self.consume(TokenKind::Dot)?;
         let (name, _) = self.try_identifier().unwrap();
-        let member = self.add_expr(Member(Some(lhs), name))?;
+        let member = self.add_expr(Member(Some(lhs), name), tok)?;
 
         self.skip_newlines();
 
@@ -332,18 +373,22 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         if self.did_match(TokenKind::True)? {
-            return self.add_expr(Expr::LiteralTrue);
+            return self.add_expr(Expr::LiteralTrue, tok);
         }
 
         if self.did_match(TokenKind::False)? {
-            return self.add_expr(Expr::LiteralFalse);
+            return self.add_expr(Expr::LiteralFalse, tok);
         }
 
         unreachable!()
     }
 
     pub(crate) fn if_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         self.consume(TokenKind::If)?;
 
         let condition = self.parse_with_precedence(Precedence::Assignment)?;
@@ -351,13 +396,15 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::Else)? {
             let else_body = self.block(can_assign)?;
-            self.add_expr(If(condition, body, Some(else_body)))
+            self.add_expr(If(condition, body, Some(else_body)), tok)
         } else {
-            self.add_expr(If(condition, body, None))
+            self.add_expr(If(condition, body, None), tok)
         }
     }
 
     pub(crate) fn loop_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         self.consume(TokenKind::Loop)?;
 
         let mut condition = None;
@@ -372,20 +419,22 @@ impl<'a> Parser<'a> {
 
         let body = self.block(can_assign)?;
 
-        self.add_expr(Loop(condition, body))
+        self.add_expr(Loop(condition, body), tok)
     }
 
     pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         self.consume(TokenKind::LeftParen)?;
 
         if self.did_match(TokenKind::RightParen)? {
-            return self.add_expr(Tuple(vec![]));
+            return self.add_expr(Tuple(vec![]), tok);
         }
 
         let child = self.parse_with_precedence(Precedence::Assignment)?;
 
         if self.did_match(TokenKind::RightParen)? {
-            return self.add_expr(Tuple(vec![child]));
+            return self.add_expr(Tuple(vec![child]), tok);
         }
 
         self.consume(TokenKind::Comma)?;
@@ -398,10 +447,12 @@ impl<'a> Parser<'a> {
 
         self.consume(TokenKind::RightParen)?;
 
-        self.add_expr(Tuple(items))
+        self.add_expr(Tuple(items), tok)
     }
 
     pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         // Consume the `let` keyword
         self.advance();
         let (name, _) = self.try_identifier().expect("did not get identifier");
@@ -412,17 +463,20 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr));
+        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr), tok);
 
         if self.did_match(TokenKind::Equals)? {
+            let tok = self.push_source_location();
             let rhs = self.parse_with_precedence(Precedence::None)?;
-            self.add_expr(Expr::Assignment(let_expr?, rhs))
+            self.add_expr(Expr::Assignment(let_expr?, rhs), tok)
         } else {
             let_expr
         }
     }
 
     pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         self.advance();
 
         match &self
@@ -431,14 +485,16 @@ impl<'a> Parser<'a> {
             .expect("got into #literal without having a token")
             .kind
         {
-            TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone())),
-            TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone())),
+            TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
+            TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::Func => self.func(),
             _ => unreachable!("didn't get a literal"),
         }
     }
 
     pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         let name = if let Some((
             _,
             Token {
@@ -471,13 +527,14 @@ impl<'a> Parser<'a> {
             },
         )) = self.try_identifier()
         {
+            let tok = self.push_source_location();
             let ty_repr = if self.did_match(TokenKind::Colon)? {
                 Some(self.type_repr(false)?)
             } else {
                 None
             };
 
-            params.push(self.add_expr(Parameter(name.into(), ty_repr))?);
+            params.push(self.add_expr(Parameter(name.into(), ty_repr), tok)?);
 
             if self.did_match(TokenKind::Comma)? {
                 continue;
@@ -496,14 +553,17 @@ impl<'a> Parser<'a> {
 
         let body = self.block(false)?;
 
-        let func_id = self.add_expr(Expr::Func {
-            name: name.map(|s| s.to_string()).map(Name::Raw),
-            generics,
-            params,
-            body,
-            ret: ret.transpose()?,
-            captures: vec![],
-        })?;
+        let func_id = self.add_expr(
+            Expr::Func {
+                name: name.map(|s| s.to_string()).map(Name::Raw),
+                generics,
+                params,
+                body,
+                ret: ret.transpose()?,
+                captures: vec![],
+            },
+            tok,
+        )?;
 
         if let Some(call_id) = self.check_call(func_id, false)? {
             Ok(call_id)
@@ -513,6 +573,8 @@ impl<'a> Parser<'a> {
     }
 
     fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+
         if self.did_match(TokenKind::LeftParen)? {
             // it's a func type or tuple repr
             let mut sig_args = vec![];
@@ -522,9 +584,9 @@ impl<'a> Parser<'a> {
             }
             if self.did_match(TokenKind::Arrow)? {
                 let ret = self.type_repr(is_type_parameter)?;
-                return self.add_expr(FuncTypeRepr(sig_args, ret, is_type_parameter));
+                return self.add_expr(FuncTypeRepr(sig_args, ret, is_type_parameter), tok);
             } else {
-                return self.add_expr(TupleTypeRepr(sig_args, is_type_parameter));
+                return self.add_expr(TupleTypeRepr(sig_args, is_type_parameter), tok);
             }
         }
 
@@ -545,20 +607,25 @@ impl<'a> Parser<'a> {
         }
 
         let type_repr = TypeRepr(name.into(), generics, is_type_parameter);
-        let type_repr_id = self.add_expr(type_repr)?;
+        let type_repr_id = self.add_expr(type_repr, tok)?;
 
         if self.did_match(TokenKind::QuestionMark)? {
-            self.add_expr(TypeRepr(
-                Name::Raw("Optional".to_string()),
-                vec![type_repr_id],
-                is_type_parameter,
-            ))
+            let tok = self.push_source_location();
+            self.add_expr(
+                TypeRepr(
+                    Name::Raw("Optional".to_string()),
+                    vec![type_repr_id],
+                    is_type_parameter,
+                ),
+                tok,
+            )
         } else {
             Ok(type_repr_id)
         }
     }
 
     fn enum_body(&mut self) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
@@ -566,6 +633,7 @@ impl<'a> Parser<'a> {
         while !self.did_match(TokenKind::RightBrace)? {
             if self.did_match(TokenKind::Case)? {
                 while {
+                    let tok = self.push_source_location();
                     let (name, _) = self.try_identifier().expect("did not get enum case name");
                     let mut types = vec![];
 
@@ -576,7 +644,7 @@ impl<'a> Parser<'a> {
                         }
                     }
 
-                    let item = self.add_expr(Expr::EnumVariant(Name::Raw(name), types))?;
+                    let item = self.add_expr(Expr::EnumVariant(Name::Raw(name), types), tok)?;
                     items.push(item);
                     self.did_match(TokenKind::Comma)?
                 } {}
@@ -586,10 +654,11 @@ impl<'a> Parser<'a> {
             };
         }
 
-        self.add_expr(Expr::Block(items))
+        self.add_expr(Expr::Block(items), tok)
     }
 
     pub(crate) fn block(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.skip_newlines();
 
         self.consume(TokenKind::LeftBrace)?;
@@ -599,10 +668,11 @@ impl<'a> Parser<'a> {
             items.push(self.parse_with_precedence(Precedence::Assignment)?)
         }
 
-        self.add_expr(Expr::Block(items))
+        self.add_expr(Expr::Block(items), tok)
     }
 
     pub(crate) fn array_literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::LeftBracket)?;
         self.skip_newlines();
 
@@ -612,12 +682,13 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Comma).ok();
         }
 
-        self.add_expr(Expr::LiteralArray(items))
+        self.add_expr(Expr::LiteralArray(items), tok)
     }
 
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         let (name, _) = self.try_identifier().unwrap();
-        let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None))?;
+        let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None), tok)?;
 
         self.skip_newlines();
 
@@ -628,8 +699,9 @@ impl<'a> Parser<'a> {
         };
 
         if can_assign && self.did_match(TokenKind::Equals)? {
+            let tok = self.push_source_location();
             let rhs = self.parse_with_precedence(Precedence::Assignment)?;
-            self.add_expr(Expr::Assignment(var, rhs))
+            self.add_expr(Expr::Assignment(var, rhs), tok)
         } else {
             Ok(var)
         }
@@ -649,6 +721,7 @@ impl<'a> Parser<'a> {
         type_args: Vec<ExprID>,
         callee: ExprID,
     ) -> Result<ExprID, ParserError> {
+        let tok = self.push_lhs_location(callee);
         self.skip_newlines();
         let mut args: Vec<ExprID> = vec![];
 
@@ -662,24 +735,30 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::RightParen)?;
         }
 
-        self.add_expr(Expr::Call {
-            callee,
-            type_args,
-            args,
-        })
+        self.add_expr(
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            },
+            tok,
+        )
     }
 
     pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
         let rhs = self
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
 
-        self.add_expr(Unary(op.kind, rhs))
+        self.add_expr(Unary(op.kind, rhs), tok)
     }
 
     pub(crate) fn binary(&mut self, _can_assign: bool, lhs: ExprID) -> Result<ExprID, ParserError> {
+        let tok = self.push_lhs_location(lhs);
+
         let op = self.consume_any(vec![
             TokenKind::Plus,
             TokenKind::Minus,
@@ -700,7 +779,7 @@ impl<'a> Parser<'a> {
             .parse_with_precedence(current_precedence + 1)
             .expect("did not get binop rhs");
 
-        self.add_expr(Binary(lhs, op.kind, rhs))
+        self.add_expr(Binary(lhs, op.kind, rhs), tok)
     }
 
     pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
@@ -889,6 +968,18 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Binary(0, TokenKind::EqualsEquals, 1,));
+    }
+
+    #[test]
+    fn stores_expr_meta() {
+        let parsed = parse("1 + 2").unwrap();
+        let meta = &parsed.meta[parsed.root_ids()[0] as usize];
+
+        assert_eq!(meta.start.start, 1);
+        assert_eq!(meta.start.end, 1);
+        assert_eq!(meta.end.start, 5);
+        assert_eq!(meta.end.end, 5);
+        assert_eq!(meta.source_range(), 1..5);
     }
 
     #[test]
@@ -1202,7 +1293,10 @@ mod tests {
                 args: vec![]
             }
         );
-        assert_eq!(*parsed.get(&1).unwrap(), Expr::TypeRepr("T".into(), vec![], false));
+        assert_eq!(
+            *parsed.get(&1).unwrap(),
+            Expr::TypeRepr("T".into(), vec![], false)
+        );
     }
 
     #[test]
