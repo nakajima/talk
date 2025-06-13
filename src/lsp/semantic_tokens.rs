@@ -1,4 +1,7 @@
-use crate::{Parsed, expr::Expr, parser::ExprID, source_file::SourceFile};
+use crate::{
+    Parsed, expr::Expr, lexer::Lexer, parser::ExprID, source_file::SourceFile, token::Token,
+    token_kind::TokenKind,
+};
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
 use super::server::TOKEN_TYPES;
@@ -11,7 +14,9 @@ struct SemanticTokenCollector<'a> {
 
 pub fn collect(source_file: &SourceFile<Parsed>, source: &str) -> Vec<SemanticToken> {
     let mut collector = SemanticTokenCollector::new(source_file, source);
-    collector.collect_tokens();
+    collector.tokens.clear();
+    collector.collect_lexed_tokens();
+    collector.collect_parsed_tokens();
     collector.encode_tokens()
 }
 
@@ -43,11 +48,14 @@ impl<'a> SemanticTokenCollector<'a> {
 
     fn range_for(&self, expr_id: &ExprID) -> Range {
         let range = self.source_file.meta[*expr_id as usize].source_range();
-        Range::new(
-            self.line_col_for(range.start)
-                .expect("did not get position"),
-            self.line_col_for(range.end).expect("did not get position"),
-        )
+
+        if let Some(start) = self.line_col_for(range.start)
+            && let Some(end) = self.line_col_for(range.end)
+        {
+            Range::new(start, end)
+        } else {
+            Range::new(Position::new(0, 0), Position::new(0, 0))
+        }
     }
 
     fn tokens_from_exprs(&self, exprs: &[ExprID]) -> Vec<(Range, SemanticTokenType)> {
@@ -57,16 +65,19 @@ impl<'a> SemanticTokenCollector<'a> {
             .collect()
     }
 
-    fn tokens_from_expr(&self, expr: &ExprID) -> Vec<(Range, SemanticTokenType)> {
+    fn tokens_from_expr(&self, expr_id: &ExprID) -> Vec<(Range, SemanticTokenType)> {
         let mut result = vec![];
+        let Some(expr) = self.source_file.get(expr_id) else {
+            return vec![];
+        };
 
-        match self.source_file.get(expr).unwrap() {
+        match expr {
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
-                result.push((self.range_for(expr), SemanticTokenType::NUMBER))
+                result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
             }
             Expr::LiteralTrue | Expr::LiteralFalse => {
-                result.push((self.range_for(expr), SemanticTokenType::KEYWORD))
+                result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
             }
             Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
             Expr::Binary(lhs, _token_kind, rhs) => {
@@ -85,16 +96,16 @@ impl<'a> SemanticTokenCollector<'a> {
             }
             Expr::Pattern(pattern) => match pattern {
                 crate::expr::Pattern::LiteralInt(_) => {
-                    result.push((self.range_for(expr), SemanticTokenType::NUMBER))
+                    result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralFloat(_) => {
-                    result.push((self.range_for(expr), SemanticTokenType::NUMBER))
+                    result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralTrue => {
-                    result.push((self.range_for(expr), SemanticTokenType::KEYWORD))
+                    result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::LiteralFalse => {
-                    result.push((self.range_for(expr), SemanticTokenType::KEYWORD))
+                    result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::Bind(_name) => {}
                 crate::expr::Pattern::Wildcard => {}
@@ -192,14 +203,95 @@ impl<'a> SemanticTokenCollector<'a> {
         result
     }
 
-    fn collect_tokens(&mut self) {
-        eprintln!("Starting token collection...");
-        self.tokens = self
+    fn make(
+        &self,
+        token: Token,
+        token_type: SemanticTokenType,
+        tokens: &mut Vec<(Range, SemanticTokenType)>,
+    ) {
+        if let Some(start) = self.line_col_for(token.start)
+            && let Some(end) = self.line_col_for(token.end)
+        {
+            tokens.push((Range::new(start, end), token_type))
+        }
+    }
+
+    fn collect_lexed_tokens(&mut self) {
+        eprintln!("Starting lexed token collection...");
+        let mut lexer = Lexer::new(self.source);
+        let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
+        while let Ok(tok) = lexer.next() {
+            match tok.kind {
+                TokenKind::If => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Else => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Loop => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Return => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::True => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::False => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Enum => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Case => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Match => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Underscore => (),
+                TokenKind::QuestionMark => (),
+                TokenKind::Arrow => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Colon => (),
+                TokenKind::Newline => (),
+                TokenKind::Dot => (),
+                TokenKind::Plus => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Minus => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Slash => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Star => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Equals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Bang => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Less => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::LessEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Greater => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::GreaterEquals => {
+                    self.make(tok, SemanticTokenType::OPERATOR, &mut tokens)
+                }
+                TokenKind::Tilde => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::PlusEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::MinusEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::StarEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::SlashEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::EqualsEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::BangEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::TildeEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Caret => (),
+                TokenKind::CaretEquals => (),
+                TokenKind::Pipe => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::PipePipe => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::Amp => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::AmpEquals => self.make(tok, SemanticTokenType::OPERATOR, &mut tokens),
+                TokenKind::LeftBrace => (),
+                TokenKind::RightBrace => (),
+                TokenKind::LeftParen => (),
+                TokenKind::RightParen => (),
+                TokenKind::LeftBracket => (),
+                TokenKind::RightBracket => (),
+                TokenKind::Comma => (),
+                TokenKind::Struct => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Int(_) => self.make(tok, SemanticTokenType::NUMBER, &mut tokens),
+                TokenKind::Float(_) => self.make(tok, SemanticTokenType::NUMBER, &mut tokens),
+                TokenKind::Identifier(_) => (),
+                TokenKind::Func => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Let => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::EOF => break,
+                TokenKind::Generated => (),
+            }
+        }
+        self.tokens.extend(tokens);
+    }
+
+    fn collect_parsed_tokens(&mut self) {
+        eprintln!("Starting parsed token collection...");
+        let tokens: Vec<(Range, SemanticTokenType)> = self
             .source_file
             .root_ids()
             .iter()
             .flat_map(|id| self.tokens_from_expr(id))
             .collect();
+        self.tokens.extend(tokens);
         eprintln!("Collected {} tokens", self.tokens.len());
     }
 
@@ -233,8 +325,10 @@ impl<'a> SemanticTokenCollector<'a> {
             };
             let length = range.end.character - range.start.character;
 
-            let token_type_index =
-                TOKEN_TYPES.iter().position(|tt| tt == &token_type).unwrap() as u32;
+            let token_type_index = TOKEN_TYPES
+                .iter()
+                .position(|tt| tt == &token_type)
+                .unwrap_or(0) as u32;
 
             encoded_tokens.push(SemanticToken {
                 delta_line,
@@ -264,7 +358,7 @@ mod tests {
     fn tokens_for(code: &'static str) -> Vec<SemanticToken> {
         let parsed = parse(code, 0).unwrap();
         let mut semantic_tokens = SemanticTokenCollector::new(&parsed, code);
-        semantic_tokens.collect_tokens();
+        semantic_tokens.collect_parsed_tokens();
         semantic_tokens.encode_tokens()
     }
 

@@ -1,7 +1,6 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
@@ -16,6 +15,7 @@ use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
+use async_lsp::{ErrorCode, LanguageClient};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
@@ -82,8 +82,10 @@ impl LanguageServer for ServerState {
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
         Box::pin(async move {
-            let source = std::fs::read_to_string(params.text_document.uri.path()).unwrap();
-            let source_file = parse(&source, 0).unwrap();
+            let source = std::fs::read_to_string(params.text_document.uri.path())
+                .map_err(|_| ResponseError::new(ErrorCode::INTERNAL_ERROR, "could not read uri"))?;
+            let source_file = parse(&source, 0)
+                .map_err(|e| ResponseError::new(ErrorCode::PARSE_ERROR, &format!("{:?}", e)))?;
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                 result_id: None,
                 data: semantic_tokens::collect(&source_file, &source),
