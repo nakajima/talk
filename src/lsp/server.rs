@@ -19,7 +19,6 @@ use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
-use crate::compiling::driver::Driver;
 use crate::lsp::semantic_tokens;
 use crate::parser::parse;
 
