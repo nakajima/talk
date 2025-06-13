@@ -1,127 +1,206 @@
-use crate::{
-    Typed,
-    expr::{Expr, Pattern},
-    name::Name,
-    source_file::SourceFile,
-    symbol_table::{SymbolInfo, SymbolKind, SymbolTable},
-};
+use crate::{Parsed, expr::Expr, parser::ExprID, source_file::SourceFile};
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
 use super::server::TOKEN_TYPES;
 
 struct SemanticTokenCollector<'a> {
-    source_file: &'a SourceFile<Typed>,
-    symbol_table: &'a SymbolTable,
+    source_file: &'a SourceFile<Parsed>,
     source: &'a str,
     tokens: Vec<(Range, SemanticTokenType)>,
-    line_starts: Vec<usize>,
 }
 
-pub fn collect(
-    source_file: &SourceFile<Typed>,
-    symbol_table: &SymbolTable,
-    source: &str,
-) -> Vec<SemanticToken> {
-    let mut collector = SemanticTokenCollector::new(source_file, symbol_table, source);
+pub fn collect(source_file: &SourceFile<Parsed>, source: &str) -> Vec<SemanticToken> {
+    let mut collector = SemanticTokenCollector::new(source_file, source);
     collector.collect_tokens();
     collector.encode_tokens()
 }
 
 impl<'a> SemanticTokenCollector<'a> {
-    fn new(
-        source_file: &'a SourceFile<Typed>,
-        symbol_table: &'a SymbolTable,
-        source: &'a str,
-    ) -> Self {
-        let line_starts = std::iter::once(0)
-            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
-            .collect();
-
+    fn new(source_file: &'a SourceFile<Parsed>, source: &'a str) -> Self {
         Self {
             source_file,
-            symbol_table,
             source,
             tokens: vec![],
-            line_starts,
         }
+    }
+
+    fn line_col_for(&self, position: usize) -> Option<Position> {
+        if position > self.source.len() {
+            return None;
+        }
+
+        let before = &self.source[..position];
+        let line = before.matches('\n').count(); // Remove the +1 here
+        let column = before
+            .rfind('\n')
+            .map(|i| &before[i + 1..])
+            .unwrap_or(before)
+            .chars()
+            .count(); // Also remove the +1 here
+
+        Some(Position::new(line as u32, column as u32))
+    }
+
+    fn range_for(&self, expr_id: &ExprID) -> Range {
+        let range = self.source_file.meta[*expr_id as usize].source_range();
+        Range::new(
+            self.line_col_for(range.start)
+                .expect("did not get position"),
+            self.line_col_for(range.end).expect("did not get position"),
+        )
+    }
+
+    fn tokens_from_exprs(&self, exprs: &[ExprID]) -> Vec<(Range, SemanticTokenType)> {
+        exprs
+            .iter()
+            .flat_map(|e| self.tokens_from_expr(e))
+            .collect()
+    }
+
+    fn tokens_from_expr(&self, expr: &ExprID) -> Vec<(Range, SemanticTokenType)> {
+        let mut result = vec![];
+
+        match self.source_file.get(expr).unwrap() {
+            Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
+                result.push((self.range_for(expr), SemanticTokenType::NUMBER))
+            }
+            Expr::LiteralTrue | Expr::LiteralFalse => {
+                result.push((self.range_for(expr), SemanticTokenType::KEYWORD))
+            }
+            Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
+            Expr::Binary(lhs, _token_kind, rhs) => {
+                result.extend(self.tokens_from_exprs(&[*lhs, *rhs]))
+            }
+            Expr::Tuple(items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            } => {
+                result.extend(self.tokens_from_expr(callee));
+                result.extend(self.tokens_from_exprs(type_args));
+                result.extend(self.tokens_from_exprs(args));
+            }
+            Expr::Pattern(pattern) => match pattern {
+                crate::expr::Pattern::LiteralInt(_) => {
+                    result.push((self.range_for(expr), SemanticTokenType::NUMBER))
+                }
+                crate::expr::Pattern::LiteralFloat(_) => {
+                    result.push((self.range_for(expr), SemanticTokenType::NUMBER))
+                }
+                crate::expr::Pattern::LiteralTrue => {
+                    result.push((self.range_for(expr), SemanticTokenType::KEYWORD))
+                }
+                crate::expr::Pattern::LiteralFalse => {
+                    result.push((self.range_for(expr), SemanticTokenType::KEYWORD))
+                }
+                crate::expr::Pattern::Bind(_name) => {}
+                crate::expr::Pattern::Wildcard => {}
+                crate::expr::Pattern::Variant { fields, .. } => {
+                    result.extend(self.tokens_from_exprs(fields))
+                }
+            },
+            Expr::Return(rhs) => {
+                if let Some(rhs) = rhs {
+                    result.extend(self.tokens_from_expr(rhs))
+                }
+            }
+            Expr::Struct(_name, items, body) => {
+                result.extend(self.tokens_from_exprs(items));
+                result.extend(self.tokens_from_expr(body));
+            }
+            Expr::Property {
+                name: _name,
+                type_repr,
+                default_value,
+            } => {
+                if let Some(type_repr) = type_repr {
+                    result.extend(self.tokens_from_expr(type_repr));
+                }
+                if let Some(default_value) = default_value {
+                    result.extend(self.tokens_from_expr(default_value));
+                }
+            }
+            Expr::TypeRepr(_name, items, _) => result.extend(self.tokens_from_exprs(items)),
+            Expr::FuncTypeRepr(items, ret, _) => {
+                result.extend(self.tokens_from_exprs(items));
+                result.extend(self.tokens_from_expr(ret));
+            }
+            Expr::TupleTypeRepr(items, _) => {
+                result.extend(self.tokens_from_exprs(items));
+            }
+            Expr::Member(receiver, _) => {
+                if let Some(receiver) = receiver {
+                    result.extend(self.tokens_from_expr(receiver));
+                }
+            }
+            Expr::Func {
+                generics,
+                params,
+                body,
+                ret,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(&params));
+                result.extend(self.tokens_from_expr(body));
+                if let Some(ret) = ret {
+                    result.extend(self.tokens_from_expr(ret));
+                }
+            }
+            Expr::Parameter(_name, ty) => {
+                if let Some(ty) = ty {
+                    result.extend(self.tokens_from_expr(ty));
+                }
+            }
+            Expr::Let(_name, rhs) => {
+                if let Some(rhs) = rhs {
+                    result.extend(self.tokens_from_expr(rhs));
+                }
+            }
+            Expr::Assignment(lhs, rhs) => result.extend(self.tokens_from_exprs(&[*lhs, *rhs])),
+            Expr::Variable(_name, _) => {}
+            Expr::If(cond, then, alt) => {
+                result.extend(self.tokens_from_expr(cond));
+                result.extend(self.tokens_from_expr(then));
+                if let Some(alt) = alt {
+                    result.extend(self.tokens_from_expr(alt));
+                }
+            }
+            Expr::Loop(cond, body) => {
+                if let Some(cond) = cond {
+                    result.extend(self.tokens_from_expr(cond));
+                }
+                result.extend(self.tokens_from_expr(body));
+            }
+            Expr::EnumDecl(_name, items, body) => {
+                result.extend(self.tokens_from_exprs(items));
+                result.extend(self.tokens_from_expr(body));
+            }
+            Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::Match(_, items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::MatchArm(pattern, body) => {
+                result.extend(self.tokens_from_exprs(&[*pattern, *body]))
+            }
+            Expr::PatternVariant(_name, _name1, items) => {
+                result.extend(self.tokens_from_exprs(items))
+            }
+        };
+
+        result
     }
 
     fn collect_tokens(&mut self) {
         eprintln!("Starting token collection...");
-        for (expr_id, typed_expr) in self.source_file.typed_exprs() {
-            let meta = &self.source_file.meta[*expr_id as usize];
-            match &typed_expr.expr {
-                Expr::Variable(name, ..)
-                | Expr::Parameter(name, ..)
-                | Expr::Let(name, ..)
-                | Expr::Property { name, .. }
-                | Expr::EnumVariant(name, ..) => {
-                    self.add_token_for_name(name, meta.start.start, meta.start.end);
-                }
-                Expr::Func {
-                    name: Some(name), ..
-                }
-                | Expr::EnumDecl(name, ..)
-                | Expr::Struct(name, ..) => {
-                    self.add_token_for_name_in_decl(name, meta);
-                }
-                Expr::Pattern(Pattern::Bind(name)) => {
-                    self.add_token_for_name(name, meta.start.start, meta.start.end);
-                }
-                _ => {}
-            }
-        }
+        self.tokens = self
+            .source_file
+            .root_ids()
+            .iter()
+            .flat_map(|id| self.tokens_from_expr(id))
+            .collect();
         eprintln!("Collected {} tokens", self.tokens.len());
-    }
-
-    fn add_token_for_name(&mut self, name: &Name, start: usize, end: usize) {
-        if let Name::Resolved(symbol_id, name_str) = name {
-            if let Some(symbol_info) = self.symbol_table.get(symbol_id) {
-                if let Some(token_type) = self.token_type_from_symbol(symbol_info) {
-                    // Ensure we don't include trailing newlines
-                    let actual_end = if name_str.is_empty() {
-                        end
-                    } else {
-                        start + name_str.len()
-                    };
-                    let range = self.range_from_char_span(start, actual_end);
-                    self.tokens.push((range, token_type));
-                }
-            }
-        }
-    }
-
-    fn add_token_for_name_in_decl(&mut self, name: &Name, meta: &crate::expr::ExprMeta) {
-        if let Name::Resolved(symbol_id, name_str) = name {
-            let expr_source = &self.source[meta.start.start..meta.end.end];
-            if let Some(byte_pos) = expr_source.find(name_str) {
-                let start = meta.start.start + byte_pos;
-                let end = start + name_str.len();
-                self.add_token_for_name(name, start, end);
-            } else if let Some(symbol_info) = self.symbol_table.get(symbol_id) {
-                if let Some(token_type) = self.token_type_from_symbol(symbol_info) {
-                    // Fallback for names that might be tricky to find, like operators
-                    let range = self.range_from_char_span(meta.start.start, meta.start.end);
-                    self.tokens.push((range, token_type));
-                }
-            }
-        }
-    }
-
-    fn token_type_from_symbol(&self, symbol_info: &SymbolInfo) -> Option<SemanticTokenType> {
-        match symbol_info.kind {
-            SymbolKind::Func => Some(SemanticTokenType::FUNCTION),
-            SymbolKind::Param => Some(SemanticTokenType::PARAMETER),
-            SymbolKind::Local | SymbolKind::PatternBind => Some(SemanticTokenType::VARIABLE),
-            SymbolKind::Enum => Some(SemanticTokenType::ENUM),
-            SymbolKind::EnumVariant(_) => Some(SemanticTokenType::ENUM_MEMBER),
-            SymbolKind::Struct => Some(SemanticTokenType::STRUCT),
-            SymbolKind::BuiltinType => Some(SemanticTokenType::TYPE),
-            SymbolKind::CustomType => Some(SemanticTokenType::TYPE),
-            SymbolKind::TypeParameter => Some(SemanticTokenType::TYPE_PARAMETER),
-            SymbolKind::BuiltinFunc => Some(SemanticTokenType::FUNCTION),
-            SymbolKind::VariantConstructor => Some(SemanticTokenType::ENUM_MEMBER),
-        }
     }
 
     fn encode_tokens(mut self) -> Vec<SemanticToken> {
@@ -136,7 +215,6 @@ impl<'a> SemanticTokenCollector<'a> {
         let mut last_pos = Position::new(0, 0);
 
         for (range, token_type) in self.tokens {
-            // Skip tokens that span multiple lines
             if range.start.line != range.end.line {
                 eprintln!("Warning: Skipping multi-line token: {:?}", range);
                 continue;
@@ -172,31 +250,78 @@ impl<'a> SemanticTokenCollector<'a> {
         eprintln!("Encoded {} tokens", encoded_tokens.len());
         encoded_tokens
     }
+}
 
-    fn range_from_char_span(&self, start: usize, end: usize) -> Range {
-        Range {
-            start: self.pos_from_char_offset(start),
-            end: self.pos_from_char_offset(end),
-        }
+#[cfg(test)]
+mod tests {
+    use async_lsp::lsp_types::{SemanticToken, SemanticTokenType};
+
+    use crate::{
+        lsp::{semantic_tokens::SemanticTokenCollector, server::TOKEN_TYPES},
+        parser::parse,
+    };
+
+    fn tokens_for(code: &'static str) -> Vec<SemanticToken> {
+        let parsed = parse(code, 0).unwrap();
+        let mut semantic_tokens = SemanticTokenCollector::new(&parsed, code);
+        semantic_tokens.collect_tokens();
+        semantic_tokens.encode_tokens()
     }
 
-    fn pos_from_char_offset(&self, offset: usize) -> Position {
-        let mut line = 0;
-        let mut line_start = 0;
-        for (i, l_start) in self.line_starts.iter().enumerate() {
-            if *l_start > offset {
-                break;
-            }
-            line = i;
-            line_start = *l_start;
-        }
+    fn pos(token_type: SemanticTokenType) -> u32 {
+        TOKEN_TYPES.iter().position(|t| *t == token_type).unwrap() as u32
+    }
 
-        let line_content = &self.source[line_start..offset];
-        let character = line_content.chars().count();
+    #[test]
+    fn gets_int_tokens() {
+        assert_eq!(
+            tokens_for("123\n1.23"),
+            vec![
+                SemanticToken {
+                    delta_line: 0,
+                    delta_start: 0,
+                    length: 3,
+                    token_type: pos(SemanticTokenType::NUMBER),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 1,
+                    delta_start: 0,
+                    length: 4,
+                    token_type: pos(SemanticTokenType::NUMBER),
+                    token_modifiers_bitset: 0
+                }
+            ]
+        );
+    }
 
-        Position {
-            line: line as u32,
-            character: character as u32,
-        }
+    #[test]
+    fn gets_bool() {
+        assert_eq!(
+            tokens_for("true\n  false\n\ntrue"),
+            vec![
+                SemanticToken {
+                    delta_line: 0,
+                    delta_start: 0,
+                    length: 4,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 1,
+                    delta_start: 2,
+                    length: 5,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 2,
+                    delta_start: 0,
+                    length: 4,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+            ]
+        );
     }
 }

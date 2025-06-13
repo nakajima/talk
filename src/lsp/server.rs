@@ -1,13 +1,15 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    DidChangeConfigurationParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    OneOf, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities,
+    DidChangeConfigurationParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, MarkedString, MessageType, OneOf, SemanticTokenType,
+    SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
+    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, ShowMessageParams,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -16,6 +18,10 @@ use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
+
+use crate::compiling::driver::Driver;
+use crate::lsp::semantic_tokens;
+use crate::parser::parse;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::KEYWORD,
@@ -77,44 +83,34 @@ impl LanguageServer for ServerState {
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
         Box::pin(async move {
-            let path = params.text_document.uri.to_file_path().unwrap();
-            let source = std::fs::read_to_string(path).unwrap();
-
-            let (source_file, symbol_table) = match crate::check_with_symbols(&source) {
-                Ok(res) => res,
-                Err(err) => {
-                    log::error!("Failed to check file: {err:?}");
-                    return Ok(None);
-                }
-            };
-
-            let tokens = crate::lsp::semantic_tokens::collect(&source_file, &symbol_table, &source);
+            let source = std::fs::read_to_string(params.text_document.uri.path()).unwrap();
+            let source_file = parse(&source, 0).unwrap();
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                 result_id: None,
-                data: tokens,
+                data: semantic_tokens::collect(&source_file, &source),
             })))
         })
     }
 
-    // fn hover(&mut self, _: HoverParams) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {
-    //     let mut client = self.client.clone();
-    //     let counter = self.counter;
-    //     Box::pin(async move {
-    //         tokio::time::sleep(Duration::from_secs(1)).await;
-    //         client
-    //             .show_message(ShowMessageParams {
-    //                 typ: MessageType::INFO,
-    //                 message: "Hello LSP".into(),
-    //             })
-    //             .unwrap();
-    //         Ok(Some(Hover {
-    //             contents: HoverContents::Scalar(MarkedString::String(format!(
-    //                 "I am a hover text {counter}!"
-    //             ))),
-    //             range: None,
-    //         }))
-    //     })
-    // }
+    fn hover(&mut self, _: HoverParams) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {
+        let mut client = self.client.clone();
+        let counter = self.counter;
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            client
+                .show_message(ShowMessageParams {
+                    typ: MessageType::INFO,
+                    message: "Hello LSP".into(),
+                })
+                .unwrap();
+            Ok(Some(Hover {
+                contents: HoverContents::Scalar(MarkedString::String(format!(
+                    "I am a hover text {counter}!"
+                ))),
+                range: None,
+            }))
+        })
+    }
 
     // fn definition(
     //     &mut self,
@@ -186,5 +182,5 @@ pub async fn start() {
         tokio_util::compat::TokioAsyncWriteCompatExt::compat_write(tokio::io::stdout()),
     );
 
-    server.run_buffered(stdin, stdout).await.unwrap();
+    server.run_buffered(stdin, stdout).await.ok();
 }

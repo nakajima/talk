@@ -2,7 +2,7 @@ enum Maybe<T> {
   case definitely(T), nope
 }
 
-let maybe = Maybe.definitely(123)
+let maybe = Maybe.definitely(1234)
 
 match maybe {
   .definitely(x) -> x,

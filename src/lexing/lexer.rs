@@ -63,8 +63,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn consume(&mut self, char: char) -> Result<Token, LexerError> {
-        self.current += 1;
         self.started = self.current;
+        self.current += 1;
 
         match char {
             '.' => self.make(Dot),
