@@ -1,21 +1,21 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    DidChangeConfigurationParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, MarkedString, MessageType, OneOf, SemanticTokenType,
-    SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, ShowMessageParams,
+    DidChangeConfigurationParams, DidSaveTextDocumentParams, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, MarkedString, MessageType, OneOf,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
-use async_lsp::{ErrorCode, LanguageClient};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
@@ -82,10 +82,26 @@ impl LanguageServer for ServerState {
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
         Box::pin(async move {
-            let source = std::fs::read_to_string(params.text_document.uri.path())
-                .map_err(|_| ResponseError::new(ErrorCode::INTERNAL_ERROR, "could not read uri"))?;
-            let source_file = parse(&source, 0)
-                .map_err(|e| ResponseError::new(ErrorCode::PARSE_ERROR, &format!("{:?}", e)))?;
+            let source = match std::fs::read_to_string(params.text_document.uri.path()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read file: {:?}", e);
+                    return Ok(None); // Return None instead of error
+                }
+            };
+
+            let source_file = match parse(&source, 0) {
+                Ok(sf) => sf,
+                Err(e) => {
+                    eprintln!("Failed to parse file: {:?}", e);
+                    // Return empty tokens instead of error
+                    return Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                        result_id: None,
+                        data: vec![],
+                    })));
+                }
+            };
+
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                 result_id: None,
                 data: semantic_tokens::collect(&source_file, &source),
@@ -111,6 +127,10 @@ impl LanguageServer for ServerState {
                 range: None,
             }))
         })
+    }
+
+    fn did_save(&mut self, _params: DidSaveTextDocumentParams) -> Self::NotifyResult {
+        ControlFlow::Continue(())
     }
 
     // fn definition(
@@ -183,5 +203,8 @@ pub async fn start() {
         tokio_util::compat::TokioAsyncWriteCompatExt::compat_write(tokio::io::stdout()),
     );
 
-    server.run_buffered(stdin, stdout).await.ok();
+    match server.run_buffered(stdin, stdout).await {
+        Ok(()) => eprintln!("All done."),
+        Err(e) => eprintln!("server.run_buffered err: {:?}", e),
+    }
 }
