@@ -41,6 +41,7 @@ pub enum ParserError {
     UnexpectedEndOfInput(Vec<TokenKind> /* expected */),
     UnknownError(&'static str),
     ExpectedIdentifier(Option<Token>),
+    CannotAssign,
 }
 
 pub fn parse(code: &str, file_id: FileID) -> Result<SourceFile, ParserError> {
@@ -384,11 +385,23 @@ impl<'a> Parser<'a> {
 
         self.skip_newlines();
 
-        if let Some(call_id) = self.check_call(member, can_assign)? {
-            Ok(call_id)
+        let expr_id = if let Some(call_id) = self.check_call(member, can_assign)? {
+            call_id
         } else {
-            Ok(member)
+            member
+        };
+
+        if self.did_match(TokenKind::Equals)? {
+            if can_assign {
+                let loc = self.push_source_location();
+                let rhs = self.parse_with_precedence(Precedence::Assignment)?;
+                return self.add_expr(Expr::Assignment(expr_id, rhs), loc);
+            } else {
+                return Err(ParserError::CannotAssign);
+            }
         }
+
+        Ok(expr_id)
     }
 
     pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -897,6 +910,7 @@ impl<'a> Parser<'a> {
             while !self.did_match(TokenKind::Greater)? {
                 self.skip_newlines();
                 generics.push(self.type_repr(false)?);
+                self.consume(TokenKind::Comma).ok();
                 self.skip_newlines();
             }
 
