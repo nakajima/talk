@@ -2180,7 +2180,7 @@ mod pending {
     #[test]
     fn checks_if_expression_with_non_bool_condition() {
         let checked = check_err("if 123 { 1 }").unwrap();
-        assert_eq!(checked.diagnostics.len(), 1);
+        assert_eq!(checked.diagnostics().len(), 1);
     }
 
     #[test]
@@ -2196,7 +2196,7 @@ mod pending {
     #[test]
     fn checks_loop_expression_with_invalid_condition() {
         let checked = check_err("loop 1.2 { 1 }").unwrap();
-        assert_eq!(checked.diagnostics.len(), 1);
+        assert_eq!(checked.diagnostics().len(), 1);
         assert!(
             checked.diagnostics.contains(&Diagnostic::typing(
                 0,

@@ -210,11 +210,7 @@ impl<'a> Parser<'a> {
     fn push_source_location(&mut self) -> LocToken {
         log::trace!("push_source_location: {:?}", self.current);
         let start = SourceLocationStart {
-            token: self.previous_before_newline.clone().unwrap_or(
-                self.previous
-                    .clone()
-                    .unwrap_or(self.current.clone().unwrap()),
-            ),
+            token: self.current.clone().unwrap(),
             identifiers: vec![],
         };
         self.source_location_stack.push(start);
@@ -2111,16 +2107,20 @@ mod error_handling_tests {
     fn handles_unclosed_brace() {
         let parsed = parse("func foo() {", 0);
         assert_eq!(parsed.diagnostics.len(), 1);
-        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
-            Token {
-                kind: TokenKind::Func,
-                col: 1,
-                line: 0,
-                start: 0,
-                end: 4,
-            },
-            crate::parser::ParserError::UnexpectedEndOfInput(None)
-        )))
+        assert!(
+            parsed.diagnostics.contains(&Diagnostic::parser(
+                Token {
+                    kind: TokenKind::Func,
+                    col: 4,
+                    line: 0,
+                    start: 0,
+                    end: 4,
+                },
+                crate::parser::ParserError::UnexpectedEndOfInput(None)
+            )),
+            "{:?}",
+            parsed.diagnostics
+        )
     }
 
     #[test]
@@ -2130,7 +2130,7 @@ mod error_handling_tests {
         assert!(parsed.diagnostics.contains(&Diagnostic::parser(
             Token {
                 kind: TokenKind::Func,
-                col: 1,
+                col: 4,
                 line: 0,
                 start: 0,
                 end: 4,
