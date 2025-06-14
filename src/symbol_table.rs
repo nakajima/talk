@@ -1,6 +1,7 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use crate::{
+    FileID,
     parser::ExprID,
     prelude::{compile_prelude, compile_prelude_for_name_resolver},
 };
@@ -40,11 +41,19 @@ pub enum SymbolKind {
 }
 
 #[derive(Debug, Clone)]
+pub struct Definition {
+    pub file_id: FileID,
+    pub line: u32,
+    pub col: u32,
+}
+
+#[derive(Debug, Clone)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
     pub expr_id: ExprID,
     pub is_captured: bool,
+    pub definition: Option<Definition>,
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +124,13 @@ impl SymbolTable {
         self.symbols.get_mut(symbol_id).unwrap().is_captured = true;
     }
 
-    pub fn add(&mut self, name: &str, kind: SymbolKind, expr_id: ExprID) -> SymbolID {
+    pub fn add(
+        &mut self,
+        name: &str,
+        kind: SymbolKind,
+        expr_id: ExprID,
+        definition: Option<Definition>,
+    ) -> SymbolID {
         self.next_id += 1;
         let symbol_id = SymbolID(self.next_id);
         self.symbols.insert(
@@ -125,6 +140,7 @@ impl SymbolTable {
                 kind,
                 expr_id,
                 is_captured: false,
+                definition,
             },
         );
 

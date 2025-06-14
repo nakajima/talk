@@ -1271,7 +1271,7 @@ impl<'a> Lowerer<'a> {
                 let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
                 let symbol = self
                     .symbol_table
-                    .add(&name_str, SymbolKind::CustomType, 12345);
+                    .add(&name_str, SymbolKind::CustomType, 12345, None);
                 Name::Resolved(symbol, name_str)
             }
             _ => todo!(),
@@ -1344,6 +1344,7 @@ fn find_or_create_main(
             kind: SymbolKind::Func,
             expr_id: SymbolID::GENERATED_MAIN.0,
             is_captured: false,
+            definition: None,
         },
     );
 

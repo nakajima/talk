@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
+use crate::Definition;
+use crate::FileID;
 use crate::NameResolved;
 use crate::SymbolID;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::expr::Expr::*;
+use crate::expr::ExprMeta;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
@@ -87,8 +90,13 @@ impl NameResolver {
                 Struct(name, generics, body) => {
                     match name {
                         Name::Raw(name_str) => {
-                            let symbol_id =
-                                self.declare(name_str.clone(), SymbolKind::Struct, node_id);
+                            let symbol_id = self.declare(
+                                name_str.clone(),
+                                SymbolKind::Struct,
+                                node_id,
+                                &source_file.meta,
+                                source_file.file_id,
+                            );
                             self.type_symbol_stack.push(symbol_id);
                             source_file.nodes[*node_id as usize] =
                                 Struct(Name::Resolved(symbol_id, name_str), generics.clone(), body)
@@ -141,8 +149,13 @@ impl NameResolver {
                 Let(name, rhs) => {
                     let name = match name {
                         Name::Raw(name_str) => {
-                            let symbol_id =
-                                self.declare(name_str.clone(), SymbolKind::Local, node_id);
+                            let symbol_id = self.declare(
+                                name_str.clone(),
+                                SymbolKind::Local,
+                                node_id,
+                                &source_file.meta,
+                                source_file.file_id,
+                            );
                             Name::Resolved(symbol_id, name_str)
                         }
                         Name::Resolved(_, _) | Name::_Self(_) => name,
@@ -205,7 +218,13 @@ impl NameResolver {
                             panic!("got a non variable param")
                         };
 
-                        self.declare(name.clone(), SymbolKind::Param, node_id);
+                        self.declare(
+                            name.clone(),
+                            SymbolKind::Param,
+                            node_id,
+                            &source_file.meta,
+                            source_file.file_id,
+                        );
 
                         if let Some(ty_id) = ty_id {
                             self.resolve_nodes(&[*ty_id], source_file);
@@ -287,6 +306,8 @@ impl NameResolver {
                                     raw_name_str.clone(),
                                     SymbolKind::TypeParameter,
                                     node_id,
+                                    &source_file.meta,
+                                    source_file.file_id,
                                 );
                                 Name::Resolved(symbol_id, raw_name_str)
                             } else {
@@ -320,8 +341,13 @@ impl NameResolver {
                 EnumDecl(name, generics, body) => {
                     match name {
                         Name::Raw(name_str) => {
-                            let symbol_id =
-                                self.declare(name_str.clone(), SymbolKind::Enum, node_id);
+                            let symbol_id = self.declare(
+                                name_str.clone(),
+                                SymbolKind::Enum,
+                                node_id,
+                                &source_file.meta,
+                                source_file.file_id,
+                            );
                             self.type_symbol_stack.push(symbol_id);
                             source_file.nodes[*node_id as usize] = EnumDecl(
                                 Name::Resolved(symbol_id, name_str),
@@ -373,7 +399,13 @@ impl NameResolver {
                 captures,
             } = source_file.get(id).unwrap().clone()
             {
-                let symbol_id = self.declare(name.clone(), SymbolKind::Func, id);
+                let symbol_id = self.declare(
+                    name.clone(),
+                    SymbolKind::Func,
+                    id,
+                    &source_file.meta,
+                    source_file.file_id,
+                );
 
                 source_file.nodes[*id as usize] = Func {
                     name: Some(Name::Resolved(symbol_id, name)),
@@ -396,7 +428,13 @@ impl NameResolver {
             };
 
             // Declare the enum type
-            let enum_symbol = self.declare(name_str.clone(), SymbolKind::Enum, id);
+            let enum_symbol = self.declare(
+                name_str.clone(),
+                SymbolKind::Enum,
+                id,
+                &source_file.meta,
+                source_file.file_id,
+            );
 
             self.resolve_nodes(&generics, source_file);
 
@@ -418,7 +456,13 @@ impl NameResolver {
     ) -> Pattern {
         match pattern {
             Pattern::Bind(Name::Raw(name_str)) => {
-                let symbol = self.declare(name_str.clone(), SymbolKind::PatternBind, node_id);
+                let symbol = self.declare(
+                    name_str.clone(),
+                    SymbolKind::PatternBind,
+                    node_id,
+                    &source_file.meta,
+                    source_file.file_id,
+                );
                 Pattern::Bind(Name::Resolved(symbol, name_str.to_string()))
             }
             Pattern::Variant {
@@ -427,7 +471,13 @@ impl NameResolver {
                 fields,
             } => {
                 let enum_name = if let Some(Name::Raw(enum_name)) = enum_name {
-                    let symbol = self.declare(enum_name.clone(), SymbolKind::PatternBind, node_id);
+                    let symbol = self.declare(
+                        enum_name.clone(),
+                        SymbolKind::PatternBind,
+                        node_id,
+                        &source_file.meta,
+                        source_file.file_id,
+                    );
                     Some(Name::Resolved(symbol, enum_name.to_string()))
                 } else {
                     None
@@ -488,14 +538,31 @@ impl NameResolver {
         }
     }
 
-    fn declare(&mut self, name: String, kind: SymbolKind, expr_id: &ExprID) -> SymbolID {
+    fn declare(
+        &mut self,
+        name: String,
+        kind: SymbolKind,
+        expr_id: &ExprID,
+        expr_meta: &Vec<ExprMeta>,
+        file_id: FileID,
+    ) -> SymbolID {
         log::trace!(
             "declaring {} in {:?} at depth {}",
             name,
             self.scopes,
             self.scopes.len() - 1
         );
-        let symbol_id = self.symbol_table.add(&name, kind, *expr_id);
+
+        let meta = &expr_meta[*expr_id as usize];
+        let definition = Definition {
+            file_id: file_id,
+            line: meta.start.line,
+            col: meta.start.col,
+        };
+
+        let symbol_id = self
+            .symbol_table
+            .add(&name, kind, *expr_id, Some(definition));
         self.scopes.last_mut().unwrap().insert(name, symbol_id);
         symbol_id
     }
@@ -531,13 +598,13 @@ mod tests {
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let tree = parse(code, 123);
         let resolver = NameResolver::default();
-        resolver.resolve(tree).0
+        resolver.resolve(tree.clone()).0
     }
 
     fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
         let tree = parse(code, 123);
         let resolver = NameResolver::default();
-        resolver.resolve(tree)
+        resolver.resolve(tree.clone())
     }
 
     #[test]

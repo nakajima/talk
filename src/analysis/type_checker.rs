@@ -1175,6 +1175,10 @@ impl TypeChecker {
                             &name_str,
                             crate::SymbolKind::VariantConstructor,
                             expr_id,
+                            symbol_table
+                                .get(&enum_id)
+                                .map(|s| s.definition.clone())
+                                .unwrap(),
                         );
 
                         let enum_ty = Ty::Enum(enum_id, generic_vars.clone()); // e.g., Option<TypeVar_for_T>
