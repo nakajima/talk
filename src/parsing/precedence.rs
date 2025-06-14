@@ -44,7 +44,7 @@ impl<'a> ParseHandler<'a> {
 }
 
 impl Precedence {
-    pub const fn handler<'a>(token: &Option<Token>) -> Result<ParseHandler<'a>, ParserError> {
+    pub fn handler<'a>(token: &Option<Token>) -> Result<ParseHandler<'a>, ParserError> {
         let token = match token {
             Some(t) => t,
             None => {
@@ -53,6 +53,8 @@ impl Precedence {
                 ));
             }
         };
+
+        log::trace!("getting handler for {:?}", token);
 
         Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {

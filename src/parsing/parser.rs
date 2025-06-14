@@ -38,7 +38,7 @@ pub struct Parser<'a> {
 #[derive(Debug, PartialEq, Clone)]
 pub enum ParserError {
     UnexpectedToken(String /* expected */, Option<Token> /* actual */),
-    UnexpectedEndOfInput(Vec<TokenKind> /* expected */),
+    UnexpectedEndOfInput(Option<Vec<TokenKind>> /* expected */),
     UnknownError(&'static str),
     ExpectedIdentifier(Option<Token>),
     CannotAssign,
@@ -77,10 +77,33 @@ impl<'a> Parser<'a> {
 
             match self.parse_with_precedence(Precedence::Assignment) {
                 Ok(expr) => self.parse_tree.push_root(expr),
-                Err(err) => self.parse_tree.diagnostics.push(Diagnostic::parser(err)),
+                Err(err) => {
+                    self.parse_tree.diagnostics.push(Diagnostic::parser(err));
+                    self.recover();
+                }
             }
 
             self.skip_newlines();
+        }
+    }
+
+    fn recover(&mut self) {
+        self.advance();
+        log::trace!("Recovering parser: {:?}", self.current);
+
+        while let Some(current) = &self.current {
+            use TokenKind::*;
+
+            if matches!(self.previous, Some(Token { kind: Newline, .. })) {
+                break;
+            };
+
+            match current.kind {
+                EOF | Struct | Func | Enum | Let | If | Loop | Return => break,
+                _ => {
+                    self.advance();
+                }
+            }
         }
     }
 
@@ -868,7 +891,7 @@ impl<'a> Parser<'a> {
         if let Some(lhs) = lhs {
             Ok(lhs)
         } else {
-            Err(ParserError::UnknownError("Didn't get LHS"))
+            Err(ParserError::UnexpectedEndOfInput(None))
         }
     }
 
@@ -991,7 +1014,7 @@ impl<'a> Parser<'a> {
                     ))
                 }
             }
-            None => Err(ParserError::UnexpectedEndOfInput(possible_tokens)),
+            None => Err(ParserError::UnexpectedEndOfInput(Some(possible_tokens))),
         }
     }
 }
@@ -2018,5 +2041,52 @@ mod structs {
             }
         );
         assert_eq!(*parsed.get(&5).unwrap(), Expr::LiteralInt("456".into()));
+    }
+}
+
+#[cfg(test)]
+mod error_handling_tests {
+    use crate::{diagnostic::Diagnostic, expr::Expr, parser::parse};
+
+    #[test]
+    fn handles_unclosed_paren() {
+        let parsed = parse("(", 0);
+        assert_eq!(parsed.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.diagnostics[0],
+            Diagnostic::parser(crate::parser::ParserError::UnexpectedEndOfInput(None))
+        )
+    }
+
+    #[test]
+    fn handles_unclosed_brace() {
+        let parsed = parse("func foo() {", 0);
+        assert_eq!(parsed.diagnostics.len(), 1);
+        assert_eq!(
+            parsed.diagnostics[0],
+            Diagnostic::parser(crate::parser::ParserError::UnexpectedEndOfInput(None))
+        )
+    }
+
+    #[test]
+    fn recovers() {
+        let parsed = parse("func foo() {\n\nfunc fizz() {}", 0);
+        assert_eq!(parsed.diagnostics.len(), 1, "{:?}", parsed);
+        assert_eq!(
+            parsed.diagnostics[0],
+            Diagnostic::parser(crate::parser::ParserError::UnexpectedEndOfInput(None))
+        );
+
+        assert_eq!(
+            *parsed.roots()[1].unwrap(),
+            Expr::Func {
+                name: Some("fizz".into()),
+                body: 123,
+                ret: None,
+                params: vec![],
+                generics: vec![],
+                captures: vec![]
+            }
+        )
     }
 }
