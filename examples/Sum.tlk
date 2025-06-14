@@ -4,6 +4,6 @@ if false {
   3 + 4
 }
 
-if 1 {
+if true {
 	1 + 2
 }

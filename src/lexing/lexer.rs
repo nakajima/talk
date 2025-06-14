@@ -9,6 +9,14 @@ pub enum LexerError {
     UnexpectedInput(char),
 }
 
+impl LexerError {
+    pub fn message(&self) -> String {
+        match &self {
+            Self::UnexpectedInput(ch) => format!("Unexpected character: {:?}", ch),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Lexer<'a> {
     pub code: &'a str,
@@ -61,8 +69,7 @@ impl<'a> Lexer<'a> {
                 }
             }
 
-            self.chars.next();
-            self.current += 1;
+            self.advance();
         }
 
         match self.chars.next() {
@@ -128,8 +135,7 @@ impl<'a> Lexer<'a> {
         not_found: TokenKind,
     ) -> Result<Token, LexerError> {
         if self.chars.peek() == Some(&expecting) {
-            self.chars.next();
-            self.current += 1;
+            self.advance();
             self.make(found)
         } else {
             self.make(not_found)
@@ -139,8 +145,7 @@ impl<'a> Lexer<'a> {
     fn identifier(&mut self, starting_at: usize) -> TokenKind {
         while let Some(ch) = self.chars.peek() {
             if ch.is_alphanumeric() || *ch == '_' {
-                self.chars.next();
-                self.current += 1;
+                self.advance();
             } else {
                 break;
             }
@@ -184,11 +189,9 @@ impl<'a> Lexer<'a> {
         while let Some(ch) = self.chars.peek() {
             if *ch == '.' {
                 is_float = true;
-                self.chars.next();
-                self.current += 1;
+                self.advance();
             } else if ch.is_numeric() || *ch == '_' {
-                self.chars.next();
-                self.current += 1;
+                self.advance();
             } else {
                 break;
             }
@@ -224,6 +227,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn advance(&mut self) {
+        self.col += 1;
         self.current += 1;
         self.chars.next();
     }

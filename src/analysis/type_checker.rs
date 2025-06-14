@@ -46,14 +46,34 @@ pub enum TypeVarKind {
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum TypeError {
     Unresolved,
-    InvalidEnumAccess,
     NameResolution(NameResolverError),
-    UnknownEnum(SymbolID),
+    UnknownEnum(Name),
     UnknownVariant(Name),
     Unknown(&'static str),
     UnexpectedType(Ty, Ty),
     Mismatch(Ty, Ty),
+    Handled, // If we've already reported it
     OccursConflict,
+}
+
+impl TypeError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unresolved => "".into(),
+            Self::NameResolution(e) => e.message(),
+            Self::UnknownEnum(name) => format!("No enum named {}", name.name_str()),
+            Self::UnknownVariant(name) => format!("No case named {}", name.name_str()),
+            Self::Unknown(err) => format!("Unknown error: {}", err),
+            Self::UnexpectedType(actual, expected) => {
+                format!("Unexpected type: {:?}, expected: {:?}", expected, actual)
+            }
+            Self::Mismatch(expected, actual) => {
+                format!("Unexpected type: {:?}, expected: {:?}", expected, actual)
+            }
+            Self::Handled => unreachable!("Handled errors should not be displayed"),
+            Self::OccursConflict => format!("Recursive types are not supported"),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -182,7 +202,7 @@ impl TypeChecker {
         let expr = source_file.get(id).unwrap().clone();
         log::trace!("Inferring {expr:?}");
 
-        let ty = match &expr {
+        let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
             Expr::If(condition, consequence, alternative) => {
@@ -257,20 +277,28 @@ impl TypeChecker {
             }
             Expr::Pattern(pattern) => self.infer_pattern_expr(env, pattern, expected, source_file),
             Expr::Variable(Name::Raw(_), _) => Err(TypeError::Unresolved),
-            Expr::Variable(Name::_Self(sym), _) => Ok(env.instantiate_symbol(*sym)),
+            Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
             _ => panic!("Unhandled expr in type checker: {:?}", expr.clone()),
         };
 
-        if let Ok(ty) = &ty {
-            let typed_expr = TypedExpr {
-                id: *id,
-                expr,
-                ty: ty.clone(),
-            };
+        match &ty {
+            Ok(ty) => {
+                let typed_expr = TypedExpr {
+                    id: *id,
+                    expr,
+                    ty: ty.clone(),
+                };
 
-            env.typed_exprs.insert(*id, typed_expr);
+                env.typed_exprs.insert(*id, typed_expr);
+            }
+            Err(e) => {
+                source_file
+                    .diagnostics
+                    .insert(Diagnostic::typing(*id, e.clone()));
+                ty = Err(TypeError::Handled)
+            }
         }
 
         ty
@@ -440,10 +468,10 @@ impl TypeChecker {
                 } else {
                     // Usage of a resolved type name (e.g., T in `case some(T)` or `Int`).
                     // Instantiate its scheme from the environment.
-                    env.instantiate_symbol(*symbol_id)
+                    env.instantiate_symbol(*symbol_id)?
                 }
             }
-            Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id),
+            Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id)?,
         };
 
         // For explicit lists of generic types like <Int> in Option<Int>, we need to handle the generics
@@ -620,6 +648,7 @@ impl TypeChecker {
             let capture_tys = captures
                 .iter()
                 .map(|c| env.instantiate_symbol(*c))
+                .filter_map(|c| if let Ok(c) = c { Some(c) } else { None })
                 .collect();
 
             Ty::Closure {
@@ -683,7 +712,7 @@ impl TypeChecker {
     ) -> Result<Ty, TypeError> {
         let ty = env.instantiate_symbol(symbol_id);
         log::trace!("instantiated {symbol_id:?} ({name:?}) with {ty:?}");
-        Ok(ty)
+        ty
     }
 
     fn infer_tuple(
@@ -2170,7 +2199,7 @@ mod pending {
         assert_eq!(checked.diagnostics.len(), 1);
         assert!(
             checked.diagnostics.contains(&Diagnostic::typing(
-                3,
+                0,
                 TypeError::UnexpectedType(Ty::Bool, Ty::Float)
             )),
             "{:?}",

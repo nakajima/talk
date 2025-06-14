@@ -7,7 +7,7 @@ use crate::{
     SymbolID,
     parser::ExprID,
     prelude::{Prelude, compile_prelude},
-    type_checker::Ty,
+    type_checker::{Ty, TypeError},
 };
 
 use super::{
@@ -185,15 +185,17 @@ impl Environment {
     }
 
     /// Look up the scheme for `sym`, then immediately instantiate it.
-    pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Ty {
-        let scheme = self
+    pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
+        let Some(scheme) = self
             .scopes
             .iter()
             .rev()
             .find_map(|frame| frame.get(&symbol_id).cloned())
-            .unwrap_or_else(|| panic!("missing symbol {:?} in {:?}", symbol_id, self.scopes));
+        else {
+            return Err(TypeError::Unknown("Unknown symbol"));
+        };
 
-        self.instantiate(scheme)
+        Ok(self.instantiate(scheme))
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {

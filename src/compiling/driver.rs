@@ -82,7 +82,7 @@ impl Driver {
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
             {
-                for diag in &source_file.diagnostics {
+                for diag in &source_file.diagnostics() {
                     let diag_range = diag.range(source_file);
                     let range = Range::new(
                         Position::new(diag_range.0.line, diag_range.0.col),
@@ -93,7 +93,7 @@ impl Driver {
                         Some(DiagnosticSeverity::ERROR),
                         None,
                         None,
-                        format!("{:?}", diag),
+                        diag.message(),
                         None,
                         None,
                     ));

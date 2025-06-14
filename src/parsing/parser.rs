@@ -44,6 +44,42 @@ pub enum ParserError {
     CannotAssign,
 }
 
+impl ParserError {
+    pub fn message(&self) -> String {
+        match &self {
+            Self::UnexpectedEndOfInput(token_kinds) => {
+                if let Some(token_kinds) = token_kinds
+                    && token_kinds.is_empty()
+                {
+                    format!(
+                        "Unexpected end of input, expected: {}",
+                        &token_kinds
+                            .iter()
+                            .map(|t| t.as_str())
+                            .collect::<Vec<String>>()
+                            .join(" ")
+                    )
+                } else {
+                    format!("Unexpected end of input")
+                }
+            }
+            Self::UnknownError(e) => e.to_string(),
+            Self::ExpectedIdentifier(token) => format!(
+                "Expected a name, got: {}",
+                token.clone().unwrap_or(Token::GENERATED).as_str()
+            ),
+            Self::CannotAssign => format!("Cannot assign"),
+            Self::UnexpectedToken(expected, actual) => {
+                format!(
+                    "Unexpected token: {}, expected: {}",
+                    actual.clone().unwrap_or(Token::GENERATED).as_str(),
+                    expected
+                )
+            }
+        }
+    }
+}
+
 pub fn parse(code: &str, file_id: FileID) -> SourceFile {
     let lexer = Lexer::new(code);
     let mut parser = Parser::new(lexer, file_id);
@@ -174,7 +210,11 @@ impl<'a> Parser<'a> {
     fn push_source_location(&mut self) -> LocToken {
         log::trace!("push_source_location: {:?}", self.current);
         let start = SourceLocationStart {
-            token: self.current.clone().unwrap(),
+            token: self.previous_before_newline.clone().unwrap_or(
+                self.previous
+                    .clone()
+                    .unwrap_or(self.current.clone().unwrap()),
+            ),
             identifiers: vec![],
         };
         self.source_location_stack.push(start);
@@ -2061,7 +2101,7 @@ mod error_handling_tests {
                 col: 1,
                 line: 0,
                 start: 0,
-                end: 1
+                end: 1,
             },
             crate::parser::ParserError::UnexpectedEndOfInput(None)
         )))
@@ -2077,7 +2117,7 @@ mod error_handling_tests {
                 col: 1,
                 line: 0,
                 start: 0,
-                end: 4
+                end: 4,
             },
             crate::parser::ParserError::UnexpectedEndOfInput(None)
         )))
@@ -2093,7 +2133,7 @@ mod error_handling_tests {
                 col: 1,
                 line: 0,
                 start: 0,
-                end: 4
+                end: 4,
             },
             crate::parser::ParserError::UnexpectedEndOfInput(None)
         )));

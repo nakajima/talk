@@ -51,6 +51,22 @@ impl Diagnostic {
         }
     }
 
+    pub fn message(&self) -> String {
+        match &self.kind {
+            DiagnosticKind::Lexer(_, e) => e.message(),
+            DiagnosticKind::Parse(_, e) => e.message(),
+            DiagnosticKind::Resolve(_, e) => e.message(),
+            DiagnosticKind::Typing(_, e) => e.message(),
+        }
+    }
+
+    pub fn is_unhandled(&self) -> bool {
+        match &self.kind {
+            DiagnosticKind::Typing(_, err) => *err != TypeError::Handled,
+            _ => true,
+        }
+    }
+
     pub fn range<S: crate::source_file::Phase>(
         &self,
         source_file: &SourceFile<S>,
@@ -82,6 +98,7 @@ impl Diagnostic {
             }
             DiagnosticKind::Typing(expr_id, _type_error) => {
                 let expr = source_file.meta.get(*expr_id as usize).unwrap();
+
                 (
                     Position {
                         line: expr.start.line,

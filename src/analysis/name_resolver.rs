@@ -14,6 +14,12 @@ use crate::source_file::SourceFile;
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub enum NameResolverError {}
 
+impl NameResolverError {
+    pub fn message(&self) -> String {
+        "".into()
+    }
+}
+
 pub struct NameResolver {
     symbol_table: SymbolTable,
 

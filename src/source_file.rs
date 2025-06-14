@@ -193,6 +193,13 @@ impl<P: Phase> SourceFile<P> {
         id
     }
 
+    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.is_unhandled())
+            .collect()
+    }
+
     pub fn push_root(&mut self, root: ExprID) {
         self.roots.push(root);
     }

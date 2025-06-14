@@ -17,4 +17,8 @@ impl Token {
         line: 0,
         col: 0,
     };
+
+    pub fn as_str<'a>(&'a self) -> String {
+        self.kind.as_str()
+    }
 }

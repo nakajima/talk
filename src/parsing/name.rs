@@ -23,6 +23,16 @@ impl Name {
             }
         }
     }
+
+    pub fn name_str(&self) -> String {
+        match self {
+            Name::Raw(name_str) => name_str.into(),
+            Name::Resolved(_symbol_id, name_str) => name_str.into(),
+            Name::_Self(_) => {
+                todo!()
+            }
+        }
+    }
 }
 
 impl From<String> for Name {
