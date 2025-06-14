@@ -120,7 +120,7 @@ impl TypeChecker {
         source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
         env: &mut Environment,
-    ) -> Result<SourceFile<Typed>, TypeError> {
+    ) -> SourceFile<Typed> {
         env.import_prelude(compile_prelude());
         self.infer_without_prelude(env, source_file, symbol_table)
     }
@@ -130,7 +130,7 @@ impl TypeChecker {
         env: &mut Environment,
         mut source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
-    ) -> Result<SourceFile<Typed>, TypeError> {
+    ) -> SourceFile<Typed> {
         let root_ids = source_file.root_ids();
 
         self.hoist_structs(&root_ids, env, &source_file, symbol_table)?;
@@ -144,7 +144,7 @@ impl TypeChecker {
         }
 
         // Now it's safe to move source_file since env is dropped before this line
-        Ok(source_file.to_typed(typed_roots, env.clone()))
+        source_file.to_typed(typed_roots, env.clone())
     }
 
     pub fn infer_node(

@@ -140,9 +140,7 @@ impl CompilationUnit<Resolved> {
         let mut symbol_table = self.stage.symbol_table;
 
         for file in self.stage.files {
-            let typed = TypeChecker
-                .infer(file, &mut symbol_table, &mut env)
-                .map_err(CompilationError::TypeError)?;
+            let typed = TypeChecker.infer(file, &mut symbol_table, &mut env);
             files.push(typed);
         }
 

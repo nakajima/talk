@@ -121,14 +121,7 @@ impl LanguageServer for ServerState {
             }
         };
 
-        let source_file = match parse(&contents, 0) {
-            Ok(sf) => sf,
-            Err(e) => {
-                eprintln!("Failed to parse file: {:?}", e);
-                // Return empty tokens instead of error
-                return Box::pin(async { Ok(None) });
-            }
-        };
+        let source_file = parse(&contents, 0);
 
         Box::pin(async {
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
@@ -166,23 +159,21 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        if let Some(source_file) = parse(&code, 0).ok() {
-            return Box::pin(async move {
-                let formatted = format(&source_file, 80);
-                let last_line = code.lines().count() as u32;
-                let last_char = code.lines().last().map(|line| line.len() - 1);
+        let source_file = parse(&code, 0);
 
-                Ok(Some(vec![TextEdit::new(
-                    Range::new(
-                        Position::new(0, 0),
-                        Position::new(last_line, last_char.unwrap_or(0) as u32),
-                    ),
-                    formatted,
-                )]))
-            });
-        }
+        return Box::pin(async move {
+            let formatted = format(&source_file, 80);
+            let last_line = code.lines().count() as u32;
+            let last_char = code.lines().last().map(|line| line.len() - 1);
 
-        return Box::pin(async { Ok(None) });
+            Ok(Some(vec![TextEdit::new(
+                Range::new(
+                    Position::new(0, 0),
+                    Position::new(last_line, last_char.unwrap_or(0) as u32),
+                ),
+                formatted,
+            )]))
+        });
     }
 
     fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {

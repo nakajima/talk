@@ -14,7 +14,7 @@ pub fn check(input: &str) -> Result<SourceFile<Typed>, TypeError> {
     };
 
     let symbol_table = &compile_prelude().symbols;
-    let parsed = parse(input, 123).unwrap();
+    let parsed = parse(input, 123);
     let resolver = NameResolver::new(symbol_table.clone());
     let (resolved, mut symbol_table) = resolver.resolve(parsed);
     let checker = TypeChecker;
@@ -32,7 +32,7 @@ pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable
     };
 
     let symbol_table = &compile_prelude().symbols;
-    let parsed = parse(input, 123).unwrap();
+    let parsed = parse(input, 123);
     let resolver = NameResolver::new(symbol_table.clone());
     let (resolved, mut symbol_table) = resolver.resolve(parsed);
     let checker = TypeChecker;

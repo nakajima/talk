@@ -371,7 +371,7 @@ mod tests {
     };
 
     fn tokens_for(code: &'static str) -> Vec<SemanticToken> {
-        let parsed = parse(code, 0).unwrap();
+        let parsed = parse(code, 0);
         let mut semantic_tokens = SemanticTokenCollector::new(&parsed, code);
         semantic_tokens.collect_parsed_tokens();
         semantic_tokens.encode_tokens()

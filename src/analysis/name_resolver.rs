@@ -523,13 +523,13 @@ mod tests {
     use crate::{expr::Expr, parser::parse};
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
-        let tree = parse(code, 123).expect("parse failed");
+        let tree = parse(code, 123);
         let resolver = NameResolver::default();
         resolver.resolve(tree).0
     }
 
     fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
-        let tree = parse(code, 123).expect("parse failed");
+        let tree = parse(code, 123);
         let resolver = NameResolver::default();
         resolver.resolve(tree)
     }

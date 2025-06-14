@@ -793,7 +793,7 @@ mod formatter_tests {
     use crate::parser::parse;
 
     fn format_code(input: &str, width: usize) -> String {
-        let source_file = parse(input, 0).unwrap();
+        let source_file = parse(input, 0);
         format(&source_file, width)
     }
 
