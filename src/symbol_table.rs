@@ -40,7 +40,7 @@ pub enum SymbolKind {
     VariantConstructor,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Definition {
     pub file_id: FileID,
     pub line: u32,

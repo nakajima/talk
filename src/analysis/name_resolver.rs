@@ -732,6 +732,29 @@ mod tests {
     }
 
     #[test]
+    fn resolves_let_definitions() {
+        let (_, symbols) = resolve_with_symbols(
+            "
+        let x = 123
+        let y = 345
+        x
+        y
+        ",
+        );
+
+        let symbol_id = symbols.lookup("y").unwrap();
+        let info = symbols.get(&symbol_id).unwrap();
+        assert_eq!(
+            info.definition.as_ref().unwrap(),
+            &Definition {
+                file_id: 123,
+                line: 2,
+                col: 11
+            }
+        )
+    }
+
+    #[test]
     fn resolves_let_expr() {
         let tree = resolve(
             "
