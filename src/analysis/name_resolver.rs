@@ -11,6 +11,9 @@ use crate::parser::ExprID;
 use crate::prelude::compile_prelude_for_name_resolver;
 use crate::source_file::SourceFile;
 
+#[derive(Debug, Clone)]
+pub enum NameResolverError {}
+
 pub struct NameResolver {
     symbol_table: SymbolTable,
 
@@ -71,7 +74,9 @@ impl NameResolver {
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
-                LiteralArray(items) => self.resolve_nodes(&items, source_file),
+                LiteralArray(items) => {
+                    self.resolve_nodes(&items, source_file);
+                }
                 LiteralTrue | LiteralFalse => continue,
                 Struct(name, generics, body) => {
                     match name {
@@ -214,7 +219,7 @@ impl NameResolver {
                 }
                 Parameter(name, ty_repr) => {
                     if let Some(ty_repr) = ty_repr {
-                        self.resolve_nodes(&[ty_repr], source_file)
+                        self.resolve_nodes(&[ty_repr], source_file);
                     };
 
                     match name {
@@ -443,7 +448,7 @@ impl NameResolver {
     // New helper method to hoist enum variants
     fn hoist_enum_members(&mut self, body_expr_id: &ExprID, source_file: &mut SourceFile) {
         let Block(items) = source_file.get(body_expr_id).unwrap().clone() else {
-            panic!("Expected Block for enum body");
+            unreachable!("Expected Block for enum body");
         };
 
         for variant_id in &items {
@@ -577,7 +582,7 @@ mod tests {
             );
 
             let Block(exprs) = &tree.get(body).unwrap() else {
-                panic!("didn't get a block")
+                unreachable!("didn't get a block")
             };
 
             assert_eq!(exprs.len(), 1);
@@ -587,7 +592,7 @@ mod tests {
                 &Variable(Name::Resolved(SymbolID::resolved(1), "x".into()), None)
             );
         } else {
-            panic!("expected Func node");
+            unreachable!("expected Func node");
         }
     }
 

@@ -15,8 +15,10 @@ pub use analysis::*;
 pub mod parsing;
 pub use parsing::*;
 pub mod compiling;
+pub mod diagnostic;
 pub mod interpreter;
 pub mod lowering;
+
 #[cfg(feature = "cli")]
 pub mod lsp;
 pub mod prelude;

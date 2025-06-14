@@ -6,6 +6,7 @@ use crate::{
     expr::{Expr, Pattern},
     match_builtin,
     name::Name,
+    name_resolver::NameResolverError,
     parser::ExprID,
     prelude::compile_prelude,
     source_file::SourceFile,
@@ -45,6 +46,7 @@ pub enum TypeVarKind {
 pub enum TypeError {
     Unresolved,
     InvalidEnumAccess,
+    NameResolution(NameResolverError),
     UnknownEnum(SymbolID),
     UnknownVariant(Name),
     Unknown(&'static str),

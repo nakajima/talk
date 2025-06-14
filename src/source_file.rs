@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     FileID, SymbolID, SymbolTable,
     constraint_solver::Constraint,
+    diagnostic::Diagnostic,
     environment::{Environment, Scope, TypeDef, TypedExprs},
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
@@ -57,6 +58,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     roots: Vec<ExprID>,
     pub(crate) nodes: Vec<Expr>,
     pub(crate) meta: Vec<ExprMeta>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
     phase_data: P::Data,
 }
 

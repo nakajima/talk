@@ -1,10 +1,11 @@
 enum Maybe<T> {
-  case definitely(T), nope
+	case definitely(T)
+	case nope
 }
 
-let maybe = Maybe.definitely(1234)
+let maybe = Maybe.definitely(1234);
 
 match maybe {
-  .definitely(x) -> x,
-  .nope -> 0
+	.definitely(x) -> x
+	.nope -> 0
 }

@@ -4,7 +4,7 @@ use core::str::Chars;
 use super::token::Token;
 use super::token_kind::TokenKind::{self, *};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LexerError {
     UnexpectedInput(char),
 }
@@ -15,6 +15,8 @@ pub struct Lexer<'a> {
     chars: Peekable<Chars<'a>>,
     current: usize,
     started: usize,
+    line: u32,
+    col: u32,
 }
 
 impl<'a> Lexer<'a> {
@@ -24,6 +26,8 @@ impl<'a> Lexer<'a> {
             chars: code.chars().peekable(),
             current: 0,
             started: 0,
+            line: 0,
+            col: 0,
         }
     }
 
@@ -37,12 +41,17 @@ impl<'a> Lexer<'a> {
                         // Collapse multiple newlines into one
                         if *ch == '\n' {
                             while self.chars.peek() == Some(&'\n') {
+                                self.line += 1;
                                 self.chars.next();
                                 self.current += 1;
                             }
 
+                            self.col = 0;
+
                             return self.make(Newline);
                         }
+
+                        self.col += 1;
 
                         break;
                     }
@@ -200,6 +209,8 @@ impl<'a> Lexer<'a> {
             kind,
             start: self.started,
             end: self.current,
+            line: self.line,
+            col: self.col,
         })
     }
 

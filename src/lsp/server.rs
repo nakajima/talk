@@ -2,25 +2,28 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, MarkedString, MessageType, OneOf, SemanticTokenType,
-    SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, ShowMessageParams, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, MarkedString, MessageType, OneOf,
+    Position, Range, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
+    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
+use async_lsp::{ErrorCode, LanguageClient};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
+use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
 use crate::parser::parse;
 
@@ -59,6 +62,14 @@ impl LanguageServer for ServerState {
                 capabilities: ServerCapabilities {
                     hover_provider: Some(HoverProviderCapability::Simple(true)),
                     definition_provider: Some(OneOf::Left(true)),
+                    document_formatting_provider: Some(OneOf::Left(true)),
+                    diagnostic_provider: Some(
+                        async_lsp::lsp_types::DiagnosticServerCapabilities::Options(
+                            DiagnosticOptions {
+                                ..Default::default()
+                            },
+                        ),
+                    ),
                     semantic_tokens_provider: Some(
                         SemanticTokensServerCapabilities::SemanticTokensOptions(
                             SemanticTokensOptions {
@@ -81,6 +92,13 @@ impl LanguageServer for ServerState {
                 server_info: None,
             })
         })
+    }
+
+    fn document_diagnostic(
+        &mut self,
+        _params: DocumentDiagnosticParams,
+    ) -> BoxFuture<'static, Result<DocumentDiagnosticReportResult, Self::Error>> {
+        Box::pin(async { Err(ResponseError::new(ErrorCode::SERVER_CANCELLED, "todo")) })
     }
 
     fn semantic_tokens_full(
@@ -138,6 +156,33 @@ impl LanguageServer for ServerState {
                 range: None,
             }))
         })
+    }
+
+    fn formatting(
+        &mut self,
+        params: DocumentFormattingParams,
+    ) -> BoxFuture<'static, Result<Option<Vec<TextEdit>>, Self::Error>> {
+        let Some(code) = self.fetch(params.text_document.uri) else {
+            return Box::pin(async { Ok(None) });
+        };
+
+        if let Some(source_file) = parse(&code, 0).ok() {
+            return Box::pin(async move {
+                let formatted = format(&source_file, 80);
+                let last_line = code.lines().count() as u32;
+                let last_char = code.lines().last().map(|line| line.len() - 1);
+
+                Ok(Some(vec![TextEdit::new(
+                    Range::new(
+                        Position::new(0, 0),
+                        Position::new(last_line, last_char.unwrap_or(0) as u32),
+                    ),
+                    formatted,
+                )]))
+            });
+        }
+
+        return Box::pin(async { Ok(None) });
     }
 
     fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {
@@ -206,6 +251,25 @@ impl ServerState {
         // log::info!("tick");
         self.counter += 1;
         ControlFlow::Continue(())
+    }
+
+    fn fetch(&mut self, url: Url) -> Option<String> {
+        let contents = if let Some(contents) = self.src_cache.get(&url) {
+            Some(contents.clone())
+        } else {
+            match std::fs::read_to_string(url.path()) {
+                Ok(s) => {
+                    self.src_cache.insert(url.clone(), s.clone());
+                    Some(s)
+                }
+                Err(e) => {
+                    eprintln!("Failed to read file: {:?}", e);
+                    return None;
+                }
+            }
+        };
+
+        contents
     }
 
     fn refresh_semantic_tokens(&self) {

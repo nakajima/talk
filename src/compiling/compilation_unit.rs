@@ -56,30 +56,36 @@ impl CompilationUnit<Raw> {
         }
     }
 
-    pub fn parse(&mut self) -> Result<CompilationUnit<Parsed>, CompilationError> {
+    pub fn parse(&mut self) -> CompilationUnit<Parsed> {
         let mut files = vec![];
         let symbol_table = SymbolTable::default();
         for file in self.input.files.clone() {
             let file_id = self.input.id(&file);
-            let source = self.read(&file)?;
-            let parsed = parse(source, file_id).map_err(CompilationError::ParserError)?;
-            files.push(parsed);
+            match self.read(&file) {
+                Ok(source) => {
+                    let parsed = parse(source, file_id);
+                    files.push(parsed);
+                }
+                Err(e) => {
+                    log::error!("read error: {:?}", e);
+                }
+            }
         }
 
-        Ok(CompilationUnit {
+        CompilationUnit {
             src_cache: self.src_cache.clone(),
             input: self.input.clone(),
             stage: Parsed {
                 symbol_table,
                 files,
             },
-        })
+        }
     }
 
     pub fn lower(&mut self) -> Result<CompilationUnit<Lowered>, CompilationError> {
-        let parsed = self.parse()?;
-        let resolved = parsed.resolved()?;
-        let typed = resolved.typed()?;
+        let parsed = self.parse();
+        let resolved = parsed.resolved();
+        let typed = resolved.typed();
         let lowered = typed.lower()?;
         Ok(lowered)
     }
@@ -99,7 +105,7 @@ impl CompilationUnit<Parsed> {
             .find(|f| f.file_id == self.input.id(path))
     }
 
-    pub fn resolved(self) -> Result<CompilationUnit<Resolved>, CompilationError> {
+    pub fn resolved(self) -> CompilationUnit<Resolved> {
         let mut symbol_table = self.stage.symbol_table;
         let mut files = vec![];
         for file in self.stage.files {
@@ -108,14 +114,14 @@ impl CompilationUnit<Parsed> {
             symbol_table = sym;
         }
 
-        Ok(CompilationUnit {
+        CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
             stage: Resolved {
                 symbol_table,
                 files,
             },
-        })
+        }
     }
 }
 
@@ -125,7 +131,7 @@ pub struct Resolved {
 }
 
 impl CompilationUnit<Resolved> {
-    pub fn typed(self) -> Result<CompilationUnit<Typed>, CompilationError> {
+    pub fn typed(self) -> CompilationUnit<Typed> {
         let prelude = compile_prelude();
         let mut env = Environment::new();
         env.import_prelude(prelude);
@@ -140,7 +146,7 @@ impl CompilationUnit<Resolved> {
             files.push(typed);
         }
 
-        Ok(CompilationUnit {
+        CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
             stage: Typed {
@@ -148,7 +154,7 @@ impl CompilationUnit<Resolved> {
                 environment: env,
                 files,
             },
-        })
+        }
     }
 }
 

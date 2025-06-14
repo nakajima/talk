@@ -103,16 +103,15 @@ impl<'a> Formatter<'a> {
 
     pub fn format(&self, width: usize) -> String {
         let mut output = String::new();
-        let mut last_end_line = 0;
+        let mut last_meta: Option<&ExprMeta> = None;
 
         for (i, &root_id) in self.source_file.root_ids().iter().enumerate() {
             if i > 0 {
-                // Check if we need blank lines between top-level items
-                if let Some(meta) = self.meta_cache.get(&root_id) {
-                    let blank_lines = meta.start.start.saturating_sub(last_end_line);
-                    if blank_lines > 1 {
-                        output.push_str("\n\n");
-                    } else {
+                output.push('\n');
+
+                if let (Some(last), Some(current)) = (last_meta, self.meta_cache.get(&root_id)) {
+                    // If there's more than 1 line between expressions, add blank line
+                    if current.start.line - last.end.line > 1 {
                         output.push('\n');
                     }
                 }
@@ -121,9 +120,7 @@ impl<'a> Formatter<'a> {
             let doc = self.format_expr(root_id);
             output.push_str(&Self::render_doc(doc, width));
 
-            if let Some(meta) = self.meta_cache.get(&root_id) {
-                last_end_line = meta.end.end;
-            }
+            last_meta = self.meta_cache.get(&root_id).map(|v| &**v);
         }
 
         output
@@ -268,7 +265,7 @@ impl<'a> Formatter<'a> {
 
             // Check if we need to preserve a blank line
             if let (Some(last), Some(current)) = (last_meta, meta) {
-                if current.start.start.saturating_sub(last.end.end) > 1 {
+                if current.start.line - last.end.line > 1 {
                     docs.push(hardline());
                 }
             }
@@ -291,8 +288,8 @@ impl<'a> Formatter<'a> {
         concat(
             text("{"),
             concat(
-                nest(1, concat(line(), join(docs, line()))),
-                concat(line(), text("}")),
+                nest(1, concat(hardline(), join(docs, hardline()))),
+                concat(hardline(), text("}")),
             ),
         )
     }
@@ -895,6 +892,41 @@ mod formatter_tests {
         assert_eq!(
             format_code("func foo() {\n123\n456\n}", 80),
             "func foo() {\n\t123\n\t456\n}"
+        );
+    }
+
+    #[test]
+    fn test_func_bodies_with_multiple_exprs_with_call() {
+        assert_eq!(
+            format_code("func foo() {1+1 2+2}()", 80),
+            "func foo() {\n\t1 + 1\n\t2 + 2\n}()"
+        );
+    }
+
+    #[test]
+    fn test_doesnt_insert_too_many_newlines_at_root() {
+        assert_eq!(
+            format_code("let x = 1\nlet y = 2", 80),
+            "let x = 1\nlet y = 2"
+        );
+    }
+
+    #[test]
+    fn test_doesnt_insert_too_many_newlines_nested() {
+        assert_eq!(
+            format_code("func() {let x = 1\nlet y = 2 }", 80),
+            "func() {\n\tlet x = 1\n\tlet y = 2\n}"
+        );
+    }
+
+    #[test]
+    fn test_respects_newlines() {
+        assert_eq!(
+            format_code(
+                "let maybe = Maybe.definitely(123)\n\nmatch maybe {\n\t.definitely(x) -> x\n}",
+                80
+            ),
+            "let maybe = Maybe.definitely(123)\n\nmatch maybe {\n\t.definitely(x) -> x\n}"
         );
     }
 
