@@ -3,7 +3,7 @@ use crate::{
     type_checker::TypeError,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DiagnosticKind {
     Lexer(LexerError),
     Parse(ParserError),
@@ -11,7 +11,7 @@ pub enum DiagnosticKind {
     Typing(TypeError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     kind: DiagnosticKind,
 }

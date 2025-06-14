@@ -33,7 +33,7 @@ pub fn compile_prelude() -> &'static Prelude {
 pub fn _compile_prelude_for_name_resolver() -> Prelude {
     let source = load_stdlib_module("Optional").unwrap();
     let symbol_table = SymbolTable::default();
-    let parsed = parse(source, 0).unwrap();
+    let parsed = parse(source, 0);
     let (_resolved, symbol_table) = NameResolver::new(symbol_table).resolve(parsed);
 
     Prelude {
@@ -47,13 +47,12 @@ pub fn _compile_prelude_for_name_resolver() -> Prelude {
 pub fn _compile_prelude() -> Prelude {
     let source = load_stdlib_module("Optional").unwrap();
     let symbol_table = SymbolTable::default();
-    let parsed = parse(source, 0).unwrap();
+    let parsed = parse(source, 0);
     let (resolved, mut symbol_table) = NameResolver::new(symbol_table).resolve(parsed);
     let checker = TypeChecker;
     let mut env = Environment::new();
     let mut inferred = checker
-        .infer_without_prelude(&mut env, resolved, &mut symbol_table)
-        .unwrap();
+        .infer_without_prelude(&mut env, resolved, &mut symbol_table);
     let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
     solver.solve().unwrap();
 

@@ -52,7 +52,7 @@ impl Phase for Lowered {
     type Data = LoweredData;
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone)]
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
     pub file_id: FileID,
     roots: Vec<ExprID>,
@@ -70,6 +70,7 @@ impl SourceFile {
             nodes: vec![],
             meta: vec![],
             phase_data: (),
+            diagnostics: vec![],
         }
     }
 }
@@ -82,6 +83,7 @@ impl SourceFile<Parsed> {
             nodes: self.nodes,
             meta: self.meta,
             phase_data: (),
+            diagnostics: self.diagnostics,
         }
     }
 }
@@ -94,6 +96,7 @@ impl SourceFile<NameResolved> {
             nodes: self.nodes,
             meta: self.meta,
             phase_data: TypedInfo { roots, env },
+            diagnostics: self.diagnostics,
         }
     }
 }
@@ -174,6 +177,7 @@ impl SourceFile<Typed> {
             nodes: self.nodes,
             meta: self.meta,
             phase_data: LoweredData {},
+            diagnostics: self.diagnostics,
         }
     }
 }

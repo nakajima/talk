@@ -11,7 +11,7 @@ use crate::parser::ExprID;
 use crate::prelude::compile_prelude_for_name_resolver;
 use crate::source_file::SourceFile;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum NameResolverError {}
 
 pub struct NameResolver {

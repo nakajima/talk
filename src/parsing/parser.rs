@@ -35,7 +35,7 @@ pub struct Parser<'a> {
     previous_before_newline: Option<Token>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ParserError {
     UnexpectedToken(String /* expected */, Option<Token> /* actual */),
     UnexpectedEndOfInput(Vec<TokenKind> /* expected */),
