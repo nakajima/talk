@@ -4,7 +4,7 @@ use core::str::Chars;
 use super::token::Token;
 use super::token_kind::TokenKind::{self, *};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LexerError {
     UnexpectedInput(char),
 }

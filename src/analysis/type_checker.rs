@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
@@ -43,7 +43,7 @@ pub enum TypeVarKind {
     PatternBind(Name),
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum TypeError {
     Unresolved,
     InvalidEnumAccess,
@@ -56,7 +56,7 @@ pub enum TypeError {
     OccursConflict,
 }
 
-#[derive(Clone, PartialEq, Debug, Eq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Ty {
     Void,
     Int,
@@ -78,6 +78,14 @@ pub enum Ty {
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
 }
+
+impl Hash for Ty {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        format!("{:?}", self).hash(state);
+    }
+}
+
+impl Eq for Ty {}
 
 impl Ty {
     fn optional(&self) -> Ty {
@@ -135,12 +143,16 @@ impl TypeChecker {
         let root_ids = source_file.root_ids();
 
         match self.hoist_structs(&root_ids, env, &mut source_file, symbol_table) {
-            Err(e) => source_file.diagnostics.push(Diagnostic::typing(e)),
+            Err((id, err)) => {
+                source_file.diagnostics.insert(Diagnostic::typing(id, err));
+            }
             _ => (),
         }
 
         match self.hoist_enums(&root_ids, env, &mut source_file, symbol_table) {
-            Err(e) => source_file.diagnostics.push(Diagnostic::typing(e)),
+            Err((id, err)) => {
+                source_file.diagnostics.insert(Diagnostic::typing(id, err));
+            }
             _ => (),
         }
 
@@ -148,8 +160,12 @@ impl TypeChecker {
 
         let mut typed_roots = vec![];
         for id in &root_ids {
-            self.infer_node(id, env, &None, &mut source_file);
-            typed_roots.push(env.typed_exprs.get(id).unwrap().clone())
+            match self.infer_node(id, env, &None, &mut source_file) {
+                Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
+                Err(e) => {
+                    source_file.diagnostics.insert(Diagnostic::typing(*id, e));
+                }
+            }
         }
 
         // Now it's safe to move source_file since env is dropped before this line
@@ -172,7 +188,7 @@ impl TypeChecker {
             Expr::If(condition, consequence, alternative) => {
                 let ty = self.infer_if(condition, consequence, alternative, env, source_file);
                 if let Ok(ty) = &ty {
-                    checked_expected(expected, ty.clone());
+                    checked_expected(expected, ty.clone())?;
                 }
 
                 ty
@@ -247,17 +263,14 @@ impl TypeChecker {
             _ => panic!("Unhandled expr in type checker: {:?}", expr.clone()),
         };
 
-        match &ty {
-            Ok(ty) => {
-                let typed_expr = TypedExpr {
-                    id: *id,
-                    expr,
-                    ty: ty.clone(),
-                };
+        if let Ok(ty) = &ty {
+            let typed_expr = TypedExpr {
+                id: *id,
+                expr,
+                ty: ty.clone(),
+            };
 
-                env.typed_exprs.insert(*id, typed_expr);
-            }
-            Err(e) => source_file.diagnostics.push(Diagnostic::typing(e.clone())),
+            env.typed_exprs.insert(*id, typed_expr);
         }
 
         ty
@@ -981,7 +994,7 @@ impl TypeChecker {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
         _symbol_table: &mut SymbolTable,
-    ) -> Result<(), TypeError> {
+    ) -> Result<(), (ExprID, TypeError)> {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
             let Expr::Struct(name, generics, body) = expr else {
@@ -989,7 +1002,7 @@ impl TypeChecker {
             };
 
             let Name::Resolved(symbol_id, _) = name else {
-                return Err(TypeError::Unresolved);
+                return Err((*id, TypeError::Unresolved));
             };
 
             let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
@@ -1003,7 +1016,9 @@ impl TypeChecker {
             for id in generics {
                 match self.infer_node(&id, env, &None, source_file) {
                     Ok(ty) => type_parameters.push(ty),
-                    Err(e) => source_file.diagnostics.push(Diagnostic::typing(e)),
+                    Err(e) => {
+                        source_file.diagnostics.insert(Diagnostic::typing(id, e));
+                    }
                 }
             }
             log::warn!("{type_parameters:?}");
@@ -1017,13 +1032,19 @@ impl TypeChecker {
                     } => {
                         let mut ty = None;
                         if let Some(type_repr) = type_repr {
-                            ty = Some(self.infer_node(type_repr, env, &None, source_file)?);
+                            ty = Some(
+                                self.infer_node(type_repr, env, &None, source_file)
+                                    .map_err(|e| (expr_id, e))?,
+                            )
                         }
                         if let Some(default_value) = default_value {
-                            ty = Some(self.infer_node(default_value, env, &None, source_file)?);
+                            ty = Some(
+                                self.infer_node(default_value, env, &None, source_file)
+                                    .map_err(|e| (expr_id, e))?,
+                            );
                         }
                         if ty.is_none() {
-                            return Err(TypeError::Unknown("No type for method"));
+                            return Err((expr_id, TypeError::Unknown("No type for method")));
                         }
 
                         let name = match name.clone() {
@@ -1044,10 +1065,12 @@ impl TypeChecker {
                             _ => unreachable!(),
                         };
 
-                        let ty = self.infer_node(&expr_id, env, &None, source_file)?;
+                        let ty = self
+                            .infer_node(&expr_id, env, &None, source_file)
+                            .map_err(|e| (expr_id, e))?;
                         methods.insert(name.to_string(), Method::new(name.to_string(), ty));
                     }
-                    _ => return Err(TypeError::Unknown("Unhandled property")),
+                    _ => return Err((*id, TypeError::Unknown("Unhandled property"))),
                 }
             }
 
@@ -1064,7 +1087,7 @@ impl TypeChecker {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
-    ) -> Result<(), TypeError> {
+    ) -> Result<(), (ExprID, TypeError)> {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
 
@@ -1076,7 +1099,9 @@ impl TypeChecker {
                 env.start_scope();
                 let mut generic_vars = vec![];
                 for generic_id in generics {
-                    let ty = self.infer_node(&generic_id, env, &None, source_file)?;
+                    let ty = self
+                        .infer_node(&generic_id, env, &None, source_file)
+                        .map_err(|e| (generic_id, e))?;
                     generic_vars.push(ty);
                 }
 
@@ -1102,7 +1127,9 @@ impl TypeChecker {
                     let expr = source_file.get(&expr_id).cloned().unwrap();
 
                     if let Expr::Func { .. } = &expr {
-                        let method = self.infer_node(&expr_id, env, &None, source_file)?;
+                        let method = self
+                            .infer_node(&expr_id, env, &None, source_file)
+                            .map_err(|e| (expr_id, e))?;
                         methods.push(method);
                     }
 
@@ -2068,15 +2095,15 @@ mod tests {
 #[cfg(test)]
 mod pending {
     use super::Ty;
-    use crate::type_checker::TypeError;
+    use crate::{SourceFile, Typed, diagnostic::Diagnostic, type_checker::TypeError};
 
-    fn check_err(code: &'static str) -> Result<Ty, TypeError> {
-        let inferred = crate::check(code)?;
-        Ok(inferred.type_for(inferred.root_ids()[0]))
+    fn check_err(code: &'static str) -> Result<SourceFile<Typed>, TypeError> {
+        crate::check(code)
     }
 
     fn check(code: &'static str) -> Ty {
-        check_err(code).unwrap()
+        let typed = check_err(code).unwrap();
+        typed.type_for(typed.root_ids()[0])
     }
 
     // #[test]
@@ -2123,7 +2150,8 @@ mod pending {
 
     #[test]
     fn checks_if_expression_with_non_bool_condition() {
-        assert!(check_err("if 123 { 1 }").is_err());
+        let checked = check_err("if 123 { 1 }").unwrap();
+        assert_eq!(checked.diagnostics.len(), 1);
     }
 
     #[test]
@@ -2138,7 +2166,16 @@ mod pending {
 
     #[test]
     fn checks_loop_expression_with_invalid_condition() {
-        assert!(check_err("loop 1.2 { 1 }").is_err());
+        let checked = check_err("loop 1.2 { 1 }").unwrap();
+        assert_eq!(checked.diagnostics.len(), 1);
+        assert!(
+            checked.diagnostics.contains(&Diagnostic::typing(
+                3,
+                TypeError::UnexpectedType(Ty::Bool, Ty::Float)
+            )),
+            "{:?}",
+            checked.diagnostics
+        )
     }
 
     #[test]

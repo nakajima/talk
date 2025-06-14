@@ -35,7 +35,7 @@ pub struct Parser<'a> {
     previous_before_newline: Option<Token>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum ParserError {
     UnexpectedToken(String /* expected */, Option<Token> /* actual */),
     UnexpectedEndOfInput(Option<Vec<TokenKind>> /* expected */),
@@ -78,7 +78,9 @@ impl<'a> Parser<'a> {
             match self.parse_with_precedence(Precedence::Assignment) {
                 Ok(expr) => self.parse_tree.push_root(expr),
                 Err(err) => {
-                    self.parse_tree.diagnostics.push(Diagnostic::parser(err));
+                    self.parse_tree
+                        .diagnostics
+                        .insert(Diagnostic::parser(current, err));
                     self.recover();
                 }
             }
@@ -88,7 +90,6 @@ impl<'a> Parser<'a> {
     }
 
     fn recover(&mut self) {
-        self.advance();
         log::trace!("Recovering parser: {:?}", self.current);
 
         while let Some(current) = &self.current {
@@ -2046,42 +2047,62 @@ mod structs {
 
 #[cfg(test)]
 mod error_handling_tests {
-    use crate::{diagnostic::Diagnostic, expr::Expr, parser::parse};
+    use crate::{
+        diagnostic::Diagnostic, expr::Expr, parser::parse, token::Token, token_kind::TokenKind,
+    };
 
     #[test]
     fn handles_unclosed_paren() {
         let parsed = parse("(", 0);
         assert_eq!(parsed.diagnostics.len(), 1);
-        assert_eq!(
-            parsed.diagnostics[0],
-            Diagnostic::parser(crate::parser::ParserError::UnexpectedEndOfInput(None))
-        )
+        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+            Token {
+                kind: TokenKind::LeftParen,
+                col: 1,
+                line: 0,
+                start: 0,
+                end: 1
+            },
+            crate::parser::ParserError::UnexpectedEndOfInput(None)
+        )))
     }
 
     #[test]
     fn handles_unclosed_brace() {
         let parsed = parse("func foo() {", 0);
         assert_eq!(parsed.diagnostics.len(), 1);
-        assert_eq!(
-            parsed.diagnostics[0],
-            Diagnostic::parser(crate::parser::ParserError::UnexpectedEndOfInput(None))
-        )
+        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+            Token {
+                kind: TokenKind::Func,
+                col: 1,
+                line: 0,
+                start: 0,
+                end: 4
+            },
+            crate::parser::ParserError::UnexpectedEndOfInput(None)
+        )))
     }
 
     #[test]
     fn recovers() {
         let parsed = parse("func foo() {\n\nfunc fizz() {}", 0);
         assert_eq!(parsed.diagnostics.len(), 1, "{:?}", parsed);
-        assert_eq!(
-            parsed.diagnostics[0],
-            Diagnostic::parser(crate::parser::ParserError::UnexpectedEndOfInput(None))
-        );
+        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+            Token {
+                kind: TokenKind::Func,
+                col: 1,
+                line: 0,
+                start: 0,
+                end: 4
+            },
+            crate::parser::ParserError::UnexpectedEndOfInput(None)
+        )));
 
         assert_eq!(
-            *parsed.roots()[1].unwrap(),
+            *parsed.get(&1).unwrap(),
             Expr::Func {
                 name: Some("fizz".into()),
-                body: 123,
+                body: 0,
                 ret: None,
                 params: vec![],
                 generics: vec![],

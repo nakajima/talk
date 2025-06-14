@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     FileID, SymbolID, SymbolTable,
@@ -58,7 +58,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     roots: Vec<ExprID>,
     pub(crate) nodes: Vec<Expr>,
     pub(crate) meta: Vec<ExprMeta>,
-    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) diagnostics: HashSet<Diagnostic>,
     phase_data: P::Data,
 }
 
@@ -70,7 +70,7 @@ impl SourceFile {
             nodes: vec![],
             meta: vec![],
             phase_data: (),
-            diagnostics: vec![],
+            diagnostics: Default::default(),
         }
     }
 }
