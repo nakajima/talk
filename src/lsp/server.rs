@@ -6,13 +6,15 @@ use std::time::Duration;
 use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
+use async_lsp::lsp_types::notification::DidChangeWatchedFiles;
 use async_lsp::lsp_types::{
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, MarkedString, MessageType, OneOf, SemanticTokenType,
-    SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, ShowMessageParams,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, MarkedString, MessageType, OneOf,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -44,7 +46,7 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
 struct ServerState {
     client: ClientSocket,
     counter: i32,
-    src_cache: HashMap<PathBuf, String>,
+    src_cache: HashMap<Url, String>,
 }
 
 impl LanguageServer for ServerState {
@@ -53,9 +55,8 @@ impl LanguageServer for ServerState {
 
     fn initialize(
         &mut self,
-        params: InitializeParams,
+        _params: InitializeParams,
     ) -> BoxFuture<'static, Result<InitializeResult, Self::Error>> {
-        eprintln!("Initialize with {params:?}");
         Box::pin(async move {
             Ok(InitializeResult {
                 capabilities: ServerCapabilities {
@@ -74,6 +75,10 @@ impl LanguageServer for ServerState {
                             },
                         ),
                     ),
+                    text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                        TextDocumentSyncKind::FULL,
+                    )),
+
                     ..ServerCapabilities::default()
                 },
                 server_info: None,
@@ -85,15 +90,15 @@ impl LanguageServer for ServerState {
         &mut self,
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
-        let Ok(path) = params.text_document.uri.to_file_path() else {
-            return Box::pin(async { Ok(None) });
-        };
-
-        let contents = if let Some(contents) = self.src_cache.get(&path) {
+        let contents = if let Some(contents) = self.src_cache.get(&params.text_document.uri) {
             contents.clone()
         } else {
             match std::fs::read_to_string(params.text_document.uri.path()) {
-                Ok(s) => s,
+                Ok(s) => {
+                    self.src_cache
+                        .insert(params.text_document.uri.clone(), s.clone());
+                    s
+                }
                 Err(e) => {
                     eprintln!("Failed to read file: {:?}", e);
                     return Box::pin(async { Ok(None) }); // Return None instead of error
@@ -109,10 +114,11 @@ impl LanguageServer for ServerState {
                 return Box::pin(async { Ok(None) });
             }
         };
-        Box::pin(async move {
+
+        Box::pin(async {
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                 result_id: None,
-                data: semantic_tokens::collect(source_file, contents),
+                data: semantic_tokens::collect(source_file, contents).clone(),
             })))
         })
     }
@@ -138,7 +144,6 @@ impl LanguageServer for ServerState {
     }
 
     fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {
-        eprintln!("DID OPEN: {:?}", params.text_document.uri);
         let Ok(path) = params.text_document.uri.to_file_path() else {
             return ControlFlow::Continue(());
         };
@@ -147,17 +152,15 @@ impl LanguageServer for ServerState {
             return ControlFlow::Continue(());
         };
 
-        self.src_cache.insert(path, contents);
+        self.src_cache.insert(params.text_document.uri, contents);
+        self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }
 
     fn did_save(&mut self, params: DidSaveTextDocumentParams) -> Self::NotifyResult {
-        eprintln!("DID SAVE: {:?}", params.text_document.uri);
-        if let Ok(path) = params.text_document.uri.to_file_path()
-            && let Some(text) = params.text
-        {
-            eprintln!("updating cached value");
-            self.src_cache.insert(path, text.to_string());
+        if let Some(text) = params.text {
+            self.src_cache
+                .insert(params.text_document.uri, text.to_string());
             self.refresh_semantic_tokens();
         }
         self.refresh_semantic_tokens();
@@ -165,12 +168,9 @@ impl LanguageServer for ServerState {
     }
 
     fn did_change(&mut self, params: DidChangeTextDocumentParams) -> Self::NotifyResult {
-        eprintln!("DID CHANGE: {:?}", params.text_document.uri);
-        if let Ok(path) = params.text_document.uri.to_file_path()
-            && let Some(change) = params.content_changes.first()
-        {
-            eprintln!("updating cached value");
-            self.src_cache.insert(path, change.text.to_string());
+        if let Some(change) = params.content_changes.first() {
+            self.src_cache
+                .insert(params.text_document.uri, change.text.to_string());
             self.refresh_semantic_tokens();
         }
 
@@ -259,7 +259,9 @@ pub async fn start() {
     );
 
     match server.run_buffered(stdin, stdout).await {
-        Ok(()) => eprintln!("All done."),
+        Ok(()) => {
+            eprintln!("All done.");
+        }
         Err(e) => eprintln!("server.run_buffered err: {:?}", e),
     }
 }

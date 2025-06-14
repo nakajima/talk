@@ -236,7 +236,6 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn collect_lexed_tokens(&mut self) {
-        eprintln!("Starting lexed token collection...");
         let mut lexer = Lexer::new(self.source);
         let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
         while let Ok(tok) = lexer.next() {
@@ -303,7 +302,6 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn collect_parsed_tokens(&mut self) {
-        eprintln!("Starting parsed token collection...");
         let tokens: Vec<(Range, SemanticTokenType)> = self
             .source_file
             .root_ids()
@@ -311,7 +309,6 @@ impl<'a> SemanticTokenCollector<'a> {
             .flat_map(|id| self.tokens_from_expr(id))
             .collect();
         self.tokens.extend(tokens);
-        eprintln!("Collected {} tokens", self.tokens.len());
     }
 
     fn encode_tokens(mut self) -> Vec<SemanticToken> {
@@ -360,7 +357,6 @@ impl<'a> SemanticTokenCollector<'a> {
             last_pos = range.start;
         }
 
-        eprintln!("Encoded {} tokens", encoded_tokens.len());
         encoded_tokens
     }
 }

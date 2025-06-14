@@ -28,7 +28,7 @@ function activate(context) {
         documentSelector: [{ scheme: "file", language: "talktalk" }],
         synchronize: {
             // Notify the server about file changes to '.clientrc files contained in the workspace
-            fileEvents: vscode_1.workspace.createFileSystemWatcher("**/.clientrc"),
+            fileEvents: vscode_1.workspace.createFileSystemWatcher("**/*.tlk"),
         },
     };
     // Create the language client and start the client.

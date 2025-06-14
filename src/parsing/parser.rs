@@ -103,8 +103,6 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn add_expr(&mut self, expr: Expr, _loc: LocToken) -> Result<ExprID, ParserError> {
-        log::debug!("Adding expr: {expr:?}");
-
         let token = self.previous.clone().unwrap();
         let start = self
             .source_location_stack

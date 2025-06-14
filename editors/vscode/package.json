@@ -27,6 +27,13 @@
         ],
         "configuration": "./language-configuration.json"
       }
+    ],
+    "grammars": [
+      {
+        "language": "talktalk",
+        "scopeName": "source.talktalk",
+        "path": "./syntax/talktalk.tmLanguage.json"
+      }
     ]
   },
   "scripts": {

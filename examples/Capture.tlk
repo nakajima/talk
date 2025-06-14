@@ -1,5 +1,4 @@
 func makeCounter() {
-
   let i = 0
 
 	func foo() {

@@ -21,3 +21,5 @@
     ["\"", "\""]
   ]
 }
+
+// func|let|if|else|true|false|loop|enum|case|match|return|struct

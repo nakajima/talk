@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Your Language",
+  "patterns": [
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.talktalk",
+          "match": "\\b(func|let|if|else|true|false|loop|enum|case|match|return|struct)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.talktalk",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.talktalk",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.talktalk",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.talktalk",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.talktalk",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    }
+  },
+  "scopeName": "source.talktalk"
+}

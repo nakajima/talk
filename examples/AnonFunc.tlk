@@ -1,5 +1,2 @@
-let x = func(x) {
 
-  1 + x
-
-}(2)
+let x = func(x) { 1 + x }(2)
