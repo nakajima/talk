@@ -1,28 +1,32 @@
-use std::collections::HashMap;
 use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
     DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReportResult, DocumentFormattingParams, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, MarkedString, MessageType, OneOf,
-    Position, Range, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
+    FullDocumentDiagnosticReport, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, MarkedString, MessageType, OneOf, Position, Range,
+    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
     SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport,
+    Url, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
 use async_lsp::server::LifecycleLayer;
 use async_lsp::tracing::TracingLayer;
 use async_lsp::{ClientSocket, LanguageServer, ResponseError};
-use async_lsp::{ErrorCode, LanguageClient};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
+use crate::compiling::driver::Driver;
 use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
 use crate::parser::parse;
@@ -46,7 +50,7 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
 struct ServerState {
     client: ClientSocket,
     counter: i32,
-    src_cache: HashMap<Url, String>,
+    driver: Driver,
 }
 
 impl LanguageServer for ServerState {
@@ -70,6 +74,13 @@ impl LanguageServer for ServerState {
                             },
                         ),
                     ),
+                    workspace: Some(WorkspaceServerCapabilities {
+                        file_operations: None,
+                        workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                            change_notifications: Some(OneOf::Left(true)),
+                            supported: Some(true),
+                        }),
+                    }),
                     semantic_tokens_provider: Some(
                         SemanticTokensServerCapabilities::SemanticTokensOptions(
                             SemanticTokensOptions {
@@ -96,39 +107,68 @@ impl LanguageServer for ServerState {
 
     fn document_diagnostic(
         &mut self,
-        _params: DocumentDiagnosticParams,
+        params: DocumentDiagnosticParams,
     ) -> BoxFuture<'static, Result<DocumentDiagnosticReportResult, Self::Error>> {
-        Box::pin(async { Err(ResponseError::new(ErrorCode::SERVER_CANCELLED, "todo")) })
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            log::error!("no file path from: {:?}", params.text_document.uri);
+            return Box::pin(async {
+                Ok(DocumentDiagnosticReportResult::Report(
+                    DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
+                        related_documents: None,
+                        unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
+                            result_id: "".into(),
+                        },
+                    }),
+                ))
+            });
+        };
+
+        let diagnostics = self.driver.diagnostics(&path);
+
+        Box::pin(async {
+            Ok(DocumentDiagnosticReportResult::Report(
+                DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                    related_documents: None,
+                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                        result_id: None,
+                        items: diagnostics,
+                    },
+                }),
+            ))
+        })
     }
 
     fn semantic_tokens_full(
         &mut self,
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
-        let contents = if let Some(contents) = self.src_cache.get(&params.text_document.uri) {
-            contents.clone()
-        } else {
-            match std::fs::read_to_string(params.text_document.uri.path()) {
-                Ok(s) => {
-                    self.src_cache
-                        .insert(params.text_document.uri.clone(), s.clone());
-                    s
-                }
-                Err(e) => {
-                    eprintln!("Failed to read file: {:?}", e);
-                    return Box::pin(async { Ok(None) }); // Return None instead of error
-                }
-            }
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            log::error!("no file path from: {:?}", params.text_document.uri);
+            return Box::pin(async { Ok(None) });
         };
 
-        let source_file = parse(&contents, 0);
+        let Some(source_file) = self.driver.parsed_source_file(&path) else {
+            eprintln!("Failed to find parsed file: {:?}", params.text_document.uri);
+            return Box::pin(async { Ok(None) });
+        };
 
-        Box::pin(async {
-            Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+        let response = Ok(Some(SemanticTokensResult::Tokens(
+            SemanticTokens {
                 result_id: None,
-                data: semantic_tokens::collect(source_file, contents).clone(),
-            })))
-        })
+                data: semantic_tokens::collect(source_file, self.driver.contents(&path)),
+            }
+            .clone(),
+        )));
+
+        Box::pin(async { response })
+    }
+
+    fn did_change_workspace_folders(
+        &mut self,
+        _params: <async_lsp::lsp_types::lsp_notification!("workspace/didChangeWorkspaceFolders")as async_lsp::lsp_types::notification::Notification>::Params,
+    ) -> Self::NotifyResult {
+        eprintln!("did change workspace folders??");
+        ControlFlow::Continue(())
     }
 
     fn hover(&mut self, _: HoverParams) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {
@@ -185,25 +225,37 @@ impl LanguageServer for ServerState {
             return ControlFlow::Continue(());
         };
 
-        self.src_cache.insert(params.text_document.uri, contents);
+        if !self.driver.has_file(&path) {
+            // TODO: Add additional files
+            self.driver.update_file(&path, contents.clone());
+        }
+
+        self.driver.update_file(&path, contents);
         self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }
 
     fn did_save(&mut self, params: DidSaveTextDocumentParams) -> Self::NotifyResult {
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            log::error!("no file path from: {:?}", params.text_document.uri);
+            return ControlFlow::Continue(());
+        };
+
         if let Some(text) = params.text {
-            self.src_cache
-                .insert(params.text_document.uri, text.to_string());
-            self.refresh_semantic_tokens();
+            self.driver.update_file(&path, text);
         }
         self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }
 
     fn did_change(&mut self, params: DidChangeTextDocumentParams) -> Self::NotifyResult {
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            log::error!("no file path from: {:?}", params.text_document.uri);
+            return ControlFlow::Continue(());
+        };
+
         if let Some(change) = params.content_changes.first() {
-            self.src_cache
-                .insert(params.text_document.uri, change.text.to_string());
+            self.driver.update_file(&path, change.text.clone());
             self.refresh_semantic_tokens();
         }
 
@@ -232,7 +284,7 @@ impl ServerState {
         let mut router = Router::from_language_server(Self {
             client,
             counter: 0,
-            src_cache: Default::default(),
+            driver: Driver::with_files(vec![]),
         });
         router.event(Self::on_tick);
         router
@@ -245,22 +297,12 @@ impl ServerState {
     }
 
     fn fetch(&mut self, url: Url) -> Option<String> {
-        let contents = if let Some(contents) = self.src_cache.get(&url) {
-            Some(contents.clone())
-        } else {
-            match std::fs::read_to_string(url.path()) {
-                Ok(s) => {
-                    self.src_cache.insert(url.clone(), s.clone());
-                    Some(s)
-                }
-                Err(e) => {
-                    eprintln!("Failed to read file: {:?}", e);
-                    return None;
-                }
-            }
+        let Ok(path) = url.to_file_path() else {
+            log::error!("no file path from: {:?}", url);
+            return None;
         };
 
-        contents
+        Some(self.driver.contents(&path))
     }
 
     fn refresh_semantic_tokens(&self) {
@@ -316,4 +358,33 @@ pub async fn start() {
         }
         Err(e) => eprintln!("server.run_buffered err: {:?}", e),
     }
+}
+
+#[allow(unused)]
+fn find_files_by_extension(dir: &Path, extension: &str) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    find_files_recursive(dir, extension, &mut files)?;
+    Ok(files)
+}
+
+fn find_files_recursive(
+    dir: &Path,
+    extension: &str,
+    files: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            find_files_recursive(&path, extension, files)?;
+        } else if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext.to_str() == Some(extension) {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    Ok(())
 }

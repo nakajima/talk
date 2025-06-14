@@ -16,6 +16,8 @@ use crate::{
     type_checker::{TypeChecker, TypeError},
 };
 
+pub trait StageTrait {}
+
 #[derive(Debug)]
 pub enum CompilationError {
     LexerError(LexerError),
@@ -26,7 +28,7 @@ pub enum CompilationError {
     UnknownError(&'static str),
 }
 
-impl<Stage> CompilationUnit<Stage> {
+impl<Stage: StageTrait> CompilationUnit<Stage> {
     fn read(&mut self, path: &PathBuf) -> Result<&str, CompilationError> {
         if self.src_cache.contains_key(path) {
             return Ok(self.src_cache.get(path).unwrap());
@@ -39,12 +41,22 @@ impl<Stage> CompilationUnit<Stage> {
 }
 
 pub struct Raw {}
+impl StageTrait for Raw {}
 
 #[allow(unused)]
-pub struct CompilationUnit<Stage = Raw> {
-    src_cache: HashMap<PathBuf, String>,
+pub struct CompilationUnit<Stage = Raw>
+where
+    Stage: StageTrait,
+{
+    pub src_cache: HashMap<PathBuf, String>,
     pub input: FileStore,
     pub stage: Stage,
+}
+
+impl<S: StageTrait> CompilationUnit<S> {
+    pub fn has_file(&self, path: &PathBuf) -> bool {
+        self.input.id(path).is_some()
+    }
 }
 
 impl CompilationUnit<Raw> {
@@ -60,7 +72,9 @@ impl CompilationUnit<Raw> {
         let mut files = vec![];
         let symbol_table = SymbolTable::default();
         for file in self.input.files.clone() {
-            let file_id = self.input.id(&file);
+            let Some(file_id) = self.input.id(&file) else {
+                continue;
+            };
             match self.read(&file) {
                 Ok(source) => {
                     let parsed = parse(source, file_id);
@@ -94,15 +108,17 @@ impl CompilationUnit<Raw> {
 #[allow(unused)]
 pub struct Parsed {
     symbol_table: SymbolTable,
-    files: Vec<SourceFile<source_file::Parsed>>,
+    pub files: Vec<SourceFile<source_file::Parsed>>,
 }
+
+impl StageTrait for Parsed {}
 
 impl CompilationUnit<Parsed> {
     pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
         self.stage
             .files
             .iter()
-            .find(|f| f.file_id == self.input.id(path))
+            .find(|f| Some(f.file_id) == self.input.id(path))
     }
 
     pub fn resolved(self) -> CompilationUnit<Resolved> {
@@ -129,6 +145,7 @@ pub struct Resolved {
     symbol_table: SymbolTable,
     files: Vec<SourceFile<NameResolved>>,
 }
+impl StageTrait for Resolved {}
 
 impl CompilationUnit<Resolved> {
     pub fn typed(self) -> CompilationUnit<Typed> {
@@ -161,13 +178,14 @@ pub struct Typed {
     pub environment: Environment,
     files: Vec<SourceFile<source_file::Typed>>,
 }
+impl StageTrait for Typed {}
 
 impl CompilationUnit<Typed> {
     pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
         self.stage
             .files
             .iter()
-            .find(|f| f.file_id == self.input.id(path))
+            .find(|f| Some(f.file_id) == self.input.id(path))
     }
 
     pub fn lower(self) -> Result<CompilationUnit<Lowered>, CompilationError> {
@@ -198,5 +216,7 @@ pub struct Lowered {
     pub symbol_table: SymbolTable,
     pub files: Vec<SourceFile<source_file::Lowered>>,
 }
+
+impl StageTrait for Lowered {}
 
 impl CompilationUnit<Lowered> {}

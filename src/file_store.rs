@@ -33,11 +33,8 @@ impl FileStore {
         }
     }
 
-    pub fn id(&self, file: &PathBuf) -> FileID {
-        *self
-            .lookup
-            .get(file)
-            .unwrap_or_else(|| panic!("File not found: {file:?}"))
+    pub fn id(&self, file: &PathBuf) -> Option<FileID> {
+        self.lookup.get(file).cloned()
     }
 
     pub fn lookup(&self, id: FileID) -> &PathBuf {
