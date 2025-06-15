@@ -58,7 +58,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     roots: Vec<ExprID>,
     pub(crate) nodes: Vec<Expr>,
     pub(crate) meta: Vec<ExprMeta>,
-    pub(crate) diagnostics: HashSet<Diagnostic>,
+    pub diagnostics: HashSet<Diagnostic>,
     phase_data: P::Data,
 }
 

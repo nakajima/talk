@@ -2582,4 +2582,133 @@ mod tests {
             ]
         )
     }
+
+    #[test]
+    #[ignore]
+    fn lowers_struct_property() {
+        let lowered = lower(
+            "
+        struct Person {
+            let age: Int
+        }
+
+        Person(age: 123).age
+        ",
+        )
+        .unwrap();
+
+        assert_lowered_functions!(
+            lowered,
+            vec![
+                IRFunction {
+                    ty: IRType::Struct(vec![]),
+                    name: "@_5_Person".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![Instr::Ret(
+                            IRType::TypeVar("T3".into()),
+                            Some(Register(1))
+                        )],
+                    }],
+                    env_ty: IRType::EMPTY_STRUCT
+                },
+                IRFunction {
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            Instr::Alloc {
+                                dest: Register(1),
+                                count: None,
+                                ty: IRType::closure()
+                            },
+                            Instr::MakeStruct {
+                                dest: Register(2),
+                                ty: IRType::EMPTY_STRUCT,
+                                values: RegisterList::EMPTY
+                            },
+                            Instr::Alloc {
+                                dest: Register(3),
+                                count: None,
+                                ty: IRType::EMPTY_STRUCT
+                            },
+                            Instr::Store {
+                                val: Register(2),
+                                location: Register(3),
+                                ty: IRType::EMPTY_STRUCT
+                            },
+                            Instr::Ref(
+                                Register(4),
+                                IRType::Int.clone(),
+                                RefKind::Func("@_5_foo".into())
+                            ),
+                            Instr::GetElementPointer {
+                                dest: Register(5),
+                                from: Register(1),
+                                index: 1,
+                                ty: IRType::closure()
+                            },
+                            Instr::GetElementPointer {
+                                dest: Register(6),
+                                from: Register(1),
+                                index: 0,
+                                ty: IRType::closure()
+                            },
+                            Instr::Store {
+                                val: Register(3),
+                                location: Register(5),
+                                ty: IRType::Pointer
+                            },
+                            Instr::Store {
+                                val: Register(4),
+                                location: Register(6),
+                                ty: IRType::Pointer
+                            },
+                            // %4 now holds the pointer to the `foo` closure.
+
+                            // === Part 2: Call the closure ===
+
+                            // 1. Prepare the explicit argument(s).
+                            Instr::ConstantInt(Register(7), 123),
+                            // 2. Unpack the closure object from %4.
+                            // You need to introduce a Load instruction here.
+                            Instr::GetElementPointer {
+                                dest: Register(8),
+                                from: Register(1),
+                                index: 0,
+                                ty: IRType::closure()
+                            },
+                            Instr::Load {
+                                dest: Register(9),
+                                ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                                addr: Register(8)
+                            }, // Load the func_ptr
+                            Instr::GetElementPointer {
+                                dest: Register(10),
+                                from: Register(1),
+                                index: 1,
+                                ty: IRType::closure()
+                            },
+                            Instr::Load {
+                                dest: Register(11),
+                                ty: IRType::Pointer,
+                                addr: Register(10)
+                            }, // Load the env_ptr
+                            // 3. Make the indirect call.
+                            Instr::Call {
+                                dest_reg: Register(12),
+                                ty: IRType::Int,
+                                callee: Register(9).into(), // The loaded function pointer
+                                args: RegisterList(vec![Register(11), Register(7)]), // (env_ptr, arg)
+                            },
+                            // 4. Return the result of the call.
+                            Instr::Ret(IRType::Int, Some(Register(12)))
+                        ],
+                    }],
+                    env_ty: IRType::EMPTY_STRUCT,
+                },
+            ]
+        )
+    }
 }
