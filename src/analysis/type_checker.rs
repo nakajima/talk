@@ -462,11 +462,9 @@ impl TypeChecker {
                 if env.is_struct_symbol(symbol_id) =>
             {
                 let instantiated = env.instantiate_symbol(*symbol_id)?;
-                println!("Struct callee: {:?}", instantiated);
                 ret_var = instantiated;
             }
             _ => {
-                println!("NON Struct callee: {:?}", callee);
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
@@ -2472,6 +2470,32 @@ mod struct_tests {
             let age: Int
 
             func getAge() {
+                self.age
+            }
+        }
+
+        Person(age: 123).getAge()
+        ",
+        )
+        .unwrap();
+
+        dbg!(checked.diagnostics());
+
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
+    }
+
+    #[test]
+    fn checks_method_out_of_order() {
+        let checked = check(
+            "
+        struct Person {
+            let age: Int
+
+            func getAge() {
+                self.getAgeAgain()
+            }
+
+            func getAgeAgain() {
                 self.age
             }
         }

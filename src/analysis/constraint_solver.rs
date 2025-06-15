@@ -132,8 +132,6 @@ impl<'a> ConstraintSolver<'a> {
 
                 match &receiver_ty {
                     Ty::Struct(struct_id, _generics) => {
-                        println!("struct: {:?}", struct_id);
-
                         let Some(TypeDef::Struct(struct_def)) =
                             self.source_file.type_def(struct_id)
                         else {
@@ -143,12 +141,10 @@ impl<'a> ConstraintSolver<'a> {
                         };
 
                         if let Some(method) = struct_def.methods.get(member_name) {
-                            println!("struct: {:?}", method);
                             Self::unify(&method.ty, &result_ty, substitutions)?;
                         }
 
                         if let Some(property) = struct_def.properties.get(member_name) {
-                            println!("struct: {:?}", property);
                             Self::unify(&property.ty, &result_ty, substitutions)?;
                         }
                     }
