@@ -252,12 +252,16 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::LeftBrace)?;
 
         let mut attributes: Vec<ExprID> = vec![];
+
         while !self.did_match(TokenKind::RightBrace)? {
+            self.skip_newlines();
+            log::info!("in struct body: {:?}", self.current);
             if self.peek_is(TokenKind::Let) {
                 attributes.push(self.property()?);
-
-                // attributes.push(item);
-            };
+            } else {
+                attributes.push(self.parse_with_precedence(Precedence::Assignment)?);
+            }
+            self.skip_newlines();
         }
 
         self.add_expr(Expr::Block(attributes), tok)
@@ -959,6 +963,7 @@ impl<'a> Parser<'a> {
             }
 
             if i > 100 {
+                self.advance();
                 return Err(ParserError::UnknownError("Infinite loop detected"));
             }
         }

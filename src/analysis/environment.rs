@@ -205,6 +205,11 @@ impl Environment {
             .rev()
             .find_map(|frame| frame.get(&symbol_id).cloned())
         else {
+            log::error!(
+                "Trying ot instantiate unknown symbol: {:?} in {:?}",
+                symbol_id,
+                self.scopes
+            );
             return Err(TypeError::Unknown("Unknown symbol".into()));
         };
 

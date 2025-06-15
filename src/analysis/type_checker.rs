@@ -430,7 +430,7 @@ impl TypeChecker {
 
     fn infer_call(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
@@ -1109,8 +1109,8 @@ impl TypeChecker {
 
             let mut methods: HashMap<String, Method> = Default::default();
             let mut properties: HashMap<String, Property> = Default::default();
-
             let mut type_parameters = vec![];
+
             for id in generics {
                 match self.infer_node(&id, env, &None, source_file) {
                     Ok(ty) => type_parameters.push(ty),
@@ -1119,6 +1119,20 @@ impl TypeChecker {
                     }
                 }
             }
+
+            // Define a placeholder for `self` references
+            env.register_struct(StructDef::new(
+                symbol_id,
+                None,
+                type_parameters.clone(),
+                properties.clone(),
+                methods.clone(),
+            ));
+
+            env.declare(
+                symbol_id,
+                env.generalize(&Ty::Struct(symbol_id, type_parameters.clone())),
+            );
 
             for expr_id in expr_ids {
                 match &source_file.get(&expr_id).cloned().unwrap() {
@@ -1180,11 +1194,9 @@ impl TypeChecker {
                 properties,
                 methods,
             );
+
+            // Register updated definition
             env.register_struct(struct_def);
-            env.declare(
-                symbol_id,
-                env.generalize(&Ty::Struct(symbol_id, type_parameters)),
-            );
         }
 
         Ok(())
@@ -2443,6 +2455,28 @@ mod struct_tests {
         }
 
         Person(age: 123).age
+        ",
+        )
+        .unwrap();
+
+        dbg!(checked.diagnostics());
+
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
+    }
+
+    #[test]
+    fn checks_method() {
+        let checked = check(
+            "
+        struct Person {
+            let age: Int
+
+            func getAge() {
+                self.age
+            }
+        }
+
+        Person(age: 123).getAge()
         ",
         )
         .unwrap();
