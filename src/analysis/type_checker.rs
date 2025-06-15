@@ -2505,8 +2505,6 @@ mod struct_tests {
         )
         .unwrap();
 
-        dbg!(checked.diagnostics());
-
         assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
     }
 }
