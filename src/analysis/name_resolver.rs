@@ -112,7 +112,6 @@ impl NameResolver {
                         log::error!("no type found for initializer");
                         return;
                     };
-                    println!("adding initializer {node_id:?} to {symbol_id:?}");
                     self.symbol_table.add_initializer(symbol_id, *node_id);
                     self.resolve_nodes(&[func_id], source_file);
                     source_file.nodes[*node_id as usize] = Expr::Init(Some(symbol_id), func_id);
