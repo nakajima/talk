@@ -40,6 +40,7 @@ pub struct StructDef {
     pub type_parameters: TypeParams,
     pub properties: HashMap<String, Property>,
     pub methods: HashMap<String, Method>,
+    pub initializers: Vec<ExprID>,
 }
 
 impl StructDef {
@@ -49,6 +50,7 @@ impl StructDef {
         type_parameters: TypeParams,
         properties: HashMap<String, Property>,
         methods: HashMap<String, Method>,
+        initializers: Vec<ExprID>,
     ) -> Self {
         Self {
             name,
@@ -56,6 +58,7 @@ impl StructDef {
             type_parameters,
             properties,
             methods,
+            initializers,
         }
     }
 
@@ -354,6 +357,14 @@ impl Environment {
 
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {
         if let Some(TypeDef::Enum(def)) = self.types.get(name) {
+            Some(def)
+        } else {
+            None
+        }
+    }
+
+    pub fn lookup_struct(&self, name: &SymbolID) -> Option<&StructDef> {
+        if let Some(TypeDef::Struct(def)) = self.types.get(name) {
             Some(def)
         } else {
             None

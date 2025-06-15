@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    SourceFile, SymbolID, SymbolTable, Typed, environment::TypeDef, parser::ExprID,
-    type_checker::TypeError,
+    SourceFile, SymbolID, SymbolTable, Typed, diagnostic::Diagnostic, environment::TypeDef,
+    parser::ExprID, type_checker::TypeError,
 };
 
 use super::{
@@ -15,6 +15,16 @@ pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
     UnqualifiedMember(ExprID, String, Ty), // member name, expected type
+}
+
+impl Constraint {
+    fn expr_id(&self) -> ExprID {
+        match self {
+            Self::Equality(id, _, _) => *id,
+            Self::MemberAccess(id, _, _, _) => *id,
+            Self::UnqualifiedMember(id, _, _) => *id,
+        }
+    }
 }
 
 pub struct ConstraintSolver<'a> {
@@ -37,7 +47,14 @@ impl<'a> ConstraintSolver<'a> {
         log::info!("solving {:#?}", self.constraints);
 
         while let Some(constraint) = self.constraints.pop() {
-            self.solve_constraint(constraint, &mut substitutions)?
+            match self.solve_constraint(&constraint, &mut substitutions) {
+                Ok(_) => (),
+                Err(err) => {
+                    self.source_file
+                        .diagnostics
+                        .insert(Diagnostic::typing(constraint.expr_id(), err));
+                }
+            }
         }
 
         for typed_expr in &mut self.source_file.types_mut().values_mut() {
@@ -49,7 +66,7 @@ impl<'a> ConstraintSolver<'a> {
 
     fn solve_constraint(
         &mut self,
-        constraint: Constraint,
+        constraint: &Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
         match &constraint {
@@ -79,8 +96,7 @@ impl<'a> ConstraintSolver<'a> {
                             if let Some(_enum_info) = self
                                 .source_file
                                 .type_from_symbol(enum_id, self.symbol_table)
-                                && let Some(variant_info) =
-                                    self.find_variant(enum_id, member_name)
+                                && let Some(variant_info) = self.find_variant(enum_id, member_name)
                             {
                                 // Create the constructor type for this variant
                                 let constructor_ty = self.create_variant_constructor_type(
@@ -124,9 +140,7 @@ impl<'a> ConstraintSolver<'a> {
                 let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
-                log::debug!(
-                    "solving MemberAccess constraint: {receiver_ty:?} {substitutions:?}"
-                );
+                log::debug!("solving MemberAccess constraint: {receiver_ty:?} {substitutions:?}");
 
                 match &receiver_ty {
                     Ty::Struct(struct_id, _generics) => {

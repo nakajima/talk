@@ -14,6 +14,14 @@ pub struct ExprMeta {
 }
 
 impl ExprMeta {
+    pub fn generated() -> Self {
+        Self {
+            start: Token::GENERATED,
+            end: Token::GENERATED,
+            identifiers: vec![],
+        }
+    }
+
     pub fn source_range(&self) -> Range<usize> {
         self.start.start..self.end.end
     }
@@ -95,6 +103,8 @@ pub enum Expr {
 
     // A dot thing
     Member(Option<ExprID> /* receiver */, String),
+
+    Init(Option<SymbolID>, ExprID /* func */),
 
     // Function stuff
     Func {

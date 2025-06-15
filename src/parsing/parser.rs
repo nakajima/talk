@@ -22,6 +22,20 @@ pub struct SourceLocationStart {
 }
 pub type SourceLocationStack = Vec<SourceLocationStart>;
 
+macro_rules! some_kind {
+    ($name:ident) => {
+        Some(Token {
+            kind: TokenKind::$name,
+            ..
+        })
+    };
+    ($name:ident($binding:ident)) => {
+        Some(Token {
+            kind: TokenKind::$name($binding),
+            ..
+        })
+    };
+}
 // for making sure we've pushed to the location stack
 // it's not copyable so we always need to have one before calling add_expr
 pub struct LocToken;
@@ -251,20 +265,31 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
-        let mut attributes: Vec<ExprID> = vec![];
+        let mut members: Vec<ExprID> = vec![];
 
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_newlines();
             log::info!("in struct body: {:?}", self.current);
-            if self.peek_is(TokenKind::Let) {
-                attributes.push(self.property()?);
-            } else {
-                attributes.push(self.parse_with_precedence(Precedence::Assignment)?);
+            match self.current {
+                some_kind!(Let) => {
+                    members.push(self.property()?);
+                }
+                some_kind!(Init) => members.push(self.init()?),
+                _ => {
+                    members.push(self.parse_with_precedence(Precedence::Assignment)?);
+                }
             }
+
             self.skip_newlines();
         }
 
-        self.add_expr(Expr::Block(attributes), tok)
+        self.add_expr(Expr::Block(members), tok)
+    }
+
+    pub(crate) fn init(&mut self) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+        let func_id = self.func()?;
+        self.add_expr(Expr::Init(None, func_id), tok)
     }
 
     pub(crate) fn property(&mut self) -> Result<ExprID, ParserError> {
@@ -608,17 +633,17 @@ impl<'a> Parser<'a> {
     pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
 
-        let name = if let Some((
-            _,
-            Token {
-                kind: TokenKind::Identifier(name),
-                ..
-            },
-        )) = self.try_identifier()
-        {
-            Some(name)
-        } else {
-            None
+        let current = self.current.clone();
+        let name = match &current {
+            some_kind!(Identifier(name)) => {
+                self.advance();
+                Some(name.as_str())
+            }
+            some_kind!(Init) => {
+                self.advance();
+                Some("init")
+            }
+            _ => None,
         };
 
         let mut generics = vec![];
@@ -2155,6 +2180,54 @@ mod structs {
             }
         );
         assert_eq!(*parsed.get(&5).unwrap(), Expr::LiteralInt("456".into()));
+    }
+
+    #[test]
+    fn parses_init() {
+        let parsed = parse(
+            "
+        struct Person {
+            let age: Int
+            
+            init(age: Int) {
+                self.age = age
+            }
+        }
+        ",
+            0,
+        );
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::Struct("Person".into(), vec![], 11)
+        );
+
+        let Some(Expr::Block(items)) = parsed.get(&11) else {
+            unreachable!()
+        };
+
+        let Some(Expr::Init(None, func_id)) = parsed.get(&items[1]) else {
+            unreachable!()
+        };
+
+        let Some(Expr::Func {
+            name,
+            generics,
+            params,
+            body,
+            ret,
+            captures,
+        }) = parsed.get(func_id)
+        else {
+            unreachable!()
+        };
+
+        assert_eq!(&Some(Name::Raw("init".into())), name);
+        assert!(generics.is_empty());
+        assert_eq!(&vec![3], params);
+        assert_eq!(&None, ret);
+        assert_eq!(&8, body);
+        assert!(captures.is_empty());
     }
 }
 

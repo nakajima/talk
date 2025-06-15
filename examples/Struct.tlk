@@ -1,0 +1,7 @@
+struct Person {
+  let age: Int
+
+  init(age: Int) {
+    self.age = age
+  }
+}

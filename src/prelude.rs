@@ -51,8 +51,7 @@ pub fn _compile_prelude() -> Prelude {
     let (resolved, mut symbol_table) = NameResolver::new(symbol_table).resolve(parsed);
     let checker = TypeChecker;
     let mut env = Environment::new();
-    let mut inferred = checker
-        .infer_without_prelude(&mut env, resolved, &mut symbol_table);
+    let mut inferred = checker.infer_without_prelude(&mut env, resolved, &mut symbol_table);
     let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
     solver.solve().unwrap();
 

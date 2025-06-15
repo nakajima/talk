@@ -11,6 +11,7 @@ use crate::{
     parser::ExprID,
     prelude::compile_prelude,
     source_file::SourceFile,
+    synthesis::synthesize_inits,
     token_kind::TokenKind,
 };
 
@@ -146,11 +147,12 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
 impl TypeChecker {
     pub fn infer(
         &self,
-        source_file: SourceFile<NameResolved>,
+        mut source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
         env: &mut Environment,
     ) -> SourceFile<Typed> {
         env.import_prelude(compile_prelude());
+        synthesize_inits(&mut source_file, symbol_table);
         self.infer_without_prelude(env, source_file, symbol_table)
     }
 
@@ -288,6 +290,9 @@ impl TypeChecker {
                 self.infer_struct(name, generics, body, env, expected, source_file)
             }
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
+            Expr::Init(Some(struct_id), func_id) => {
+                self.infer_init(struct_id, func_id, env, source_file)
+            }
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -312,6 +317,18 @@ impl TypeChecker {
         }
 
         ty
+    }
+
+    fn infer_init(
+        &self,
+        struct_id: &SymbolID,
+        func_id: &ExprID,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        self.infer_node(func_id, env, &None, source_file)?;
+
+        Ok(env.instantiate_symbol(*struct_id)?)
     }
 
     fn infer_struct(
@@ -423,7 +440,7 @@ impl TypeChecker {
 
     fn infer_call(
         &self,
-        _id: &ExprID,
+        id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
@@ -454,7 +471,36 @@ impl TypeChecker {
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
                 if env.is_struct_symbol(symbol_id) =>
             {
+                let struct_def = env.lookup_struct(symbol_id).unwrap();
+
+                // TODO: Handle multiple initializers
+                let Some(Expr::Init(_, func_id)) =
+                    source_file.get(&struct_def.initializers[0]).cloned()
+                else {
+                    return Err(TypeError::Unknown(
+                        "Unable to determine initializer for struct".into(),
+                    ));
+                };
+
                 let instantiated = env.instantiate_symbol(*symbol_id)?;
+
+                let Ok(callee_ty) = self.infer_node(&func_id, env, expected, source_file) else {
+                    return Err(TypeError::Unknown("Could not get init func".into()));
+                };
+
+                env.typed_exprs.insert(
+                    *callee,
+                    TypedExpr {
+                        id: *callee,
+                        expr: source_file.get(callee).cloned().unwrap(),
+                        ty: callee_ty.clone(),
+                    },
+                );
+
+                let expected_callee_ty =
+                    Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
+                env.constrain_equality(*callee, expected_callee_ty, callee_ty.clone());
+
                 ret_var = instantiated;
             }
             _ => {
@@ -1082,7 +1128,7 @@ impl TypeChecker {
         root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-        _symbol_table: &mut SymbolTable,
+        symbol_table: &mut SymbolTable,
     ) -> Result<(), (ExprID, TypeError)> {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
@@ -1101,6 +1147,10 @@ impl TypeChecker {
             let mut methods: HashMap<String, Method> = Default::default();
             let mut properties: HashMap<String, Property> = Default::default();
             let mut type_parameters = vec![];
+            let default_initializers = vec![];
+            let initializers = symbol_table
+                .initializers_for(&symbol_id)
+                .unwrap_or(&default_initializers);
 
             for id in generics {
                 match self.infer_node(&id, env, &None, source_file) {
@@ -1118,6 +1168,7 @@ impl TypeChecker {
                 type_parameters.clone(),
                 properties.clone(),
                 methods.clone(),
+                initializers.clone(),
             ));
 
             env.declare(
@@ -1161,6 +1212,9 @@ impl TypeChecker {
                             Property::new(name.to_string(), ty.unwrap()),
                         );
                     }
+                    Expr::Init(_, func_id) => {
+                        self.infer_node(func_id, env, &None, source_file).ok();
+                    }
                     Expr::Func { name, .. } => {
                         let name = match name.clone() {
                             Some(Name::Raw(name_str)) => name_str,
@@ -1184,6 +1238,7 @@ impl TypeChecker {
                 type_parameters.clone(),
                 properties,
                 methods,
+                initializers.clone(),
             );
 
             // Register updated definition
@@ -1370,8 +1425,6 @@ mod struct_tests {
         )
         .unwrap();
 
-        dbg!(checked.diagnostics());
-
         assert_eq!(
             checked.type_for(checked.root_ids()[1]),
             Ty::Struct(SymbolID(5), vec![])
@@ -1390,8 +1443,6 @@ mod struct_tests {
         ",
         )
         .unwrap();
-
-        dbg!(checked.diagnostics());
 
         assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
     }
@@ -1412,8 +1463,6 @@ mod struct_tests {
         ",
         )
         .unwrap();
-
-        dbg!(checked.diagnostics());
 
         assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
     }

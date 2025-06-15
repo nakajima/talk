@@ -180,6 +180,7 @@ impl<'a> Formatter<'a> {
                 self.format_pattern_variant(enum_name, variant_name, bindings)
             }
             Expr::CallArg { label, value } => self.format_arg(label, value),
+            Expr::Init(_, func_id) => self.format_expr(*func_id),
         }
     }
 
@@ -274,9 +275,10 @@ impl<'a> Formatter<'a> {
 
             // Check if we need to preserve a blank line
             if let (Some(last), Some(current)) = (last_meta, meta)
-                && current.start.line - last.end.line > 1 {
-                    docs.push(hardline());
-                }
+                && current.start.line - last.end.line > 1
+            {
+                docs.push(hardline());
+            }
 
             docs.push(self.format_expr(stmt_id));
             last_meta = meta.map(|v| &**v);
@@ -509,9 +511,11 @@ impl<'a> Formatter<'a> {
 
         // Check if the body is a single-statement block that could be formatted inline
         if let Some(Expr::Block(stmts)) = self.source_file.get(&body)
-            && stmts.len() == 1 && !self.contains_control_flow(&stmts[0]) {
-                return group(concat_space(result, self.format_expr(body)));
-            }
+            && stmts.len() == 1
+            && !self.contains_control_flow(&stmts[0])
+        {
+            return group(concat_space(result, self.format_expr(body)));
+        }
 
         concat_space(result, self.format_expr(body))
     }

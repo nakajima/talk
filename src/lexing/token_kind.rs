@@ -59,6 +59,7 @@ pub enum TokenKind {
     Float(String),
     Identifier(String),
     Func,
+    Init,
     Let,
     EOF,
     Generated,
@@ -127,6 +128,7 @@ impl TokenKind {
             TokenKind::Let => "let",
             TokenKind::EOF => "EOF",
             TokenKind::Generated => "(generated)",
+            TokenKind::Init => "init",
         }
         .to_string()
     }

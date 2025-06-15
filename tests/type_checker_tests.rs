@@ -98,7 +98,7 @@ mod tests {
         applyTwice
         ",
         );
-        dbg!(&checker.diagnostics);
+
         let root_id = checker.root_ids()[0];
         let Ty::Func(params, return_type, _) = checker.type_for(root_id) else {
             panic!(
@@ -956,14 +956,14 @@ mod pending {
 
     #[test]
     fn checks_tuple_expectations() {
-        assert!(
-            check_err(
-                "
+        let checked = check_err(
+            "
             let my_tuple: (Int, Bool) = (42, 10)
             ",
-            )
-            .is_err()
-        );
+        )
+        .unwrap();
+
+        assert_eq!(checked.diagnostics().len(), 1);
     }
 
     #[test]
@@ -995,14 +995,14 @@ mod pending {
 
     #[test]
     fn checks_return_err() {
-        assert!(
-            check_err(
-                "func foo() -> Int {
-            return
-        }()"
-            )
-            .is_err(),
-        );
+        let checked = check_err(
+            "func foo() -> Int {
+                return
+            }()",
+        )
+        .unwrap();
+        dbg!(&checked.diagnostics());
+        assert_eq!(checked.diagnostics().len(), 2);
     }
 
     #[test]

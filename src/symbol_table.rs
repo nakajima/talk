@@ -39,6 +39,7 @@ pub enum SymbolKind {
     TypeParameter,
     PatternBind,
     VariantConstructor,
+    SyntheticConstructor,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,11 +49,11 @@ pub struct Definition {
     pub col: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct PropertyInfo {
-    name: String,
-    type_id: Option<ExprID>,
-    default_value_id: Option<ExprID>
+    pub name: String,
+    pub type_id: Option<ExprID>,
+    pub default_value_id: Option<ExprID>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,13 +63,19 @@ pub struct SymbolInfo {
     pub expr_id: ExprID,
     pub is_captured: bool,
     pub definition: Option<Definition>,
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct TypeTable {
     pub properties: Vec<PropertyInfo>,
+    pub initializers: Vec<ExprID>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SymbolTable {
     symbols: HashMap<SymbolID, SymbolInfo>,
     next_id: i32,
+    pub types: HashMap<SymbolID, TypeTable>,
 }
 
 impl Default for SymbolTable {
@@ -76,6 +83,7 @@ impl Default for SymbolTable {
         let mut table = Self {
             symbols: Default::default(),
             next_id: Default::default(),
+            types: Default::default(),
         };
 
         crate::builtins::import_symbols(&mut table);
@@ -87,6 +95,14 @@ impl Default for SymbolTable {
 impl SymbolTable {
     pub fn import(&mut self, symbol_id: &SymbolID, info: SymbolInfo) {
         self.symbols.insert(*symbol_id, info);
+    }
+
+    pub fn initializers_for(&self, symbol_id: &SymbolID) -> Option<&Vec<ExprID>> {
+        self.types.get(symbol_id).map(|t| &t.initializers)
+    }
+
+    pub fn properties_for(&self, symbol_id: &SymbolID) -> Option<&Vec<PropertyInfo>> {
+        self.types.get(symbol_id).map(|t| &t.properties)
     }
 
     pub fn with_prelude(prelude_symbols: &HashMap<SymbolID, SymbolInfo>) -> Self {
@@ -150,7 +166,6 @@ impl SymbolTable {
                 expr_id,
                 is_captured: false,
                 definition,
-                properties: vec![],
             },
         );
 
@@ -164,13 +179,35 @@ impl SymbolTable {
         type_id: Option<ExprID>,
         default_value_id: Option<ExprID>,
     ) {
-        self.symbols.get_mut(&to_symbol_id).map(|s| {
-            s.properties.push(PropertyInfo {
-                name,
-                type_id,
-                default_value_id,
-            })
-        });
+        let info = PropertyInfo {
+            name,
+            type_id,
+            default_value_id,
+        };
+
+        if let Some(table) = self.types.get_mut(&to_symbol_id) {
+            table.properties.push(info);
+        } else {
+            let table = TypeTable {
+                initializers: vec![],
+                properties: vec![info],
+            };
+
+            self.types.insert(to_symbol_id, table);
+        }
+    }
+
+    pub fn add_initializer(&mut self, to_symbol_id: SymbolID, id: ExprID) {
+        if let Some(table) = self.types.get_mut(&to_symbol_id) {
+            table.initializers.push(id);
+        } else {
+            let table = TypeTable {
+                initializers: vec![id],
+                properties: vec![],
+            };
+
+            self.types.insert(to_symbol_id, table);
+        }
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {

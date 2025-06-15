@@ -6,13 +6,13 @@ use crate::NameResolved;
 use crate::SymbolID;
 use crate::SymbolKind;
 use crate::SymbolTable;
+use crate::expr::Expr;
 use crate::expr::Expr::*;
 use crate::expr::ExprMeta;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
 use crate::prelude::compile_prelude_for_name_resolver;
-use crate::source_file;
 use crate::source_file::SourceFile;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -106,6 +106,16 @@ impl NameResolver {
                     self.resolve_nodes(&generics, source_file);
                     self.resolve_nodes(&[body], source_file);
                     self.type_symbol_stack.pop();
+                }
+                Init(_, func_id) => {
+                    let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
+                        log::error!("no type found for initializer");
+                        return;
+                    };
+                    println!("adding initializer {:?} to {:?}", node_id, symbol_id);
+                    self.symbol_table.add_initializer(symbol_id, *node_id);
+                    self.resolve_nodes(&[func_id], source_file);
+                    source_file.nodes[*node_id as usize] = Expr::Init(Some(symbol_id), func_id);
                 }
                 Property {
                     type_repr,
@@ -656,10 +666,10 @@ mod tests {
         resolver.resolve(tree.clone()).0
     }
 
-    fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
+    pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
         let tree = parse(code, 123);
         let resolver = NameResolver::default();
-        resolver.resolve(tree.clone())
+        resolver.resolve(tree)
     }
 
     #[test]
@@ -1094,6 +1104,39 @@ mod tests {
             *resolved.get(&0).unwrap(),
             Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
+    }
+
+    #[test]
+    fn resolves_initializers() {
+        let (resolved, symbol_table) = resolve_with_symbols(
+            "
+        struct Person {
+            let age: Int
+
+            init(age: Int) {
+                self.age = age
+            }
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved.roots()[0].unwrap(),
+            Struct(Name::Resolved(SymbolID(3), "Person".into()), vec![], 11)
+        );
+        assert_eq!(
+            *resolved.get(&1).unwrap(),
+            Expr::Property {
+                name: "age".into(),
+                type_repr: Some(0),
+                default_value: None
+            }
+        );
+        assert_eq!(
+            *resolved.get(&0).unwrap(),
+            Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+        );
+
+        assert_eq!(symbol_table.initializers_for(&SymbolID(3)), Some(&vec![10]))
     }
 }
 

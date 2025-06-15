@@ -180,6 +180,7 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(ret));
                 }
             }
+            Expr::Init(_, func_id) => result.extend(self.tokens_from_expr(func_id)),
             Expr::Parameter(_name, ty) => {
                 if let Some(ty) = ty {
                     result.extend(self.tokens_from_expr(ty));
@@ -307,6 +308,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::Let => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::EOF => break,
                 TokenKind::Generated => (),
+                TokenKind::Init => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
             }
         }
         self.tokens.extend(tokens);
