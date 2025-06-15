@@ -328,7 +328,7 @@ impl TypeChecker {
     ) -> Result<Ty, TypeError> {
         self.infer_node(func_id, env, &None, source_file)?;
 
-        Ok(env.instantiate_symbol(*struct_id)?)
+        env.instantiate_symbol(*struct_id)
     }
 
     fn infer_struct(

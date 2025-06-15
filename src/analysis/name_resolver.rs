@@ -112,7 +112,7 @@ impl NameResolver {
                         log::error!("no type found for initializer");
                         return;
                     };
-                    println!("adding initializer {:?} to {:?}", node_id, symbol_id);
+                    println!("adding initializer {node_id:?} to {symbol_id:?}");
                     self.symbol_table.add_initializer(symbol_id, *node_id);
                     self.resolve_nodes(&[func_id], source_file);
                     source_file.nodes[*node_id as usize] = Expr::Init(Some(symbol_id), func_id);
@@ -467,7 +467,7 @@ impl NameResolver {
                     name: Name::Raw(name_str),
                     type_repr: ty,
                     default_value: val,
-                }) = source_file.get(&id)
+                }) = source_file.get(id)
                 else {
                     continue;
                 };
@@ -475,8 +475,8 @@ impl NameResolver {
                 self.symbol_table.add_property(
                     struct_symbol,
                     name_str.clone(),
-                    ty.clone(),
-                    val.clone(),
+                    *ty,
+                    *val,
                 );
             }
             self.hoist_enum_members(&body_expr, source_file);
