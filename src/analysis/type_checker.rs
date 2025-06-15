@@ -440,7 +440,7 @@ impl TypeChecker {
 
     fn infer_call(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
