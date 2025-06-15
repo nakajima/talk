@@ -30,6 +30,7 @@ pub struct Parser<'a> {
     pub(crate) lexer: Lexer<'a>,
     pub(crate) previous: Option<Token>,
     pub(crate) current: Option<Token>,
+    pub(crate) next: Option<Token>,
     pub(crate) parse_tree: SourceFile,
     pub(crate) source_location_stack: SourceLocationStack,
     previous_before_newline: Option<Token>,
@@ -94,6 +95,7 @@ impl<'a> Parser<'a> {
             lexer,
             previous: None,
             current: None,
+            next: None,
             parse_tree: SourceFile::new(file_id),
             source_location_stack: Default::default(),
             previous_before_newline: None,
@@ -101,6 +103,8 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) {
+        // Prime the pump
+        self.advance();
         self.advance();
         self.skip_newlines();
 
@@ -111,9 +115,12 @@ impl<'a> Parser<'a> {
                 return;
             }
 
+            log::trace!("{:?}", current);
+
             match self.parse_with_precedence(Precedence::Assignment) {
                 Ok(expr) => self.parse_tree.push_root(expr),
                 Err(err) => {
+                    log::error!("{}", err.message());
                     self.parse_tree
                         .diagnostics
                         .insert(Diagnostic::parser(current, err));
@@ -157,7 +164,7 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> Option<Token> {
-        self.previous = self.current.clone();
+        self.previous = self.current.take();
 
         if let Some(prev) = &self.previous
             && prev.kind != TokenKind::Newline
@@ -165,7 +172,8 @@ impl<'a> Parser<'a> {
             self.previous_before_newline = Some(prev.clone());
         }
 
-        self.current = self.lexer.next().ok();
+        self.current = self.next.take();
+        self.next = self.lexer.next().ok();
         self.previous.clone()
     }
 
@@ -836,8 +844,13 @@ impl<'a> Parser<'a> {
                         kind: TokenKind::Identifier(_),
                         ..
                     })
-                ) && self.peek_next_is(TokenKind::Colon)
-                {
+                ) && matches!(
+                    &self.next,
+                    Some(Token {
+                        kind: TokenKind::Colon,
+                        ..
+                    })
+                ) {
                     // we've got an argument label
                     let Some(label) = self.identifier().ok() else {
                         return Err(ParserError::ExpectedIdentifier(self.current.clone()));
@@ -993,17 +1006,6 @@ impl<'a> Parser<'a> {
             *actual == expected
         } else {
             false
-        }
-    }
-
-    pub(super) fn peek_next_is(&self, expected: TokenKind) -> bool {
-        let mut copy = self.lexer.clone();
-        copy.advance();
-
-        if let Ok(Token { kind, .. }) = copy.next() {
-            return kind == expected;
-        } else {
-            return false;
         }
     }
 
@@ -1547,7 +1549,9 @@ mod tests {
     #[test]
     fn parses_call_with_args() {
         let parsed = parse("fizz(foo: 123)");
-        dbg!(parsed.diagnostics());
+
+        println!("{:?}", parsed);
+
         let expr = parsed.roots()[0].unwrap();
 
         let Expr::Call {
@@ -1699,7 +1703,7 @@ mod tests {
             Call {
                 callee: 5,
                 type_args: vec![],
-                args: vec![6]
+                args: vec![7]
             }
         );
         assert_eq!(*parsed.get(&5).unwrap(), Member(Some(4), "foo".into()));
@@ -1991,6 +1995,7 @@ mod pattern_parsing_tests {
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
         let mut parser = Parser::new(lexer, 123);
+        parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()
     }

@@ -620,6 +620,7 @@ impl<'a> Lowerer<'a> {
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(_, name) => self.lower_member(expr_id, &name),
             Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
+            Expr::CallArg { value, .. } => self.lower_expr(&value),
             expr => todo!("Cannot lower {:?}", expr),
         }
     }

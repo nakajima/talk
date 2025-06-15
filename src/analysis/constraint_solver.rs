@@ -62,6 +62,7 @@ impl<'a> ConstraintSolver<'a> {
                     err
                 })?;
 
+                log::info!("defining {:?} = {:?}", node_id, lhs);
                 self.source_file.define(node_id, lhs);
             }
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {

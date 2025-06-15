@@ -327,6 +327,13 @@ impl Environment {
         self.types.get(name)
     }
 
+    pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {
+        match self.lookup_type(symbol_id) {
+            Some(TypeDef::Struct(_)) => true,
+            _ => false,
+        }
+    }
+
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {
         if let Some(TypeDef::Enum(def)) = self.types.get(name) {
             Some(def)

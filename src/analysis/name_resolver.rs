@@ -900,7 +900,7 @@ mod tests {
             Call {
                 callee: 6,
                 type_args: vec![],
-                args: vec![7]
+                args: vec![8]
             }
         );
         assert_eq!(
@@ -998,11 +998,23 @@ mod tests {
 
     #[test]
     fn resolves_struct() {
-        let resolved = resolve("struct Person {}");
+        let resolved = resolve("struct Person {}\nPerson()");
         assert_eq!(
             *resolved.roots()[0].unwrap(),
             Struct(Name::Resolved(SymbolID(3), "Person".into()), vec![], 0)
         );
+        assert_eq!(
+            *resolved.roots()[1].unwrap(),
+            Expr::Call {
+                callee: 2,
+                type_args: vec![],
+                args: vec![]
+            }
+        );
+        assert_eq!(
+            *resolved.get(&2).unwrap(),
+            Expr::Variable(Name::Resolved(SymbolID(3), "Person".into()), None)
+        )
     }
 
     #[test]

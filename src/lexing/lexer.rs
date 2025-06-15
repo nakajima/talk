@@ -17,7 +17,7 @@ impl LexerError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Lexer<'a> {
     pub code: &'a str,
     chars: Peekable<Chars<'a>>,

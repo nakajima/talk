@@ -34,7 +34,11 @@ fn lower_alloc(
         unreachable!()
     };
 
-    let Expr::LiteralInt(val) = lowerer.source_file.get(&args[0]).unwrap() else {
+    let Expr::CallArg { value: val, .. } = lowerer.source_file.get(&args[0]).unwrap() else {
+        unreachable!()
+    };
+
+    let Some(Expr::LiteralInt(val)) = lowerer.source_file.get(val) else {
         unreachable!()
     };
 

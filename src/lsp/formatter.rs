@@ -179,8 +179,16 @@ impl<'a> Formatter<'a> {
             Expr::PatternVariant(enum_name, variant_name, bindings) => {
                 self.format_pattern_variant(enum_name, variant_name, bindings)
             }
-            Expr::CallArg { .. } => todo!(),
+            Expr::CallArg { label, value } => self.format_arg(label, value),
         }
+    }
+
+    fn format_arg(&self, label: &Option<Name>, value: &ExprID) -> Doc {
+        let Some(name) = label else {
+            return self.format_expr(*value);
+        };
+
+        group(concat(self.format_name(&name), self.format_expr(*value)))
     }
 
     fn format_array_literal(&self, items: &[ExprID]) -> Doc {

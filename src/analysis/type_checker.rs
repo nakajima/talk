@@ -200,7 +200,7 @@ impl TypeChecker {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let expr = source_file.get(id).unwrap().clone();
-        log::trace!("Inferring {expr:?}");
+        log::trace!("Inferring {id:?} {expr:?}");
 
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
@@ -217,7 +217,7 @@ impl TypeChecker {
                 callee,
                 type_args,
                 args,
-            } => self.infer_call(env, callee, type_args, args, expected, source_file),
+            } => self.infer_call(id, env, callee, type_args, args, expected, source_file),
             Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
             Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
@@ -332,7 +332,18 @@ impl TypeChecker {
             return Err(TypeError::Unresolved);
         };
 
-        self.infer_block(body, env, expected, source_file).ok();
+        let Some(Expr::Block(items)) = source_file.get(body).cloned() else {
+            unreachable!()
+        };
+
+        for item in items {
+            match source_file.get(&item) {
+                Some(Expr::Property { .. }) => continue, // Properties are handled by the hoisting
+                _ => {
+                    self.infer_node(&item, env, expected, source_file)?;
+                }
+            }
+        }
 
         Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
@@ -355,7 +366,7 @@ impl TypeChecker {
             .last()
             .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
 
-        Ok(Ty::Array(Box::new(ty)))
+        Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
 
     fn infer_return(
@@ -409,6 +420,7 @@ impl TypeChecker {
 
     fn infer_call(
         &self,
+        id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
@@ -435,10 +447,20 @@ impl TypeChecker {
             arg_tys.push(ty);
         }
 
-        let expected_callee_ty = Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
-        let callee_ty = self.infer_node(callee, env, &None, source_file)?;
-
-        env.constrain_equality(*callee, expected_callee_ty, callee_ty.clone());
+        match source_file.get(callee) {
+            Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
+                if env.is_struct_symbol(symbol_id) =>
+            {
+                let instantiated = env.instantiate_symbol(*symbol_id)?;
+                env.constrain_equality(*id, ret_var.clone(), instantiated.clone());
+            }
+            _ => {
+                let callee_ty = self.infer_node(callee, env, &None, source_file)?;
+                let expected_callee_ty =
+                    Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
+                env.constrain_equality(*callee, expected_callee_ty, callee_ty.clone());
+            }
+        };
 
         Ok(ret_var)
     }
@@ -1138,8 +1160,18 @@ impl TypeChecker {
                 }
             }
 
-            let struct_def = StructDef::new(symbol_id, None, type_parameters, properties, methods);
+            let struct_def = StructDef::new(
+                symbol_id,
+                None,
+                type_parameters.clone(),
+                properties,
+                methods,
+            );
             env.register_struct(struct_def);
+            env.declare(
+                symbol_id,
+                env.generalize(&Ty::Struct(symbol_id, type_parameters)),
+            );
         }
 
         Ok(())
@@ -2129,7 +2161,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]),
-            Ty::Array(Box::new(Ty::Int))
+            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
     }
 
@@ -2151,11 +2183,11 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]),
-            Ty::Array(Ty::Int.into())
+            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
         assert_eq!(
             checked.type_for(checked.root_ids()[2]),
-            Ty::Array(Ty::Float.into())
+            Ty::Struct(SymbolID::ARRAY, vec![Ty::Float])
         );
     }
 }
