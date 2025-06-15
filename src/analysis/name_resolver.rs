@@ -12,6 +12,7 @@ use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
 use crate::prelude::compile_prelude_for_name_resolver;
+use crate::source_file;
 use crate::source_file::SourceFile;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -71,11 +72,9 @@ impl NameResolver {
     }
 
     fn resolve_nodes(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
-        // 1) First pass: Hoist enums and their variants
         self.hoist_enums(node_ids, source_file);
-
-        // 1) Hoist all funcs in this block before any recursion
         self.hoist_funcs(node_ids, source_file);
+        self.hoise_structs(node_ids, source_file);
 
         for node_id in node_ids {
             let expr = &mut source_file.get_mut(node_id).unwrap();
@@ -419,6 +418,59 @@ impl NameResolver {
                     captures,
                 };
             }
+        }
+    }
+
+    fn hoise_structs(&mut self, node_ids: &[ExprID], source_file: &mut SourceFile) {
+        for id in node_ids {
+            let Some(Struct(Name::Raw(name_str), generics, body_expr)) =
+                source_file.get(id).cloned()
+            else {
+                continue;
+            };
+
+            let struct_symbol = self.declare(
+                name_str.clone(),
+                SymbolKind::Struct,
+                id,
+                &source_file.meta,
+                source_file.file_id,
+            );
+
+            self.resolve_nodes(&generics, source_file);
+
+            source_file.nodes[*id as usize] =
+                Struct(Name::Resolved(struct_symbol, name_str), generics, body_expr);
+
+            // Hoist properties
+            let Some(Block(ids)) = source_file.get(&body_expr) else {
+                log::error!("Didn't get struct body");
+                return;
+            };
+
+            self.type_symbol_stack.push(struct_symbol);
+
+            // Get properties for the struct so we can synthesize stuff before
+            // type checking
+            for id in ids {
+                let Some(Property {
+                    name: Name::Raw(name_str),
+                    type_repr: ty,
+                    default_value: val,
+                }) = source_file.get(&id)
+                else {
+                    continue;
+                };
+
+                self.symbol_table.add_property(
+                    struct_symbol,
+                    name_str.clone(),
+                    ty.clone(),
+                    val.clone(),
+                );
+            }
+            self.hoist_enum_members(&body_expr, source_file);
+            self.type_symbol_stack.pop();
         }
     }
 

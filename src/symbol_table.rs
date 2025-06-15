@@ -49,12 +49,20 @@ pub struct Definition {
 }
 
 #[derive(Debug, Clone)]
+pub struct PropertyInfo {
+    name: String,
+    type_id: Option<ExprID>,
+    default_value_id: Option<ExprID>
+}
+
+#[derive(Debug, Clone)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
     pub expr_id: ExprID,
     pub is_captured: bool,
     pub definition: Option<Definition>,
+    pub properties: Vec<PropertyInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -142,10 +150,27 @@ impl SymbolTable {
                 expr_id,
                 is_captured: false,
                 definition,
+                properties: vec![],
             },
         );
 
         symbol_id
+    }
+
+    pub fn add_property(
+        &mut self,
+        to_symbol_id: SymbolID,
+        name: String,
+        type_id: Option<ExprID>,
+        default_value_id: Option<ExprID>,
+    ) {
+        self.symbols.get_mut(&to_symbol_id).map(|s| {
+            s.properties.push(PropertyInfo {
+                name,
+                type_id,
+                default_value_id,
+            })
+        });
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {

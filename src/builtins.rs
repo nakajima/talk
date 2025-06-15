@@ -27,6 +27,7 @@ fn builtins() -> Vec<Builtin> {
                 expr_id: -1,
                 is_captured: false,
                 definition: None,
+                properties: vec![]
             },
             ty: Ty::Int,
             unbound_vars: vec![],
@@ -40,6 +41,7 @@ fn builtins() -> Vec<Builtin> {
                 expr_id: -2,
                 is_captured: false,
                 definition: None,
+                properties: vec![]
             },
             ty: Ty::Float,
             unbound_vars: vec![],
@@ -53,6 +55,7 @@ fn builtins() -> Vec<Builtin> {
                 expr_id: -3,
                 is_captured: false,
                 definition: None,
+                properties: vec![]
             },
             ty: Ty::Bool,
             unbound_vars: vec![],
@@ -66,6 +69,7 @@ fn builtins() -> Vec<Builtin> {
                 expr_id: -4,
                 is_captured: false,
                 definition: None,
+                properties: vec![]
             },
             ty: Ty::Array(Box::new(Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element)))),
             unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
@@ -85,6 +89,7 @@ fn builtins() -> Vec<Builtin> {
                 expr_id: -5,
                 is_captured: false,
                 definition: None,
+                properties: vec![]
             },
             ty: Ty::Func(
                 vec![Ty::Int /* capacity */],
