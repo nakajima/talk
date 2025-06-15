@@ -52,8 +52,7 @@ impl IRType {
                 Ok(Pointer(from.0 + offset))
             }
             _ => Err(IRError::InvalidPointer(format!(
-                "Unable to index into {:?}",
-                self
+                "Unable to index into {self:?}"
             ))),
         }
     }
@@ -147,7 +146,7 @@ impl std::fmt::Display for IRType {
                     .join(", ")
             ),
             IRType::Pointer => write!(f, "ptr"),
-            IRType::Array { element } => write!(f, "[{}]", element),
+            IRType::Array { element } => write!(f, "[{element}]"),
         }
     }
 }

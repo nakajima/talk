@@ -188,7 +188,7 @@ impl<'a> Formatter<'a> {
             return self.format_expr(*value);
         };
 
-        group(concat(self.format_name(&name), self.format_expr(*value)))
+        group(concat(self.format_name(name), self.format_expr(*value)))
     }
 
     fn format_array_literal(&self, items: &[ExprID]) -> Doc {
@@ -273,11 +273,10 @@ impl<'a> Formatter<'a> {
             let meta = self.meta_cache.get(&stmt_id);
 
             // Check if we need to preserve a blank line
-            if let (Some(last), Some(current)) = (last_meta, meta) {
-                if current.start.line - last.end.line > 1 {
+            if let (Some(last), Some(current)) = (last_meta, meta)
+                && current.start.line - last.end.line > 1 {
                     docs.push(hardline());
                 }
-            }
 
             docs.push(self.format_expr(stmt_id));
             last_meta = meta.map(|v| &**v);
@@ -509,11 +508,10 @@ impl<'a> Formatter<'a> {
         }
 
         // Check if the body is a single-statement block that could be formatted inline
-        if let Some(Expr::Block(stmts)) = self.source_file.get(&body) {
-            if stmts.len() == 1 && !self.contains_control_flow(&stmts[0]) {
+        if let Some(Expr::Block(stmts)) = self.source_file.get(&body)
+            && stmts.len() == 1 && !self.contains_control_flow(&stmts[0]) {
                 return group(concat_space(result, self.format_expr(body)));
             }
-        }
 
         concat_space(result, self.format_expr(body))
     }

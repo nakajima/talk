@@ -54,19 +54,19 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         match &constraint {
             Constraint::Equality(node_id, lhs, rhs) => {
-                let lhs = Self::apply(&lhs, substitutions, 0);
-                let rhs = Self::apply(&rhs, substitutions, 0);
+                let lhs = Self::apply(lhs, substitutions, 0);
+                let rhs = Self::apply(rhs, substitutions, 0);
 
                 Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
                     log::error!("{err:?}");
                     err
                 })?;
 
-                log::info!("defining {:?} = {:?}", node_id, lhs);
+                log::info!("defining {node_id:?} = {lhs:?}");
                 self.source_file.define(*node_id, lhs);
             }
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
-                let result_ty = Self::apply(&result_ty, substitutions, 0);
+                let result_ty = Self::apply(result_ty, substitutions, 0);
 
                 // Look for matching constructors based on the result_ty
                 match &result_ty {
@@ -78,14 +78,14 @@ impl<'a> ConstraintSolver<'a> {
                             // Look up the enum and find the variant
                             if let Some(_enum_info) = self
                                 .source_file
-                                .type_from_symbol(&enum_id, self.symbol_table)
+                                .type_from_symbol(enum_id, self.symbol_table)
                                 && let Some(variant_info) =
-                                    self.find_variant(&enum_id, &member_name)
+                                    self.find_variant(enum_id, member_name)
                             {
                                 // Create the constructor type for this variant
                                 let constructor_ty = self.create_variant_constructor_type(
-                                    &enum_id,
-                                    &ret_generics, // We'll create fresh generics
+                                    enum_id,
+                                    ret_generics, // We'll create fresh generics
                                     &variant_info,
                                     substitutions,
                                 );
@@ -108,7 +108,7 @@ impl<'a> ConstraintSolver<'a> {
                         if let Some(_enum_info) = self
                             .source_file
                             .type_from_symbol(enum_id, self.symbol_table)
-                            && let Some(variant_info) = self.find_variant(enum_id, &member_name)
+                            && let Some(variant_info) = self.find_variant(enum_id, member_name)
                             && variant_info.values.is_empty()
                         {
                             // This is a valueless variant, unify with the enum type directly
@@ -121,13 +121,11 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
             Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
-                let receiver_ty = Self::apply(&receiver_ty, substitutions, 0);
-                let result_ty = Self::apply(&result_ty, substitutions, 0);
+                let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
+                let result_ty = Self::apply(result_ty, substitutions, 0);
 
                 log::debug!(
-                    "solving MemberAccess constraint: {:?} {:?}",
-                    receiver_ty,
-                    substitutions
+                    "solving MemberAccess constraint: {receiver_ty:?} {substitutions:?}"
                 );
 
                 match &receiver_ty {
@@ -156,7 +154,7 @@ impl<'a> ConstraintSolver<'a> {
                         {
                             // Check if this is a variant constructor
                             log::debug!("Enum info: {enum_info:?}");
-                            if let Some(variant_info) = self.find_variant(enum_id, &member_name) {
+                            if let Some(variant_info) = self.find_variant(enum_id, member_name) {
                                 // Create the constructor type
                                 log::debug!("Variant info: {variant_info:?}");
 
@@ -277,7 +275,7 @@ impl<'a> ConstraintSolver<'a> {
     fn apply_multiple(types: &[Ty], substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Vec<Ty> {
         types
             .iter()
-            .map(|ty| Self::apply(&ty, substitutions, depth))
+            .map(|ty| Self::apply(ty, substitutions, depth))
             .collect()
     }
 
@@ -293,7 +291,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Func(params, returning, generics) => {
                 let applied_params = Self::apply_multiple(params, substitutions, depth);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
-                let applied_generics = Self::apply_multiple(&generics, substitutions, depth);
+                let applied_generics = Self::apply_multiple(generics, substitutions, depth);
 
                 Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }

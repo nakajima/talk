@@ -201,7 +201,7 @@ impl LanguageServer for ServerState {
 
         let source_file = parse(&code, 0);
 
-        return Box::pin(async move {
+        Box::pin(async move {
             let formatted = format(&source_file, 80);
             let last_line = code.lines().count() as u32;
             let last_char = code.lines().last().map(|line| line.len() - 1);
@@ -213,7 +213,7 @@ impl LanguageServer for ServerState {
                 ),
                 formatted,
             )]))
-        });
+        })
     }
 
     fn did_open(&mut self, params: DidOpenTextDocumentParams) -> Self::NotifyResult {
@@ -298,7 +298,7 @@ impl ServerState {
 
     fn fetch(&mut self, url: Url) -> Option<String> {
         let Ok(path) = url.to_file_path() else {
-            log::error!("no file path from: {:?}", url);
+            log::error!("no file path from: {url:?}");
             return None;
         };
 
@@ -356,7 +356,7 @@ pub async fn start() {
         Ok(()) => {
             eprintln!("All done.");
         }
-        Err(e) => eprintln!("server.run_buffered err: {:?}", e),
+        Err(e) => eprintln!("server.run_buffered err: {e:?}"),
     }
 }
 
@@ -378,13 +378,11 @@ fn find_files_recursive(
 
         if path.is_dir() {
             find_files_recursive(&path, extension, files)?;
-        } else if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext.to_str() == Some(extension) {
+        } else if path.is_file()
+            && let Some(ext) = path.extension()
+                && ext.to_str() == Some(extension) {
                     files.push(path);
                 }
-            }
-        }
     }
     Ok(())
 }

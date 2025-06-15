@@ -81,7 +81,7 @@ impl CompilationUnit<Raw> {
                     files.push(parsed);
                 }
                 Err(e) => {
-                    log::error!("read error: {:?}", e);
+                    log::error!("read error: {e:?}");
                 }
             }
         }

@@ -174,7 +174,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 ..
             } => {
                 result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_exprs(&params));
+                result.extend(self.tokens_from_exprs(params));
                 result.extend(self.tokens_from_expr(body));
                 if let Some(ret) = ret {
                     result.extend(self.tokens_from_expr(ret));
@@ -335,12 +335,12 @@ impl<'a> SemanticTokenCollector<'a> {
 
         for (range, token_type) in self.tokens {
             if range.start.line != range.end.line {
-                eprintln!("Warning: Skipping multi-line token: {:?}", range);
+                eprintln!("Warning: Skipping multi-line token: {range:?}");
                 continue;
             }
 
             if range.end.character < range.start.character {
-                eprintln!("Warning: Invalid range detected: {:?}", range);
+                eprintln!("Warning: Invalid range detected: {range:?}");
                 continue;
             }
 

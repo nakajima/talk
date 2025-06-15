@@ -54,7 +54,7 @@ impl Precedence {
             }
         };
 
-        log::trace!("getting handler for {:?}", token);
+        log::trace!("getting handler for {token:?}");
 
         Ok(match &token.kind {
             TokenKind::LeftParen => ParseHandler {

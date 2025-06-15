@@ -558,7 +558,7 @@ impl NameResolver {
 
         let meta = &expr_meta[*expr_id as usize];
         let definition = Definition {
-            file_id: file_id,
+            file_id,
             line: meta.start.line,
             col: meta.start.col,
         };

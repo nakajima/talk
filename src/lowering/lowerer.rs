@@ -432,7 +432,7 @@ impl<'a> Lowerer<'a> {
         } = &typed_expr.ty
         {
             let Name::Resolved(self_symbol, _) = self.resolve_name(name.clone()) else {
-                panic!("no symbol: {:?}", name)
+                panic!("no symbol: {name:?}")
             };
 
             // Define an environment object for our captures. If there aren't any captures we don't care,

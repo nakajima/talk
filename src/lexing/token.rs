@@ -18,7 +18,7 @@ impl Token {
         col: 0,
     };
 
-    pub fn as_str<'a>(&'a self) -> String {
+    pub fn as_str(&self) -> String {
         self.kind.as_str()
     }
 }

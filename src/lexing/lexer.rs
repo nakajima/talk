@@ -12,7 +12,7 @@ pub enum LexerError {
 impl LexerError {
     pub fn message(&self) -> String {
         match &self {
-            Self::UnexpectedInput(ch) => format!("Unexpected character: {:?}", ch),
+            Self::UnexpectedInput(ch) => format!("Unexpected character: {ch:?}"),
         }
     }
 }

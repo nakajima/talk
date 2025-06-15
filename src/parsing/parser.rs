@@ -61,7 +61,7 @@ impl ParserError {
                             .join(" ")
                     )
                 } else {
-                    format!("Unexpected end of input")
+                    "Unexpected end of input".to_string()
                 }
             }
             Self::UnknownError(e) => e.to_string(),
@@ -69,7 +69,7 @@ impl ParserError {
                 "Expected a name, got: {}",
                 token.clone().unwrap_or(Token::GENERATED).as_str()
             ),
-            Self::CannotAssign => format!("Cannot assign"),
+            Self::CannotAssign => "Cannot assign".to_string(),
             Self::UnexpectedToken(expected, actual) => {
                 format!(
                     "Unexpected token: {}, expected: {}",
@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
                 return;
             }
 
-            log::trace!("{:?}", current);
+            log::trace!("{current:?}");
 
             match self.parse_with_precedence(Precedence::Assignment) {
                 Ok(expr) => self.parse_tree.push_root(expr),
@@ -185,7 +185,7 @@ impl<'a> Parser<'a> {
         let start = self
             .source_location_stack
             .pop()
-            .unwrap_or_else(|| panic!("unbalanced source location stack. current: {:?}", token));
+            .unwrap_or_else(|| panic!("unbalanced source location stack. current: {token:?}"));
         log::trace!("pop location: {:?}", start.token);
 
         let expr_meta = ExprMeta {
@@ -863,7 +863,7 @@ impl<'a> Parser<'a> {
                     let value = self.parse_with_precedence(Precedence::Assignment)?;
                     args.push(self.add_expr(
                         Expr::CallArg {
-                            label: Some(Name::Raw(label.into())),
+                            label: Some(Name::Raw(label)),
                             value,
                         },
                         tok,
@@ -1071,7 +1071,7 @@ impl<'a> Parser<'a> {
         };
 
         Err(ParserError::UnexpectedToken(
-            format!("Expected {:?}", expected),
+            format!("Expected {expected:?}"),
             self.current.clone(),
         ))
     }
@@ -1090,7 +1090,7 @@ impl<'a> Parser<'a> {
                     Ok(current)
                 } else {
                     Err(ParserError::UnexpectedToken(
-                        format!("{:?}", possible_tokens),
+                        format!("{possible_tokens:?}"),
                         Some(current),
                     ))
                 }

@@ -342,7 +342,7 @@ impl IRInterpreter {
 
                 let pointer = ty
                     .get_element_pointer(ptr, index)
-                    .map_err(|e| InterpreterError::IRError(e))?;
+                    .map_err(InterpreterError::IRError)?;
 
                 self.set_register_value(&dest, Value::Pointer(pointer));
             }

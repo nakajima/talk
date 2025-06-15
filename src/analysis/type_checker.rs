@@ -63,15 +63,15 @@ impl TypeError {
             Self::NameResolution(e) => e.message(),
             Self::UnknownEnum(name) => format!("No enum named {}", name.name_str()),
             Self::UnknownVariant(name) => format!("No case named {}", name.name_str()),
-            Self::Unknown(err) => format!("Unknown error: {}", err),
+            Self::Unknown(err) => format!("Unknown error: {err}"),
             Self::UnexpectedType(actual, expected) => {
-                format!("Unexpected type: {:?}, expected: {:?}", expected, actual)
+                format!("Unexpected type: {expected:?}, expected: {actual:?}")
             }
             Self::Mismatch(expected, actual) => {
-                format!("Unexpected type: {:?}, expected: {:?}", expected, actual)
+                format!("Unexpected type: {expected:?}, expected: {actual:?}")
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
-            Self::OccursConflict => format!("Recursive types are not supported"),
+            Self::OccursConflict => "Recursive types are not supported".to_string(),
         }
     }
 }
@@ -101,7 +101,7 @@ pub enum Ty {
 
 impl Hash for Ty {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        format!("{:?}", self).hash(state);
+        format!("{self:?}").hash(state);
     }
 }
 
@@ -161,21 +161,15 @@ impl TypeChecker {
         source_file: &mut SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
     ) {
-        match self.hoist_structs(items, env, source_file, symbol_table) {
-            Err((id, err)) => {
-                source_file.diagnostics.insert(Diagnostic::typing(id, err));
-            }
-            _ => (),
+        if let Err((id, err)) = self.hoist_structs(items, env, source_file, symbol_table) {
+            source_file.diagnostics.insert(Diagnostic::typing(id, err));
         }
 
-        match self.hoist_enums(items, env, source_file, symbol_table) {
-            Err((id, err)) => {
-                source_file.diagnostics.insert(Diagnostic::typing(id, err));
-            }
-            _ => (),
+        if let Err((id, err)) = self.hoist_enums(items, env, source_file, symbol_table) {
+            source_file.diagnostics.insert(Diagnostic::typing(id, err));
         }
 
-        self.hoist_functions(items, env, &source_file);
+        self.hoist_functions(items, env, source_file);
     }
 
     pub fn infer_without_prelude(
@@ -295,8 +289,7 @@ impl TypeChecker {
             }
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             _ => Err(TypeError::Unknown(format!(
-                "Don't know how to type check {:?}",
-                expr
+                "Don't know how to type check {expr:?}"
             ))),
         };
 
@@ -713,7 +706,7 @@ impl TypeChecker {
             let capture_tys = captures
                 .iter()
                 .map(|c| env.instantiate_symbol(*c))
-                .filter_map(|c| if let Ok(c) = c { Some(c) } else { None })
+                .filter_map(|c| c.ok())
                 .collect();
 
             Ty::Closure {
@@ -1162,7 +1155,7 @@ impl TypeChecker {
                             _ => unreachable!(),
                         };
 
-                        log::trace!("Defining property {:?} {:?}", name, ty);
+                        log::trace!("Defining property {name:?} {ty:?}");
                         properties.insert(
                             name.to_string(),
                             Property::new(name.to_string(), ty.unwrap()),
@@ -1178,7 +1171,7 @@ impl TypeChecker {
                         let ty = self
                             .infer_node(&expr_id, env, &None, source_file)
                             .map_err(|e| (expr_id, e))?;
-                        log::trace!("Defining property {:?} {:?}", name, ty);
+                        log::trace!("Defining property {name:?} {ty:?}");
                         methods.insert(name.to_string(), Method::new(name.to_string(), ty));
                     }
                     _ => return Err((*id, TypeError::Unknown("Unhandled property".into()))),

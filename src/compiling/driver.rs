@@ -12,6 +12,12 @@ pub struct Driver {
     units: Vec<CompilationUnit>,
 }
 
+impl Default for Driver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Driver {
     pub fn new() -> Self {
         let mut driver = Self {
@@ -41,7 +47,7 @@ impl Driver {
         }
 
         // We don't have this file, so add it to the default unit
-        log::error!("adding {:?} to default unit", path);
+        log::error!("adding {path:?} to default unit");
         self.units[0].input.add(path);
         self.units[0]
             .src_cache
@@ -133,7 +139,7 @@ impl Driver {
         let parsed = self.parse();
         for unit in parsed.into_iter() {
             for file in unit.stage.files {
-                eprintln!("file: {:?} path: {:?}", file, path);
+                eprintln!("file: {file:?} path: {path:?}");
                 if unit.input.id(path) == Some(file.file_id) {
                     return Some(file);
                 }

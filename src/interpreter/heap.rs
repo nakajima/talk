@@ -30,7 +30,7 @@ impl Heap {
             let new_capacity = (self.capacity + bytes) * 2;
             self.bytes.resize(new_capacity, 0);
             self.capacity = new_capacity;
-            log::trace!("New capacity is {:?}", new_capacity);
+            log::trace!("New capacity is {new_capacity:?}");
         }
 
         let addr = self.next_free_addr;
