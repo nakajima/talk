@@ -61,6 +61,7 @@ pub enum TokenKind {
     Func,
     Init,
     Let,
+    Mut,
     EOF,
     Generated,
 }
@@ -126,6 +127,7 @@ impl TokenKind {
             TokenKind::Identifier(ident) => ident,
             TokenKind::Func => "func",
             TokenKind::Let => "let",
+            TokenKind::Mut => "mut",
             TokenKind::EOF => "EOF",
             TokenKind::Generated => "(generated)",
             TokenKind::Init => "init",

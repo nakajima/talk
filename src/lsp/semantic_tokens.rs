@@ -309,6 +309,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::EOF => break,
                 TokenKind::Generated => (),
                 TokenKind::Init => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Mut => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens)
             }
         }
         self.tokens.extend(tokens);

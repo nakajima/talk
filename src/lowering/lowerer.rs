@@ -1385,7 +1385,7 @@ mod tests {
                             functions: right_val.clone(),
                         };
 
-                        use crate::lowering::ir_printer::print;
+                        use $crate::lowering::ir_printer::print;
                         use prettydiff::diff_lines;
                         //println!("\n\n\n{:#?}\n{:#?}\n\n\n", &left_val.functions, right_val);
 
