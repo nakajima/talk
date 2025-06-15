@@ -217,6 +217,17 @@ impl<'a> SemanticTokenCollector<'a> {
             Expr::PatternVariant(_name, _name1, items) => {
                 result.extend(self.tokens_from_exprs(items))
             }
+            Expr::CallArg { value, .. } => {
+                if let Some(meta) = self.source_file.meta.get(*expr_id as usize) {
+                    result.extend(
+                        meta.identifiers
+                            .iter()
+                            .map(|i| (self.range_from_token(i), SemanticTokenType::PROPERTY)),
+                    )
+                }
+
+                result.extend(self.tokens_from_expr(value));
+            }
         };
 
         result

@@ -11,6 +11,7 @@ pub struct SymbolID(pub i32);
 
 impl SymbolID {
     pub const OPTIONAL: SymbolID = SymbolID(1);
+    pub const ARRAY: SymbolID = SymbolID(-4);
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
 
     // Remove the prelude's symbol offset

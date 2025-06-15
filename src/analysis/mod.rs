@@ -6,7 +6,6 @@ pub mod name_resolver;
 pub mod type_checker;
 pub mod typed_expr;
 
-#[cfg(test)]
 pub fn check(input: &str) -> Result<SourceFile<Typed>, TypeError> {
     use crate::{
         constraint_solver::ConstraintSolver, environment::Environment, name_resolver::NameResolver,

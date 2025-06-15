@@ -17,7 +17,7 @@ impl LexerError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Lexer<'a> {
     pub code: &'a str,
     chars: Peekable<Chars<'a>>,
@@ -226,7 +226,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn advance(&mut self) {
+    pub(crate) fn advance(&mut self) {
         self.col += 1;
         self.current += 1;
         self.chars.next();

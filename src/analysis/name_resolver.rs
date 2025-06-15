@@ -242,6 +242,9 @@ impl NameResolver {
                     self.end_scope();
                     self.func_stack.pop();
                 }
+                CallArg { value, .. } => {
+                    self.resolve_nodes(&[value], source_file);
+                }
                 Parameter(name, ty_repr) => {
                     if let Some(ty_repr) = ty_repr {
                         self.resolve_nodes(&[ty_repr], source_file);

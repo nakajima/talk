@@ -828,8 +828,34 @@ impl<'a> Parser<'a> {
 
         if !self.did_match(TokenKind::RightParen)? {
             while {
-                let arg = self.parse_with_precedence(Precedence::Assignment)?;
-                args.push(arg);
+                let tok = self.push_source_location();
+
+                if matches!(
+                    &self.current,
+                    Some(Token {
+                        kind: TokenKind::Identifier(_),
+                        ..
+                    })
+                ) && self.peek_next_is(TokenKind::Colon)
+                {
+                    // we've got an argument label
+                    let Some(label) = self.identifier().ok() else {
+                        return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+                    };
+                    self.consume(TokenKind::Colon)?;
+                    let value = self.parse_with_precedence(Precedence::Assignment)?;
+                    args.push(self.add_expr(
+                        Expr::CallArg {
+                            label: Some(Name::Raw(label.into())),
+                            value,
+                        },
+                        tok,
+                    )?)
+                } else {
+                    let value = self.parse_with_precedence(Precedence::Assignment)?;
+                    args.push(self.add_expr(Expr::CallArg { label: None, value }, tok)?);
+                }
+
                 self.did_match(TokenKind::Comma)?
             } {}
 
@@ -967,6 +993,17 @@ impl<'a> Parser<'a> {
             *actual == expected
         } else {
             false
+        }
+    }
+
+    pub(super) fn peek_next_is(&self, expected: TokenKind) -> bool {
+        let mut copy = self.lexer.clone();
+        copy.advance();
+
+        if let Ok(Token { kind, .. }) = copy.next() {
+            return kind == expected;
+        } else {
+            return false;
         }
     }
 
@@ -1505,6 +1542,36 @@ mod tests {
         let args_id: Vec<_> = args_ids.iter().map(|id| parsed.get(id).unwrap()).collect();
         assert_eq!(*callee, Expr::Variable(Name::Raw("fizz".to_string()), None));
         assert_eq!(args_id.len(), 0);
+    }
+
+    #[test]
+    fn parses_call_with_args() {
+        let parsed = parse("fizz(foo: 123)");
+        dbg!(parsed.diagnostics());
+        let expr = parsed.roots()[0].unwrap();
+
+        let Expr::Call {
+            callee: callee_id,
+            args: args_ids,
+            ..
+        } = expr
+        else {
+            panic!("no call found")
+        };
+
+        let callee = parsed.get(callee_id).unwrap();
+        let args_id: Vec<_> = args_ids.iter().map(|id| parsed.get(id).unwrap()).collect();
+        assert_eq!(*callee, Expr::Variable(Name::Raw("fizz".to_string()), None));
+        assert_eq!(args_id.len(), 1);
+        assert_eq!(
+            *args_id[0],
+            Expr::CallArg {
+                label: Some("foo".into()),
+                value: 1
+            }
+        );
+
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
     }
 
     #[test]

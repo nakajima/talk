@@ -179,6 +179,7 @@ impl<'a> Formatter<'a> {
             Expr::PatternVariant(enum_name, variant_name, bindings) => {
                 self.format_pattern_variant(enum_name, variant_name, bindings)
             }
+            Expr::CallArg { .. } => todo!(),
         }
     }
 

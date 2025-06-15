@@ -49,7 +49,7 @@ pub enum TypeError {
     NameResolution(NameResolverError),
     UnknownEnum(Name),
     UnknownVariant(Name),
-    Unknown(&'static str),
+    Unknown(String),
     UnexpectedType(Ty, Ty),
     Mismatch(Ty, Ty),
     Handled, // If we've already reported it
@@ -264,7 +264,7 @@ impl TypeChecker {
             Expr::Binary(lhs, op, rhs) => {
                 self.infer_binary(id, lhs, rhs, op, expected, env, source_file)
             }
-            Expr::Block(items) => self.infer_block(id, env, items, expected, source_file),
+            Expr::Block(_) => self.infer_block(id, env, expected, source_file),
             Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
             Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
             Expr::Match(pattern, items) => self.infer_match(env, pattern, items, source_file),
@@ -280,7 +280,14 @@ impl TypeChecker {
             Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
-            _ => panic!("Unhandled expr in type checker: {:?}", expr.clone()),
+            Expr::Struct(name, generics, body) => {
+                self.infer_struct(name, generics, body, env, expected, source_file)
+            }
+            Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
+            _ => Err(TypeError::Unknown(format!(
+                "Don't know how to type check {:?}",
+                expr
+            ))),
         };
 
         match &ty {
@@ -302,6 +309,32 @@ impl TypeChecker {
         }
 
         ty
+    }
+
+    fn infer_struct(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        body: &ExprID,
+        env: &mut Environment,
+        expected: &Option<Ty>,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let mut inferred_generics: Vec<Ty> = vec![];
+        for generic in generics {
+            inferred_generics.push(
+                self.infer_node(generic, env, expected, source_file)?
+                    .clone(),
+            );
+        }
+
+        let Name::Resolved(symbol_id, _) = name else {
+            return Err(TypeError::Unresolved);
+        };
+
+        self.infer_block(body, env, expected, source_file).ok();
+
+        Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
 
     fn infer_array(
@@ -398,7 +431,7 @@ impl TypeChecker {
 
         let mut arg_tys: Vec<Ty> = vec![];
         for arg in args {
-            let ty = self.infer_node(arg, env, &None, source_file).unwrap();
+            let ty = self.infer_node(arg, env, &None, source_file)?;
             arg_tys.push(ty);
         }
 
@@ -779,13 +812,15 @@ impl TypeChecker {
         &self,
         id: &ExprID,
         env: &mut Environment,
-        items: &[ExprID],
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        env.start_scope();
+        let Some(Expr::Block(items)) = source_file.get(id).cloned() else {
+            return Err(TypeError::Unknown("Didn't get block".into()));
+        };
 
-        self.hoist_functions(items, env, source_file);
+        env.start_scope();
+        self.hoist_functions(&items, env, source_file);
 
         let mut return_exprs: Vec<(ExprID, Ty)> = vec![];
 
@@ -917,7 +952,7 @@ impl TypeChecker {
     ) -> Result<Ty, TypeError> {
         let Some(expected) = expected else {
             return Err(TypeError::Unknown(
-                "Pattern is missing an expected type (from scrutinee).",
+                "Pattern is missing an expected type (from scrutinee).".into(),
             ));
         };
 
@@ -1073,7 +1108,7 @@ impl TypeChecker {
                             );
                         }
                         if ty.is_none() {
-                            return Err((expr_id, TypeError::Unknown("No type for method")));
+                            return Err((expr_id, TypeError::Unknown("No type for method".into())));
                         }
 
                         let name = match name.clone() {
@@ -1099,7 +1134,7 @@ impl TypeChecker {
                             .map_err(|e| (expr_id, e))?;
                         methods.insert(name.to_string(), Method::new(name.to_string(), ty));
                     }
-                    _ => return Err((*id, TypeError::Unknown("Unhandled property"))),
+                    _ => return Err((*id, TypeError::Unknown("Unhandled property".into()))),
                 }
             }
 
@@ -1346,10 +1381,9 @@ mod tests {
         let checker = check(
             "
         func fizz(c) { c }
-        fizz(123)
+        fizz(c: 123)
         ",
         );
-
         let root_id = checker.root_ids()[1];
         assert_eq!(checker.type_for(root_id), Ty::Int);
     }
@@ -1369,6 +1403,7 @@ mod tests {
         applyTwice
         ",
         );
+        dbg!(&checker.diagnostics);
         let root_id = checker.root_ids()[0];
         let Ty::Func(params, return_type, _) = checker.type_for(root_id) else {
             panic!(
@@ -2325,6 +2360,32 @@ mod pending {
                 }
             }
         ",
+        );
+    }
+}
+
+#[cfg(test)]
+mod struct_tests {
+    use crate::{SymbolID, check, type_checker::Ty};
+
+    #[test]
+    fn checks_out() {
+        let checked = check(
+            "
+        struct Person {
+            let age: Int
+        }
+
+        Person(age: 123)
+        ",
+        )
+        .unwrap();
+
+        dbg!(checked.diagnostics());
+
+        assert_eq!(
+            checked.type_for(checked.root_ids()[1]),
+            Ty::Struct(SymbolID(5), vec![])
         );
     }
 }

@@ -1,0 +1,5 @@
+struct Array {
+	let count: Int  
+	let capacity: Int
+	let storage: Int
+}

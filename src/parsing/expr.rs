@@ -105,7 +105,12 @@ pub enum Expr {
         ret: Option<ExprID>, /* return type */
         captures: Vec<SymbolID>,
     },
+
     Parameter(Name /* name */, Option<ExprID> /* TypeRepr */),
+    CallArg {
+        label: Option<Name>,
+        value: ExprID,
+    },
 
     // Variables
     Let(

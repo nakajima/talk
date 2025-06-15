@@ -192,7 +192,7 @@ impl Environment {
             .rev()
             .find_map(|frame| frame.get(&symbol_id).cloned())
         else {
-            return Err(TypeError::Unknown("Unknown symbol"));
+            return Err(TypeError::Unknown("Unknown symbol".into()));
         };
 
         Ok(self.instantiate(scheme))
