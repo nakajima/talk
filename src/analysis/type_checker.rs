@@ -154,6 +154,30 @@ impl TypeChecker {
         self.infer_without_prelude(env, source_file, symbol_table)
     }
 
+    pub fn hoist(
+        &self,
+        items: &[ExprID],
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+        symbol_table: &mut SymbolTable,
+    ) {
+        match self.hoist_structs(items, env, source_file, symbol_table) {
+            Err((id, err)) => {
+                source_file.diagnostics.insert(Diagnostic::typing(id, err));
+            }
+            _ => (),
+        }
+
+        match self.hoist_enums(items, env, source_file, symbol_table) {
+            Err((id, err)) => {
+                source_file.diagnostics.insert(Diagnostic::typing(id, err));
+            }
+            _ => (),
+        }
+
+        self.hoist_functions(items, env, &source_file);
+    }
+
     pub fn infer_without_prelude(
         &self,
         env: &mut Environment,
@@ -162,21 +186,7 @@ impl TypeChecker {
     ) -> SourceFile<Typed> {
         let root_ids = source_file.root_ids();
 
-        match self.hoist_structs(&root_ids, env, &mut source_file, symbol_table) {
-            Err((id, err)) => {
-                source_file.diagnostics.insert(Diagnostic::typing(id, err));
-            }
-            _ => (),
-        }
-
-        match self.hoist_enums(&root_ids, env, &mut source_file, symbol_table) {
-            Err((id, err)) => {
-                source_file.diagnostics.insert(Diagnostic::typing(id, err));
-            }
-            _ => (),
-        }
-
-        self.hoist_functions(&root_ids, env, &source_file);
+        self.hoist(&root_ids, env, &mut source_file, symbol_table);
 
         let mut typed_roots = vec![];
         for id in &root_ids {
@@ -428,7 +438,7 @@ impl TypeChecker {
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let ret_var = if let Some(expected) = expected {
+        let mut ret_var = if let Some(expected) = expected {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
@@ -452,9 +462,11 @@ impl TypeChecker {
                 if env.is_struct_symbol(symbol_id) =>
             {
                 let instantiated = env.instantiate_symbol(*symbol_id)?;
-                env.constrain_equality(*id, ret_var.clone(), instantiated.clone());
+                println!("Struct callee: {:?}", instantiated);
+                ret_var = instantiated;
             }
             _ => {
+                println!("NON Struct callee: {:?}", callee);
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
@@ -1107,7 +1119,6 @@ impl TypeChecker {
                     }
                 }
             }
-            log::warn!("{type_parameters:?}");
 
             for expr_id in expr_ids {
                 match &source_file.get(&expr_id).cloned().unwrap() {
@@ -1139,6 +1150,7 @@ impl TypeChecker {
                             _ => unreachable!(),
                         };
 
+                        log::trace!("Defining property {:?} {:?}", name, ty);
                         properties.insert(
                             name.to_string(),
                             Property::new(name.to_string(), ty.unwrap()),
@@ -1154,6 +1166,7 @@ impl TypeChecker {
                         let ty = self
                             .infer_node(&expr_id, env, &None, source_file)
                             .map_err(|e| (expr_id, e))?;
+                        log::trace!("Defining property {:?} {:?}", name, ty);
                         methods.insert(name.to_string(), Method::new(name.to_string(), ty));
                     }
                     _ => return Err((*id, TypeError::Unknown("Unhandled property".into()))),
@@ -2401,7 +2414,7 @@ mod struct_tests {
     use crate::{SymbolID, check, type_checker::Ty};
 
     #[test]
-    fn checks_out() {
+    fn checks_constructor() {
         let checked = check(
             "
         struct Person {
@@ -2419,5 +2432,23 @@ mod struct_tests {
             checked.type_for(checked.root_ids()[1]),
             Ty::Struct(SymbolID(5), vec![])
         );
+    }
+
+    #[test]
+    fn checks_property() {
+        let checked = check(
+            "
+        struct Person {
+            let age: Int
+        }
+
+        Person(age: 123).age
+        ",
+        )
+        .unwrap();
+
+        dbg!(checked.diagnostics());
+
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
     }
 }

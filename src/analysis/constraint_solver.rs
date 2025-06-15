@@ -52,7 +52,7 @@ impl<'a> ConstraintSolver<'a> {
         constraint: Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
-        match constraint {
+        match &constraint {
             Constraint::Equality(node_id, lhs, rhs) => {
                 let lhs = Self::apply(&lhs, substitutions, 0);
                 let rhs = Self::apply(&rhs, substitutions, 0);
@@ -63,7 +63,7 @@ impl<'a> ConstraintSolver<'a> {
                 })?;
 
                 log::info!("defining {:?} = {:?}", node_id, lhs);
-                self.source_file.define(node_id, lhs);
+                self.source_file.define(*node_id, lhs);
             }
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
                 let result_ty = Self::apply(&result_ty, substitutions, 0);
@@ -95,11 +95,11 @@ impl<'a> ConstraintSolver<'a> {
                                 Self::normalize_substitutions(substitutions);
 
                                 self.source_file.register_direct_callable(
-                                    node_id,
+                                    *node_id,
                                     variant_info.constructor_symbol,
                                 );
 
-                                self.source_file.define(node_id, constructor_ty);
+                                self.source_file.define(*node_id, constructor_ty);
                             }
                         }
                     }
@@ -112,7 +112,7 @@ impl<'a> ConstraintSolver<'a> {
                             && variant_info.values.is_empty()
                         {
                             // This is a valueless variant, unify with the enum type directly
-                            self.source_file.define(node_id, result_ty.clone());
+                            self.source_file.define(*node_id, result_ty.clone());
                         }
                     }
                     _ => {
@@ -124,9 +124,34 @@ impl<'a> ConstraintSolver<'a> {
                 let receiver_ty = Self::apply(&receiver_ty, substitutions, 0);
                 let result_ty = Self::apply(&result_ty, substitutions, 0);
 
-                log::debug!("solving MemberAccess constraint");
+                log::debug!(
+                    "solving MemberAccess constraint: {:?} {:?}",
+                    receiver_ty,
+                    substitutions
+                );
 
                 match &receiver_ty {
+                    Ty::Struct(struct_id, _generics) => {
+                        println!("struct: {:?}", struct_id);
+
+                        let Some(TypeDef::Struct(struct_def)) =
+                            self.source_file.type_def(struct_id)
+                        else {
+                            // For now, just unify with the result type
+                            self.source_file.define(*node_id, result_ty);
+                            return Ok(());
+                        };
+
+                        if let Some(method) = struct_def.methods.get(member_name) {
+                            println!("struct: {:?}", method);
+                            Self::unify(&method.ty, &result_ty, substitutions)?;
+                        }
+
+                        if let Some(property) = struct_def.properties.get(member_name) {
+                            println!("struct: {:?}", property);
+                            Self::unify(&property.ty, &result_ty, substitutions)?;
+                        }
+                    }
                     Ty::Enum(enum_id, generics) => {
                         // Look up the enum definition
                         if let Some(enum_info) = self
@@ -149,7 +174,7 @@ impl<'a> ConstraintSolver<'a> {
                                 // Unify with the result type
                                 Self::unify(&variant_ty, &result_ty, substitutions)?;
                                 Self::normalize_substitutions(substitutions);
-                                self.source_file.define(node_id, variant_ty);
+                                self.source_file.define(*node_id, variant_ty);
                             } else {
                                 log::debug!("Could not find variant named {member_name:?}");
                             }
@@ -164,7 +189,7 @@ impl<'a> ConstraintSolver<'a> {
                             "For now just unify with the result type: {node_id:?}, {result_ty:?}"
                         );
                         // For now, just unify with the result type
-                        self.source_file.define(node_id, result_ty);
+                        self.source_file.define(*node_id, result_ty);
                     }
                 }
             }

@@ -58,6 +58,19 @@ impl StructDef {
             methods,
         }
     }
+
+    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
+        if let Some(property) = self.properties.get(name) {
+            return Some(&property.ty);
+        }
+
+        if let Some(method) = self.methods.get(name) {
+            return Some(&method.ty);
+        }
+
+        None
+    }
+
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
         if let Some(ty) = self.type_override {
             ty(type_parameters)
@@ -91,8 +104,8 @@ pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
-    name: String,
-    ty: Ty,
+    pub name: String,
+    pub ty: Ty,
 }
 
 impl Property {
@@ -103,8 +116,8 @@ impl Property {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Method {
-    name: String,
-    ty: Ty,
+    pub name: String,
+    pub ty: Ty,
 }
 
 impl Method {
