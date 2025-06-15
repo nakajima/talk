@@ -14,7 +14,7 @@ pub enum IRType {
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
     Enum(Vec<IRType>),
-    Struct(Vec<IRType>),
+    Struct(Vec<IRType> /* properties */),
     Array { element: Box<IRType>, /* element */ },
     Pointer,
 }

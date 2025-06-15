@@ -44,7 +44,7 @@ fn lower_alloc(
 
     lowerer.push_instr(Instr::Alloc {
         dest,
-        ty: type_params[0].to_ir(),
+        ty: type_params[0].to_ir(lowerer),
         count: Some(str::parse(val).unwrap()),
     });
 

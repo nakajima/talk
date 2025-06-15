@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::IndexMut,
 };
 
@@ -38,7 +38,7 @@ pub struct StructDef {
     pub type_override: Option<fn(generics: &TypeParams) -> Ty>,
     pub name: SymbolID,
     pub type_parameters: TypeParams,
-    pub properties: HashMap<String, Property>,
+    pub properties: BTreeMap<String, Property>,
     pub methods: HashMap<String, Method>,
     pub initializers: Vec<ExprID>,
 }
@@ -48,7 +48,7 @@ impl StructDef {
         name: SymbolID,
         type_override: Option<fn(generics: &TypeParams) -> Ty>,
         type_parameters: TypeParams,
-        properties: HashMap<String, Property>,
+        properties: BTreeMap<String, Property>,
         methods: HashMap<String, Method>,
         initializers: Vec<ExprID>,
     ) -> Self {

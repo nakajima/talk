@@ -1,4 +1,7 @@
-use std::{collections::HashMap, hash::Hash};
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
@@ -1145,7 +1148,7 @@ impl TypeChecker {
             };
 
             let mut methods: HashMap<String, Method> = Default::default();
-            let mut properties: HashMap<String, Property> = Default::default();
+            let mut properties: BTreeMap<String, Property> = Default::default();
             let mut type_parameters = vec![];
             let default_initializers = vec![];
             let initializers = symbol_table
@@ -1508,4 +1511,8 @@ mod struct_tests {
 
         assert_eq!(checked.diagnostics().len(), 1);
     }
+
+    #[test]
+    #[ignore]
+    fn checks_setter() {}
 }

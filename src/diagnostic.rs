@@ -1,6 +1,7 @@
 use crate::{
     SourceFile,
     lexer::LexerError,
+    lowering::lowerer::IRError,
     name_resolver::NameResolverError,
     parser::{ExprID, ParserError},
     token::Token,
@@ -19,6 +20,7 @@ pub enum DiagnosticKind {
     Parse(Token, ParserError),
     Resolve(ExprID, NameResolverError),
     Typing(ExprID, TypeError),
+    Lowering(ExprID, IRError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -51,12 +53,19 @@ impl Diagnostic {
         }
     }
 
+    pub fn lowering(expr_id: ExprID, err: IRError) -> Diagnostic {
+        Self {
+            kind: DiagnosticKind::Lowering(expr_id, err),
+        }
+    }
+
     pub fn message(&self) -> String {
         match &self.kind {
             DiagnosticKind::Lexer(_, e) => e.message(),
             DiagnosticKind::Parse(_, e) => e.message(),
             DiagnosticKind::Resolve(_, e) => e.message(),
             DiagnosticKind::Typing(_, e) => e.message(),
+            DiagnosticKind::Lowering(_, e) => e.message(),
         }
     }
 
@@ -97,6 +106,20 @@ impl Diagnostic {
                 )
             }
             DiagnosticKind::Typing(expr_id, _type_error) => {
+                let expr = source_file.meta.get(*expr_id as usize).unwrap();
+
+                (
+                    Position {
+                        line: expr.start.line,
+                        col: expr.start.col,
+                    },
+                    Position {
+                        line: expr.end.line,
+                        col: expr.end.col,
+                    },
+                )
+            }
+            DiagnosticKind::Lowering(expr_id, _type_error) => {
                 let expr = source_file.meta.get(*expr_id as usize).unwrap();
 
                 (
