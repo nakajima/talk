@@ -92,11 +92,13 @@ pub fn synthesize_inits(
 
             let Some(Expr::Struct(_, _, body)) = source_file.get(&struct_info.expr_id).cloned()
             else {
-                unreachable!()
+                log::error!("didn't get struct from expr id");
+                return;
             };
 
             let Some(Expr::Block(existing_body_ids)) = source_file.get_mut(&body) else {
-                unreachable!()
+                log::error!("didn't get block body");
+                return;
             };
 
             symbol_table.add_initializer(sym, init_expr);

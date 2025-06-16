@@ -139,7 +139,6 @@ impl Driver {
         let parsed = self.parse();
         for unit in parsed.into_iter() {
             for file in unit.stage.files {
-                eprintln!("file: {file:?} path: {path:?}");
                 if unit.input.id(path) == Some(file.file_id) {
                     return Some(file);
                 }

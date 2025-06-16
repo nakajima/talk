@@ -540,7 +540,6 @@ impl<'a> Lowerer<'a> {
                 .register_symbol(symbol, SymbolValue::Register(register));
         }
 
-        println!("{:?}", self.current_func());
         self.lower_block(&body);
 
         self.push_instr(Instr::Ret(struct_ty.clone(), Some(env)));

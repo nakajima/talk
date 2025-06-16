@@ -486,7 +486,7 @@ impl<'a> Parser<'a> {
     ) -> Result<ExprID, ParserError> {
         let tok = self.push_lhs_location(lhs);
         self.consume(TokenKind::Dot)?;
-        let (name, _) = self.try_identifier().unwrap();
+        let name = self.identifier()?;
         let member = self.add_expr(Member(Some(lhs), name), tok)?;
 
         self.skip_newlines();

@@ -1241,7 +1241,10 @@ impl TypeChecker {
                         log::trace!("Defining property {name:?} {ty:?}");
                         methods.insert(name.to_string(), Method::new(name.to_string(), ty));
                     }
-                    _ => return Err((*id, TypeError::Unknown("Unhandled property".into()))),
+                    _ => return {
+                        log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
+                        Err((*id, TypeError::Unknown("Unhandled property".into())))
+                    }
                 }
             }
 
