@@ -3023,7 +3023,7 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(
                         vec![IRType::Int],
-                        IRType::Struct(SymbolID(5), vec![IRType::Int]).into()
+                        IRType::Struct(SymbolID::typed(1), vec![IRType::Int]).into()
                     ),
                     name: "@_5_Person_init".into(),
                     blocks: vec![BasicBlock {
@@ -3033,7 +3033,7 @@ mod tests {
                             Instr::GetElementPointer {
                                 dest: Register(2),
                                 from: Register(0), // self is in register 0
-                                ty: IRType::Int,
+                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
                                 index: 0
                             },
                             Instr::Store {
@@ -3041,13 +3041,18 @@ mod tests {
                                 val: Register(1), // age is in register 1
                                 location: Register(2)
                             },
+                            Instr::Load {
+                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                dest: Register(3),
+                                addr: Register(0)
+                            },
                             Instr::Ret(
-                                IRType::Struct(SymbolID(5), vec![IRType::Int]),
-                                Some(Register(0))
+                                IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                Some(Register(3))
                             )
                         ],
                     }],
-                    env_ty: IRType::Struct(SymbolID(5), vec![IRType::Int]),
+                    env_ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -3058,25 +3063,25 @@ mod tests {
                             Instr::ConstantInt(Register(1), 123),
                             Instr::Alloc {
                                 dest: Register(2),
-                                ty: IRType::Struct(SymbolID(5), vec![IRType::Int]),
+                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
                                 count: None
                             },
                             Instr::Ref(
                                 Register(3),
                                 IRType::Func(
                                     vec![IRType::Int],
-                                    IRType::Struct(SymbolID(5), vec![IRType::Int]).into()
+                                    IRType::Struct(SymbolID::typed(1), vec![IRType::Int]).into()
                                 ),
                                 RefKind::Func("@_5_Person_init".into())
                             ),
                             Instr::Call {
                                 dest_reg: Register(4),
-                                ty: IRType::Struct(SymbolID(5), vec![IRType::Int]).into(),
+                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]).into(),
                                 callee: Callee::Register(Register(3)),
                                 args: RegisterList(vec![Register(2), Register(1)])
                             },
                             Instr::Ret(
-                                IRType::Struct(SymbolID(5), vec![IRType::Int]),
+                                IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
                                 Some(Register(4))
                             )
                         ],
@@ -3104,7 +3109,7 @@ mod tests {
         )
         .unwrap();
 
-        let person_struct_ty = IRType::Struct(SymbolID(5), vec![IRType::Int]);
+        let person_struct_ty = IRType::Struct(SymbolID::typed(1), vec![IRType::Int]);
         let person_init_func_ty = IRType::Func(vec![IRType::Int], person_struct_ty.clone().into());
 
         assert_lowered_functions!(
@@ -3120,7 +3125,7 @@ mod tests {
                             Instr::GetElementPointer {
                                 dest: Register(2),
                                 from: Register(0), // self is in register 0
-                                ty: IRType::Int,
+                                ty: person_struct_ty.clone(),
                                 index: 0
                             },
                             Instr::Store {
@@ -3128,8 +3133,13 @@ mod tests {
                                 val: Register(1), // age is in register 1
                                 location: Register(2)
                             },
+                            Instr::Load {
+                                ty: person_struct_ty.clone(),
+                                dest: Register(3),
+                                addr: Register(0)
+                            },
                             // return self
-                            Instr::Ret(person_struct_ty.clone(), Some(Register(0)))
+                            Instr::Ret(person_struct_ty.clone(), Some(Register(3)))
                         ],
                     }],
                     env_ty: person_struct_ty.clone()
@@ -3162,7 +3172,7 @@ mod tests {
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 from: Register(4),
-                                ty: IRType::Int,
+                                ty: person_struct_ty,
                                 index: 0,
                             },
                             Instr::Load {
