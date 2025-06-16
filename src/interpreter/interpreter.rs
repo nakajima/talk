@@ -107,7 +107,7 @@ impl IRInterpreter {
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
         log::trace!("Reg: {:?}", self.stack.last().unwrap().registers);
-        log::trace!("{instr:?}");
+        log::info!("{instr:?}");
 
         match instr {
             Instr::ConstantInt(register, val) => {

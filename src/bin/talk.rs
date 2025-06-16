@@ -1,7 +1,7 @@
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    use std::path::PathBuf;
+    use std::{fs::File, path::PathBuf};
 
     use clap::{Args, Parser, Subcommand};
 
@@ -27,7 +27,12 @@ async fn main() {
         stdio: bool,
     }
 
-    env_logger::builder().try_init().unwrap();
+    let target = Box::new(File::create("log.txt").expect("Can't create file"));
+    env_logger::builder()
+        .filter(None, log::LevelFilter::Info)
+        .target(env_logger::Target::Pipe(target))
+        .try_init()
+        .unwrap();
 
     let cli = Cli::parse();
 

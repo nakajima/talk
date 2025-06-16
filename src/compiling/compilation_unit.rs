@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     NameResolved, SourceFile, SymbolTable,
+    constraint_solver::ConstraintSolver,
     environment::Environment,
     file_store::FileStore,
     lexer::LexerError,
@@ -157,7 +158,9 @@ impl CompilationUnit<Resolved> {
         let mut symbol_table = self.stage.symbol_table;
 
         for file in self.stage.files {
-            let typed = TypeChecker.infer(file, &mut symbol_table, &mut env);
+            let mut typed = TypeChecker.infer(file, &mut symbol_table, &mut env);
+            let mut solver = ConstraintSolver::new(&mut typed, &mut symbol_table);
+            solver.solve();
             files.push(typed);
         }
 

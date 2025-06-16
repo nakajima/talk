@@ -42,7 +42,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn solve(&mut self) -> Result<(), TypeError> {
+    pub fn solve(&mut self) {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
         log::info!("solving {:#?}", self.constraints);
 
@@ -60,8 +60,6 @@ impl<'a> ConstraintSolver<'a> {
         for typed_expr in &mut self.source_file.types_mut().values_mut() {
             typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
         }
-
-        Ok(())
     }
 
     fn solve_constraint(

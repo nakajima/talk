@@ -92,7 +92,10 @@ pub fn synthesize_inits(
 
             let Some(Expr::Struct(_, _, body)) = source_file.get(&struct_info.expr_id).cloned()
             else {
-                log::error!("didn't get struct from expr id");
+                log::error!(
+                    "didn't get struct from expr id: {:?}",
+                    source_file.get(&struct_info.expr_id)
+                );
                 return;
             };
 

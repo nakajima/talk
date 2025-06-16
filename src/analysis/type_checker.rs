@@ -454,6 +454,7 @@ impl TypeChecker {
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
+        log::info!("infer call");
         let mut ret_var = if let Some(expected) = expected {
             expected.clone()
         } else {
@@ -480,6 +481,7 @@ impl TypeChecker {
                 let struct_def = env.lookup_struct(&symbol_id).unwrap();
 
                 // TODO: Handle multiple initializers
+                log::info!("looking up initializer for struct: {struct_def:?}");
                 let Some(Expr::Init(_, func_id)) =
                     source_file.get(&struct_def.initializers[0]).cloned()
                 else {
@@ -505,11 +507,11 @@ impl TypeChecker {
                     },
                 );
 
-                let expected_callee_ty =
-                    Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
+                // let expected_callee_ty =
+                // Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
                 env.constrain_equality(
                     *callee,
-                    expected_callee_ty,
+                    Ty::Init(symbol_id, arg_tys),
                     Ty::Init(symbol_id, params).clone(),
                 );
 
@@ -1241,9 +1243,11 @@ impl TypeChecker {
                         log::trace!("Defining property {name:?} {ty:?}");
                         methods.insert(name.to_string(), Method::new(name.to_string(), ty));
                     }
-                    _ => return {
-                        log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
-                        Err((*id, TypeError::Unknown("Unhandled property".into())))
+                    _ => {
+                        return {
+                            log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
+                            Err((*id, TypeError::Unknown("Unhandled property".into())))
+                        };
                     }
                 }
             }

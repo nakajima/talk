@@ -1,9 +1,6 @@
 struct Person {
   let age: Int
-
-	init(age: Int) {
-		self.age = age
-	}
+  let count: Int
 }
 
-Person()
+Person(age: 123, count: 456)

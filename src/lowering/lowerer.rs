@@ -542,7 +542,14 @@ impl<'a> Lowerer<'a> {
 
         self.lower_block(&body);
 
-        self.push_instr(Instr::Ret(struct_ty.clone(), Some(env)));
+        let loaded_reg = self.allocate_register();
+        self.push_instr(Instr::Load {
+            dest: loaded_reg,
+            ty: struct_ty.clone(),
+            addr: env,
+        });
+
+        self.push_instr(Instr::Ret(struct_ty.clone(), Some(loaded_reg)));
 
         let Ty::Func(params, _ret, generics) = typed_func.ty else {
             unreachable!()
@@ -574,7 +581,9 @@ impl<'a> Lowerer<'a> {
         self.lowered_functions.push(func.clone());
         self.current_functions.pop();
 
-        Some(Register(1))
+        Some(loaded_reg)
+
+        // Some(Register(1))
     }
 
     fn lower_function(&mut self, expr_id: &ExprID) -> Register {
@@ -988,12 +997,11 @@ impl<'a> Lowerer<'a> {
             let index = self.property_index(name, receiver_typed.ty.to_ir(self));
 
             let member_reg = self.allocate_register();
-            let member_ty = typed_expr.ty.to_ir(self);
 
             self.push_instr(Instr::GetElementPointer {
                 dest: member_reg,
                 from: receiver,
-                ty: member_ty.clone(),
+                ty: receiver_typed.ty.to_ir(self).clone(),
                 index,
             });
 

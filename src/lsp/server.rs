@@ -123,6 +123,8 @@ impl LanguageServer for ServerState {
             });
         };
 
+        log::trace!("Getting diagnostics");
+
         let diagnostics = self.driver.diagnostics(&path);
 
         Box::pin(async {
@@ -380,9 +382,10 @@ fn find_files_recursive(
             find_files_recursive(&path, extension, files)?;
         } else if path.is_file()
             && let Some(ext) = path.extension()
-                && ext.to_str() == Some(extension) {
-                    files.push(path);
-                }
+            && ext.to_str() == Some(extension)
+        {
+            files.push(path);
+        }
     }
     Ok(())
 }

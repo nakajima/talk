@@ -53,7 +53,7 @@ pub fn _compile_prelude() -> Prelude {
     let mut env = Environment::new();
     let mut inferred = checker.infer_without_prelude(&mut env, resolved, &mut symbol_table);
     let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
-    solver.solve().unwrap();
+    solver.solve();
 
     let (types, schemes, typed_exprs) = inferred.export();
 

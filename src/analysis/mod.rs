@@ -21,7 +21,7 @@ pub fn check(input: &str) -> Result<SourceFile<Typed>, TypeError> {
     let mut env = Environment::new();
     let mut inferred = checker.infer(resolved, &mut symbol_table, &mut env);
     let mut constraint_solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
-    constraint_solver.solve()?;
+    constraint_solver.solve();
     Ok(inferred)
 }
 
@@ -39,6 +39,6 @@ pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable
     let mut env = Environment::new();
     let mut inferred = checker.infer(resolved, &mut symbol_table, &mut env);
     let mut constraint_solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
-    constraint_solver.solve()?;
+    constraint_solver.solve();
     Ok((inferred, symbol_table))
 }

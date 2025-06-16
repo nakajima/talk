@@ -48,12 +48,18 @@ impl Value {
                     .collect();
                 Value::Enum { tag, values }
             }
-            IRType::Struct(_, irtypes) => Value::Struct(
-                irtypes
-                    .iter()
-                    .map(|ty| Value::from_bytes(&bytes[2..], ty))
-                    .collect(),
-            ),
+            IRType::Struct(_, irtypes) => {
+                let mut start = 0;
+                let mut members = vec![];
+                for ty in irtypes {
+                    members.push(Value::from_bytes(
+                        &bytes[start..(start + ty.mem_size())],
+                        ty,
+                    ));
+                    start += ty.mem_size();
+                }
+                Value::Struct(members)
+            }
             IRType::Pointer => {
                 Value::Pointer(Pointer(usize::from_le_bytes(bytes.try_into().unwrap())))
             }
@@ -90,7 +96,13 @@ impl Value {
             }
             Value::Enum { .. } => todo!(),
             Value::Void => todo!(),
-            Value::Struct(values) => values.iter().flat_map(|v| v.as_bytes()).collect(),
+            Value::Struct(values) => {
+                let mut bytes = vec![];
+                for value in values {
+                    bytes.extend(value.as_bytes());
+                }
+                bytes
+            }
             Value::Pointer(pointer) => pointer.0.to_le_bytes().to_vec(),
             Value::Func(id) => id.0.to_le_bytes().to_vec(),
             Value::Array {

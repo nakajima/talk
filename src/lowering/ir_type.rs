@@ -39,7 +39,7 @@ impl IRType {
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
             IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
-            IRType::Struct(_, irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
+            IRType::Struct(_, irtypes) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Pointer => 8,
             IRType::Array { .. } => IRType::Pointer.mem_size(),
         }
@@ -47,10 +47,10 @@ impl IRType {
 
     pub fn get_element_pointer(&self, from: Pointer, index: usize) -> Result<Pointer, IRError> {
         match self {
-            IRType::Struct(_, irtypes) => {
+            IRType::Struct(_, members) => {
                 let mut offset = 0;
                 for i in 0..index {
-                    offset += irtypes[i].mem_size();
+                    offset += members[i].mem_size();
                 }
 
                 Ok(Pointer(from.0 + offset))

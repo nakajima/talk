@@ -918,9 +918,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
-        let rhs = self
-            .parse_with_precedence(current_precedence + 1)
-            .expect("did not get binop rhs");
+        let rhs = self.parse_with_precedence(current_precedence + 1)?;
 
         self.add_expr(Unary(op.kind, rhs), tok)
     }
@@ -944,9 +942,7 @@ impl<'a> Parser<'a> {
         ])?;
 
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
-        let rhs = self
-            .parse_with_precedence(current_precedence + 1)
-            .expect("did not get binop rhs");
+        let rhs = self.parse_with_precedence(current_precedence + 1)?;
 
         self.add_expr(Binary(lhs, op.kind, rhs), tok)
     }
