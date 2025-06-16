@@ -3,4 +3,5 @@ struct Person {
   let count: Int
 }
 
-Person(age: 123, count: 456)
+let person = Person(age: 123, count: 456)
+person.age

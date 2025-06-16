@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
-    FileStore, SourceFile,
+    FileID, FileStore, SourceFile,
     compiling::compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
     source_file,
 };

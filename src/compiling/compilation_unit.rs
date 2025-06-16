@@ -177,7 +177,7 @@ impl CompilationUnit<Resolved> {
 }
 
 pub struct Typed {
-    symbol_table: SymbolTable,
+    pub symbol_table: SymbolTable,
     pub environment: Environment,
     files: Vec<SourceFile<source_file::Typed>>,
 }

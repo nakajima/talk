@@ -593,7 +593,7 @@ impl<'a> Parser<'a> {
 
         // Consume the `let` keyword
         self.advance();
-        let (name, _) = self.try_identifier().expect("did not get identifier");
+        let name = self.identifier()?;
 
         let type_repr = if self.did_match(TokenKind::Colon)? {
             Some(self.type_repr(false)?)
