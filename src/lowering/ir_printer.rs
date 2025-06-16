@@ -62,7 +62,7 @@ fn print_func_sig_with_args(args: &[IRType], env_ty: &IRType, ret: &IRType) -> S
         res.push_str(&format!(
             "{} {}",
             &format_ir_ty(arg),
-            &format_register(&Register(i as i32))
+            &format_register(&Register(i as i32 + 1))
         ));
     }
 

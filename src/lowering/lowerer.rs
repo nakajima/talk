@@ -9,6 +9,7 @@ use crate::{
         instr::Instr, ir_module::IRModule, ir_type::IRType, parsing::parser::ParserError,
         register::Register,
     },
+    lsp::formatter::format,
     name::Name,
     parser::ExprID,
     token::Token,
@@ -92,6 +93,7 @@ impl Ty {
                 };
 
                 IRType::Struct(
+                    *symbol_id,
                     struct_def
                         .properties
                         .values()
@@ -260,6 +262,7 @@ impl From<Register> for SymbolValue {
     }
 }
 
+#[derive(Debug)]
 struct CurrentFunction {
     current_block_idx: usize,
     next_block_id: BasicBlockID,
@@ -335,19 +338,23 @@ pub struct IRFunction {
 
 impl IRFunction {
     pub(crate) fn args(&self) -> &[IRType] {
-        let IRType::Func(ref args, _) = self.ty else {
-            unreachable!()
+        let (IRType::Func(ref args, _) | IRType::Struct(_, ref args)) = self.ty else {
+            unreachable!("didn't get func for ty: {:?}", self.ty)
         };
 
         args
     }
 
     pub(crate) fn ret(&self) -> &IRType {
-        let IRType::Func(_, ref ret) = self.ty else {
-            unreachable!()
+        if let IRType::Func(_, ref ret) = self.ty {
+            return ret;
         };
 
-        ret
+        if let IRType::Struct(_, _) = self.ty {
+            return &self.ty;
+        };
+
+        unreachable!()
     }
 }
 
@@ -393,7 +400,10 @@ impl<'a> Lowerer<'a> {
         if did_create {
             // Make sure we have a current function
             self.current_functions
-                .push(CurrentFunction::new(IRType::Struct(vec![])));
+                .push(CurrentFunction::new(IRType::Struct(
+                    SymbolID::GENERATED_MAIN,
+                    vec![],
+                )));
 
             // Make sure it has a basic block
             let entry = self.new_basic_block();
@@ -422,6 +432,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
         let typed_expr = self.source_file.typed_expr(expr_id).unwrap().clone();
+        println!("-> lowering {typed_expr:?}");
         match typed_expr.expr {
             Expr::LiteralInt(_)
             | Expr::LiteralFloat(_)
@@ -444,44 +455,113 @@ impl<'a> Lowerer<'a> {
             Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
             Expr::CallArg { value, .. } => self.lower_expr(&value),
             Expr::Struct(Name::Resolved(struct_id, _), _, _) => {
-                let Some(TypeDef::Struct(struct_def)) =
-                    self.source_file.type_def(&struct_id).cloned()
-                else {
-                    self.source_file.diagnostics.insert(Diagnostic::lowering(
-                        *expr_id,
-                        IRError::Unknown(format!(
-                            "Could not resolve struct for symbol: {:?}",
-                            struct_id
-                        )),
-                    ));
-                    return None;
-                };
-
-                self.current_func_mut()
-                    .register_symbol(struct_id, SymbolValue::Struct(struct_def));
-
-                None
+                self.lower_struct(expr_id, struct_id)
             } // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
             expr => todo!("Cannot lower {:?}", expr),
         }
     }
 
+    fn lower_struct(&mut self, expr_id: &ExprID, struct_id: SymbolID) -> Option<Register> {
+        let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&struct_id).cloned()
+        else {
+            self.source_file.diagnostics.insert(Diagnostic::lowering(
+                *expr_id,
+                IRError::Unknown(format!(
+                    "Could not resolve struct for symbol: {:?}",
+                    struct_id
+                )),
+            ));
+            return None;
+        };
+
+        for initializer in &struct_def.initializers {
+            self.lower_expr(initializer);
+        }
+
+        self.current_func_mut()
+            .register_symbol(struct_id, SymbolValue::Struct(struct_def));
+
+        None
+    }
+
     fn lower_init(&mut self, symbol_id: &SymbolID, func_id: &ExprID) -> Option<Register> {
-        self.lower_function(func_id);
+        let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(symbol_id).cloned()
+        else {
+            unreachable!()
+        };
+        let typed_func = self.source_file.typed_expr(func_id).unwrap();
+        let Expr::Func { params, body, .. } = typed_func.expr else {
+            unreachable!()
+        };
 
-        let closure_ptr = self.allocate_register();
-
-        //??
-
-        let func_ref = RefKind::Func(name.mangled(&typed_expr.ty));
-        self.fill_closure(
-            closure_ptr,
-            func_ref,
-            func_type,
-            capture_types,
-            capture_registers,
+        let struct_ty = IRType::Struct(
+            *symbol_id,
+            struct_def
+                .properties
+                .values()
+                .map(|p| p.ty.to_ir(self))
+                .collect(),
         );
+
+        self.current_functions
+            .push(CurrentFunction::new(struct_ty.clone()));
+        let block_id = self.new_basic_block();
+        self.set_current_block(block_id);
+
+        // Define our env
+        let env = self.allocate_register();
+        self.current_func_mut()
+            .register_symbol(*symbol_id, SymbolValue::Register(env));
+
+        for param in params {
+            let Expr::Parameter(Name::Resolved(symbol, _), _) =
+                self.source_file.get(&param).unwrap().clone()
+            else {
+                panic!("didn't get parameter")
+            };
+
+            let register = self.allocate_register();
+            self.current_func_mut()
+                .register_symbol(symbol, SymbolValue::Register(register));
+        }
+
+        println!("{:?}", self.current_func());
+        self.lower_block(&body);
+
+        self.push_instr(Instr::Ret(struct_ty.clone(), Some(env)));
+
+        let Ty::Func(params, ret, generics) = typed_func.ty else {
+            unreachable!()
+        };
+
+        // Override func type for init to always return the struct
+        let init_func_ty = Ty::Func(
+            params,
+            Ty::Struct(
+                *symbol_id,
+                struct_def
+                    .properties
+                    .values()
+                    .map(|p| p.ty.clone())
+                    .collect(),
+            )
+            .into(),
+            generics,
+        );
+
+        let name_str = struct_def.name_str.clone();
+        let func = IRFunction {
+            ty: init_func_ty.to_ir(self),
+            name: Name::Resolved(*symbol_id, format!("{}_init", name_str)).mangled(&init_func_ty),
+            blocks: self.current_func_mut().blocks.clone(),
+            env_ty: struct_ty,
+        };
+
+        self.lowered_functions.push(func.clone());
+        self.current_functions.pop();
+
+        Some(Register(1))
     }
 
     fn lower_function(&mut self, expr_id: &ExprID) -> Register {
@@ -556,7 +636,7 @@ impl<'a> Lowerer<'a> {
             (vec![], vec![])
         };
 
-        let environment_type = IRType::Struct(capture_types.clone());
+        let environment_type = IRType::Struct(SymbolID::ENV, capture_types.clone());
 
         self.current_functions
             .push(CurrentFunction::new(environment_type));
@@ -884,10 +964,29 @@ impl<'a> Lowerer<'a> {
         }
 
         if let Some(receiver_id) = receiver_id {
-            let receiver = self.lower_expr(receiver_id);
+            let Some(receiver) = self.lower_expr(receiver_id) else {
+                todo!("did not get receiver register: {:?}", receiver_id)
+            };
 
-            todo!("receiver: {:?} {:?}", receiver, typed_expr);
+            let Some(receiver_typed) = self.source_file.typed_expr(receiver_id) else {
+                unreachable!()
+            };
+
+            let index = self.property_index(name, receiver_typed.ty.to_ir(self));
+
+            let member_reg = self.allocate_register();
+            let member_ty = typed_expr.ty.to_ir(self);
+
+            self.push_instr(Instr::GetElementPointer {
+                dest: member_reg,
+                from: receiver,
+                ty: member_ty,
+                index,
+            });
+
+            return Some(member_reg);
         } else {
+            todo!("wtf")
         }
 
         todo!("receiver: {:?}", receiver_id);
@@ -1011,15 +1110,17 @@ impl<'a> Lowerer<'a> {
         Some(return_reg)
     }
 
-    fn lower_assignment(&mut self, lhs: &ExprID, rhs_id: &ExprID) -> Option<Register> {
+    fn lower_assignment(&mut self, lhs_id: &ExprID, rhs_id: &ExprID) -> Option<Register> {
         let rhs = self
             .lower_expr(rhs_id)
             .expect("Did not get rhs for assignment");
 
-        match self.source_file.get(lhs).unwrap().clone() {
+        let lhs = self.source_file.typed_expr(lhs_id).unwrap().clone();
+
+        match &lhs.expr {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
                 self.current_func_mut()
-                    .register_symbol(symbol_id, rhs.into());
+                    .register_symbol(*symbol_id, rhs.into());
                 None
             }
             Expr::Variable(Name::Resolved(symbol, _), _) => {
@@ -1037,7 +1138,7 @@ impl<'a> Lowerer<'a> {
                             rhs,
                         ));
                         self.current_func_mut()
-                            .register_symbol(symbol, new_reg.into());
+                            .register_symbol(*symbol, new_reg.into());
                         None
                     }
                     SymbolValue::Capture(idx, ty) => {
@@ -1062,7 +1163,16 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            _ => todo!(),
+            Expr::Member(Some(receiver_id), name) => {
+                let dest = self.lower_member(&Some(*receiver_id), lhs_id, name);
+                self.push_instr(Instr::Store {
+                    ty: lhs.ty.to_ir(self),
+                    val: rhs,
+                    location: dest.unwrap(),
+                });
+                None
+            }
+            _ => todo!("don't know how to lower: {:?}", lhs),
         }
     }
 
@@ -1086,8 +1196,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_variable(&mut self, expr_id: &ExprID, name: &Name) -> Option<Register> {
-        let Name::Resolved(symbol_id, _) = name else {
-            panic!("Unresolved variable: {name:?}")
+        let (Name::Resolved(symbol_id, _) | Name::_Self(symbol_id)) = name else {
+            let expr = self.source_file.get(expr_id).unwrap();
+
+            panic!("Unresolved variable: {name:?} {:?}", expr)
         };
 
         let value = self
@@ -1211,18 +1323,12 @@ impl<'a> Lowerer<'a> {
 
         // Handle struct construction
         println!("{:?}", callee_typed_expr.ty);
-        if let Ty::Init(struct_id, params) = callee_typed_expr.ty {
+        if let Ty::Init(struct_id, _params) = callee_typed_expr.ty {
             let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&struct_id) else {
                 unreachable!()
             };
 
             let struct_dest = self.allocate_register();
-            // self.push_instr(Instr::Alloc {
-            //     dest: struct_dest,
-            //     ty,
-            //     count: None,
-            // });
-
             let env_ptr = self.allocate_register();
             let env_reg = self.allocate_register();
 
@@ -1303,7 +1409,7 @@ impl<'a> Lowerer<'a> {
     ) {
         // Create the environment struct
         let environment_register = self.allocate_register();
-        let environment_type = IRType::Struct(capture_types);
+        let environment_type = IRType::Struct(SymbolID(0), capture_types);
         self.push_instr(Instr::MakeStruct {
             dest: environment_register,
             ty: environment_type.clone(),
@@ -1413,6 +1519,22 @@ impl<'a> Lowerer<'a> {
             _ => todo!(),
         }
     }
+
+    pub fn property_index(&self, name: &str, irtype: IRType) -> usize {
+        let IRType::Struct(symbol_id, _) = irtype else {
+            unreachable!()
+        };
+
+        let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&symbol_id) else {
+            unreachable!()
+        };
+
+        struct_def
+            .properties
+            .keys()
+            .position(|k| k == name)
+            .expect("did not get property")
+    }
 }
 
 fn find_or_create_main(
@@ -1490,7 +1612,7 @@ fn find_or_create_main(
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolTable, check,
+        SymbolID, SymbolTable, check,
         lowering::{
             instr::Callee,
             ir_module::IRModule,
@@ -1689,7 +1811,7 @@ mod tests {
                             Instr::Ret(IRType::TypeVar("T4".into()), Some(Register(8))),
                         ],
                     }],
-                    env_ty: IRType::Struct(vec![IRType::Pointer]),
+                    env_ty: IRType::Struct(SymbolID::ENV, vec![IRType::Pointer]),
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -1702,21 +1824,20 @@ mod tests {
                                 ty: IRType::closure(),
                                 count: None,
                             },
-                            // This sequence is now identical to your working test case.
                             Instr::MakeStruct {
                                 dest: Register(2),
-                                ty: IRType::Struct(vec![IRType::Pointer]),
+                                ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
                                 values: RegisterList(vec![Register(1)])
                             },
                             Instr::Alloc {
                                 dest: Register(3),
                                 count: None,
-                                ty: IRType::Struct(vec![IRType::Pointer]),
+                                ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
                             },
                             Instr::Store {
                                 val: Register(2),
                                 location: Register(3),
-                                ty: IRType::Struct(vec![IRType::Pointer]),
+                                ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
                             },
                             Instr::Ref(
                                 Register(4),
@@ -1997,7 +2118,7 @@ mod tests {
                             Some(Register(1))
                         )],
                     }],
-                    env_ty: IRType::Struct(vec![])
+                    env_ty: IRType::Struct(SymbolID::ENV, vec![])
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -2068,7 +2189,7 @@ mod tests {
                             Instr::Ret(IRType::Pointer, Some(Register(1)))
                         ],
                     }],
-                    env_ty: IRType::Struct(vec![])
+                    env_ty: IRType::Struct(SymbolID::ENV, vec![])
                 },
             ]
         )
@@ -2089,7 +2210,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(1)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2109,7 +2230,7 @@ mod tests {
                         Instr::Ret(IRType::Float, Some(Register(1)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }],
         )
     }
@@ -2130,7 +2251,7 @@ mod tests {
                         Instr::Ret(IRType::Bool, Some(Register(2))),
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2152,7 +2273,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(3)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2174,7 +2295,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(3)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }],
         )
     }
@@ -2196,7 +2317,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(3)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2218,7 +2339,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(3)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2238,7 +2359,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(1))),
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2297,7 +2418,7 @@ mod tests {
                     ],
                 },
             ],
-            env_ty: IRType::Struct(vec![]),
+            env_ty: IRType::Struct(SymbolID::ENV, vec![]),
         }];
 
         assert_lowered_functions!(lowered, expected,);
@@ -2325,7 +2446,7 @@ mod tests {
                         Instr::Ret(IRType::Enum(vec![]), Some(Register(1)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2351,7 +2472,7 @@ mod tests {
                         Instr::Ret(IRType::Enum(vec![IRType::Int]), Some(Register(2)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2419,7 +2540,7 @@ mod tests {
                         ]
                     },
                 ],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2499,7 +2620,7 @@ mod tests {
                         ]
                     },
                 ],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2575,7 +2696,7 @@ mod tests {
                         ]
                     },
                 ],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }]
         )
     }
@@ -2593,7 +2714,7 @@ mod tests {
 
         // The function signature for `add` only includes its explicit parameters.
         let add_func_type = IRType::Func(vec![IRType::Int], Box::new(IRType::Int));
-        let env_struct_type = IRType::Struct(vec![IRType::Int]);
+        let env_struct_type = IRType::Struct(SymbolID::ENV, vec![IRType::Int]);
 
         assert_lowered_functions!(
             lowered,
@@ -2655,7 +2776,6 @@ mod tests {
                                 add_func_type.clone(),
                                 RefKind::Func("@_5_add".into())
                             ),
-                            // Adhering to your specified GEP -> Store order
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 from: Register(2),
@@ -2719,6 +2839,98 @@ mod tests {
     }
 
     #[test]
+    fn lowers_struct_initializer() {
+        let lowered = lower(
+            "
+        struct Person {
+            let age: Int
+
+            init(age: Int) {
+                self.age = age
+            }
+        }
+
+        Person(age: 123)
+        ",
+        )
+        .unwrap();
+
+        assert_lowered_functions!(
+            lowered,
+            vec![
+                IRFunction {
+                    ty: IRType::Struct(SymbolID::ENV, vec![]),
+                    name: "@_5_Person_init".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            // Get the instance (first param for methods)
+                            Instr::GetElementPointer {
+                                dest: Register(3),
+                                from: Register(1),
+                                ty: IRType::Struct(SymbolID::ENV, vec![IRType::Int]),
+                                index: 0
+                            },
+                            // Get a pointer to the member field
+                            Instr::GetElementPointer {
+                                dest: Register(4),
+                                from: Register(3),
+                                ty: IRType::Int,
+                                index: 0
+                            },
+                            Instr::Store {
+                                ty: IRType::Int,
+                                // First param is in register 2
+                                val: Register(2),
+                                location: Register(4)
+                            },
+                            Instr::Ret(
+                                IRType::Struct(SymbolID::ENV, vec![IRType::Int]),
+                                Some(Register(1))
+                            )
+                        ],
+                    }],
+                    env_ty: IRType::EMPTY_STRUCT
+                },
+                IRFunction {
+                    ty: IRType::Func(vec![], IRType::Void.into()),
+                    name: "@main".into(),
+                    blocks: vec![BasicBlock {
+                        id: BasicBlockID(0),
+                        instructions: vec![
+                            Instr::ConstantInt(Register(1), 123),
+                            Instr::Alloc {
+                                dest: Register(2),
+                                ty: IRType::Struct(SymbolID::ENV, vec![IRType::Int]),
+                                count: None
+                            },
+                            Instr::Ref(
+                                Register(3),
+                                IRType::Func(
+                                    vec![IRType::Int],
+                                    IRType::Struct(SymbolID::ENV, vec![IRType::Int]).into()
+                                ),
+                                RefKind::Func("@_5_Person_init".into())
+                            ),
+                            Instr::Call {
+                                dest_reg: Register(4),
+                                ty: IRType::Struct(SymbolID::ENV, vec![IRType::Int]).into(),
+                                callee: Callee::Register(Register(3)),
+                                args: RegisterList(vec![Register(1)])
+                            },
+                            Instr::Ret(
+                                IRType::Struct(SymbolID::ENV, vec![IRType::Int]),
+                                Some(Register(4))
+                            )
+                        ],
+                    }],
+                    env_ty: IRType::EMPTY_STRUCT,
+                },
+            ]
+        )
+    }
+
+    #[test]
     fn lowers_struct_property() {
         let lowered = lower(
             "
@@ -2735,16 +2947,32 @@ mod tests {
             lowered,
             vec![
                 IRFunction {
-                    ty: IRType::Struct(vec![]),
-                    name: "@_5_Person".into(),
+                    ty: IRType::Func(
+                        vec![IRType::Int],
+                        IRType::Struct(SymbolID(5), vec![IRType::Int]).into()
+                    ),
+                    name: "@_5_Person_init".into(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
-                        instructions: vec![Instr::Ret(
-                            IRType::TypeVar("T3".into()),
-                            Some(Register(1))
-                        )],
+                        instructions: vec![
+                            Instr::GetElementPointer {
+                                dest: Register(2),
+                                from: Register(0),
+                                ty: IRType::Int,
+                                index: 0
+                            },
+                            Instr::Store {
+                                ty: IRType::Int,
+                                val: Register(1),
+                                location: Register(2)
+                            },
+                            Instr::Ret(
+                                IRType::Struct(SymbolID(5), vec![IRType::Int]),
+                                Some(Register(0))
+                            )
+                        ],
                     }],
-                    env_ty: IRType::EMPTY_STRUCT
+                    env_ty: IRType::Struct(SymbolID(5), vec![IRType::Int])
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -2799,14 +3027,7 @@ mod tests {
                                 location: Register(6),
                                 ty: IRType::Pointer
                             },
-                            // %4 now holds the pointer to the `foo` closure.
-
-                            // === Part 2: Call the closure ===
-
-                            // 1. Prepare the explicit argument(s).
                             Instr::ConstantInt(Register(7), 123),
-                            // 2. Unpack the closure object from %4.
-                            // You need to introduce a Load instruction here.
                             Instr::GetElementPointer {
                                 dest: Register(8),
                                 from: Register(1),

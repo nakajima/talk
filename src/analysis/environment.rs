@@ -36,7 +36,8 @@ pub struct EnumDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
     pub type_override: Option<fn(generics: &TypeParams) -> Ty>,
-    pub name: SymbolID,
+    pub symbol_id: SymbolID,
+    pub name_str: String,
     pub type_parameters: TypeParams,
     pub properties: BTreeMap<String, Property>,
     pub methods: HashMap<String, Method>,
@@ -45,7 +46,8 @@ pub struct StructDef {
 
 impl StructDef {
     pub fn new(
-        name: SymbolID,
+        symbol_id: SymbolID,
+        name_str: String,
         type_override: Option<fn(generics: &TypeParams) -> Ty>,
         type_parameters: TypeParams,
         properties: BTreeMap<String, Property>,
@@ -53,7 +55,8 @@ impl StructDef {
         initializers: Vec<ExprID>,
     ) -> Self {
         Self {
-            name,
+            symbol_id,
+            name_str,
             type_override,
             type_parameters,
             properties,
@@ -78,7 +81,7 @@ impl StructDef {
         if let Some(ty) = self.type_override {
             ty(type_parameters)
         } else {
-            Ty::Struct(self.name, self.type_parameters.clone())
+            Ty::Struct(self.symbol_id, self.type_parameters.clone())
         }
     }
 }
@@ -345,7 +348,7 @@ impl Environment {
     }
 
     pub fn register_struct(&mut self, def: StructDef) {
-        self.types.insert(def.name, TypeDef::Struct(def));
+        self.types.insert(def.symbol_id, TypeDef::Struct(def));
     }
 
     pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {

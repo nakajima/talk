@@ -54,14 +54,13 @@ fn lower_alloc(
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolTable, assert_lowered_functions, check,
-        lowering::{
+        assert_lowered_functions, check, lowering::{
             instr::Instr,
             ir_module::IRModule,
             ir_type::IRType,
             lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, Lowerer},
             register::Register,
-        },
+        }, SymbolID, SymbolTable
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
@@ -92,7 +91,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(1)))
                     ],
                 }],
-                env_ty: IRType::Struct(vec![])
+                env_ty: IRType::Struct(SymbolID::ENV, vec![])
             }],
         )
     }

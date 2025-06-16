@@ -1,8 +1,13 @@
 use std::str::FromStr;
 
 use crate::{
+    SymbolID,
+    environment::TypeDef,
     interpreter::heap::Pointer,
-    lowering::{lowerer::IRError, parsing::parser::ParserError},
+    lowering::{
+        lowerer::{IRError, Lowerer},
+        parsing::parser::ParserError,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,15 +19,18 @@ pub enum IRType {
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
     Enum(Vec<IRType>),
-    Struct(Vec<IRType> /* properties */),
+    Struct(SymbolID, Vec<IRType> /* properties */),
     Array { element: Box<IRType>, /* element */ },
     Pointer,
 }
 
 impl IRType {
-    pub const EMPTY_STRUCT: IRType = IRType::Struct(vec![]);
+    pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![]);
     pub fn closure() -> IRType {
-        IRType::Struct(vec![IRType::Pointer, IRType::Pointer])
+        IRType::Struct(
+            SymbolID::GENERATED_MAIN,
+            vec![IRType::Pointer, IRType::Pointer],
+        )
     }
 
     // How many bytes does this type take
@@ -35,7 +43,7 @@ impl IRType {
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
             IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
-            IRType::Struct(irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
+            IRType::Struct(sym, irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
             IRType::Pointer => 8,
             IRType::Array { .. } => IRType::Pointer.mem_size(),
         }
@@ -43,7 +51,7 @@ impl IRType {
 
     pub fn get_element_pointer(&self, from: Pointer, index: usize) -> Result<Pointer, IRError> {
         match self {
-            IRType::Struct(irtypes) => {
+            IRType::Struct(symbold_id, irtypes) => {
                 let mut offset = 0;
                 for i in 0..index {
                     offset += irtypes[i].mem_size();
@@ -96,7 +104,7 @@ impl FromStr for IRType {
             }
 
             // Recursively parse the return type
-            Ok(IRType::Struct(args))
+            Ok(IRType::Struct(SymbolID(0), args))
         } else {
             // Handle simple, non-function types
             match s {
@@ -136,7 +144,7 @@ impl std::fmt::Display for IRType {
             }
             Self::TypeVar(name) => f.write_str(name),
             Self::Enum(_generics) => f.write_str("enum"),
-            Self::Struct(types) => write!(
+            Self::Struct(_, types) => write!(
                 f,
                 "{{{}}}",
                 types

@@ -1148,7 +1148,7 @@ impl TypeChecker {
                 continue;
             };
 
-            let Name::Resolved(symbol_id, _) = name else {
+            let Name::Resolved(symbol_id, name_str) = name else {
                 return Err((*id, TypeError::Unresolved));
             };
 
@@ -1176,6 +1176,7 @@ impl TypeChecker {
             // Define a placeholder for `self` references
             env.register_struct(StructDef::new(
                 symbol_id,
+                name_str.clone(),
                 None,
                 type_parameters.clone(),
                 properties.clone(),
@@ -1246,6 +1247,7 @@ impl TypeChecker {
 
             let struct_def = StructDef::new(
                 symbol_id,
+                name_str,
                 None,
                 type_parameters.clone(),
                 properties,

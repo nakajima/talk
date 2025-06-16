@@ -13,6 +13,7 @@ impl SymbolID {
     pub const OPTIONAL: SymbolID = SymbolID(1);
     pub const ARRAY: SymbolID = SymbolID(-4);
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
+    pub const ENV: SymbolID = SymbolID(i32::MIN + 1);
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {

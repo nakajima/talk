@@ -5,14 +5,14 @@ use std::{
     str::{Chars, FromStr},
 };
 
-use crate::lowering::{
+use crate::{lowering::{
     instr::{FuncName, Instr},
     ir_module::IRModule,
     ir_type::IRType,
     lowerer::{BasicBlock, BasicBlockID, IRFunction},
     parsing::lexer::{Lexer, Token, Tokind},
     register::Register,
-};
+}, SymbolID};
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -130,7 +130,7 @@ impl<'a> Parser<'a> {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
             blocks,
-            env_ty: IRType::Struct(vec![]), //FIXME
+            env_ty: IRType::Struct(SymbolID(0), vec![]), //FIXME
         })
     }
 
@@ -354,7 +354,7 @@ impl<'a> Parser<'a> {
                         self.consume(Tokind::Comma).ok();
                     }
 
-                    IRType::Struct(types)
+                    IRType::Struct(SymbolID(0),types)
                 }
                 _ => todo!("{:?}", tok.kind),
             },

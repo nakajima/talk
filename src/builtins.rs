@@ -71,6 +71,7 @@ fn builtins() -> Vec<Builtin> {
             unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
             type_def: Some(TypeDef::Struct(StructDef::new(
                 SymbolID(-4),
+                "Array".to_string(),
                 Some(array_override),
                 vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
                 Default::default(),

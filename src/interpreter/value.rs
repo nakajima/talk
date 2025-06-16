@@ -48,7 +48,7 @@ impl Value {
                     .collect();
                 Value::Enum { tag, values }
             }
-            IRType::Struct(irtypes) => Value::Struct(
+            IRType::Struct(_, irtypes) => Value::Struct(
                 irtypes
                     .iter()
                     .map(|ty| Value::from_bytes(&bytes[2..], ty))
