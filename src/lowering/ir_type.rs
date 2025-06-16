@@ -2,12 +2,8 @@ use std::str::FromStr;
 
 use crate::{
     SymbolID,
-    environment::TypeDef,
     interpreter::heap::Pointer,
-    lowering::{
-        lowerer::{IRError, Lowerer},
-        parsing::parser::ParserError,
-    },
+    lowering::{lowerer::IRError, parsing::parser::ParserError},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,7 +39,7 @@ impl IRType {
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
             IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
-            IRType::Struct(sym, irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
+            IRType::Struct(_, irtypes) => irtypes.iter().map(IRType::mem_size).sum(),
             IRType::Pointer => 8,
             IRType::Array { .. } => IRType::Pointer.mem_size(),
         }
@@ -51,7 +47,7 @@ impl IRType {
 
     pub fn get_element_pointer(&self, from: Pointer, index: usize) -> Result<Pointer, IRError> {
         match self {
-            IRType::Struct(symbold_id, irtypes) => {
+            IRType::Struct(_, irtypes) => {
                 let mut offset = 0;
                 for i in 0..index {
                     offset += irtypes[i].mem_size();

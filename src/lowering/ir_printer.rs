@@ -169,7 +169,7 @@ mod tests {
         let func = print(&program);
         assert_eq!(
             func.trim(),
-            r#"func @_5_add({} %0, int %0) int
+            r#"func @_5_add({} %0, int %1) int
   entry:
     %2 = int 1;
     %3 = add int %2, %1;

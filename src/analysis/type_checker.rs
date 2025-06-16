@@ -505,13 +505,13 @@ impl TypeChecker {
                     },
                 );
 
-                // let expected_callee_ty =
-                //     Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
-                // env.constrain_equality(
-                //     *callee,
-                //     expected_callee_ty,
-                //     Ty::Init(symbol_id, params).clone(),
-                // );
+                let expected_callee_ty =
+                    Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
+                env.constrain_equality(
+                    *callee,
+                    expected_callee_ty,
+                    Ty::Init(symbol_id, params).clone(),
+                );
 
                 ret_var = instantiated;
             }
