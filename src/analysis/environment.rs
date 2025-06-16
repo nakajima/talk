@@ -287,6 +287,10 @@ impl Environment {
                     let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
                     Ty::Func(new_params, new_ret, new_generics)
                 }
+                Ty::Init(struct_id, params) => {
+                    let new_params = params.iter().map(|p| walk(p.clone(), map)).collect();
+                    Ty::Init(struct_id, new_params)
+                }
                 Ty::Closure { func, captures } => {
                     let func = Box::new(walk(*func, map));
                     let captures = captures.iter().map(|p| walk(p.clone(), map)).collect();
@@ -383,6 +387,13 @@ impl Environment {
                 } else {
                     ty // Not in this substitution map, return as is.
                 }
+            }
+            Ty::Init(struct_id, params) => {
+                let applied_params = params
+                    .iter()
+                    .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
+                    .collect();
+                Ty::Init(struct_id, applied_params)
             }
             Ty::Func(params, returning, generics) => {
                 let applied_params = params

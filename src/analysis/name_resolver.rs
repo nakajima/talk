@@ -471,12 +471,8 @@ impl NameResolver {
                     continue;
                 };
 
-                self.symbol_table.add_property(
-                    struct_symbol,
-                    name_str.clone(),
-                    *ty,
-                    *val,
-                );
+                self.symbol_table
+                    .add_property(struct_symbol, name_str.clone(), *ty, *val);
             }
             self.hoist_enum_members(&body_expr, source_file);
             self.type_symbol_stack.pop();

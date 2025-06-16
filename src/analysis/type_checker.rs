@@ -86,6 +86,7 @@ pub enum Ty {
     Int,
     Bool,
     Float,
+    Init(SymbolID, FuncParams),
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
@@ -329,9 +330,11 @@ impl TypeChecker {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        self.infer_node(func_id, env, &None, source_file)?;
+        let Ty::Func(params, _, _) = self.infer_node(func_id, env, &None, source_file)? else {
+            unreachable!()
+        };
 
-        env.instantiate_symbol(*struct_id)
+        Ok(Ty::Init(*struct_id, params))
     }
 
     fn infer_struct(
@@ -470,11 +473,11 @@ impl TypeChecker {
             arg_tys.push(ty);
         }
 
-        match source_file.get(callee) {
+        match source_file.get(callee).cloned() {
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
-                if env.is_struct_symbol(symbol_id) =>
+                if env.is_struct_symbol(&symbol_id) =>
             {
-                let struct_def = env.lookup_struct(symbol_id).unwrap();
+                let struct_def = env.lookup_struct(&symbol_id).unwrap();
 
                 // TODO: Handle multiple initializers
                 let Some(Expr::Init(_, func_id)) =
@@ -485,9 +488,11 @@ impl TypeChecker {
                     ));
                 };
 
-                let instantiated = env.instantiate_symbol(*symbol_id)?;
+                let instantiated = env.instantiate_symbol(symbol_id)?;
 
-                let Ok(callee_ty) = self.infer_node(&func_id, env, expected, source_file) else {
+                let Ok(Ty::Func(params, _, _)) =
+                    self.infer_node(&func_id, env, expected, source_file)
+                else {
                     return Err(TypeError::Unknown("Could not get init func".into()));
                 };
 
@@ -496,13 +501,17 @@ impl TypeChecker {
                     TypedExpr {
                         id: *callee,
                         expr: source_file.get(callee).cloned().unwrap(),
-                        ty: callee_ty.clone(),
+                        ty: Ty::Init(symbol_id, params.clone()),
                     },
                 );
 
-                let expected_callee_ty =
-                    Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
-                env.constrain_equality(*callee, expected_callee_ty, callee_ty.clone());
+                // let expected_callee_ty =
+                //     Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
+                // env.constrain_equality(
+                //     *callee,
+                //     expected_callee_ty,
+                //     Ty::Init(symbol_id, params).clone(),
+                // );
 
                 ret_var = instantiated;
             }
@@ -1413,14 +1422,18 @@ impl TypeChecker {
 
 #[cfg(test)]
 mod struct_tests {
-    use crate::{SymbolID, check, type_checker::Ty};
+    use crate::{SymbolID, check, expr::Expr, type_checker::Ty, typed_expr::TypedExpr};
 
     #[test]
-    fn checks_constructor() {
+    fn checks_initializer() {
         let checked = check(
             "
         struct Person {
             let age: Int
+
+            init(age: Int) {
+                self.age = age
+            }
         }
 
         Person(age: 123)
@@ -1432,6 +1445,20 @@ mod struct_tests {
             checked.type_for(checked.root_ids()[1]),
             Ty::Struct(SymbolID(5), vec![])
         );
+
+        let Some(TypedExpr {
+            expr: Expr::Call { callee, .. },
+            ..
+        }) = checked.typed_expr(&checked.root_ids()[1])
+        else {
+            panic!("did not get call")
+        };
+
+        let Some(TypedExpr { ty, .. }) = checked.typed_expr(&callee) else {
+            panic!("did not get callee")
+        };
+
+        assert_eq!(ty, Ty::Init(SymbolID(5), vec![Ty::Int]));
     }
 
     #[test]

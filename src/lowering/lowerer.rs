@@ -65,6 +65,10 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
+            Ty::Init(_, params) => IRType::Func(
+                params.iter().map(|t| t.to_ir(lowerer)).collect(),
+                IRType::Void.into(),
+            ),
             Ty::Void => IRType::Void,
             Ty::Int => IRType::Int,
             Ty::Bool => IRType::Bool,
@@ -458,8 +462,26 @@ impl<'a> Lowerer<'a> {
 
                 None
             } // Nothing to be done here.
+            Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
             expr => todo!("Cannot lower {:?}", expr),
         }
+    }
+
+    fn lower_init(&mut self, symbol_id: &SymbolID, func_id: &ExprID) -> Option<Register> {
+        self.lower_function(func_id);
+
+        let closure_ptr = self.allocate_register();
+
+        //??
+
+        let func_ref = RefKind::Func(name.mangled(&typed_expr.ty));
+        self.fill_closure(
+            closure_ptr,
+            func_ref,
+            func_type,
+            capture_types,
+            capture_registers,
+        );
     }
 
     fn lower_function(&mut self, expr_id: &ExprID) -> Register {
@@ -534,28 +556,7 @@ impl<'a> Lowerer<'a> {
             (vec![], vec![])
         };
 
-        let environment_register = self.allocate_register();
         let environment_type = IRType::Struct(capture_types.clone());
-        // Create the env
-        self.push_instr(Instr::MakeStruct {
-            dest: environment_register,
-            ty: environment_type.clone(),
-            values: RegisterList(capture_registers),
-        });
-
-        // Alloc a spot for it
-        let env_dest_ptr = self.allocate_register();
-        self.push_instr(Instr::Alloc {
-            dest: env_dest_ptr,
-            count: None,
-            ty: environment_type.clone(),
-        });
-
-        self.push_instr(Instr::Store {
-            ty: environment_type.clone(),
-            val: environment_register,
-            location: env_dest_ptr,
-        });
 
         self.current_functions
             .push(CurrentFunction::new(environment_type));
@@ -624,42 +625,13 @@ impl<'a> Lowerer<'a> {
             panic!("no symbol")
         };
 
-        let func_ref_reg = self.current_func_mut().registers.allocate();
-
-        self.current_func_mut()
-            .register_symbol(symbol, SymbolValue::Register(func_ref_reg));
-        let ir_type = typed_expr.ty.to_ir(self);
-        self.current_block_mut().push_instr(Instr::Ref(
-            func_ref_reg,
-            ir_type,
+        self.fill_closure(
+            closure_ptr,
             RefKind::Func(name.mangled(&typed_expr.ty)),
-        ));
-
-        let env_ptr = self.allocate_register();
-        let fn_ptr = self.allocate_register();
-        self.push_instr(Instr::GetElementPointer {
-            dest: env_ptr,
-            from: closure_ptr,
-            ty: IRType::closure(),
-            index: 1,
-        });
-        self.push_instr(Instr::GetElementPointer {
-            dest: fn_ptr,
-            from: closure_ptr,
-            ty: IRType::closure(),
-            index: 0,
-        });
-
-        self.push_instr(Instr::Store {
-            ty: IRType::Pointer,
-            val: env_dest_ptr,
-            location: env_ptr,
-        });
-        self.push_instr(Instr::Store {
-            ty: IRType::Pointer,
-            val: func_ref_reg,
-            location: fn_ptr,
-        });
+            typed_expr.ty.to_ir(self),
+            capture_types,
+            capture_registers,
+        );
 
         self.current_func_mut()
             .register_symbol(symbol, SymbolValue::Register(closure_ptr));
@@ -1239,18 +1211,17 @@ impl<'a> Lowerer<'a> {
 
         // Handle struct construction
         println!("{:?}", callee_typed_expr.ty);
-        if let Ty::Struct(struct_id, _) = callee_typed_expr.ty {
+        if let Ty::Init(struct_id, params) = callee_typed_expr.ty {
             let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&struct_id) else {
                 unreachable!()
             };
 
             let struct_dest = self.allocate_register();
-            let ty = callee_typed_expr.ty.to_ir(self);
-            self.push_instr(Instr::Alloc {
-                dest: struct_dest,
-                ty,
-                count: None,
-            });
+            // self.push_instr(Instr::Alloc {
+            //     dest: struct_dest,
+            //     ty,
+            //     count: None,
+            // });
 
             let env_ptr = self.allocate_register();
             let env_reg = self.allocate_register();
@@ -1317,6 +1288,74 @@ impl<'a> Lowerer<'a> {
 
         // 5. Return the destination register
         Some(dest_reg)
+    }
+
+    /// Fills a pre-allocated closure with the given function reference and captures.
+    ///
+    /// This assumes `closure_ptr` has already been allocated with Instr::Alloc.
+    fn fill_closure(
+        &mut self,
+        closure_ptr: Register,
+        func_ref: RefKind,
+        func_type: IRType,
+        capture_types: Vec<IRType>,
+        capture_registers: Vec<Register>,
+    ) {
+        // Create the environment struct
+        let environment_register = self.allocate_register();
+        let environment_type = IRType::Struct(capture_types);
+        self.push_instr(Instr::MakeStruct {
+            dest: environment_register,
+            ty: environment_type.clone(),
+            values: RegisterList(capture_registers),
+        });
+
+        // Allocate space for the environment
+        let env_dest_ptr = self.allocate_register();
+        self.push_instr(Instr::Alloc {
+            dest: env_dest_ptr,
+            count: None,
+            ty: environment_type.clone(),
+        });
+
+        // Store the environment
+        self.push_instr(Instr::Store {
+            ty: environment_type,
+            val: environment_register,
+            location: env_dest_ptr,
+        });
+
+        // Get reference to the function
+        let func_ref_reg = self.allocate_register();
+        self.push_instr(Instr::Ref(func_ref_reg, func_type, func_ref));
+
+        // Get pointers to the closure fields
+        let env_ptr = self.allocate_register();
+        let fn_ptr = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: env_ptr,
+            from: closure_ptr,
+            ty: IRType::closure(),
+            index: 1,
+        });
+        self.push_instr(Instr::GetElementPointer {
+            dest: fn_ptr,
+            from: closure_ptr,
+            ty: IRType::closure(),
+            index: 0,
+        });
+
+        // Store the environment and function pointers
+        self.push_instr(Instr::Store {
+            ty: IRType::Pointer,
+            val: env_dest_ptr,
+            location: env_ptr,
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::Pointer,
+            val: func_ref_reg,
+            location: fn_ptr,
+        });
     }
 
     pub(super) fn push_instr(&mut self, instr: Instr) {

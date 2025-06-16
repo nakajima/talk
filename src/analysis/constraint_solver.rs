@@ -352,6 +352,13 @@ impl<'a> ConstraintSolver<'a> {
                     .map(|t| Self::apply(t, substitutions, depth + 1))
                     .collect(),
             ),
+            Ty::Init(struct_id, params) => Ty::Init(
+                *struct_id,
+                params
+                    .iter()
+                    .map(|p| Self::apply(p, substitutions, depth + 1))
+                    .collect(),
+            ),
             Ty::Void => ty.clone(),
         }
     }
