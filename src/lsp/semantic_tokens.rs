@@ -59,8 +59,8 @@ impl<'a> SemanticTokenCollector<'a> {
     fn range_for(&self, expr_id: &ExprID) -> Range {
         let range = self.source_file.meta[*expr_id as usize].source_range();
 
-        if let Some(start) = self.line_col_for(range.start as u32)
-            && let Some(end) = self.line_col_for(range.end as u32)
+        if let Some(start) = self.line_col_for(range.start)
+            && let Some(end) = self.line_col_for(range.end)
         {
             Range::new(start, end)
         } else {

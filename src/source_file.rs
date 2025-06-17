@@ -245,15 +245,15 @@ impl<P: Phase> SourceFile<P> {
 
     pub fn span(&self, expr_id: &ExprID) -> Span {
         let Some(meta) = self.meta.get(*expr_id as usize) else {
-            panic!("didn't get a span for expr: {}", expr_id);
+            panic!("didn't get a span for expr: {expr_id}");
         };
 
         // handle single token expressions
         if meta.start == meta.end {
             Span {
                 file_id: self.file_id,
-                start: meta.start.start as u32,
-                end: meta.end.end as u32,
+                start: meta.start.start,
+                end: meta.end.end,
                 start_line: meta.start.line,
                 start_col: meta
                     .start
@@ -265,8 +265,8 @@ impl<P: Phase> SourceFile<P> {
         } else {
             Span {
                 file_id: self.file_id,
-                start: meta.start.start as u32,
-                end: meta.end.end as u32,
+                start: meta.start.start,
+                end: meta.end.end,
                 start_line: meta.start.line,
                 start_col: meta.start.col,
                 end_line: meta.end.line,

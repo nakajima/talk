@@ -88,7 +88,7 @@ impl Ty {
             Ty::Struct(symbol_id, _generics) => {
                 let Some(TypeDef::Struct(struct_def)) = lowerer.source_file.type_def(symbol_id)
                 else {
-                    panic!("Unable to determine definition of struct: {:?}", symbol_id);
+                    panic!("Unable to determine definition of struct: {symbol_id:?}");
                 };
 
                 IRType::Struct(
@@ -482,8 +482,7 @@ impl<'a> Lowerer<'a> {
             self.source_file.diagnostics.insert(Diagnostic::lowering(
                 *expr_id,
                 IRError::Unknown(format!(
-                    "Could not resolve struct for symbol: {:?}",
-                    struct_id
+                    "Could not resolve struct for symbol: {struct_id:?}"
                 )),
             ));
             return None;
@@ -573,7 +572,7 @@ impl<'a> Lowerer<'a> {
         let name_str = struct_def.name_str.clone();
         let func = IRFunction {
             ty: init_func_ty.to_ir(self),
-            name: Name::Resolved(*symbol_id, format!("{}_init", name_str)).mangled(&init_func_ty),
+            name: Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
             blocks: self.current_func_mut().blocks.clone(),
             env_ty: struct_ty,
         };
@@ -1005,7 +1004,7 @@ impl<'a> Lowerer<'a> {
                 index,
             });
 
-            return Some(member_reg);
+            Some(member_reg)
         } else {
             todo!("wtf")
         }
@@ -1144,7 +1143,7 @@ impl<'a> Lowerer<'a> {
             }
             Expr::Variable(Name::Resolved(symbol, _), _) => {
                 let value = self
-                    .lookup_register(&symbol)
+                    .lookup_register(symbol)
                     .expect("didn't get lhs for assignment")
                     .clone();
 
@@ -1218,12 +1217,12 @@ impl<'a> Lowerer<'a> {
         let (Name::Resolved(symbol_id, _) | Name::_Self(symbol_id)) = name else {
             let expr = self.source_file.get(expr_id).unwrap();
 
-            panic!("Unresolved variable: {name:?} {:?}", expr)
+            panic!("Unresolved variable: {name:?} {expr:?}")
         };
 
         let value = self
             .lookup_register(symbol_id)
-            .unwrap_or_else(|| panic!("no value for name: {:?} at {:?}", name, expr_id))
+            .unwrap_or_else(|| panic!("no value for name: {name:?} at {expr_id:?}"))
             .clone();
 
         match value {

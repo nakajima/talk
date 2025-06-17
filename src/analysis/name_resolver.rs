@@ -76,10 +76,10 @@ impl NameResolver {
                 None,
                 Span {
                     file_id: source_file.file_id,
-                    start: first_root.start.start as u32,
+                    start: first_root.start.start,
                     start_line: first_root.start.line,
                     start_col: first_root.start.col,
-                    end: last_root.end.end as u32,
+                    end: last_root.end.end,
                     end_line: last_root.end.line,
                     end_col: last_root.end.col,
                 },

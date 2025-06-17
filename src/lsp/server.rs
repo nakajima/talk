@@ -178,7 +178,7 @@ impl LanguageServer for ServerState {
         &mut self,
         params: CompletionParams,
     ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
-        log::info!("completions requested: {:?}", params);
+        log::info!("completions requested: {params:?}");
 
         let Ok(path) = params
             .text_document_position
@@ -242,7 +242,7 @@ impl LanguageServer for ServerState {
         //     })
         //     .collect();
         let completion_items = completion.get_completions();
-        log::info!("completion_items: {:?}", completion_items);
+        log::info!("completion_items: {completion_items:?}");
         Box::pin(async move {
             if completion_items.is_empty() {
                 Ok(None)
