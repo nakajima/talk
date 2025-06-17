@@ -207,15 +207,23 @@ impl IRInterpreter {
                 //    store it in the destination register specified by the `Call` instruction.
                 self.set_register_value(&dest_reg, result);
             }
-            Instr::JumpUnless(cond, jump_to) => {
-                if Value::Bool(false) == self.register_value(&cond) {
-                    let id = self.current_basic_block().id;
-                    let frame = self.stack.last_mut().expect("stack underflow");
-                    frame.pred = Some(id);
-                    frame.block_idx = jump_to.0 as usize;
-                    frame.pc = 0;
-                    return Ok(None);
-                }
+            Instr::Branch {
+                cond,
+                true_target,
+                false_target,
+            } => {
+                let next_block = if Value::Bool(true) == self.register_value(&cond) {
+                    true_target.0 as usize
+                } else {
+                    false_target.0 as usize
+                };
+
+                let id = self.current_basic_block().id;
+                let frame = self.stack.last_mut().expect("stack underflow");
+                frame.pred = Some(id);
+                frame.block_idx = next_block;
+                frame.pc = 0;
+                return Ok(None);
             }
             Instr::Ret(_ret, reg) => {
                 if let Some(reg) = reg {
@@ -234,16 +242,6 @@ impl IRInterpreter {
                 frame.pc = 0;
                 frame.block_idx = jump_to.0 as usize;
                 return Ok(None);
-            }
-            Instr::JumpIf(cond, jump_to) => {
-                if Value::Bool(true) == self.register_value(&cond) {
-                    let id = self.current_basic_block().id;
-                    let frame = self.stack.last_mut().expect("stack underflow");
-                    frame.pred = Some(id);
-                    frame.block_idx = jump_to.0 as usize;
-                    frame.pc = 0;
-                    return Ok(None);
-                }
             }
             Instr::Eq(dest, _, op1, op2) => {
                 self.set_register_value(
@@ -328,7 +326,7 @@ impl IRInterpreter {
             }
             Instr::GetElementPointer {
                 dest,
-                from,
+                base: from,
                 index,
                 ty,
             } => {

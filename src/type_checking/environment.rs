@@ -108,19 +108,20 @@ pub enum TypeDef {
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Property {
     pub name: String,
+    pub symbol: SymbolID,
     pub ty: Ty,
 }
 
 impl Property {
-    pub fn new(name: String, ty: Ty) -> Self {
-        Self { name, ty }
+    pub fn new(name: String, ty: Ty, symbol: SymbolID) -> Self {
+        Self { name, ty, symbol }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Method {
     pub name: String,
     pub ty: Ty,

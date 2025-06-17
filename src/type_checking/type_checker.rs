@@ -1215,16 +1215,15 @@ impl TypeChecker {
                             return Err((expr_id, TypeError::Unknown("No type for method".into())));
                         }
 
-                        let name = match name.clone() {
-                            Name::Raw(name_str) => name_str,
-                            Name::Resolved(_, name_str) => name_str,
+                        let (symbol, name) = match name.clone() {
+                            Name::Resolved(symbol, name_str) => (symbol, name_str),
                             _ => unreachable!(),
                         };
 
                         log::trace!("Defining property {name:?} {ty:?}");
                         properties.insert(
                             name.to_string(),
-                            Property::new(name.to_string(), ty.unwrap()),
+                            Property::new(name.to_string(), ty.unwrap(), symbol),
                         );
                     }
                     Expr::Init(_, func_id) => {

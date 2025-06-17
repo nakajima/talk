@@ -3,7 +3,7 @@ use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     diagnostic::Diagnostic,
-    environment::{StructDef, TypeDef},
+    environment::{Property, StructDef, TypeDef},
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::Instr, ir_module::IRModule, ir_type::IRType, parsing::parser::ParserError,
@@ -21,6 +21,7 @@ use crate::{
 pub enum IRError {
     ParseError,
     InvalidPointer(String),
+    PartialInitialization(String, Vec<Property>),
     Unknown(String),
 }
 
@@ -115,6 +116,10 @@ pub enum IRPattern {
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
 pub struct BasicBlockID(pub u32);
+
+impl BasicBlockID {
+    pub const ENTRY: BasicBlockID = BasicBlockID(0);
+}
 
 impl AddAssign<u32> for BasicBlockID {
     fn add_assign(&mut self, rhs: u32) {
@@ -333,6 +338,7 @@ pub struct IRFunction {
     pub name: String,
     pub blocks: Vec<BasicBlock>,
     pub env_ty: IRType,
+    pub env_reg: Register,
 }
 
 impl IRFunction {
@@ -575,6 +581,7 @@ impl<'a> Lowerer<'a> {
             name: Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
             blocks: self.current_func_mut().blocks.clone(),
             env_ty: struct_ty,
+            env_reg: env,
         };
 
         self.lowered_functions.push(func.clone());
@@ -679,7 +686,7 @@ impl<'a> Lowerer<'a> {
         let id = self.new_basic_block();
         self.set_current_block(id);
 
-        self.allocate_register(); // Set aside our env register
+        let env_reg = self.allocate_register(); // Set aside our env register
 
         for param in params {
             let Expr::Parameter(Name::Resolved(symbol, _), _) =
@@ -718,6 +725,7 @@ impl<'a> Lowerer<'a> {
             name: name.mangled(&typed_expr.ty),
             blocks: self.current_func_mut().blocks.clone(),
             env_ty: self.current_func().env_ty.clone(),
+            env_reg,
         };
         self.lowered_functions.push(func.clone());
         self.current_functions.pop();
@@ -744,12 +752,28 @@ impl<'a> Lowerer<'a> {
         let scrutinee_reg = self.lower_expr(scrutinee).unwrap();
         let merge_block_id = self.new_basic_block();
 
+        // Pre-allocate all the blocks where we will check the condition for each arm.
+        let arm_cond_blocks: Vec<_> = (0..arms.len()).map(|_| self.new_basic_block()).collect();
+
+        // Jump to the first condition
+        self.current_block_mut()
+            .push_instr(Instr::Jump(arm_cond_blocks[0]));
+
+        let fail_block_id = self.new_basic_block();
+        self.set_current_block(fail_block_id);
+        self.push_instr(Instr::Unreachable);
+
         let mut predecessors = vec![];
-        for arm in arms {
-            predecessors.push(self.lower_match_arm(arm, &scrutinee_reg, merge_block_id));
+        for (i, arm) in arms.iter().enumerate() {
+            predecessors.push(self.lower_match_arm(
+                arm,
+                &scrutinee_reg,
+                merge_block_id,
+                arm_cond_blocks[i],
+                arm_cond_blocks.get(i + 1).cloned().unwrap_or(fail_block_id),
+            ));
         }
 
-        self.push_instr(Instr::Unreachable);
         self.set_current_block(merge_block_id);
 
         let phi_reg = self.allocate_register();
@@ -767,37 +791,46 @@ impl<'a> Lowerer<'a> {
         expr_id: &ExprID,
         scrutinee: &Register,
         merge_block_id: BasicBlockID,
+        cond_block_id: BasicBlockID,
+        else_block_id: BasicBlockID,
     ) -> (Register, BasicBlockID) {
         let typed_arm = self.source_file.typed_expr(expr_id).unwrap();
         let Expr::MatchArm(pattern_id, body_id) = typed_arm.expr else {
             panic!("Didn't get match arm: {typed_arm:?}");
         };
 
-        // This is the new, more powerful pattern lowering logic.
-        let current_block_id = self.current_block_mut().id;
-        let body_block = self.lower_pattern_and_bind(&pattern_id, scrutinee);
-        self.set_current_block(body_block);
+        let then_block_id = self.new_basic_block();
 
+        self.lower_pattern_and_bind(
+            &pattern_id,
+            scrutinee,
+            cond_block_id,
+            then_block_id,
+            else_block_id,
+        );
+        self.set_current_block(then_block_id);
         let body_ret_reg = self.lower_expr(&body_id).unwrap();
 
         // After evaluating body, jump to the merge
         self.push_instr(Instr::Jump(merge_block_id));
 
-        self.set_current_block(current_block_id);
-
-        (body_ret_reg, body_block)
+        (body_ret_reg, then_block_id)
     }
 
     fn lower_pattern_and_bind(
         &mut self,
         pattern_id: &ExprID,
         scrutinee_reg: &Register,
-    ) -> BasicBlockID {
+        cond_block_id: BasicBlockID,
+        then_block_id: BasicBlockID,
+        else_block_id: BasicBlockID,
+    ) {
         let pattern_typed_expr = self.source_file.typed_expr(pattern_id).unwrap();
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
             panic!("Expected a pattern expression");
         };
 
+        self.set_current_block(cond_block_id);
         match pattern {
             Pattern::Variant {
                 variant_name,
@@ -833,10 +866,13 @@ impl<'a> Lowerer<'a> {
                 ));
 
                 // 4. If tags match, jump to a new block to extract values.
-                let body_block = self.new_basic_block();
-                self.push_instr(Instr::JumpIf(tags_match_reg, body_block));
+                self.push_instr(Instr::Branch {
+                    cond: tags_match_reg,
+                    true_target: then_block_id,
+                    false_target: else_block_id,
+                });
 
-                self.set_current_block(body_block);
+                self.set_current_block(then_block_id);
 
                 // 5. Extract values and bind them.
                 for (i, field_pattern_id) in fields.iter().enumerate() {
@@ -881,8 +917,6 @@ impl<'a> Lowerer<'a> {
                     }
                     // Handle nested patterns recursively here.
                 }
-
-                body_block
             }
             Pattern::LiteralInt(val) => {
                 let literal_reg = self.allocate_register();
@@ -895,10 +929,11 @@ impl<'a> Lowerer<'a> {
                     literal_reg,
                 ));
 
-                let body_block = self.new_basic_block();
-                self.push_instr(Instr::JumpIf(is_eq_reg, body_block));
-
-                body_block
+                self.push_instr(Instr::Branch {
+                    cond: is_eq_reg,
+                    true_target: then_block_id,
+                    false_target: else_block_id,
+                });
             }
             Pattern::LiteralFloat(_) => todo!(),
             Pattern::LiteralTrue => todo!(),
@@ -999,7 +1034,7 @@ impl<'a> Lowerer<'a> {
 
             self.push_instr(Instr::GetElementPointer {
                 dest: member_reg,
-                from: receiver,
+                base: receiver,
                 ty: receiver_typed.ty.to_ir(self).clone(),
                 index,
             });
@@ -1139,7 +1174,7 @@ impl<'a> Lowerer<'a> {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
                 self.current_func_mut()
                     .register_symbol(*symbol_id, rhs.into());
-                None
+                Some(rhs)
             }
             Expr::Variable(Name::Resolved(symbol, _), _) => {
                 let value = self
@@ -1164,7 +1199,7 @@ impl<'a> Lowerer<'a> {
                         let env_ty = self.current_func().env_ty.clone();
                         self.push_instr(Instr::GetElementPointer {
                             dest: capture_ptr,
-                            from: Register(0),
+                            base: Register(0),
                             ty: env_ty,
                             index: idx,
                         });
@@ -1174,7 +1209,7 @@ impl<'a> Lowerer<'a> {
                             location: capture_ptr,
                         });
 
-                        None
+                        Some(rhs)
                     }
                     SymbolValue::Struct(struct_def) => {
                         unreachable!("Cannot assign to struct: {:?}", struct_def)
@@ -1188,7 +1223,7 @@ impl<'a> Lowerer<'a> {
                     val: rhs,
                     location: dest.unwrap(),
                 });
-                None
+                Some(rhs)
             }
             _ => todo!("don't know how to lower: {:?}", lhs),
         }
@@ -1231,7 +1266,7 @@ impl<'a> Lowerer<'a> {
                 let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
                     dest: env_ptr,
-                    from: Register(0),
+                    base: Register(0),
                     ty: IRType::closure(),
                     index: idx,
                 });
@@ -1259,7 +1294,7 @@ impl<'a> Lowerer<'a> {
             .lower_expr(&cond)
             .expect("Condition for if expression did not produce a value");
 
-        let then_id = self.current_block_mut().id;
+        let then_id = self.new_basic_block();
 
         let mut else_reg: Option<Register> = None;
         let else_id: Option<BasicBlockID> = if alt.is_some() {
@@ -1269,9 +1304,13 @@ impl<'a> Lowerer<'a> {
         };
         let merge_id = self.new_basic_block(); // All paths merge here
 
-        self.current_block_mut()
-            .push_instr(Instr::JumpUnless(cond_reg, else_id.unwrap_or(merge_id)));
+        self.current_block_mut().push_instr(Instr::Branch {
+            cond: cond_reg,
+            true_target: then_id,
+            false_target: else_id.unwrap_or(merge_id),
+        });
 
+        self.set_current_block(then_id);
         let then_reg = self.lower_expr(&conseq).unwrap();
         self.current_block_mut().push_instr(Instr::Jump(merge_id));
 
@@ -1284,135 +1323,23 @@ impl<'a> Lowerer<'a> {
         self.current_func_mut().set_current_block(merge_id);
 
         let phi_dest_reg = self.allocate_register();
-
         let ir_type = typed_expr.ty.to_ir(self);
+        let predecessors = if let Some(else_reg) = else_reg
+            && let Some(else_id) = else_id
+        {
+            vec![(then_reg, then_id), (else_reg, else_id)]
+        } else {
+            vec![(then_reg, then_id)]
+        };
+
         self.current_block_mut().push_instr(Instr::Phi(
             phi_dest_reg,
             ir_type,
-            PhiPredecessors(vec![
-                (then_reg, then_id),                   // Value from 'then' path came from then_bb
-                (else_reg.unwrap(), else_id.unwrap()), // Value from 'else' path came from else_bb
-            ]),
+            PhiPredecessors(predecessors),
         ));
 
         Some(phi_dest_reg)
     }
-
-    // fn lower_call(
-    //     &mut self,
-    //     callee: ExprID,
-    //     _type_args: Vec<ExprID>,
-    //     args: Vec<ExprID>,
-    //     ty: Ty,
-    // ) -> Option<Register> {
-    //     // Handle builtins
-    //     if let Some(Expr::Variable(Name::Resolved(symbol, _), _)) =
-    //         self.source_file.get(&callee).cloned()
-    //     {
-    //         let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
-    //         if crate::builtins::is_builtin_func(&symbol) {
-    //             return super::builtins::lower_builtin(&symbol, &callee_typed_expr, &args, self)
-    //                 .unwrap();
-    //         }
-    //     }
-
-    //     let mut arg_registers = vec![];
-    //     for arg in args {
-    //         if let Some(arg_reg) = self.lower_expr(&arg) {
-    //             arg_registers.push(arg_reg);
-    //         } else {
-    //             // This would happen if an argument expression doesn't produce a value.
-    //             // Depending on your language, this might be an error or indicate a void arg,
-    //             // though void args are uncommon.
-    //             panic!("Argument expression did not produce a value for call");
-    //         }
-    //     }
-
-    //     let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
-
-    //     // Handle enum variant construction
-    //     if let Ty::Enum(enum_id, _) = &ty {
-    //         let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
-    //             panic!("didn't get member expr for enum call")
-    //         };
-
-    //         return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
-    //     }
-
-    //     // Handle struct construction
-    //     println!("{:?}", callee_typed_expr.ty);
-    //     if let Ty::Init(struct_id, _params) = callee_typed_expr.ty {
-    //         let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&struct_id) else {
-    //             unreachable!()
-    //         };
-
-    //         let struct_dest = self.allocate_register();
-    //         let env_ptr = self.allocate_register();
-    //         let env_reg = self.allocate_register();
-
-    //         self.push_instr(Instr::GetElementPointer {
-    //             dest: env_ptr,
-    //             from: struct_dest,
-    //             ty: IRType::closure(),
-    //             index: 1,
-    //         });
-    //         self.push_instr(Instr::Load {
-    //             dest: env_reg,
-    //             ty: IRType::Pointer,
-    //             addr: env_ptr,
-    //         });
-
-    //         return Some(struct_dest);
-    //     }
-
-    //     let callee = self
-    //         .lower_expr(&callee)
-    //         .unwrap_or_else(|| panic!("did not get callee: {:?}", self.source_file.get(&callee)));
-
-    //     let func_ptr = self.allocate_register();
-    //     let func_reg = self.allocate_register();
-    //     self.push_instr(Instr::GetElementPointer {
-    //         dest: func_ptr,
-    //         from: callee,
-    //         ty: IRType::closure(),
-    //         index: 0,
-    //     });
-    //     self.push_instr(Instr::Load {
-    //         dest: func_reg,
-    //         ty: callee_typed_expr.ty.to_ir(self),
-    //         addr: func_ptr,
-    //     });
-
-    //     let env_ptr = self.allocate_register();
-    //     let env_reg = self.allocate_register();
-
-    //     self.push_instr(Instr::GetElementPointer {
-    //         dest: env_ptr,
-    //         from: callee,
-    //         ty: IRType::closure(),
-    //         index: 1,
-    //     });
-    //     self.push_instr(Instr::Load {
-    //         dest: env_reg,
-    //         ty: IRType::Pointer,
-    //         addr: env_ptr,
-    //     });
-
-    //     arg_registers.insert(0, env_reg);
-
-    //     let dest_reg = self.allocate_register();
-
-    //     let ir_type = ty.to_ir(self);
-    //     self.current_block_mut().push_instr(Instr::Call {
-    //         ty: ir_type,
-    //         dest_reg, // clone if Register is Copy, else it's fine
-    //         callee: func_reg.into(),
-    //         args: RegisterList(arg_registers),
-    //     });
-
-    //     // 5. Return the destination register
-    //     Some(dest_reg)
-    // }
 
     fn lower_call(
         &mut self,
@@ -1510,7 +1437,7 @@ impl<'a> Lowerer<'a> {
         let func_reg = self.allocate_register();
         self.push_instr(Instr::GetElementPointer {
             dest: func_ptr,
-            from: callee_reg,
+            base: callee_reg,
             ty: IRType::closure(),
             index: 0,
         });
@@ -1525,7 +1452,7 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(Instr::GetElementPointer {
             dest: env_ptr,
-            from: callee_reg,
+            base: callee_reg,
             ty: IRType::closure(),
             index: 1,
         });
@@ -1595,13 +1522,13 @@ impl<'a> Lowerer<'a> {
         let fn_ptr = self.allocate_register();
         self.push_instr(Instr::GetElementPointer {
             dest: env_ptr,
-            from: closure_ptr,
+            base: closure_ptr,
             ty: IRType::closure(),
             index: 1,
         });
         self.push_instr(Instr::GetElementPointer {
             dest: fn_ptr,
-            from: closure_ptr,
+            base: closure_ptr,
             ty: IRType::closure(),
             index: 0,
         });
@@ -1762,1429 +1689,4 @@ fn find_or_create_main(
     );
 
     (SymbolID::GENERATED_MAIN.0, true)
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::{
-        SymbolID,
-        compiling::driver::Driver,
-        lowering::{
-            instr::Callee,
-            ir_module::IRModule,
-            lowerer::{
-                BasicBlock, BasicBlockID, IRError, IRFunction, IRType, Instr, PhiPredecessors,
-                RefKind, Register, RegisterList,
-            },
-        },
-    };
-
-    fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::with_str(input);
-        let typed = driver.units[0]
-            .parse()
-            .resolved(&mut driver.symbol_table)
-            .typed(&mut driver.symbol_table)
-            .lower(&mut driver.symbol_table)
-            .unwrap();
-
-        Ok(typed.module())
-    }
-
-    #[macro_export]
-    macro_rules! assert_lowered_functions {
-        ($left:expr, $right:expr $(,)?) => {
-            match (&$left, &$right) {
-                (left_val, right_val) => {
-                    if !(*left_val.functions == *right_val) {
-                        let right_program = IRModule {
-                            functions: right_val.clone(),
-                        };
-
-                        use prettydiff::{diff_chars, diff_lines};
-                        use $crate::lowering::ir_printer::print;
-                        println!(
-                            "{}",
-                            diff_chars(
-                                &format!("{:?}", &left_val.functions),
-                                &format!("{:?}", right_val)
-                            )
-                        );
-
-                        panic!(
-                            "{}\n{}",
-                            diff_lines("Actual", "Expected"),
-                            diff_lines(print(left_val).as_ref(), print(&right_program).as_ref())
-                        )
-                    }
-                }
-            }
-        };
-    }
-
-    #[test]
-    fn lowers_nested_function() {
-        let lowered = lower("func foo() { 123 }").unwrap();
-
-        // Define the types we'll be using to make the test cleaner
-        let foo_func_type = IRType::Func(vec![], Box::new(IRType::Int));
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: foo_func_type.clone(),
-                    name: format!("@_{}_foo", SymbolID::resolved(1).0),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::ConstantInt(Register(1), 123),
-                            Instr::Ret(IRType::Int, Some(Register(1)))
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::Alloc {
-                                dest: Register(1),
-                                ty: IRType::closure(),
-                                count: None
-                            },
-                            Instr::MakeStruct {
-                                dest: Register(2),
-                                ty: IRType::EMPTY_STRUCT,
-                                values: RegisterList::EMPTY
-                            },
-                            Instr::Alloc {
-                                dest: Register(3),
-                                ty: IRType::EMPTY_STRUCT,
-                                count: None,
-                            },
-                            Instr::Store {
-                                val: Register(2),
-                                location: Register(3),
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Ref(
-                                Register(4),
-                                foo_func_type.clone(),
-                                RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0))
-                            ),
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                from: Register(1),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(1),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Store {
-                                val: Register(3),
-                                location: Register(5),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Store {
-                                val: Register(4),
-                                location: Register(6),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Ret(IRType::Pointer, Some(Register(1))),
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_recursion() {
-        let lowered = lower(
-            "
-            func foo(x) {
-                foo(x)
-            }
-            ",
-        )
-        .unwrap();
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: IRType::Func(
-                        vec![IRType::TypeVar("T3".into())],
-                        Box::new(IRType::TypeVar("T4".into()))
-                    ),
-                    name: format!("@_{}_foo", SymbolID::resolved(1).0),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::GetElementPointer {
-                                dest: Register(2),
-                                from: Register(0),
-                                ty: IRType::closure(),
-                                index: 0
-                            },
-                            Instr::Load {
-                                dest: Register(3),
-                                ty: IRType::Pointer,
-                                addr: Register(2)
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(4),
-                                from: Register(3),
-                                ty: IRType::closure(),
-                                index: 0
-                            },
-                            Instr::Load {
-                                dest: Register(5),
-                                ty: IRType::Func(
-                                    vec![IRType::TypeVar("T3".into())],
-                                    IRType::TypeVar("T4".into()).into()
-                                ),
-                                addr: Register(4)
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(3),
-                                ty: IRType::closure(),
-                                index: 1
-                            },
-                            Instr::Load {
-                                dest: Register(7),
-                                ty: IRType::Pointer,
-                                addr: Register(6)
-                            },
-                            Instr::Call {
-                                dest_reg: Register(8),
-                                ty: IRType::TypeVar("T4".into()),
-                                callee: Callee::Register(Register(5)),
-                                args: RegisterList(vec![Register(7), Register(1)])
-                            },
-                            // The `return x` becomes a Ret instruction using the argument register.
-                            // In our calling convention, the env is %0, so x is %1.
-                            Instr::Ret(IRType::TypeVar("T4".into()), Some(Register(8))),
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![IRType::Pointer]),
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::Alloc {
-                                dest: Register(1),
-                                ty: IRType::closure(),
-                                count: None,
-                            },
-                            Instr::MakeStruct {
-                                dest: Register(2),
-                                ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
-                                values: RegisterList(vec![Register(1)])
-                            },
-                            Instr::Alloc {
-                                dest: Register(3),
-                                count: None,
-                                ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
-                            },
-                            Instr::Store {
-                                val: Register(2),
-                                location: Register(3),
-                                ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
-                            },
-                            Instr::Ref(
-                                Register(4),
-                                IRType::Func(
-                                    vec![IRType::TypeVar("T3".into())],
-                                    IRType::TypeVar("T4".into()).into()
-                                ),
-                                RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0))
-                            ),
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                from: Register(1),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(1),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Store {
-                                val: Register(3),
-                                location: Register(5),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Store {
-                                val: Register(4),
-                                location: Register(6),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Ret(IRType::Pointer, Some(Register(1))),
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_return() {
-        let lowered = lower(
-            "
-            func foo(x) {
-                return x
-                123
-            }
-            ",
-        )
-        .unwrap();
-
-        let foo_func_type = IRType::Func(vec![IRType::Int], Box::new(IRType::Int));
-        let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: foo_func_type.clone(),
-                    name: foo_name.clone(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // The `return x` becomes a Ret instruction using the argument register.
-                            // In our calling convention, the env is %0, so x is %1.
-                            Instr::Ret(IRType::Int, Some(Register(1))),
-                            // The `123` is dead code but is still lowered.
-                            Instr::ConstantInt(Register(2), 123),
-                            // The implicit return is still added
-                            Instr::Ret(IRType::Int, Some(Register(2)))
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::Alloc {
-                                dest: Register(1),
-                                count: None,
-                                ty: IRType::closure()
-                            },
-                            // This sequence is now identical to your working test case.
-                            Instr::MakeStruct {
-                                dest: Register(2),
-                                ty: IRType::EMPTY_STRUCT,
-                                values: RegisterList::EMPTY
-                            },
-                            Instr::Alloc {
-                                dest: Register(3),
-                                count: None,
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Store {
-                                val: Register(2),
-                                location: Register(3),
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Ref(Register(4), foo_func_type.clone(), RefKind::Func(foo_name)),
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                from: Register(1),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(1),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Store {
-                                val: Register(3),
-                                location: Register(5),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Store {
-                                val: Register(4),
-                                location: Register(6),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Ret(IRType::Pointer, Some(Register(1))),
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_calls() {
-        let lowered = lower("func foo(x) { x }\nfoo(123)").unwrap();
-
-        let foo_func_type = IRType::Func(
-            vec![IRType::TypeVar("T3".into())],
-            Box::new(IRType::TypeVar("T3".into())),
-        );
-
-        let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: foo_func_type.clone(),
-                    name: foo_name.clone(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![Instr::Ret(
-                            IRType::TypeVar("T3".into()),
-                            Some(Register(1))
-                        )],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::Alloc {
-                                dest: Register(1),
-                                count: None,
-                                ty: IRType::closure()
-                            },
-                            Instr::MakeStruct {
-                                dest: Register(2),
-                                ty: IRType::EMPTY_STRUCT,
-                                values: RegisterList::EMPTY
-                            },
-                            Instr::Alloc {
-                                dest: Register(3),
-                                count: None,
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Store {
-                                val: Register(2),
-                                location: Register(3),
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Ref(Register(4), foo_func_type.clone(), RefKind::Func(foo_name)),
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                from: Register(1),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(1),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Store {
-                                val: Register(3),
-                                location: Register(5),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Store {
-                                val: Register(4),
-                                location: Register(6),
-                                ty: IRType::Pointer
-                            },
-                            // %4 now holds the pointer to the `foo` closure.
-
-                            // === Part 2: Call the closure ===
-
-                            // 1. Prepare the explicit argument(s).
-                            Instr::ConstantInt(Register(7), 123),
-                            // 2. Unpack the closure object from %4.
-                            // You need to introduce a Load instruction here.
-                            Instr::GetElementPointer {
-                                dest: Register(8),
-                                from: Register(1),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Load {
-                                dest: Register(9),
-                                ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
-                                addr: Register(8)
-                            }, // Load the func_ptr
-                            Instr::GetElementPointer {
-                                dest: Register(10),
-                                from: Register(1),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::Load {
-                                dest: Register(11),
-                                ty: IRType::Pointer,
-                                addr: Register(10)
-                            }, // Load the env_ptr
-                            // 3. Make the indirect call.
-                            Instr::Call {
-                                dest_reg: Register(12),
-                                ty: IRType::Int,
-                                callee: Register(9).into(), // The loaded function pointer
-                                args: RegisterList(vec![Register(11), Register(7)]), // (env_ptr, arg)
-                            },
-                            // 4. Return the result of the call.
-                            Instr::Ret(IRType::Int, Some(Register(12)))
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_func_with_params() {
-        let lowered = lower("func foo(x) { x }").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: IRType::Func(
-                        vec![IRType::TypeVar("T3".into())],
-                        IRType::TypeVar("T3".into()).into()
-                    ),
-                    name: format!("@_{}_foo", SymbolID::resolved(1).0),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![Instr::Ret(
-                            IRType::TypeVar("T3".into()),
-                            Some(Register(1))
-                        )],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![])
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // Alloc the closure
-                            Instr::Alloc {
-                                dest: Register(1),
-                                count: None,
-                                ty: IRType::closure()
-                            },
-                            // Create the env
-                            Instr::MakeStruct {
-                                dest: Register(2),
-                                ty: IRType::EMPTY_STRUCT,
-                                values: RegisterList::EMPTY
-                            },
-                            // Alloc space for it
-                            Instr::Alloc {
-                                dest: Register(3),
-                                count: None,
-                                ty: IRType::EMPTY_STRUCT,
-                            },
-                            // Store the env
-                            Instr::Store {
-                                ty: IRType::EMPTY_STRUCT,
-                                val: Register(2),
-                                location: Register(3)
-                            },
-                            // Get the fn
-                            Instr::Ref(
-                                Register(4),
-                                IRType::Func(
-                                    vec![IRType::TypeVar("T3".into())],
-                                    IRType::TypeVar("T3".into()).into()
-                                ),
-                                RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0))
-                            ),
-                            // Get a pointer to the env's address in the closure
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                from: Register(1),
-                                ty: IRType::closure(),
-                                index: 1
-                            },
-                            // Get a pointer to the fn's address in the closure
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(1),
-                                ty: IRType::closure(),
-                                index: 0
-                            },
-                            // Store the env into the closure
-                            Instr::Store {
-                                ty: IRType::Pointer,
-                                val: Register(3),
-                                location: Register(5)
-                            },
-                            // Store the fn into the closure
-                            Instr::Store {
-                                ty: IRType::Pointer,
-                                val: Register(4),
-                                location: Register(6)
-                            },
-                            // Return a pointer to the closure
-                            Instr::Ret(IRType::Pointer, Some(Register(1)))
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![])
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_int() {
-        let lowered = lower("123").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 123),
-                        Instr::Ret(IRType::Int, Some(Register(1)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_float() {
-        let lowered = lower("123.").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantFloat(Register(1), 123.),
-                        Instr::Ret(IRType::Float, Some(Register(1)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }],
-        )
-    }
-
-    #[test]
-    fn lowers_bools() {
-        let lowered = lower("true\nfalse").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantBool(Register(1), true),
-                        Instr::ConstantBool(Register(2), false),
-                        Instr::Ret(IRType::Bool, Some(Register(2))),
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_add() {
-        let lowered = lower("1 + 2").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 1),
-                        Instr::ConstantInt(Register(2), 2),
-                        Instr::Add(Register(3), IRType::Int, Register(1), Register(2)),
-                        Instr::Ret(IRType::Int, Some(Register(3)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_sub() {
-        let lowered = lower("2 - 1").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 2),
-                        Instr::ConstantInt(Register(2), 1),
-                        Instr::Sub(Register(3), IRType::Int, Register(1), Register(2)),
-                        Instr::Ret(IRType::Int, Some(Register(3)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }],
-        )
-    }
-
-    #[test]
-    fn lowers_mul() {
-        let lowered = lower("2 * 1").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 2),
-                        Instr::ConstantInt(Register(2), 1),
-                        Instr::Mul(Register(3), IRType::Int, Register(1), Register(2)),
-                        Instr::Ret(IRType::Int, Some(Register(3)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_div() {
-        let lowered = lower("2 / 1").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 2),
-                        Instr::ConstantInt(Register(2), 1),
-                        Instr::Div(Register(3), IRType::Int, Register(1), Register(2)),
-                        Instr::Ret(IRType::Int, Some(Register(3)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_assignment() {
-        let lowered = lower("let a = 123\na").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 123),
-                        Instr::Ret(IRType::Int, Some(Register(1))),
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_if_expr_with_else() {
-        let lowered = lower(
-            "
-                if true {
-                    123
-                } else {
-                    456
-                }
-
-                789
-        ",
-        )
-        .unwrap();
-
-        let expected = vec![IRFunction {
-            ty: IRType::Func(vec![], IRType::Void.into()),
-            name: "@main".into(),
-            blocks: vec![
-                // if block
-                BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantBool(Register(1), true),
-                        Instr::JumpUnless(Register(1), BasicBlockID(1)),
-                        Instr::ConstantInt(Register(2), 123),
-                        Instr::Jump(BasicBlockID(2)),
-                    ],
-                },
-                // else block
-                BasicBlock {
-                    id: BasicBlockID(1),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(3), 456),
-                        Instr::Jump(BasicBlockID(2)),
-                    ],
-                },
-                // converge block
-                BasicBlock {
-                    id: BasicBlockID(2),
-                    instructions: vec![
-                        Instr::Phi(
-                            Register(4),
-                            IRType::Int,
-                            PhiPredecessors(vec![
-                                (Register(2), BasicBlockID(0)),
-                                (Register(3), BasicBlockID(1)),
-                            ]),
-                        ),
-                        Instr::ConstantInt(Register(5), 789),
-                        Instr::Ret(IRType::Int, Some(Register(5))),
-                    ],
-                },
-            ],
-            env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-        }];
-
-        assert_lowered_functions!(lowered, expected,);
-    }
-
-    #[test]
-    fn lowers_basic_enum() {
-        let lowered = lower(
-            "enum Foo {
-                    case fizz, buzz
-                }
-                
-                Foo.buzz",
-        )
-        .unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::TagVariant(Register(1), IRType::Enum(vec![]), 1, vec![].into()),
-                        Instr::Ret(IRType::Enum(vec![]), Some(Register(1)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_builtin_optional() {
-        let lowered = lower("Optional.some(123)").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(1), 123),
-                        Instr::TagVariant(
-                            Register(2),
-                            IRType::Enum(vec![IRType::Int]),
-                            0,
-                            RegisterList(vec![Register(1)])
-                        ),
-                        Instr::Ret(IRType::Enum(vec![IRType::Int]), Some(Register(2)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_match_ints() {
-        let lowered = lower(
-            "
-            match 123 {
-                123 -> 3.14,
-                456 -> 2.71
-            }
-            ",
-        )
-        .unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![
-                    BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // Add the scrutinee
-                            Instr::ConstantInt(Register(1), 123),
-                            // Add the first arm (register 1 is allocated for the return val of the match expr)
-                            Instr::ConstantInt(Register(2), 123),
-                            Instr::Eq(Register(3), IRType::Int, Register(1), Register(2)),
-                            Instr::JumpIf(Register(3), BasicBlockID(2)),
-                            // Add the second term
-                            Instr::ConstantInt(Register(5), 456),
-                            Instr::Eq(Register(6), IRType::Int, Register(1), Register(5)),
-                            Instr::JumpIf(Register(6), BasicBlockID(3)),
-                            // We should have jumped no matter what
-                            Instr::Unreachable,
-                        ],
-                    },
-                    BasicBlock {
-                        id: BasicBlockID(1),
-                        instructions: vec![
-                            Instr::Phi(
-                                Register(8),
-                                IRType::Float,
-                                PhiPredecessors(vec![
-                                    (Register(4), BasicBlockID(2)),
-                                    (Register(7), BasicBlockID(3))
-                                ])
-                            ),
-                            Instr::Ret(IRType::Float, Some(Register(8)))
-                        ]
-                    },
-                    BasicBlock {
-                        id: BasicBlockID(2),
-                        instructions: vec![
-                            Instr::ConstantFloat(Register(4), 3.14),
-                            Instr::Jump(BasicBlockID(1))
-                        ]
-                    },
-                    BasicBlock {
-                        id: BasicBlockID(3),
-                        instructions: vec![
-                            Instr::ConstantFloat(Register(7), 2.71),
-                            Instr::Jump(BasicBlockID(1))
-                        ]
-                    },
-                ],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_match_bind() {
-        let lowered = lower(
-            "
-            match Optional.some(123) {
-                .some(x) -> x,
-                .none -> 456
-            }
-            ",
-        )
-        .unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![
-                    // Block 0: Dispatch
-                    BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // Scrutinee: Optional.some(123)
-                            Instr::ConstantInt(Register(1), 123),
-                            Instr::TagVariant(
-                                Register(2),
-                                IRType::Enum(vec![IRType::Int]),
-                                0,
-                                RegisterList(vec![Register(1)])
-                            ),
-                            // Check for first arm: .some(x)
-                            Instr::GetEnumTag(Register(3), Register(2)),
-                            Instr::ConstantInt(Register(4), 0), // Tag for .some
-                            Instr::Eq(Register(5), IRType::Int, Register(3), Register(4)),
-                            Instr::JumpIf(Register(5), BasicBlockID(2)),
-                            // Check for second arm: .none
-                            Instr::GetEnumTag(Register(7), Register(2)),
-                            Instr::ConstantInt(Register(8), 1), // Tag for .none
-                            Instr::Eq(Register(9), IRType::Int, Register(7), Register(8)),
-                            Instr::JumpIf(Register(9), BasicBlockID(3)),
-                            Instr::Unreachable,
-                        ],
-                    },
-                    // Block 1: Merge Point
-                    BasicBlock {
-                        id: BasicBlockID(1),
-                        instructions: vec![
-                            Instr::Phi(
-                                Register(11),
-                                IRType::Int,
-                                PhiPredecessors(vec![
-                                    (Register(6), BasicBlockID(2)),  // from .some arm
-                                    (Register(10), BasicBlockID(3)), // from .none arm
-                                ])
-                            ),
-                            Instr::Ret(IRType::Int, Some(Register(11))),
-                        ]
-                    },
-                    // Block 2: Body for .some(x) -> x
-                    BasicBlock {
-                        id: BasicBlockID(2),
-                        instructions: vec![
-                            // This is the binding: get value at index 0 and put it in register 8
-                            Instr::GetEnumValue(Register(6), IRType::Int, Register(2), 0, 0),
-                            Instr::Jump(BasicBlockID(1)),
-                        ]
-                    },
-                    // Block 3: Body for .none -> 456
-                    BasicBlock {
-                        id: BasicBlockID(3),
-                        instructions: vec![
-                            Instr::ConstantInt(Register(10), 456),
-                            Instr::Jump(BasicBlockID(1)),
-                        ]
-                    },
-                ],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_enum_match() {
-        let lowered = lower(
-            "
-            enum Foo {
-                case fizz, buzz
-            }
-            match Foo.buzz {
-                .fizz -> 123,
-                .buzz -> 456
-            }
-            ",
-        )
-        .unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![
-                    BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // Add the scrutinee
-                            Instr::TagVariant(Register(1), IRType::Enum(vec![]), 1, vec![].into()),
-                            // Figure out what the scrutinee's tag is
-                            Instr::GetEnumTag(Register(2), Register(1)),
-                            // Put the .fizz's tag (0) into a register to compare
-                            Instr::ConstantInt(Register(3), 0),
-                            // Compare
-                            Instr::Eq(Register(4), IRType::Int, Register(2), Register(3)),
-                            // Jump if they're the same
-                            Instr::JumpIf(Register(4), BasicBlockID(2)),
-                            // Do it all over again for the other variant .buzz
-                            Instr::GetEnumTag(Register(6), Register(1)),
-                            Instr::ConstantInt(Register(7), 1),
-                            Instr::Eq(Register(8), IRType::Int, Register(6), Register(7)),
-                            Instr::JumpIf(Register(8), BasicBlockID(3)),
-                            // We should have jumped no matter what
-                            Instr::Unreachable,
-                        ],
-                    },
-                    BasicBlock {
-                        id: BasicBlockID(1),
-                        instructions: vec![
-                            Instr::Phi(
-                                Register(10),
-                                IRType::Int,
-                                PhiPredecessors(vec![
-                                    (Register(5), BasicBlockID(2)),
-                                    (Register(9), BasicBlockID(3))
-                                ])
-                            ),
-                            Instr::Ret(IRType::Int, Some(Register(10)))
-                        ]
-                    },
-                    BasicBlock {
-                        id: BasicBlockID(2),
-                        instructions: vec![
-                            Instr::ConstantInt(Register(5), 123),
-                            Instr::Jump(BasicBlockID(1))
-                        ]
-                    },
-                    BasicBlock {
-                        id: BasicBlockID(3),
-                        instructions: vec![
-                            Instr::ConstantInt(Register(9), 456),
-                            Instr::Jump(BasicBlockID(1))
-                        ]
-                    },
-                ],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![])
-            }]
-        )
-    }
-
-    #[test]
-    fn lowers_captured_value() {
-        let lowered = lower(
-            "
-            let x = 1
-            func add(y) { x + y }
-            add(2)
-            ",
-        )
-        .unwrap();
-
-        // The function signature for `add` only includes its explicit parameters.
-        let add_func_type = IRType::Func(vec![IRType::Int], Box::new(IRType::Int));
-        let env_struct_type = IRType::Struct(SymbolID(0), vec![IRType::Int]);
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: add_func_type.clone(),
-                    name: format!("@_{}_add", SymbolID::resolved(1).0),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::GetElementPointer {
-                                dest: Register(2),
-                                ty: IRType::closure(),
-                                from: Register(0),
-                                index: 0
-                            },
-                            Instr::Load {
-                                dest: Register(3),
-                                ty: IRType::Int,
-                                addr: Register(2)
-                            },
-                            Instr::Add(Register(4), IRType::Int, Register(3), Register(1)),
-                            Instr::Ret(IRType::Int, Some(Register(4))),
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![IRType::Int]),
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // === Part 1: Setup `let x = 1` and environment ===
-                            // The environment struct now holds the VALUE of x, not a pointer.
-                            Instr::ConstantInt(Register(1), 1),
-                            Instr::Alloc {
-                                dest: Register(2),
-                                count: None,
-                                ty: IRType::closure()
-                            },
-                            Instr::MakeStruct {
-                                dest: Register(3),
-                                ty: env_struct_type.clone(),
-                                values: RegisterList(vec![Register(1)])
-                            },
-                            Instr::Alloc {
-                                dest: Register(4),
-                                count: None,
-                                ty: env_struct_type.clone()
-                            },
-                            Instr::Store {
-                                val: Register(3),
-                                location: Register(4),
-                                ty: env_struct_type.clone()
-                            },
-                            Instr::Ref(
-                                Register(5),
-                                add_func_type.clone(),
-                                RefKind::Func(format!("@_{}_add", SymbolID::resolved(1).0))
-                            ),
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                from: Register(2),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(7),
-                                from: Register(2),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Store {
-                                val: Register(4),
-                                location: Register(6),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Store {
-                                val: Register(5),
-                                location: Register(7),
-                                ty: IRType::Pointer
-                            },
-                            Instr::ConstantInt(Register(8), 2), // The argument `y`.
-                            // Unpack the closure
-                            Instr::GetElementPointer {
-                                dest: Register(9),
-                                from: Register(2),
-                                index: 0,
-                                ty: IRType::closure()
-                            },
-                            Instr::Load {
-                                dest: Register(10),
-                                ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
-                                addr: Register(9)
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(11),
-                                from: Register(2),
-                                index: 1,
-                                ty: IRType::closure()
-                            },
-                            Instr::Load {
-                                dest: Register(12),
-                                ty: IRType::Pointer,
-                                addr: Register(11)
-                            }, // Load func_ptr
-                            // Make the call. The `args` list includes the env_ptr (%11) and the explicit arg `y` (%8).
-                            Instr::Call {
-                                dest_reg: Register(13),
-                                ty: IRType::Int,
-                                callee: Register(10).into(),
-                                args: RegisterList(vec![Register(12), Register(8)]),
-                            },
-                            Instr::Ret(IRType::Int, Some(Register(13))),
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_struct_initializer() {
-        let lowered = lower(
-            "
-            struct Person {
-                let age: Int
-
-                init(age: Int) {
-                    self.age = age
-                }
-            }
-
-            Person(age: 123)
-            ",
-        )
-        .unwrap();
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: IRType::Func(
-                        vec![IRType::Int],
-                        IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into()
-                    ),
-                    name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // self.age = age
-                            Instr::GetElementPointer {
-                                dest: Register(2),
-                                from: Register(0), // self is in register 0
-                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                                index: 0
-                            },
-                            Instr::Store {
-                                ty: IRType::Int,
-                                val: Register(1), // age is in register 1
-                                location: Register(2)
-                            },
-                            Instr::Load {
-                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                                dest: Register(3),
-                                addr: Register(0)
-                            },
-                            Instr::Ret(
-                                IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                                Some(Register(3))
-                            )
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::ConstantInt(Register(1), 123),
-                            Instr::Alloc {
-                                dest: Register(2),
-                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                                count: None
-                            },
-                            Instr::Ref(
-                                Register(3),
-                                IRType::Func(
-                                    vec![IRType::Int],
-                                    IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into()
-                                ),
-                                RefKind::Func(format!("@_{}_Person_init", SymbolID::resolved(1).0))
-                            ),
-                            Instr::Call {
-                                dest_reg: Register(4),
-                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into(),
-                                callee: Callee::Register(Register(3)),
-                                args: RegisterList(vec![Register(2), Register(1)])
-                            },
-                            Instr::Ret(
-                                IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                                Some(Register(4))
-                            )
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
-
-    #[test]
-    fn lowers_struct_property() {
-        let lowered = lower(
-            "
-        struct Person {
-            let age: Int
-
-            init(age: Int) {
-                self.age = age
-            }
-        }
-
-        Person(age: 123).age
-        ",
-        )
-        .unwrap();
-
-        let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]);
-        let person_init_func_ty = IRType::Func(vec![IRType::Int], person_struct_ty.clone().into());
-
-        assert_lowered_functions!(
-            lowered,
-            vec![
-                IRFunction {
-                    ty: person_init_func_ty.clone(),
-                    name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // self.age = age
-                            Instr::GetElementPointer {
-                                dest: Register(2),
-                                from: Register(0), // self is in register 0
-                                ty: person_struct_ty.clone(),
-                                index: 0
-                            },
-                            Instr::Store {
-                                ty: IRType::Int,
-                                val: Register(1), // age is in register 1
-                                location: Register(2)
-                            },
-                            Instr::Load {
-                                ty: person_struct_ty.clone(),
-                                dest: Register(3),
-                                addr: Register(0)
-                            },
-                            // return self
-                            Instr::Ret(person_struct_ty.clone(), Some(Register(3)))
-                        ],
-                    }],
-                    env_ty: person_struct_ty.clone()
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            // Person(age: 123)
-                            Instr::ConstantInt(Register(1), 123),
-                            Instr::Alloc {
-                                dest: Register(2),
-                                count: None,
-                                ty: person_struct_ty.clone(),
-                            },
-                            Instr::Ref(
-                                Register(3),
-                                person_init_func_ty.clone(),
-                                RefKind::Func(format!("@_{}_Person_init", SymbolID::resolved(1).0))
-                            ),
-                            Instr::Call {
-                                dest_reg: Register(4),
-                                ty: person_struct_ty.clone(),
-                                callee: Callee::Register(Register(3)),
-                                args: RegisterList(vec![Register(2), Register(1)])
-                            },
-                            // .age
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                from: Register(4),
-                                ty: person_struct_ty,
-                                index: 0,
-                            },
-                            Instr::Load {
-                                dest: Register(6),
-                                ty: IRType::Int,
-                                addr: Register(5)
-                            },
-                            Instr::Ret(IRType::Int, Some(Register(6)))
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                },
-            ]
-        )
-    }
 }

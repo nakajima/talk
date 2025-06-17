@@ -5,14 +5,17 @@ use std::{
     str::{Chars, FromStr},
 };
 
-use crate::{lowering::{
-    instr::{FuncName, Instr},
-    ir_module::IRModule,
-    ir_type::IRType,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction},
-    parsing::lexer::{Lexer, Token, Tokind},
-    register::Register,
-}, SymbolID};
+use crate::{
+    SymbolID,
+    lowering::{
+        instr::{FuncName, Instr},
+        ir_module::IRModule,
+        ir_type::IRType,
+        lowerer::{BasicBlock, BasicBlockID, IRFunction},
+        parsing::lexer::{Lexer, Token, Tokind},
+        register::Register,
+    },
+};
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -131,6 +134,7 @@ impl<'a> Parser<'a> {
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
             blocks,
             env_ty: IRType::Struct(SymbolID(0), vec![]), //FIXME
+            env_reg: Register(0),
         })
     }
 
@@ -354,7 +358,7 @@ impl<'a> Parser<'a> {
                         self.consume(Tokind::Comma).ok();
                     }
 
-                    IRType::Struct(SymbolID(0),types)
+                    IRType::Struct(SymbolID(0), types)
                 }
                 _ => todo!("{:?}", tok.kind),
             },
@@ -469,12 +473,13 @@ mod tests {
         func @main() int
           entry:
             %0 = bool true;
-            jmpif %0 #1;
-            unreachable;
+            br %0 #1 #2;
           #1:
             %1 = call int @foo();
             %2 = phi int [entry: %0, #1: %1];
             ret int %2;
+          #2:
+            unreachable;
         "#
         ))
         .unwrap()
@@ -487,9 +492,12 @@ mod tests {
         );
         assert_eq!(
             entry_bb.instructions[1],
-            Instr::JumpIf(Register(0), BasicBlockID(1))
+            Instr::Branch {
+                cond: Register(0),
+                true_target: BasicBlockID(1),
+                false_target: BasicBlockID(2)
+            }
         );
-        assert_eq!(entry_bb.instructions[2], Instr::Unreachable);
 
         let bb1 = &func.blocks[1];
         assert_eq!(
@@ -512,6 +520,7 @@ mod tests {
                 ])
             )
         );
+        assert_eq!(func.blocks[2].instructions, vec![Instr::Unreachable]);
     }
 
     #[test]
@@ -533,7 +542,7 @@ mod tests {
             %10 = enumvalue int %8 0 0;
             jump #1;
           #1:
-            jmpnl %6 #2;
+            br %6 #2 #2;
             ret void;
           #2:
             ret void;
@@ -598,7 +607,11 @@ mod tests {
         assert_eq!(bb1.id, BasicBlockID(1));
         assert_eq!(
             bb1.instructions[0],
-            Instr::JumpUnless(Register(6), BasicBlockID(2))
+            Instr::Branch {
+                cond: Register(6),
+                true_target: BasicBlockID(2),
+                false_target: BasicBlockID(2)
+            }
         );
         assert_eq!(bb1.instructions[1], Instr::Ret(IRType::Void, None));
 

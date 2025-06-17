@@ -1,7 +1,7 @@
 #![feature(box_patterns)]
 
 #[cfg(test)]
-mod tests {
+mod type_checker_tests {
     use talk::{
         SourceFile, SymbolID, Typed,
         environment::TypeDef,

@@ -49,7 +49,9 @@ impl Phase for Typed {
 }
 
 #[derive(Debug, Clone)]
-pub struct LoweredData {}
+pub struct LoweredData {
+    pub env: Environment,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lowered {}
@@ -185,14 +187,20 @@ impl SourceFile<Typed> {
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: LoweredData {},
+            phase_data: LoweredData {
+                env: self.phase_data.env,
+            },
             diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }
     }
 }
 
-impl SourceFile<Lowered> {}
+impl SourceFile<Lowered> {
+    pub fn type_def(&self, id: &SymbolID) -> Option<&TypeDef> {
+        self.phase_data.env.types.get(id)
+    }
+}
 
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID

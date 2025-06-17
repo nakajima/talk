@@ -132,10 +132,10 @@ pub enum Instr {
         addr: Register,
     },
 
-    #[doc = "$dest = getelementptr $ty $from $index;"]
+    #[doc = "$dest = getelementptr $ty $base $index;"]
     GetElementPointer {
         dest: Register,
-        from: Register,
+        base: Register,
         ty: IRType,
         index: usize,
     },
@@ -190,12 +190,34 @@ pub enum Instr {
     #[doc = "jump $0;"]
     Jump(BasicBlockID),
 
-    #[doc = "jmpif $0 $1;"]
-    JumpIf(Register, BasicBlockID),
-
-    #[doc = "jmpnl $0 $1;"]
-    JumpUnless(Register, BasicBlockID),
+    #[doc = "br $cond $true_target $false_target;"]
+    Branch {
+        cond: Register,
+        true_target: BasicBlockID,
+        false_target: BasicBlockID,
+    },
 
     #[doc = "unreachable;"]
     Unreachable,
+}
+
+impl Instr {
+    /// Returns a list of successor BasicBlockIDs for a terminator instruction.
+    pub fn successors(&self) -> Vec<BasicBlockID> {
+        match self {
+            Instr::Jump(target) => vec![*target],
+            Instr::Branch {
+                true_target,
+                false_target,
+                ..
+            } => vec![*true_target, *false_target],
+
+            // Return and Unreachable terminate flow and have no successors.
+            Instr::Ret(..) => vec![],
+            Instr::Unreachable => vec![],
+
+            // All other instructions are not terminators, so they have no successors.
+            _ => vec![],
+        }
+    }
 }
