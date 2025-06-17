@@ -6,7 +6,7 @@ use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
+    CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind,
     DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
     DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
@@ -27,8 +27,8 @@ use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
-use crate::SymbolKind;
 use crate::compiling::driver::Driver;
+use crate::lsp::completion::CompletionContext;
 use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
 use crate::parser::parse;
@@ -178,7 +178,7 @@ impl LanguageServer for ServerState {
         &mut self,
         params: CompletionParams,
     ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
-        log::info!("completions requested");
+        log::info!("completions requested: {:?}", params);
 
         let Ok(path) = params
             .text_document_position
@@ -200,51 +200,48 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let Some(scope) = source_file
-            .scope_tree
-            .find_scope_at(crate::diagnostic::Position {
-                line: position.line,
-                col: position.character,
-            })
-        else {
-            log::error!(
-                "did not find scope at position: {position:?} in {:?}",
-                source_file.scope_tree
-            );
-            return Box::pin(async { Ok(None) });
+        let completion = CompletionContext {
+            source_file: &source_file,
+            driver: &self.driver,
+            position,
+            is_member_lookup: params
+                .context
+                .map(|c| c.trigger_kind == CompletionTriggerKind::TRIGGER_CHARACTER)
+                .unwrap_or(false),
         };
 
-        let symbols = source_file.scope_tree.get_symbols_in_scope(scope);
-        let completion_items: Vec<CompletionItem> = symbols
-            .iter()
-            .filter_map(|sym| self.driver.symbol_table.get(sym))
-            .map(|info| {
-                let kind = match &info.kind {
-                    SymbolKind::Func => CompletionItemKind::FUNCTION,
-                    SymbolKind::Param => CompletionItemKind::VARIABLE,
-                    SymbolKind::Local => CompletionItemKind::VARIABLE,
-                    SymbolKind::Enum => CompletionItemKind::ENUM,
-                    SymbolKind::Struct => CompletionItemKind::STRUCT,
-                    SymbolKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
-                    SymbolKind::BuiltinType => CompletionItemKind::CLASS,
-                    SymbolKind::BuiltinFunc => CompletionItemKind::FUNCTION,
-                    _ => CompletionItemKind::VARIABLE,
-                };
+        // let symbols = source_file.scope_tree.get_symbols_in_scope(scope);
+        // let completion_items: Vec<CompletionItem> = symbols
+        //     .iter()
+        //     .filter_map(|sym| self.driver.symbol_table.get(sym))
+        //     .map(|info| {
+        //         let kind = match &info.kind {
+        //             SymbolKind::Func => CompletionItemKind::FUNCTION,
+        //             SymbolKind::Param => CompletionItemKind::VARIABLE,
+        //             SymbolKind::Local => CompletionItemKind::VARIABLE,
+        //             SymbolKind::Enum => CompletionItemKind::ENUM,
+        //             SymbolKind::Struct => CompletionItemKind::STRUCT,
+        //             SymbolKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
+        //             SymbolKind::BuiltinType => CompletionItemKind::CLASS,
+        //             SymbolKind::BuiltinFunc => CompletionItemKind::FUNCTION,
+        //             _ => CompletionItemKind::VARIABLE,
+        //         };
 
-                let detail = if let Some(typed_expr) = source_file.typed_expr(&info.expr_id) {
-                    Some(format!("{:?}", &typed_expr.ty))
-                } else {
-                    None
-                };
+        //         let detail = if let Some(typed_expr) = source_file.typed_expr(&info.expr_id) {
+        //             Some(format!("{:?}", &typed_expr.ty))
+        //         } else {
+        //             None
+        //         };
 
-                CompletionItem {
-                    label: info.name.clone(),
-                    kind: Some(kind),
-                    detail,
-                    ..Default::default()
-                }
-            })
-            .collect();
+        //         CompletionItem {
+        //             label: info.name.clone(),
+        //             kind: Some(kind),
+        //             detail,
+        //             ..Default::default()
+        //         }
+        //     })
+        //     .collect();
+        let completion_items = completion.get_completions();
         log::info!("completion_items: {:?}", completion_items);
         Box::pin(async move {
             if completion_items.is_empty() {

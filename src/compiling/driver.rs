@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
-    FileID, FileStore, SourceFile, SymbolTable,
+    FileID, FileStore, SourceFile, SymbolID, SymbolTable,
     compiling::compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
     source_file,
 };
@@ -96,6 +96,19 @@ impl Driver {
         }
 
         result
+    }
+
+    pub fn symbol_from_position(&self, position: Position) -> Option<&SymbolID> {
+        for (span, sym) in &self.symbol_table.symbol_map {
+            if span.contains(&crate::diagnostic::Position {
+                line: position.line,
+                col: position.character,
+            }) {
+                return Some(sym);
+            }
+        }
+
+        None
     }
 
     pub fn diagnostics(&mut self, path: &PathBuf) -> Vec<Diagnostic> {

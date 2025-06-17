@@ -1298,7 +1298,7 @@ impl TypeChecker {
                 log::trace!("enum scheme: {scheme:?}");
                 env.declare_in_parent(enum_id, scheme);
 
-                let mut methods: Vec<Ty> = vec![];
+                let mut methods: HashMap<String, Method> = Default::default();
                 let mut variants: Vec<Ty> = vec![];
                 let mut variant_defs: Vec<EnumVariant> = vec![];
 
@@ -1314,11 +1314,12 @@ impl TypeChecker {
                 for expr_id in expr_ids.clone() {
                     let expr = source_file.get(&expr_id).cloned().unwrap();
 
-                    if let Expr::Func { .. } = &expr {
-                        let method = self
+                    if let Expr::Func { name, .. } = &expr {
+                        let ty = self
                             .infer_node(&expr_id, env, &None, source_file)
                             .map_err(|e| (expr_id, e))?;
-                        methods.push(method);
+                        let name_str = name.clone().unwrap().name_str();
+                        methods.insert(name_str.clone(), Method::new(name_str, ty));
                     }
 
                     if let Expr::EnumVariant(Name::Raw(name_str), values) =

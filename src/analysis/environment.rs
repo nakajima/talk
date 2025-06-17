@@ -30,7 +30,7 @@ pub struct EnumDef {
     pub name: Option<SymbolID>,
     pub type_parameters: TypeParams,
     pub variants: Vec<EnumVariant>,
-    pub methods: Vec<Ty>,
+    pub methods: HashMap<String, Method>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,7 +212,7 @@ impl Environment {
             .find_map(|frame| frame.get(&symbol_id).cloned())
         else {
             log::error!(
-                "Trying ot instantiate unknown symbol: {:?} in {:?}",
+                "Trying to instantiate unknown symbol: {:?} in {:?}",
                 symbol_id,
                 self.scopes
             );

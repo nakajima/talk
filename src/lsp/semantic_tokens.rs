@@ -29,12 +29,12 @@ impl<'a> SemanticTokenCollector<'a> {
         }
     }
 
-    fn line_col_for(&self, position: usize) -> Option<Position> {
-        if position > self.source.len() {
+    fn line_col_for(&self, position: u32) -> Option<Position> {
+        if position as usize > self.source.len() {
             return None;
         }
 
-        let before = &self.source[..position];
+        let before = &self.source[..position as usize];
         let line = before.matches('\n').count(); // Remove the +1 here
         let column = before
             .rfind('\n')
@@ -59,8 +59,8 @@ impl<'a> SemanticTokenCollector<'a> {
     fn range_for(&self, expr_id: &ExprID) -> Range {
         let range = self.source_file.meta[*expr_id as usize].source_range();
 
-        if let Some(start) = self.line_col_for(range.start)
-            && let Some(end) = self.line_col_for(range.end)
+        if let Some(start) = self.line_col_for(range.start as u32)
+            && let Some(end) = self.line_col_for(range.end as u32)
         {
             Range::new(start, end)
         } else {

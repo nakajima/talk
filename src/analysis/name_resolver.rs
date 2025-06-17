@@ -304,6 +304,7 @@ impl NameResolver {
                     match name {
                         Name::Raw(name_str) => {
                             let (symbol_id, _) = self.lookup(&name_str);
+                            symbol_table.add_map(source_file, node_id, &symbol_id);
                             source_file.nodes[*node_id as usize] =
                                 Parameter(Name::Resolved(symbol_id, name_str), ty_repr);
                         }
@@ -322,6 +323,8 @@ impl NameResolver {
                         } else {
                             let (symbol_id, depth) = self.lookup(&name_str);
                             log::trace!("Replacing variable {name_str} with {symbol_id:?}");
+
+                            symbol_table.add_map(source_file, node_id, &symbol_id);
 
                             // Check to see if this is a capture
                             if let Some((func_id, func_depth)) = self.func_stack.last()

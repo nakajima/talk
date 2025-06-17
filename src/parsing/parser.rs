@@ -486,7 +486,18 @@ impl<'a> Parser<'a> {
     ) -> Result<ExprID, ParserError> {
         let tok = self.push_lhs_location(lhs);
         self.consume(TokenKind::Dot)?;
-        let name = self.identifier()?;
+
+        let name = match self.identifier() {
+            Ok(name) => name,
+            Err(e) => {
+                // Add an empty member name so name resolution can  but still emit the error
+                self.parse_tree
+                    .diagnostics
+                    .insert(Diagnostic::parser(self.current.clone().unwrap(), e));
+                "".into()
+            }
+        };
+
         let member = self.add_expr(Member(Some(lhs), name), tok)?;
 
         self.skip_newlines();
@@ -993,6 +1004,7 @@ impl<'a> Parser<'a> {
         if let Some(lhs) = lhs {
             Ok(lhs)
         } else {
+            self.advance();
             Err(ParserError::UnexpectedEndOfInput(None))
         }
     }

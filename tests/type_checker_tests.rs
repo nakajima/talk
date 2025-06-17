@@ -781,7 +781,7 @@ mod tests {
         };
         assert_eq!(enum_def.methods.len(), 2);
         assert_eq!(
-            enum_def.methods[0],
+            enum_def.methods.get("buzz").unwrap().ty,
             Ty::Func(
                 vec![],
                 Box::new(Ty::Enum(SymbolID::typed(1), vec![])),
@@ -789,7 +789,7 @@ mod tests {
             )
         );
         assert_eq!(
-            enum_def.methods[1],
+            enum_def.methods.get("foo").unwrap().ty,
             Ty::Func(vec![], Box::new(Ty::Int), vec![])
         );
     }
@@ -1001,7 +1001,6 @@ mod pending {
             }()",
         )
         .unwrap();
-        dbg!(&checked.diagnostics());
         assert_eq!(checked.diagnostics().len(), 2);
     }
 

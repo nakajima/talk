@@ -21,8 +21,8 @@ impl LexerError {
 pub struct Lexer<'a> {
     pub code: &'a str,
     chars: Peekable<Chars<'a>>,
-    current: usize,
-    started: usize,
+    current: u32,
+    started: u32,
     line: u32,
     col: u32,
 }
@@ -59,8 +59,6 @@ impl<'a> Lexer<'a> {
                             return self.make(Newline);
                         }
 
-                        self.col += 1;
-
                         break;
                     }
                 }
@@ -81,6 +79,7 @@ impl<'a> Lexer<'a> {
     fn consume(&mut self, char: char) -> Result<Token, LexerError> {
         self.started = self.current;
         self.current += 1;
+        self.col += 1;
 
         match char {
             '.' => self.make(Dot),
@@ -142,7 +141,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn identifier(&mut self, starting_at: usize) -> TokenKind {
+    fn identifier(&mut self, starting_at: u32) -> TokenKind {
         while let Some(ch) = self.chars.peek() {
             if ch.is_alphanumeric() || *ch == '_' {
                 self.advance();
@@ -151,8 +150,18 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let start_idx = self.code.char_indices().nth(starting_at).unwrap().0;
-        let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
+        let start_idx = self
+            .code
+            .char_indices()
+            .nth(starting_at as usize)
+            .unwrap()
+            .0;
+        let end_idx = self
+            .code
+            .char_indices()
+            .nth(self.current as usize - 1)
+            .unwrap()
+            .0;
 
         match &self.code[start_idx..=end_idx] {
             "func" => Func,
@@ -184,7 +193,7 @@ impl<'a> Lexer<'a> {
         self.make(Minus)
     }
 
-    fn number(&mut self, starting_at: usize) -> TokenKind {
+    fn number(&mut self, starting_at: u32) -> TokenKind {
         let mut is_float = false;
 
         while let Some(ch) = self.chars.peek() {
@@ -198,8 +207,18 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let start_idx = self.code.char_indices().nth(starting_at).unwrap().0;
-        let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
+        let start_idx = self
+            .code
+            .char_indices()
+            .nth(starting_at as usize)
+            .unwrap()
+            .0;
+        let end_idx = self
+            .code
+            .char_indices()
+            .nth(self.current as usize - 1)
+            .unwrap()
+            .0;
 
         if is_float {
             Float(self.code[start_idx..=end_idx].to_string())

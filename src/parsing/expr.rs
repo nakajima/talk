@@ -22,7 +22,7 @@ impl ExprMeta {
         }
     }
 
-    pub fn source_range(&self) -> Range<usize> {
+    pub fn source_range(&self) -> Range<u32> {
         self.start.start..self.end.end
     }
 }

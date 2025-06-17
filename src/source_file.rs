@@ -248,14 +248,30 @@ impl<P: Phase> SourceFile<P> {
             panic!("didn't get a span for expr: {}", expr_id);
         };
 
-        Span {
-            file_id: self.file_id,
-            start: meta.start.start as u32,
-            end: meta.end.end as u32,
-            start_line: meta.start.line,
-            start_col: meta.start.col,
-            end_line: meta.end.line,
-            end_col: meta.end.col,
+        // handle single token expressions
+        if meta.start == meta.end {
+            Span {
+                file_id: self.file_id,
+                start: meta.start.start as u32,
+                end: meta.end.end as u32,
+                start_line: meta.start.line,
+                start_col: meta
+                    .start
+                    .col
+                    .saturating_sub(meta.start.end - meta.start.start),
+                end_line: meta.end.line,
+                end_col: meta.end.col,
+            }
+        } else {
+            Span {
+                file_id: self.file_id,
+                start: meta.start.start as u32,
+                end: meta.end.end as u32,
+                start_line: meta.start.line,
+                start_col: meta.start.col,
+                end_line: meta.end.line,
+                end_col: meta.end.col,
+            }
         }
     }
 }
