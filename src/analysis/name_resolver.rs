@@ -10,7 +10,6 @@ use crate::expr::Expr::*;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
-use crate::prelude::compile_prelude_for_name_resolver;
 use crate::scope_tree::ScopeId;
 use crate::source_file::SourceFile;
 use crate::span::Span;
@@ -34,21 +33,6 @@ pub struct NameResolver {
     func_stack: Vec<(ExprID /* func expr id */, usize /* scope depth */)>,
 
     scope_tree_ids: Vec<ScopeId>,
-}
-
-impl Default for NameResolver {
-    fn default() -> Self {
-        let prelude = compile_prelude_for_name_resolver();
-        let symbol_table = prelude.symbols.clone();
-        let initial_scope = symbol_table.build_name_scope();
-
-        NameResolver {
-            scopes: vec![initial_scope],
-            type_symbol_stack: vec![],
-            func_stack: vec![],
-            scope_tree_ids: Default::default(),
-        }
-    }
 }
 
 impl NameResolver {
@@ -503,6 +487,8 @@ impl NameResolver {
                 symbol_table,
             );
 
+            println!("Declared {} as {:?}", name_str, struct_symbol);
+
             self.resolve_nodes(&generics, source_file, symbol_table);
 
             source_file.nodes[*id as usize] =
@@ -732,20 +718,25 @@ impl NameResolver {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
-    use crate::{expr::Expr, parser::parse};
+    use crate::{compiling::driver::Driver, expr::Expr, parser::parse};
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
-        let mut symbol_table = SymbolTable::default();
-        let tree = parse(code, 123);
-        let resolver = NameResolver::default();
-        resolver.resolve(tree.clone(), &mut symbol_table)
+        let mut driver = Driver::with_str(code);
+        driver.units[0]
+            .parse()
+            .resolved(&mut driver.symbol_table)
+            .source_file(&PathBuf::from("-"))
+            .unwrap()
+            .clone()
     }
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
-        let mut symbol_table = SymbolTable::default();
+        let mut symbol_table = SymbolTable::base();
         let tree = parse(code, 123);
-        let resolver = NameResolver::default();
+        let resolver = NameResolver::new(&mut symbol_table);
         let resolved = resolver.resolve(tree, &mut symbol_table);
         (resolved, symbol_table)
     }
@@ -1128,7 +1119,11 @@ mod tests {
         let resolved = resolve("func c() -> Array<Int> {}");
         assert_eq!(
             *resolved.get(&1).unwrap(),
-            TypeRepr(Name::Resolved(SymbolID(-4), "Array".into()), vec![0], false)
+            TypeRepr(
+                Name::Resolved(SymbolID::ARRAY, "Array".into()),
+                vec![0],
+                false
+            )
         );
         assert_eq!(
             *resolved.get(&0).unwrap(),

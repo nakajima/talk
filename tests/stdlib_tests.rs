@@ -46,4 +46,10 @@ mod array_tests {
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
     }
+
+    #[test]
+    fn gets_count() {
+        let checked = talk::analysis::check("[1,2,3].count").unwrap();
+        assert_eq!(checked.type_for(checked.root_ids()[0]), Ty::Int);
+    }
 }

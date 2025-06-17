@@ -11,14 +11,18 @@ use crate::{
 pub struct SymbolID(pub i32);
 
 impl SymbolID {
+    // These are special because they have syntactic sugar that gets handled
+    // by the compiler.
     pub const OPTIONAL: SymbolID = SymbolID(1);
-    pub const ARRAY: SymbolID = SymbolID(-4);
+    pub const ARRAY: SymbolID = SymbolID(3);
+
+    // These are special for the lowering phase
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
     pub const ENV: SymbolID = SymbolID(i32::MIN + 1);
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id() - 2)
+        SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id())
     }
 
     // Remove the prelude's symbol offset
@@ -82,8 +86,8 @@ pub struct SymbolTable {
     pub symbol_map: HashMap<Span, SymbolID>,
 }
 
-impl Default for SymbolTable {
-    fn default() -> Self {
+impl SymbolTable {
+    pub fn base() -> Self {
         let mut table = Self {
             symbols: Default::default(),
             next_id: Default::default(),
@@ -95,9 +99,7 @@ impl Default for SymbolTable {
 
         table
     }
-}
 
-impl SymbolTable {
     pub fn add_map<P: Phase>(
         &mut self,
         source_file: &SourceFile<P>,
@@ -121,7 +123,7 @@ impl SymbolTable {
     }
 
     pub fn with_prelude(prelude_symbols: &HashMap<SymbolID, SymbolInfo>) -> Self {
-        let mut table = Self::default();
+        let mut table = Self::base();
 
         // Import all prelude symbols
         for (id, info) in prelude_symbols {

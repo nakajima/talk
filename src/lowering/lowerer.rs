@@ -1780,7 +1780,7 @@ mod tests {
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::default();
+        let mut symbol_table = SymbolTable::base();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
         lowerer.lower(&mut module)?;

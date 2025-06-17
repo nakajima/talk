@@ -54,18 +54,19 @@ fn lower_alloc(
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_lowered_functions, check, lowering::{
+        SymbolID, SymbolTable, assert_lowered_functions, check,
+        lowering::{
             instr::Instr,
             ir_module::IRModule,
             ir_type::IRType,
             lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, Lowerer},
             register::Register,
-        }, SymbolID, SymbolTable
+        },
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::default();
+        let mut symbol_table = SymbolTable::base();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
         lowerer.lower(&mut module)?;

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
-    environment::{StructDef, TypeDef, TypeParams},
+    environment::TypeDef,
     name::Name,
     type_checker::{Scheme, TypeVarID, TypeVarKind},
 };
@@ -58,27 +58,27 @@ fn builtins() -> Vec<Builtin> {
             unbound_vars: vec![],
             type_def: None,
         },
-        Builtin {
-            id: -4,
-            info: SymbolInfo {
-                name: "Array".into(),
-                kind: SymbolKind::BuiltinType,
-                expr_id: -4,
-                is_captured: false,
-                definition: None,
-            },
-            ty: Ty::Array(Box::new(Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element)))),
-            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
-            type_def: Some(TypeDef::Struct(StructDef::new(
-                SymbolID(-4),
-                "Array".to_string(),
-                Some(array_override),
-                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
-                Default::default(),
-                Default::default(),
-                Default::default(),
-            ))),
-        },
+        // Builtin {
+        //     id: -4,
+        //     info: SymbolInfo {
+        //         name: "Array".into(),
+        //         kind: SymbolKind::BuiltinType,
+        //         expr_id: -4,
+        //         is_captured: false,
+        //         definition: None,
+        //     },
+        //     ty: Ty::Array(Box::new(Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element)))),
+        //     unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+        //     type_def: Some(TypeDef::Struct(StructDef::new(
+        //         SymbolID(-4),
+        //         "Array".to_string(),
+        //         Some(array_override),
+        //         vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+        //         Default::default(),
+        //         Default::default(),
+        //         Default::default(),
+        //     ))),
+        // },
         Builtin {
             id: -5,
             info: SymbolInfo {
@@ -98,9 +98,10 @@ fn builtins() -> Vec<Builtin> {
         },
     ]
 }
-fn array_override(generics: &TypeParams) -> Ty {
-    Ty::Array(Box::new(generics[0].clone()))
-}
+
+// fn array_override(generics: &TypeParams) -> Ty {
+//     Ty::Array(Box::new(generics[0].clone()))
+// }
 
 pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
     let mut result = HashMap::default();

@@ -2,4 +2,10 @@ struct Array {
 	let count: Int  
 	let capacity: Int
 	let storage: Int
+
+	init(count: Int, capacity: Int, storage: Int) {
+		self.count = count
+		self.capacity = capacity
+		self.storage = storage
+	}
 }

@@ -414,7 +414,7 @@ mod tests {
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
         let typed = check(code).unwrap();
-        let mut symbol_table = SymbolTable::default();
+        let mut symbol_table = SymbolTable::base();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
         lowerer.lower(&mut module).unwrap();

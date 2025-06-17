@@ -31,8 +31,12 @@ pub fn compile_prelude() -> &'static Prelude {
 }
 
 pub fn _compile_prelude_for_name_resolver() -> Prelude {
-    let source = load_stdlib_module("Optional").unwrap();
-    let mut symbol_table = SymbolTable::default();
+    let source = &[
+        load_stdlib_module("Optional").unwrap(),
+        load_stdlib_module("Array").unwrap(),
+    ]
+    .join("\n");
+    let mut symbol_table = SymbolTable::base();
     let parsed = parse(source, 0);
     let _ = NameResolver::new(&mut symbol_table).resolve(parsed, &mut symbol_table);
 
@@ -45,8 +49,12 @@ pub fn _compile_prelude_for_name_resolver() -> Prelude {
 }
 
 pub fn _compile_prelude() -> Prelude {
-    let source = load_stdlib_module("Optional").unwrap();
-    let mut symbol_table = SymbolTable::default();
+    let source = &[
+        load_stdlib_module("Optional").unwrap(),
+        load_stdlib_module("Array").unwrap(),
+    ]
+    .join("\n");
+    let mut symbol_table = SymbolTable::base();
     let parsed = parse(source, 0);
     let resolved = NameResolver::new(&mut symbol_table).resolve(parsed, &mut symbol_table);
     let checker = TypeChecker;
@@ -78,4 +86,4 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Optional");
+stdlib_modules!("Optional", "Array");

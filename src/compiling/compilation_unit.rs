@@ -142,6 +142,13 @@ pub struct Resolved {
 impl StageTrait for Resolved {}
 
 impl CompilationUnit<Resolved> {
+    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::NameResolved>> {
+        self.stage
+            .files
+            .iter()
+            .find(|f| Some(f.file_id) == self.input.id(path))
+    }
+
     pub fn typed(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Typed> {
         let prelude = compile_prelude();
         let mut env = Environment::new();
