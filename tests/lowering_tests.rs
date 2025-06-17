@@ -6,7 +6,6 @@ mod lowering_tests {
         lowering::{
             instr::{Callee, Instr},
             ir_module::IRModule,
-            ir_printer::print,
             ir_type::IRType,
             lowerer::{
                 BasicBlock, BasicBlockID, IRError, IRFunction, PhiPredecessors, RefKind,
