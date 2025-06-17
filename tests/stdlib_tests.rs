@@ -40,7 +40,7 @@ mod array_tests {
 
     #[test]
     fn gets_typed() {
-        let checked = talk::analysis::check("[1,2,3]").unwrap();
+        let checked = talk::type_checking::check("[1,2,3]").unwrap();
         assert_eq!(
             checked.type_for(checked.root_ids()[0]),
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
@@ -49,7 +49,7 @@ mod array_tests {
 
     #[test]
     fn gets_count() {
-        let checked = talk::analysis::check("[1,2,3].count").unwrap();
+        let checked = talk::type_checking::check("[1,2,3].count").unwrap();
         assert_eq!(checked.type_for(checked.root_ids()[0]), Ty::Int);
     }
 }
