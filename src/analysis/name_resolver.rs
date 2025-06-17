@@ -487,8 +487,6 @@ impl NameResolver {
                 symbol_table,
             );
 
-            println!("Declared {} as {:?}", name_str, struct_symbol);
-
             self.resolve_nodes(&generics, source_file, symbol_table);
 
             source_file.nodes[*id as usize] =
@@ -734,11 +732,14 @@ mod tests {
     }
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
-        let mut symbol_table = SymbolTable::base();
-        let tree = parse(code, 123);
-        let resolver = NameResolver::new(&mut symbol_table);
-        let resolved = resolver.resolve(tree, &mut symbol_table);
-        (resolved, symbol_table)
+        let mut driver = Driver::with_str(code);
+        let file = driver.units[0]
+            .parse()
+            .resolved(&mut driver.symbol_table)
+            .source_file(&PathBuf::from("-"))
+            .unwrap()
+            .clone();
+        (file, driver.symbol_table)
     }
 
     #[test]
@@ -881,7 +882,7 @@ mod tests {
         assert_eq!(
             info.definition.as_ref().unwrap(),
             &Definition {
-                file_id: 123,
+                file_id: 0,
                 line: 2,
                 col: 11
             }

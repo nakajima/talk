@@ -1766,8 +1766,11 @@ fn find_or_create_main(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
         SymbolID, SymbolTable, check,
+        compiling::driver::Driver,
         lowering::{
             instr::Callee,
             ir_module::IRModule,
@@ -1776,15 +1779,19 @@ mod tests {
                 PhiPredecessors, RefKind, Register, RegisterList,
             },
         },
+        symbol_table,
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let lowerer = Lowerer::new(typed, &mut symbol_table);
-        let mut module = IRModule::new();
-        lowerer.lower(&mut module)?;
-        Ok(module)
+        let mut driver = Driver::with_str(input);
+        let typed = driver.units[0]
+            .parse()
+            .resolved(&mut driver.symbol_table)
+            .typed(&mut driver.symbol_table)
+            .lower(&mut driver.symbol_table)
+            .unwrap();
+
+        Ok(typed.module())
     }
 
     #[macro_export]
@@ -2052,13 +2059,14 @@ mod tests {
         .unwrap();
 
         let foo_func_type = IRType::Func(vec![IRType::Int], Box::new(IRType::Int));
+        let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
 
         assert_lowered_functions!(
             lowered,
             vec![
                 IRFunction {
                     ty: foo_func_type.clone(),
-                    name: "@_5_foo".into(),
+                    name: foo_name.clone(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -2103,7 +2111,7 @@ mod tests {
                             Instr::Ref(
                                 Register(4),
                                 foo_func_type.clone(),
-                                RefKind::Func("@_5_foo".into())
+                                RefKind::Func(foo_name)
                             ),
                             Instr::GetElementPointer {
                                 dest: Register(5),
@@ -2145,12 +2153,14 @@ mod tests {
             Box::new(IRType::TypeVar("T3".into())),
         );
 
+        let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
+
         assert_lowered_functions!(
             lowered,
             vec![
                 IRFunction {
                     ty: foo_func_type.clone(),
-                    name: "@_5_foo".into(),
+                    name: foo_name.clone(),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![Instr::Ret(
@@ -2186,11 +2196,7 @@ mod tests {
                                 location: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
-                            Instr::Ref(
-                                Register(4),
-                                foo_func_type.clone(),
-                                RefKind::Func("@_5_foo".into())
-                            ),
+                            Instr::Ref(Register(4), foo_func_type.clone(), RefKind::Func(foo_name)),
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 from: Register(1),

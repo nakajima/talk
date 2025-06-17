@@ -216,4 +216,15 @@ pub struct Lowered {
 
 impl StageTrait for Lowered {}
 
-impl CompilationUnit<Lowered> {}
+impl CompilationUnit<Lowered> {
+    pub fn module(self) -> IRModule {
+        self.stage.module
+    }
+
+    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Lowered>> {
+        self.stage
+            .files
+            .iter()
+            .find(|f| Some(f.file_id) == self.input.id(path))
+    }
+}
