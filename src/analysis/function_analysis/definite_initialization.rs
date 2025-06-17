@@ -56,9 +56,10 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
                 let block = &func.blocks[block_id.0 as usize];
                 for instr in &block.instructions {
                     if let Instr::Store { location, .. } = instr
-                        && let Some(property_symbol) = property_pointers.get(location) {
-                            in_set.insert(property_symbol.clone());
-                        }
+                        && let Some(property_symbol) = property_pointers.get(location)
+                    {
+                        in_set.insert(property_symbol.clone());
+                    }
                 }
 
                 let out_set = in_set;
@@ -117,12 +118,13 @@ impl DefiniteInitizationPass {
                 if let Instr::GetElementPointer {
                     dest, base, index, ..
                 } = instr
-                    && *base == self_reg {
-                        // The index of the gep corresponds to the property index.
-                        if let Some(property) = self.struct_def.properties.values().nth(*index) {
-                            property_pointers.insert(*dest, property.clone());
-                        }
+                    && *base == self_reg
+                {
+                    // The index of the gep corresponds to the property index.
+                    if let Some(property) = self.struct_def.properties.values().nth(*index) {
+                        property_pointers.insert(*dest, property.clone());
                     }
+                }
             }
         }
         (self_reg, property_pointers)
@@ -145,7 +147,7 @@ mod tests {
     fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>) {
         let mut driver = Driver::with_str(code);
 
-        let lowered = driver.lower().unwrap().into_iter().next().unwrap();
+        let lowered = driver.lower().into_iter().next().unwrap();
         let file = lowered.source_file(&"-".into()).unwrap().clone();
         let module = lowered.module();
         (module, file)

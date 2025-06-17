@@ -43,7 +43,7 @@ async fn main() {
         Commands::IR { filename } => {
             use talk::{compiling::driver::Driver, lowering::ir_printer::print};
             let mut driver = Driver::with_files(vec![filename.clone()]);
-            let lowered = driver.lower().unwrap();
+            let lowered = driver.lower();
 
             for unit in lowered {
                 println!("{}", print(&unit.stage.module));
@@ -53,7 +53,7 @@ async fn main() {
         Commands::Run { filename } => {
             use talk::compiling::driver::Driver;
             let mut driver = Driver::with_files(vec![filename.clone()]);
-            let lowered = driver.lower().unwrap();
+            let lowered = driver.lower();
 
             use talk::interpreter::interpreter::IRInterpreter;
 

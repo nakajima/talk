@@ -90,15 +90,12 @@ impl CompilationUnit<Raw> {
         }
     }
 
-    pub fn lower(
-        &mut self,
-        symbol_table: &mut SymbolTable,
-    ) -> Result<CompilationUnit<Lowered>, CompilationError> {
+    pub fn lower(&mut self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
         let parsed = self.parse();
         let resolved = parsed.resolved(symbol_table);
         let typed = resolved.typed(symbol_table);
-        let lowered = typed.lower(symbol_table)?;
-        Ok(lowered)
+        let lowered = typed.lower(symbol_table);
+        lowered
     }
 }
 
@@ -175,24 +172,19 @@ impl CompilationUnit<Typed> {
         self.stage.files.iter().find(|f| f.path == *path)
     }
 
-    pub fn lower(
-        self,
-        symbol_table: &mut SymbolTable,
-    ) -> Result<CompilationUnit<Lowered>, CompilationError> {
+    pub fn lower(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
         let mut module = IRModule::new();
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table)
-                .lower(&mut module)
-                .map_err(CompilationError::IRError)?;
+            let lowered = Lowerer::new(file, symbol_table).lower(&mut module);
             files.push(lowered);
         }
 
-        Ok(CompilationUnit {
+        CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
             stage: Lowered { module, files },
-        })
+        }
     }
 }
 

@@ -21,8 +21,7 @@ mod lowering_tests {
             .parse()
             .resolved(&mut driver.symbol_table)
             .typed(&mut driver.symbol_table)
-            .lower(&mut driver.symbol_table)
-            .unwrap();
+            .lower(&mut driver.symbol_table);
 
         Ok(typed.module())
     }

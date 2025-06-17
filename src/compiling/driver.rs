@@ -4,7 +4,7 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
     SourceFile, SymbolID, SymbolTable,
-    compiling::compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
+    compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, Typed},
     prelude::compile_prelude,
     source_file,
 };
@@ -71,12 +71,12 @@ impl Driver {
         result
     }
 
-    pub fn lower(&mut self) -> Result<Vec<CompilationUnit<Lowered>>, CompilationError> {
+    pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
         let mut result = vec![];
         for unit in &mut self.units {
-            result.push(unit.lower(&mut self.symbol_table)?);
+            result.push(unit.lower(&mut self.symbol_table));
         }
-        Ok(result)
+        result
     }
 
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {

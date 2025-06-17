@@ -415,7 +415,7 @@ mod tests {
         let mut symbol_table = SymbolTable::base();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
-        lowerer.lower(&mut module).unwrap();
+        lowerer.lower(&mut module);
 
         // println!("{}", crate::lowering::ir_printer::print(&module));
 

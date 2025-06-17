@@ -398,7 +398,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    pub fn lower(mut self, module: &mut IRModule) -> Result<SourceFile<Lowered>, IRError> {
+    pub fn lower(mut self, module: &mut IRModule) -> SourceFile<Lowered> {
         let (expr_id, did_create) = find_or_create_main(&mut self.source_file, self.symbol_table);
 
         // If we created the main function, we need to set it up
@@ -432,7 +432,7 @@ impl<'a> Lowerer<'a> {
             module.functions.push(function)
         }
 
-        Ok(self.source_file.to_lowered())
+        self.source_file.to_lowered()
     }
 
     fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {

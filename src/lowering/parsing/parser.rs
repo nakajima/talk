@@ -430,7 +430,7 @@ mod tests {
         let mut symbol_table = SymbolTable::base();
         let mut module = IRModule::new();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        lowerer.lower(&mut module)?;
+        lowerer.lower(&mut module);
         Ok(module)
     }
 
