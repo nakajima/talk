@@ -140,7 +140,7 @@ pub fn format_block_id(id: &BasicBlockID) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolTable, check,
+        SymbolID, SymbolTable, check,
         lowering::{
             ir_module::IRModule,
             ir_printer::print,
@@ -169,25 +169,29 @@ mod tests {
         let func = print(&program);
         assert_eq!(
             func.trim(),
-            r#"func @_5_add({} %0, int %1) int
+            format!(
+                r#"func @_{}_add({{}} %0, int %1) int
   entry:
     %2 = int 1;
     %3 = add int %2, %1;
     ret int %3;
 
-func @main({} %0) void
+func @main({{}} %0) void
   entry:
-    %1 = alloc {ptr, ptr} ;
-    %2 = struct {} ();
-    %3 = alloc {} ;
-    store {} %2 %3;
-    %4 = ref (int) int @_5_add;
-    %5 = getelementptr {ptr, ptr} %1 1;
-    %6 = getelementptr {ptr, ptr} %1 0;
+    %1 = alloc {{ptr, ptr}} ;
+    %2 = struct {{}} ();
+    %3 = alloc {{}} ;
+    store {{}} %2 %3;
+    %4 = ref (int) int @_{}_add;
+    %5 = getelementptr {{ptr, ptr}} %1 1;
+    %6 = getelementptr {{ptr, ptr}} %1 0;
     store ptr %3 %5;
     store ptr %4 %6;
     ret ptr %1;
-                "#
+                "#,
+                SymbolID::resolved(1).0,
+                SymbolID::resolved(1).0,
+            )
             .trim()
         )
     }

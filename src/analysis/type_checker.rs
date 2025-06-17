@@ -1453,7 +1453,7 @@ mod struct_tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]),
-            Ty::Struct(SymbolID(5), vec![])
+            Ty::Struct(SymbolID::resolved(1), vec![])
         );
 
         let Some(TypedExpr {
@@ -1468,7 +1468,7 @@ mod struct_tests {
             panic!("did not get callee")
         };
 
-        assert_eq!(ty, Ty::Init(SymbolID(5), vec![Ty::Int]));
+        assert_eq!(ty, Ty::Init(SymbolID::resolved(1), vec![Ty::Int]));
     }
 
     #[test]
