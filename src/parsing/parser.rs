@@ -1576,8 +1576,6 @@ mod tests {
     fn parses_call_with_args() {
         let parsed = parse("fizz(foo: 123)");
 
-        println!("{:?}", parsed);
-
         let expr = parsed.roots()[0].unwrap();
 
         let Expr::Call {
