@@ -37,7 +37,11 @@ impl FileStore {
         self.lookup.get(file).cloned()
     }
 
-    pub fn lookup(&self, id: FileID) -> &PathBuf {
-        &self.files[id]
+    pub fn lookup(&self, id: FileID) -> Option<&PathBuf> {
+        if self.files.len() < id {
+            Some(&self.files[id])
+        } else {
+            None
+        }
     }
 }

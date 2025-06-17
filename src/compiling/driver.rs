@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
-    FileID, FileStore, SourceFile,
+    FileID, FileStore, SourceFile, SymbolTable,
     compiling::compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
     source_file,
 };
 
 pub struct Driver {
     units: Vec<CompilationUnit>,
+    pub symbol_table: SymbolTable,
 }
 
 impl Default for Driver {
@@ -22,6 +23,7 @@ impl Driver {
     pub fn new() -> Self {
         let mut driver = Self {
             units: vec![CompilationUnit::new(FileStore::new(vec![]))],
+            symbol_table: SymbolTable::default(),
         };
 
         // Create a default unit
@@ -35,7 +37,10 @@ impl Driver {
     pub fn with_files(files: Vec<PathBuf>) -> Self {
         let store = FileStore::new(files);
         let unit = CompilationUnit::new(store);
-        Self { units: vec![unit] }
+        Self {
+            units: vec![unit],
+            symbol_table: SymbolTable::default(),
+        }
     }
 
     pub fn update_file(&mut self, path: &PathBuf, contents: String) {
@@ -54,6 +59,16 @@ impl Driver {
             .insert(path.clone(), contents.clone());
     }
 
+    pub fn path(&self, file_id: FileID) -> Option<&PathBuf> {
+        for unit in &self.units {
+            if let Some(path) = unit.input.lookup(file_id) {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
     pub fn parse(&mut self) -> Vec<CompilationUnit<Parsed>> {
         let mut result = vec![];
         for unit in &mut self.units {
@@ -65,7 +80,7 @@ impl Driver {
     pub fn lower(&mut self) -> Result<Vec<CompilationUnit<Lowered>>, CompilationError> {
         let mut result = vec![];
         for unit in &mut self.units {
-            result.push(unit.lower()?);
+            result.push(unit.lower(&mut self.symbol_table)?);
         }
         Ok(result)
     }
@@ -73,7 +88,10 @@ impl Driver {
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
         for unit in &mut self.units {
-            let checked = unit.parse().resolved().typed();
+            let checked = unit
+                .parse()
+                .resolved(&mut self.symbol_table)
+                .typed(&mut self.symbol_table);
             result.push(checked);
         }
 
@@ -130,6 +148,19 @@ impl Driver {
         }
 
         "".into()
+    }
+
+    pub fn typed_source_file(&mut self, path: &PathBuf) -> Option<SourceFile<source_file::Typed>> {
+        let checked = self.check();
+        for unit in checked.into_iter() {
+            for file in unit.stage.files {
+                if unit.input.id(path) == Some(file.file_id) {
+                    return Some(file);
+                }
+            }
+        }
+
+        None
     }
 
     pub fn parsed_source_file(

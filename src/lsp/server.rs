@@ -10,14 +10,14 @@ use async_lsp::lsp_types::{
     DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
     DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    Location, MarkedString, OneOf, Position, Range, RelatedFullDocumentDiagnosticReport,
-    RelatedUnchangedDocumentDiagnosticReport, SemanticTokenType, SemanticTokens,
-    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
-    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport,
-    Url, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, Location, OneOf, Position, Range,
+    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport, Url,
+    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -27,16 +27,11 @@ use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
+use crate::SymbolKind;
 use crate::compiling::driver::Driver;
-use crate::expr::Expr;
 use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
-use crate::name::Name;
-use crate::parser::ExprID;
 use crate::parser::parse;
-use crate::source_file::SourceFile;
-use crate::symbol_table::{SymbolID, SymbolKind};
-use crate::type_checker::Ty;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::KEYWORD,
@@ -122,7 +117,7 @@ impl LanguageServer for ServerState {
         &mut self,
         params: GotoDefinitionParams,
     ) -> BoxFuture<'static, Result<Option<GotoDefinitionResponse>, Self::Error>> {
-        let Ok(path) = params
+        let Ok(_path) = params
             .text_document_position_params
             .text_document
             .uri
@@ -137,51 +132,54 @@ impl LanguageServer for ServerState {
 
         let position = params.text_document_position_params.position;
 
-        // Get the typed AST for the file
-        let typed_units = self.driver.check();
+        let Some((_, symbol_id)) = self
+            .driver
+            .symbol_table
+            .symbol_map
+            .iter()
+            .find(|(span, _)| {
+                span.contains(&crate::diagnostic::Position {
+                    line: position.line,
+                    col: position.character,
+                })
+            })
+        else {
+            return Box::pin(async { Ok(None) });
+        };
 
-        for unit in typed_units {
-            if let Some(source_file) = unit.source_file(&path) {
-                // Find the symbol at the cursor position
-                if let Some((symbol_id, _)) =
-                    self.find_symbol_at_position(&source_file, &path, position)
-                {
-                    // Look up the symbol definition
-                    if let Some(symbol_info) = unit.stage.symbol_table.get(&symbol_id) {
-                        if let Some(definition) = &symbol_info.definition {
-                            // Convert file ID to path
-                            let def_path = unit.input.lookup(definition.file_id);
-                            let Some(uri) = Url::from_file_path(def_path).ok() else {
-                                return Box::pin(async { Ok(None) });
-                            };
+        let Some(info) = self.driver.symbol_table.get(symbol_id) else {
+            return Box::pin(async { Ok(None) });
+        };
 
-                            let location = Location {
-                                uri,
-                                range: Range::new(
-                                    Position::new(definition.line, definition.col),
-                                    Position::new(
-                                        definition.line,
-                                        definition.col + symbol_info.name.len() as u32,
-                                    ),
-                                ),
-                            };
+        let Some(definition) = &info.definition else {
+            return Box::pin(async { Ok(None) });
+        };
 
-                            return Box::pin(async move {
-                                Ok(Some(GotoDefinitionResponse::Scalar(location)))
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        let Some(path) = self.driver.path(definition.file_id) else {
+            return Box::pin(async { Ok(None) });
+        };
 
-        Box::pin(async { Ok(None) })
+        let Ok(path) = Url::from_file_path(path) else {
+            return Box::pin(async { Ok(None) });
+        };
+
+        let response = GotoDefinitionResponse::Scalar(Location::new(
+            path,
+            Range {
+                start: Position::new(definition.line, definition.col),
+                end: Position::new(definition.line, definition.col),
+            },
+        ));
+
+        Box::pin(async { Ok(Some(response)) })
     }
 
     fn completion(
         &mut self,
         params: CompletionParams,
     ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
+        log::info!("completions requested");
+
         let Ok(path) = params
             .text_document_position
             .text_document
@@ -198,40 +196,56 @@ impl LanguageServer for ServerState {
         let position = params.text_document_position.position;
 
         // Get the typed AST for the file
-        let typed_units = self.driver.check();
+        let Some(source_file) = self.driver.typed_source_file(&path) else {
+            return Box::pin(async { Ok(None) });
+        };
 
-        let mut completion_items = Vec::new();
+        let Some(scope) = source_file
+            .scope_tree
+            .find_scope_at(crate::diagnostic::Position {
+                line: position.line,
+                col: position.character,
+            })
+        else {
+            log::error!(
+                "did not find scope at position: {position:?} in {:?}",
+                source_file.scope_tree
+            );
+            return Box::pin(async { Ok(None) });
+        };
 
-        for unit in typed_units {
-            if let Some(source_file) = unit.source_file(&path) {
-                // Check if we're after a dot (member access)
-                let is_member_access = self.is_member_access_context(&path, position);
-                log::info!("is member access: {is_member_access:?}");
+        let symbols = source_file.scope_tree.get_symbols_in_scope(scope);
+        let completion_items: Vec<CompletionItem> = symbols
+            .iter()
+            .filter_map(|sym| self.driver.symbol_table.get(sym))
+            .map(|info| {
+                let kind = match &info.kind {
+                    SymbolKind::Func => CompletionItemKind::FUNCTION,
+                    SymbolKind::Param => CompletionItemKind::VARIABLE,
+                    SymbolKind::Local => CompletionItemKind::VARIABLE,
+                    SymbolKind::Enum => CompletionItemKind::ENUM,
+                    SymbolKind::Struct => CompletionItemKind::STRUCT,
+                    SymbolKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
+                    SymbolKind::BuiltinType => CompletionItemKind::CLASS,
+                    SymbolKind::BuiltinFunc => CompletionItemKind::FUNCTION,
+                    _ => CompletionItemKind::VARIABLE,
+                };
 
-                if is_member_access {
-                    // Find the expression before the dot
-                    if let Some((_expr_id, receiver_ty)) =
-                        self.find_receiver_at_position(source_file, &path, position)
-                    {
-                        log::info!("receiver at position: {receiver_ty:?}");
-                        completion_items.extend(self.get_member_completions(
-                            &receiver_ty,
-                            &unit.stage.environment,
-                            &unit.stage.symbol_table,
-                        ));
-                    }
+                let detail = if let Some(typed_expr) = source_file.typed_expr(&info.expr_id) {
+                    Some(format!("{:?}", &typed_expr.ty))
                 } else {
-                    // Global completions - all visible symbols in scope
-                    completion_items.extend(self.get_scope_completions(
-                        source_file,
-                        position,
-                        &unit.stage.symbol_table,
-                    ));
-                    log::info!("global completions: {completion_items:?}");
-                }
-            }
-        }
+                    None
+                };
 
+                CompletionItem {
+                    label: info.name.clone(),
+                    kind: Some(kind),
+                    detail,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        log::info!("completion_items: {:?}", completion_items);
         Box::pin(async move {
             if completion_items.is_empty() {
                 Ok(None)
@@ -313,7 +327,7 @@ impl LanguageServer for ServerState {
         &mut self,
         params: HoverParams,
     ) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {
-        let Ok(path) = params
+        let Ok(_path) = params
             .text_document_position_params
             .text_document
             .uri
@@ -325,52 +339,6 @@ impl LanguageServer for ServerState {
             );
             return Box::pin(async { Ok(None) });
         };
-
-        let position = params.text_document_position_params.position;
-
-        // Get the typed AST for the file
-        let typed_units = self.driver.check();
-
-        for unit in typed_units {
-            if let Some(source_file) = unit.source_file(&path) {
-                // Find the symbol at the cursor position
-                if let Some((symbol_id, expr_id)) =
-                    self.find_symbol_at_position(source_file, &path, position)
-                {
-                    // Get type information
-                    if let Some(typed_expr) = source_file.typed_expr(&expr_id) {
-                        let type_str = self.format_type(&typed_expr.ty);
-
-                        // Get symbol information
-                        if let Some(symbol_info) = unit.stage.symbol_table.get(&symbol_id) {
-                            let kind_str = match &symbol_info.kind {
-                                SymbolKind::Func => "function",
-                                SymbolKind::Param => "parameter",
-                                SymbolKind::Local => "variable",
-                                SymbolKind::Enum => "enum",
-                                SymbolKind::Struct => "struct",
-                                SymbolKind::TypeParameter => "type parameter",
-                                _ => "symbol",
-                            };
-
-                            let hover_text = format!(
-                                "**{}** `{}`\n\nType: `{}`",
-                                kind_str, symbol_info.name, type_str
-                            );
-
-                            return Box::pin(async move {
-                                Ok(Some(Hover {
-                                    contents: HoverContents::Scalar(MarkedString::String(
-                                        hover_text,
-                                    )),
-                                    range: None,
-                                }))
-                            });
-                        }
-                    }
-                }
-            }
-        }
 
         Box::pin(async { Ok(None) })
     }
@@ -487,250 +455,6 @@ impl ServerState {
         tokio::spawn(async move {
             client.semantic_tokens_refresh(()).await.ok();
         });
-    }
-
-    // Helper method to find symbol at a given position
-    fn find_symbol_at_position(
-        &self,
-        source_file: &SourceFile<crate::source_file::Typed>,
-        path: &PathBuf,
-        position: Position,
-    ) -> Option<(SymbolID, ExprID)> {
-        let byte_offset =
-            self.position_to_byte_offset(&self.driver.contents(&PathBuf::from(path)), position)?;
-
-        // Search through all expressions to find one that contains the position
-        for (expr_id, typed_expr) in source_file.typed_exprs() {
-            let meta = &source_file.meta[*expr_id as usize];
-            let range = meta.source_range();
-
-            if range.contains(&byte_offset) {
-                // Check if this expression references a symbol
-                if let Some(symbol_id) = self.extract_symbol_from_expr(&typed_expr.expr) {
-                    return Some((symbol_id, *expr_id));
-                }
-            }
-        }
-
-        None
-    }
-
-    // Helper method to extract symbol ID from an expression
-    fn extract_symbol_from_expr(&self, expr: &Expr) -> Option<SymbolID> {
-        match expr {
-            Expr::Variable(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
-            Expr::Func {
-                name: Some(Name::Resolved(symbol_id, _)),
-                ..
-            } => Some(*symbol_id),
-            Expr::Parameter(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
-            Expr::Let(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
-            Expr::Struct(Name::Resolved(symbol_id, _), _, _) => Some(*symbol_id),
-            Expr::EnumDecl(Name::Resolved(symbol_id, _), _, _) => Some(*symbol_id),
-            _ => None,
-        }
-    }
-
-    // Helper method to convert LSP position to byte offset
-    fn position_to_byte_offset(&self, content: &str, position: Position) -> Option<usize> {
-        let mut line = 0;
-        let mut col = 0;
-
-        for (i, ch) in content.char_indices() {
-            if line == position.line && col == position.character {
-                return Some(i);
-            }
-
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-
-        None
-    }
-
-    // Check if we're in a member access context (after a dot)
-    fn is_member_access_context(&self, path: &PathBuf, position: Position) -> bool {
-        let content = self.driver.contents(path);
-        if let Some(offset) = self.position_to_byte_offset(&content, position) {
-            // Check if there's a dot before the cursor
-            if offset > 0 {
-                let prev_char = content.chars().nth(offset - 1);
-                return prev_char == Some('.');
-            }
-        }
-        false
-    }
-
-    // Find the receiver expression before a dot
-    fn find_receiver_at_position(
-        &self,
-        source_file: &SourceFile<crate::source_file::Typed>,
-        path: &PathBuf,
-        position: Position,
-    ) -> Option<(ExprID, Ty)> {
-        let byte_offset = self.position_to_byte_offset(&self.driver.contents(path), position)?;
-
-        // Look for member access expressions
-        for (expr_id, typed_expr) in source_file.typed_exprs() {
-            if let Expr::Member(Some(receiver_id), _) = &typed_expr.expr {
-                let meta = &source_file.meta[*expr_id as usize];
-                let range = meta.source_range();
-
-                // Check if the position is within this member access
-                if range.contains(&byte_offset) {
-                    // Get the type of the receiver
-                    if let Some(receiver_typed) = source_file.typed_expr(receiver_id) {
-                        return Some((*receiver_id, receiver_typed.ty.clone()));
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    // Get completions for members of a type
-    fn get_member_completions(
-        &self,
-        ty: &Ty,
-        env: &crate::environment::Environment,
-        symbol_table: &crate::symbol_table::SymbolTable,
-    ) -> Vec<CompletionItem> {
-        let mut items = Vec::new();
-
-        match ty {
-            Ty::Struct(struct_id, _) => {
-                if let Some(crate::environment::TypeDef::Struct(struct_def)) =
-                    env.types.get(struct_id)
-                {
-                    // Add properties
-                    for (name, property) in &struct_def.properties {
-                        items.push(CompletionItem {
-                            label: name.clone(),
-                            kind: Some(CompletionItemKind::FIELD),
-                            detail: Some(self.format_type(&property.ty)),
-                            ..Default::default()
-                        });
-                    }
-
-                    // Add methods
-                    for (name, method) in &struct_def.methods {
-                        items.push(CompletionItem {
-                            label: name.clone(),
-                            kind: Some(CompletionItemKind::METHOD),
-                            detail: Some(self.format_type(&method.ty)),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-            Ty::Enum(enum_id, _) => {
-                if let Some(crate::environment::TypeDef::Enum(enum_def)) = env.types.get(enum_id) {
-                    // Add enum variants
-                    for variant in &enum_def.variants {
-                        let detail = if variant.values.is_empty() {
-                            variant.name.clone()
-                        } else {
-                            format!("{}(...)", variant.name)
-                        };
-
-                        items.push(CompletionItem {
-                            label: variant.name.clone(),
-                            kind: Some(CompletionItemKind::ENUM_MEMBER),
-                            detail: Some(detail),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        items
-    }
-
-    // Get completions for all symbols in scope at a position
-    fn get_scope_completions(
-        &self,
-        source_file: &SourceFile<crate::source_file::Typed>,
-        position: Position,
-        symbol_table: &crate::symbol_table::SymbolTable,
-    ) -> Vec<CompletionItem> {
-        let mut items = Vec::new();
-
-        // Add all symbols from the symbol table
-        for (symbol_id, symbol_info) in symbol_table.all() {
-            let kind = match &symbol_info.kind {
-                SymbolKind::Func => CompletionItemKind::FUNCTION,
-                SymbolKind::Param => CompletionItemKind::VARIABLE,
-                SymbolKind::Local => CompletionItemKind::VARIABLE,
-                SymbolKind::Enum => CompletionItemKind::ENUM,
-                SymbolKind::Struct => CompletionItemKind::STRUCT,
-                SymbolKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
-                SymbolKind::BuiltinType => CompletionItemKind::CLASS,
-                SymbolKind::BuiltinFunc => CompletionItemKind::FUNCTION,
-                _ => CompletionItemKind::VARIABLE,
-            };
-
-            // Get type information if available
-            let detail = if let Some(typed_expr) = source_file.typed_expr(&symbol_info.expr_id) {
-                Some(self.format_type(&typed_expr.ty))
-            } else {
-                None
-            };
-
-            items.push(CompletionItem {
-                label: symbol_info.name.clone(),
-                kind: Some(kind),
-                detail,
-                ..Default::default()
-            });
-        }
-
-        items
-    }
-
-    // Format a type for display
-    fn format_type(&self, ty: &Ty) -> String {
-        match ty {
-            Ty::Void => "Void".to_string(),
-            Ty::Int => "Int".to_string(),
-            Ty::Bool => "Bool".to_string(),
-            Ty::Float => "Float".to_string(),
-            Ty::Func(params, ret, _) => {
-                let param_strs: Vec<_> = params.iter().map(|p| self.format_type(p)).collect();
-                format!("({}) -> {}", param_strs.join(", "), self.format_type(ret))
-            }
-            Ty::TypeVar(id) => format!("T{}", id.0),
-            Ty::Enum(id, generics) => {
-                if generics.is_empty() {
-                    format!("Enum{}", id.0)
-                } else {
-                    let generic_strs: Vec<_> =
-                        generics.iter().map(|g| self.format_type(g)).collect();
-                    format!("Enum{}<{}>", id.0, generic_strs.join(", "))
-                }
-            }
-            Ty::Struct(id, generics) => {
-                if generics.is_empty() {
-                    format!("Struct{}", id.0)
-                } else {
-                    let generic_strs: Vec<_> =
-                        generics.iter().map(|g| self.format_type(g)).collect();
-                    format!("Struct{}<{}>", id.0, generic_strs.join(", "))
-                }
-            }
-            Ty::Array(elem) => format!("Array<{}>", self.format_type(elem)),
-            Ty::Tuple(types) => {
-                let type_strs: Vec<_> = types.iter().map(|t| self.format_type(t)).collect();
-                format!("({})", type_strs.join(", "))
-            }
-            _ => "Unknown".to_string(),
-        }
     }
 }
 

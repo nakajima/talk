@@ -71,7 +71,7 @@ impl CompilationUnit<Raw> {
 
     pub fn parse(&mut self) -> CompilationUnit<Parsed> {
         let mut files = vec![];
-        let symbol_table = SymbolTable::default();
+
         for file in self.input.files.clone() {
             let Some(file_id) = self.input.id(&file) else {
                 continue;
@@ -90,25 +90,24 @@ impl CompilationUnit<Raw> {
         CompilationUnit {
             src_cache: self.src_cache.clone(),
             input: self.input.clone(),
-            stage: Parsed {
-                symbol_table,
-                files,
-            },
+            stage: Parsed { files },
         }
     }
 
-    pub fn lower(&mut self) -> Result<CompilationUnit<Lowered>, CompilationError> {
+    pub fn lower(
+        &mut self,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<CompilationUnit<Lowered>, CompilationError> {
         let parsed = self.parse();
-        let resolved = parsed.resolved();
-        let typed = resolved.typed();
-        let lowered = typed.lower()?;
+        let resolved = parsed.resolved(symbol_table);
+        let typed = resolved.typed(symbol_table);
+        let lowered = typed.lower(symbol_table)?;
         Ok(lowered)
     }
 }
 
 #[allow(unused)]
 pub struct Parsed {
-    symbol_table: SymbolTable,
     pub files: Vec<SourceFile<source_file::Parsed>>,
 }
 
@@ -122,44 +121,37 @@ impl CompilationUnit<Parsed> {
             .find(|f| Some(f.file_id) == self.input.id(path))
     }
 
-    pub fn resolved(self) -> CompilationUnit<Resolved> {
-        let mut symbol_table = self.stage.symbol_table;
+    pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
         let mut files = vec![];
         for file in self.stage.files {
-            let (resolved, sym) = NameResolver::new(symbol_table).resolve(file);
+            let resolved = NameResolver::new(symbol_table).resolve(file, symbol_table);
             files.push(resolved);
-            symbol_table = sym;
         }
 
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Resolved {
-                symbol_table,
-                files,
-            },
+            stage: Resolved { files },
         }
     }
 }
 
 pub struct Resolved {
-    symbol_table: SymbolTable,
     files: Vec<SourceFile<NameResolved>>,
 }
 impl StageTrait for Resolved {}
 
 impl CompilationUnit<Resolved> {
-    pub fn typed(self) -> CompilationUnit<Typed> {
+    pub fn typed(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Typed> {
         let prelude = compile_prelude();
         let mut env = Environment::new();
         env.import_prelude(prelude);
 
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
-        let mut symbol_table = self.stage.symbol_table;
 
         for file in self.stage.files {
-            let mut typed = TypeChecker.infer(file, &mut symbol_table, &mut env);
-            let mut solver = ConstraintSolver::new(&mut typed, &mut symbol_table);
+            let mut typed = TypeChecker.infer(file, symbol_table, &mut env);
+            let mut solver = ConstraintSolver::new(&mut typed, symbol_table);
             solver.solve();
             files.push(typed);
         }
@@ -168,7 +160,6 @@ impl CompilationUnit<Resolved> {
             src_cache: self.src_cache,
             input: self.input,
             stage: Typed {
-                symbol_table,
                 environment: env,
                 files,
             },
@@ -177,9 +168,8 @@ impl CompilationUnit<Resolved> {
 }
 
 pub struct Typed {
-    pub symbol_table: SymbolTable,
     pub environment: Environment,
-    files: Vec<SourceFile<source_file::Typed>>,
+    pub files: Vec<SourceFile<source_file::Typed>>,
 }
 impl StageTrait for Typed {}
 
@@ -191,12 +181,14 @@ impl CompilationUnit<Typed> {
             .find(|f| Some(f.file_id) == self.input.id(path))
     }
 
-    pub fn lower(self) -> Result<CompilationUnit<Lowered>, CompilationError> {
-        let mut symbol_table = self.stage.symbol_table;
+    pub fn lower(
+        self,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<CompilationUnit<Lowered>, CompilationError> {
         let mut module = IRModule::new();
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, &mut symbol_table)
+            let lowered = Lowerer::new(file, symbol_table)
                 .lower(&mut module)
                 .map_err(CompilationError::IRError)?;
             files.push(lowered);
@@ -205,18 +197,13 @@ impl CompilationUnit<Typed> {
         Ok(CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Lowered {
-                module,
-                symbol_table,
-                files,
-            },
+            stage: Lowered { module, files },
         })
     }
 }
 
 pub struct Lowered {
     pub module: IRModule,
-    pub symbol_table: SymbolTable,
     pub files: Vec<SourceFile<source_file::Lowered>>,
 }
 

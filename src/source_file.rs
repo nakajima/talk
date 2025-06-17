@@ -5,6 +5,8 @@ use crate::{
     constraint_solver::Constraint,
     diagnostic::Diagnostic,
     environment::{Environment, Scope, TypeDef, TypedExprs},
+    scope_tree::ScopeTree,
+    span::Span,
     type_checker::{Ty, TypeDefs},
     typed_expr::TypedExpr,
 };
@@ -60,6 +62,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     pub(crate) meta: Vec<ExprMeta>,
     pub diagnostics: HashSet<Diagnostic>,
     phase_data: P::Data,
+    pub scope_tree: ScopeTree,
 }
 
 impl SourceFile {
@@ -71,6 +74,7 @@ impl SourceFile {
             meta: vec![],
             phase_data: (),
             diagnostics: Default::default(),
+            scope_tree: Default::default(),
         }
     }
 }
@@ -84,6 +88,7 @@ impl SourceFile<Parsed> {
             meta: self.meta,
             phase_data: (),
             diagnostics: self.diagnostics,
+            scope_tree: self.scope_tree,
         }
     }
 }
@@ -97,6 +102,7 @@ impl SourceFile<NameResolved> {
             meta: self.meta,
             phase_data: TypedInfo { roots, env },
             diagnostics: self.diagnostics,
+            scope_tree: self.scope_tree,
         }
     }
 }
@@ -178,6 +184,7 @@ impl SourceFile<Typed> {
             meta: self.meta,
             phase_data: LoweredData {},
             diagnostics: self.diagnostics,
+            scope_tree: self.scope_tree,
         }
     }
 }
@@ -233,6 +240,22 @@ impl<P: Phase> SourceFile<P> {
             None
         } else {
             Some(&mut self.nodes[index])
+        }
+    }
+
+    pub fn span(&self, expr_id: &ExprID) -> Span {
+        let Some(meta) = self.meta.get(*expr_id as usize) else {
+            panic!("didn't get a span for expr: {}", expr_id);
+        };
+
+        Span {
+            file_id: self.file_id,
+            start: meta.start.start as u32,
+            end: meta.end.end as u32,
+            start_line: meta.start.line,
+            start_col: meta.start.col,
+            end_line: meta.end.line,
+            end_col: meta.end.col,
         }
     }
 }

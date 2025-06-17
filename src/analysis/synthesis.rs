@@ -119,9 +119,11 @@ mod tests {
     };
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
+        let mut symbol_table = SymbolTable::default();
         let tree = parse(code, 123);
         let resolver = NameResolver::default();
-        resolver.resolve(tree)
+        let resolved = resolver.resolve(tree, &mut symbol_table);
+        (resolved, symbol_table.clone())
     }
 
     #[test]
@@ -160,7 +162,10 @@ mod tests {
             panic!("didn't get init func")
         };
 
-        assert_eq!(name, &Some(Name::Resolved(SymbolID(5), "init".into())));
+        assert_eq!(
+            name,
+            &Some(Name::Resolved(SymbolID::resolved(4), "init".into()))
+        );
         assert!(generics.is_empty());
         assert_eq!(params.len(), 1);
         assert_eq!(ret, &None);

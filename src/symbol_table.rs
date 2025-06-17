@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    FileID,
+    FileID, Phase, SourceFile,
     parser::ExprID,
     prelude::{compile_prelude, compile_prelude_for_name_resolver},
+    span::Span,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -17,7 +18,7 @@ impl SymbolID {
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id())
+        SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id() - 2)
     }
 
     // Remove the prelude's symbol offset
@@ -41,6 +42,7 @@ pub enum SymbolKind {
     PatternBind,
     VariantConstructor,
     SyntheticConstructor,
+    Property,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +79,7 @@ pub struct SymbolTable {
     symbols: HashMap<SymbolID, SymbolInfo>,
     next_id: i32,
     pub types: HashMap<SymbolID, TypeTable>,
+    pub symbol_map: HashMap<Span, SymbolID>,
 }
 
 impl Default for SymbolTable {
@@ -85,6 +88,7 @@ impl Default for SymbolTable {
             symbols: Default::default(),
             next_id: Default::default(),
             types: Default::default(),
+            symbol_map: Default::default(),
         };
 
         crate::builtins::import_symbols(&mut table);
@@ -94,6 +98,16 @@ impl Default for SymbolTable {
 }
 
 impl SymbolTable {
+    pub fn add_map<P: Phase>(
+        &mut self,
+        source_file: &SourceFile<P>,
+        node_id: &ExprID,
+        symbol_id: &SymbolID,
+    ) {
+        let span = source_file.span(node_id);
+        self.symbol_map.insert(span, *symbol_id);
+    }
+
     pub fn import(&mut self, symbol_id: &SymbolID, info: SymbolInfo) {
         self.symbols.insert(*symbol_id, info);
     }
