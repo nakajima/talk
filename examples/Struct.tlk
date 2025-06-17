@@ -4,4 +4,3 @@ struct Person {
 }
 
 let person = Person(age: 123, count: 456)
-person.age
