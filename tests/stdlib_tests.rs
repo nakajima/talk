@@ -4,7 +4,7 @@ mod optional_tests {
 
     #[test]
     fn gets_parsed() {
-        let parsed = parse("let a: Int?", 123);
+        let parsed = parse("let a: Int?", "-".into());
         let Expr::Let(_, Some(ty)) = parsed.roots()[0].unwrap() else {
             panic!("didn't get let expr");
         };
@@ -27,7 +27,7 @@ mod array_tests {
 
     #[test]
     fn gets_parsed() {
-        let parsed = parse("[1,2,3]", 123);
+        let parsed = parse("[1,2,3]", "-".into());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
             Expr::LiteralArray(vec![0, 1, 2])

@@ -726,11 +726,11 @@ mod tests {
             Ty::Func(
                 vec![Ty::TypeVar(TypeVarID(
                     6,
-                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(3), "T".into()))
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::resolved(3), "T".into()))
                 ))],
                 Ty::TypeVar(TypeVarID(
                     5,
-                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::typed(2), "U".into()))
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::resolved(2), "U".into()))
                 ))
                 .into(),
                 vec![]
@@ -742,7 +742,7 @@ mod tests {
                 SymbolID(1),
                 vec![Ty::TypeVar(TypeVarID(
                     5,
-                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID(6), "U".into()))
+                    TypeVarKind::TypeRepr(Name::Resolved(SymbolID::resolved(2), "U".into()))
                 ))]
             )
             .into()
@@ -751,7 +751,7 @@ mod tests {
         let call_result = checker.type_for(checker.root_ids()[1]);
         match call_result {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID::typed(-3)); // Optional's ID
+                assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
                 assert_eq!(generics, vec![Ty::Int]);
             }
             _ => panic!("Expected Optional<Int>, got {call_result:?}"),
@@ -831,7 +831,15 @@ mod tests {
     #[test]
     fn checks_array_builtin() {
         let checked = check("func c(a: Array<Int>) { a }");
-        assert_eq!(checked.type_for(1), Ty::Array(Box::new(Ty::Int)));
+        let root = checked.typed_expr(&checked.root_ids()[0]).unwrap();
+        assert_eq!(
+            root.ty,
+            Ty::Func(
+                vec![Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])],
+                Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                vec![],
+            )
+        );
     }
 
     #[test]

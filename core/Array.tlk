@@ -1,4 +1,4 @@
-struct Array {
+struct Array<T> {
 	let count: Int  
 	let capacity: Int
 	let storage: Int

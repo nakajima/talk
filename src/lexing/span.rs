@@ -1,4 +1,6 @@
-use crate::{diagnostic::Position, file_store::FileID};
+use std::path::PathBuf;
+
+use crate::diagnostic::Position;
 
 #[derive(Default, Debug, Eq, PartialEq, Hash, Clone)]
 pub struct Span {
@@ -8,7 +10,7 @@ pub struct Span {
     pub start_col: u32,
     pub end_line: u32,
     pub end_col: u32,
-    pub file_id: FileID,
+    pub path: PathBuf,
 }
 
 impl Span {

@@ -29,7 +29,7 @@ pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable
     };
 
     let mut symbol_table = compile_prelude().symbols.clone();
-    let parsed = parse(input, 123);
+    let parsed = parse(input, "-".into());
     let resolver = NameResolver::new(&mut symbol_table);
     let resolved = resolver.resolve(parsed, &mut symbol_table);
     let checker = TypeChecker;

@@ -1,11 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
-use crate::{
-    FileID, Phase, SourceFile,
-    parser::ExprID,
-    prelude::{compile_prelude, compile_prelude_for_name_resolver},
-    span::Span,
-};
+use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
@@ -22,7 +17,7 @@ impl SymbolID {
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id())
+        SymbolID(index + compile_prelude().symbols.max_id())
     }
 
     // Remove the prelude's symbol offset
@@ -51,7 +46,7 @@ pub enum SymbolKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Definition {
-    pub file_id: FileID,
+    pub path: PathBuf,
     pub line: u32,
     pub col: u32,
 }
@@ -166,6 +161,7 @@ impl SymbolTable {
         self.symbols.get_mut(symbol_id).unwrap().is_captured = true;
     }
 
+    #[track_caller]
     pub fn add(
         &mut self,
         name: &str,
@@ -173,6 +169,19 @@ impl SymbolTable {
         expr_id: ExprID,
         definition: Option<Definition>,
     ) -> SymbolID {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "add symbol {:?} {:?} {:?} {:?} from {}:{}",
+                name,
+                kind,
+                expr_id,
+                definition,
+                loc.file(),
+                loc.line()
+            );
+        }
+
         self.next_id += 1;
         let symbol_id = SymbolID(self.next_id);
         self.symbols.insert(

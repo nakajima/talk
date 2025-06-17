@@ -1,10 +1,10 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, hash::DefaultHasher, path::PathBuf};
 
 pub type FileID = usize;
 
 #[derive(Clone)]
 pub struct FileStore {
-    pub files: Vec<PathBuf>,
+    pub files: HashMap<FileID, PathBuf>,
     lookup: HashMap<PathBuf, FileID>,
 }
 
@@ -26,8 +26,8 @@ impl FileStore {
         if let Some(existing) = self.lookup.get(file) {
             *existing
         } else {
-            let id = self.files.len();
-            self.files.push(file.clone());
+            let id = calculate_hash(file);
+            self.files.insert(id, file.clone());
             self.lookup.insert(file.clone(), id);
             id
         }
@@ -37,11 +37,14 @@ impl FileStore {
         self.lookup.get(file).cloned()
     }
 
-    pub fn lookup(&self, id: FileID) -> Option<&PathBuf> {
-        if self.files.len() < id {
-            Some(&self.files[id])
-        } else {
-            None
-        }
+    pub fn lookup(&self, id: &FileID) -> Option<&PathBuf> {
+        self.files.get(id)
     }
+}
+
+use std::hash::Hasher;
+fn calculate_hash<T: std::hash::Hash>(t: &T) -> usize {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish() as usize
 }

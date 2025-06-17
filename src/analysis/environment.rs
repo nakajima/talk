@@ -81,7 +81,7 @@ impl StructDef {
         if let Some(ty) = self.type_override {
             ty(type_parameters)
         } else {
-            Ty::Struct(self.symbol_id, self.type_parameters.clone())
+            Ty::Struct(self.symbol_id, type_parameters.clone())
         }
     }
 }

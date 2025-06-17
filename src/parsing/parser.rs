@@ -1,5 +1,7 @@
+use std::path::PathBuf;
+
 use crate::{
-    FileID, SourceFile, diagnostic::Diagnostic, lexer::Lexer, token::Token, token_kind::TokenKind,
+    SourceFile, diagnostic::Diagnostic, lexer::Lexer, token::Token, token_kind::TokenKind,
 };
 
 use super::{
@@ -95,22 +97,22 @@ impl ParserError {
     }
 }
 
-pub fn parse(code: &str, file_id: FileID) -> SourceFile {
+pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer, file_id);
+    let mut parser = Parser::new(lexer, file_path);
 
     parser.parse();
     parser.parse_tree
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer<'a>, file_id: FileID) -> Self {
+    pub fn new(lexer: Lexer<'a>, file_path: PathBuf) -> Self {
         Self {
             lexer,
             previous: None,
             current: None,
             next: None,
-            parse_tree: SourceFile::new(file_id),
+            parse_tree: SourceFile::new(file_path),
             source_location_stack: Default::default(),
             previous_before_newline: None,
         }
@@ -1135,6 +1137,8 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
         Parsed, SourceFile,
         name::Name,
@@ -1143,7 +1147,7 @@ mod tests {
     };
 
     fn parse(input: &str) -> SourceFile<Parsed> {
-        super::parse(input, 123)
+        super::parse(input, PathBuf::from("-"))
     }
 
     #[test]
@@ -2030,7 +2034,7 @@ mod pattern_parsing_tests {
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer, 123);
+        let mut parser = Parser::new(lexer, "-".into());
         parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()
@@ -2085,7 +2089,7 @@ mod arrays {
 
     #[test]
     fn parses_array_literal() {
-        let parsed = parse("[1, 2, 3]", 0);
+        let parsed = parse("[1, 2, 3]", "-".into());
         assert_eq!(
             *parsed.roots()[0].unwrap(),
             Expr::LiteralArray(vec!(0, 1, 2))
@@ -2104,7 +2108,7 @@ mod arrays {
           ,
         2, 3
         ]",
-            0,
+            "-".into(),
         );
         assert_eq!(
             *parsed.roots()[0].unwrap(),
@@ -2123,7 +2127,7 @@ mod structs {
             "
         struct Person {}
         ",
-            0,
+            "-".into(),
         );
 
         assert_eq!(
@@ -2142,7 +2146,7 @@ mod structs {
             let height = 456
         }
         ",
-            0,
+            "-".into(),
         );
 
         assert_eq!(
@@ -2200,7 +2204,7 @@ mod structs {
             }
         }
         ",
-            0,
+            "-".into(),
         );
 
         assert_eq!(
@@ -2245,7 +2249,7 @@ mod error_handling_tests {
 
     #[test]
     fn handles_unclosed_paren() {
-        let parsed = parse("(", 0);
+        let parsed = parse("(", "-".into());
         assert_eq!(parsed.diagnostics.len(), 1);
         assert!(parsed.diagnostics.contains(&Diagnostic::parser(
             Token {
@@ -2261,7 +2265,7 @@ mod error_handling_tests {
 
     #[test]
     fn handles_unclosed_brace() {
-        let parsed = parse("func foo() {", 0);
+        let parsed = parse("func foo() {", "-".into());
         assert_eq!(parsed.diagnostics.len(), 1);
         assert!(
             parsed.diagnostics.contains(&Diagnostic::parser(
@@ -2281,7 +2285,7 @@ mod error_handling_tests {
 
     #[test]
     fn recovers() {
-        let parsed = parse("func foo() {\n\nfunc fizz() {}", 0);
+        let parsed = parse("func foo() {\n\nfunc fizz() {}", "-".into());
         assert_eq!(parsed.diagnostics.len(), 1, "{:?}", parsed);
         assert!(parsed.diagnostics.contains(&Diagnostic::parser(
             Token {

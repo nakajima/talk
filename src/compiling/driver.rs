@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
-    FileID, FileStore, SourceFile, SymbolID, SymbolTable,
+    SourceFile, SymbolID, SymbolTable,
     compiling::compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
-    prelude::compile_prelude_for_name_resolver,
+    prelude::compile_prelude,
     source_file,
 };
 
@@ -23,14 +23,12 @@ impl Default for Driver {
 impl Driver {
     pub fn new() -> Self {
         let mut driver = Self {
-            units: vec![CompilationUnit::new(FileStore::new(vec![]))],
-            symbol_table: compile_prelude_for_name_resolver().symbols.clone(),
+            units: vec![CompilationUnit::new(vec![])],
+            symbol_table: compile_prelude().symbols.clone(),
         };
 
         // Create a default unit
-        driver
-            .units
-            .push(CompilationUnit::new(FileStore::new(vec![])));
+        driver.units.push(CompilationUnit::new(vec![]));
 
         driver
     }
@@ -42,11 +40,10 @@ impl Driver {
     }
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
-        let store = FileStore::new(files);
-        let unit = CompilationUnit::new(store);
+        let unit = CompilationUnit::new(files);
         Self {
             units: vec![unit],
-            symbol_table: compile_prelude_for_name_resolver().symbols.clone(),
+            symbol_table: compile_prelude().symbols.clone(),
         }
     }
 
@@ -59,21 +56,11 @@ impl Driver {
         }
 
         // We don't have this file, so add it to the default unit
-        log::error!("adding {path:?} to default unit");
-        self.units[0].input.add(path);
+        log::info!("adding {path:?} to default unit");
+        self.units[0].input.push(path.to_path_buf());
         self.units[0]
             .src_cache
             .insert(path.clone(), contents.clone());
-    }
-
-    pub fn path(&self, file_id: FileID) -> Option<&PathBuf> {
-        for unit in &self.units {
-            if let Some(path) = unit.input.lookup(file_id) {
-                return Some(path);
-            }
-        }
-
-        None
     }
 
     pub fn parse(&mut self) -> Vec<CompilationUnit<Parsed>> {
@@ -105,12 +92,13 @@ impl Driver {
         result
     }
 
-    pub fn symbol_from_position(&self, position: Position) -> Option<&SymbolID> {
+    pub fn symbol_from_position(&self, position: Position, path: &PathBuf) -> Option<&SymbolID> {
         for (span, sym) in &self.symbol_table.symbol_map {
             if span.contains(&crate::diagnostic::Position {
                 line: position.line,
                 col: position.character,
-            }) {
+            }) && span.path == *path
+            {
                 return Some(sym);
             }
         }
@@ -174,7 +162,7 @@ impl Driver {
         let checked = self.check();
         for unit in checked.into_iter() {
             for file in unit.stage.files {
-                if unit.input.id(path) == Some(file.file_id) {
+                if *path == file.path {
                     return Some(file);
                 }
             }
@@ -190,7 +178,7 @@ impl Driver {
         let parsed = self.parse();
         for unit in parsed.into_iter() {
             for file in unit.stage.files {
-                if unit.input.id(path) == Some(file.file_id) {
+                if *path == file.path {
                     return Some(file);
                 }
             }

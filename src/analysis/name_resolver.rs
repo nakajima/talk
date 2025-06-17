@@ -59,7 +59,7 @@ impl NameResolver {
             let root_scope_id = source_file.scope_tree.new_scope(
                 None,
                 Span {
-                    file_id: source_file.file_id,
+                    path: source_file.path.clone(),
                     start: first_root.start.start,
                     start_line: first_root.start.line,
                     start_col: first_root.start.col,
@@ -666,7 +666,7 @@ impl NameResolver {
 
         let meta = &source_file.meta[*expr_id as usize];
         let definition = Definition {
-            file_id: source_file.file_id,
+            path: source_file.path.clone(),
             line: meta.start.line,
             col: meta.start.col,
         };
@@ -882,7 +882,7 @@ mod tests {
         assert_eq!(
             info.definition.as_ref().unwrap(),
             &Definition {
-                file_id: 0,
+                path: "-".into(),
                 line: 2,
                 col: 11
             }

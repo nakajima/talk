@@ -4,7 +4,6 @@ use crate::{
     NameResolved, SourceFile, SymbolTable,
     constraint_solver::ConstraintSolver,
     environment::Environment,
-    file_store::FileStore,
     lexer::LexerError,
     lowering::{
         ir_module::IRModule,
@@ -50,18 +49,18 @@ where
     Stage: StageTrait,
 {
     pub src_cache: HashMap<PathBuf, String>,
-    pub input: FileStore,
+    pub input: Vec<PathBuf>,
     pub stage: Stage,
 }
 
 impl<S: StageTrait> CompilationUnit<S> {
     pub fn has_file(&self, path: &PathBuf) -> bool {
-        self.input.id(path).is_some()
+        self.input.contains(path)
     }
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(input: FileStore) -> Self {
+    pub fn new(input: Vec<PathBuf>) -> Self {
         Self {
             src_cache: Default::default(),
             input,
@@ -72,13 +71,10 @@ impl CompilationUnit<Raw> {
     pub fn parse(&mut self) -> CompilationUnit<Parsed> {
         let mut files = vec![];
 
-        for file in self.input.files.clone() {
-            let Some(file_id) = self.input.id(&file) else {
-                continue;
-            };
-            match self.read(&file) {
+        for path in self.input.clone() {
+            match self.read(&path) {
                 Ok(source) => {
-                    let parsed = parse(source, file_id);
+                    let parsed = parse(source, path);
                     files.push(parsed);
                 }
                 Err(e) => {
@@ -115,10 +111,7 @@ impl StageTrait for Parsed {}
 
 impl CompilationUnit<Parsed> {
     pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
-        self.stage
-            .files
-            .iter()
-            .find(|f| Some(f.file_id) == self.input.id(path))
+        self.stage.files.iter().find(|f| f.path == *path)
     }
 
     pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
@@ -143,10 +136,7 @@ impl StageTrait for Resolved {}
 
 impl CompilationUnit<Resolved> {
     pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::NameResolved>> {
-        self.stage
-            .files
-            .iter()
-            .find(|f| Some(f.file_id) == self.input.id(path))
+        self.stage.files.iter().find(|f| f.path == *path)
     }
 
     pub fn typed(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Typed> {
@@ -182,10 +172,7 @@ impl StageTrait for Typed {}
 
 impl CompilationUnit<Typed> {
     pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
-        self.stage
-            .files
-            .iter()
-            .find(|f| Some(f.file_id) == self.input.id(path))
+        self.stage.files.iter().find(|f| f.path == *path)
     }
 
     pub fn lower(
@@ -222,9 +209,6 @@ impl CompilationUnit<Lowered> {
     }
 
     pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Lowered>> {
-        self.stage
-            .files
-            .iter()
-            .find(|f| Some(f.file_id) == self.input.id(path))
+        self.stage.files.iter().find(|f| f.path == *path)
     }
 }

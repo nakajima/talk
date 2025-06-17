@@ -155,11 +155,7 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let Some(path) = self.driver.path(definition.file_id) else {
-            return Box::pin(async { Ok(None) });
-        };
-
-        let Ok(path) = Url::from_file_path(path) else {
+        let Ok(path) = Url::from_file_path(definition.path.clone()) else {
             return Box::pin(async { Ok(None) });
         };
 
@@ -344,11 +340,15 @@ impl LanguageServer for ServerState {
         &mut self,
         params: DocumentFormattingParams,
     ) -> BoxFuture<'static, Result<Option<Vec<TextEdit>>, Self::Error>> {
-        let Some(code) = self.fetch(params.text_document.uri) else {
+        let Some(code) = self.fetch(&params.text_document.uri) else {
             return Box::pin(async { Ok(None) });
         };
 
-        let source_file = parse(&code, 0);
+        let Ok(path) = params.text_document.uri.to_file_path() else {
+            return Box::pin(async { Ok(None) });
+        };
+
+        let source_file = parse(&code, path);
 
         Box::pin(async move {
             let formatted = format(&source_file, 80);
@@ -438,7 +438,7 @@ impl ServerState {
         ControlFlow::Continue(())
     }
 
-    fn fetch(&mut self, url: Url) -> Option<String> {
+    fn fetch(&mut self, url: &Url) -> Option<String> {
         let Ok(path) = url.to_file_path() else {
             log::error!("no file path from: {url:?}");
             return None;

@@ -804,7 +804,7 @@ mod formatter_tests {
     use crate::parser::parse;
 
     fn format_code(input: &str, width: usize) -> String {
-        let source_file = parse(input, 0);
+        let source_file = parse(input, "-".into());
         format(&source_file, width)
     }
 

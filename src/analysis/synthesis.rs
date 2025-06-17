@@ -120,7 +120,7 @@ mod tests {
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
         let mut symbol_table = SymbolTable::base();
-        let tree = parse(code, 123);
+        let tree = parse(code, "-".into());
         let resolver = NameResolver::new(&mut symbol_table);
         let resolved = resolver.resolve(tree, &mut symbol_table);
         (resolved, symbol_table.clone())

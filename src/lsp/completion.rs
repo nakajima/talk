@@ -46,7 +46,7 @@ impl<'a> CompletionContext<'a> {
 
         if let Some(ty) = self
             .driver
-            .symbol_from_position(position_before_dot)
+            .symbol_from_position(position_before_dot, &self.source_file.path)
             .map(|sym| {
                 self.source_file
                     .type_from_symbol(sym, &self.driver.symbol_table)
@@ -78,19 +78,15 @@ impl<'a> CompletionContext<'a> {
                 }
                 Some(TypeDef::Struct(struct_def)) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.keys().map(|label| {
-                        CompletionItem {
-                            label: label.clone(),
-                            kind: Some(CompletionItemKind::METHOD),
-                            ..Default::default()
-                        }
+                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        ..Default::default()
                     }));
-                    completions.extend(struct_def.properties.keys().map(|label| {
-                        CompletionItem {
-                            label: label.clone(),
-                            kind: Some(CompletionItemKind::PROPERTY),
-                            ..Default::default()
-                        }
+                    completions.extend(struct_def.properties.keys().map(|label| CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        ..Default::default()
                     }));
                     completions
                 }

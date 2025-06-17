@@ -1,7 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use crate::{
-    FileID, SymbolID, SymbolTable,
+    SymbolID, SymbolTable,
     constraint_solver::Constraint,
     diagnostic::Diagnostic,
     environment::{Environment, Scope, TypeDef, TypedExprs},
@@ -56,7 +59,7 @@ impl Phase for Lowered {
 
 #[derive(Default, Debug, PartialEq, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
-    pub file_id: FileID,
+    pub path: PathBuf,
     roots: Vec<ExprID>,
     pub(crate) nodes: Vec<Expr>,
     pub(crate) meta: Vec<ExprMeta>,
@@ -66,9 +69,9 @@ pub struct SourceFile<P: Phase = Parsed> {
 }
 
 impl SourceFile {
-    pub fn new(file_id: FileID) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self {
-            file_id,
+            path,
             roots: vec![],
             nodes: vec![],
             meta: vec![],
@@ -82,7 +85,7 @@ impl SourceFile {
 impl SourceFile<Parsed> {
     pub fn to_resolved(self) -> SourceFile<NameResolved> {
         SourceFile {
-            file_id: self.file_id,
+            path: self.path,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
@@ -96,7 +99,7 @@ impl SourceFile<Parsed> {
 impl SourceFile<NameResolved> {
     pub fn to_typed(self, roots: Vec<TypedExpr>, env: Environment) -> SourceFile<Typed> {
         SourceFile {
-            file_id: self.file_id,
+            path: self.path,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
@@ -178,7 +181,7 @@ impl SourceFile<Typed> {
 
     pub fn to_lowered(self) -> SourceFile<Lowered> {
         SourceFile {
-            file_id: self.file_id,
+            path: self.path,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
@@ -251,7 +254,7 @@ impl<P: Phase> SourceFile<P> {
         // handle single token expressions
         if meta.start == meta.end {
             Span {
-                file_id: self.file_id,
+                path: self.path.clone(),
                 start: meta.start.start,
                 end: meta.end.end,
                 start_line: meta.start.line,
@@ -264,7 +267,7 @@ impl<P: Phase> SourceFile<P> {
             }
         } else {
             Span {
-                file_id: self.file_id,
+                path: self.path.clone(),
                 start: meta.start.start,
                 end: meta.end.end,
                 start_line: meta.start.line,
