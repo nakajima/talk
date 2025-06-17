@@ -5,7 +5,6 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use crate::{
     FileID, FileStore, SourceFile, SymbolID, SymbolTable,
     compiling::compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
-    prelude::compile_prelude_for_name_resolver,
     source_file,
 };
 
@@ -24,7 +23,7 @@ impl Driver {
     pub fn new() -> Self {
         let mut driver = Self {
             units: vec![CompilationUnit::new(FileStore::new(vec![]))],
-            symbol_table: compile_prelude_for_name_resolver().symbols.clone(),
+            symbol_table: SymbolTable::base(),
         };
 
         // Create a default unit
@@ -35,19 +34,19 @@ impl Driver {
         driver
     }
 
-    pub fn with_str(string: &str) -> Self {
-        let mut driver = Driver::new();
-        driver.update_file(&PathBuf::from("-"), string.into());
-        driver
-    }
-
     pub fn with_files(files: Vec<PathBuf>) -> Self {
         let store = FileStore::new(files);
         let unit = CompilationUnit::new(store);
         Self {
             units: vec![unit],
-            symbol_table: compile_prelude_for_name_resolver().symbols.clone(),
+            symbol_table: SymbolTable::base(),
         }
+    }
+
+    pub fn with_str(code: &str) -> Self {
+        let mut driver = Self::new();
+        driver.update_file(&PathBuf::from("-"), code.to_string());
+        driver
     }
 
     pub fn update_file(&mut self, path: &PathBuf, contents: String) {

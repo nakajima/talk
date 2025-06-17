@@ -78,19 +78,15 @@ impl<'a> CompletionContext<'a> {
                 }
                 Some(TypeDef::Struct(struct_def)) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.keys().map(|label| {
-                        CompletionItem {
-                            label: label.clone(),
-                            kind: Some(CompletionItemKind::METHOD),
-                            ..Default::default()
-                        }
+                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        ..Default::default()
                     }));
-                    completions.extend(struct_def.properties.keys().map(|label| {
-                        CompletionItem {
-                            label: label.clone(),
-                            kind: Some(CompletionItemKind::PROPERTY),
-                            ..Default::default()
-                        }
+                    completions.extend(struct_def.properties.keys().map(|label| CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        ..Default::default()
                     }));
                     completions
                 }
@@ -218,7 +214,15 @@ mod tests {
             true,
         );
 
-        assert_eq!(completions.len(), 1);
+        assert_eq!(
+            completions.len(),
+            1,
+            "{:?}",
+            completions
+                .iter()
+                .map(|c| c.label.clone())
+                .collect::<Vec<String>>()
+        );
         assert_eq!(completions[0].label, "bar");
     }
 }

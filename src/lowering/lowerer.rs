@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::AddAssign, str::FromStr};
+use std::{collections::HashMap, ops::AddAssign, str::FromStr, usize};
 
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
@@ -1736,6 +1736,7 @@ fn find_or_create_main(
         SymbolID::GENERATED_MAIN.0,
         TypedExpr {
             id: SymbolID::GENERATED_MAIN.0,
+            file_id: usize::MAX,
             expr: func_expr.clone(),
             ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
         },
@@ -1766,20 +1767,17 @@ fn find_or_create_main(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use crate::{
-        SymbolID, SymbolTable, check,
+        SymbolID,
         compiling::driver::Driver,
         lowering::{
             instr::Callee,
             ir_module::IRModule,
             lowerer::{
-                BasicBlock, BasicBlockID, IRError, IRFunction, IRType, Instr, Lowerer,
-                PhiPredecessors, RefKind, Register, RegisterList,
+                BasicBlock, BasicBlockID, IRError, IRFunction, IRType, Instr, PhiPredecessors,
+                RefKind, Register, RegisterList,
             },
         },
-        symbol_table,
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
@@ -1837,7 +1835,7 @@ mod tests {
             vec![
                 IRFunction {
                     ty: foo_func_type.clone(),
-                    name: "@_5_foo".into(),
+                    name: format!("@_{}_foo", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -1876,7 +1874,7 @@ mod tests {
                             Instr::Ref(
                                 Register(4),
                                 foo_func_type.clone(),
-                                RefKind::Func("@_5_foo".into())
+                                RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0),)
                             ),
                             Instr::GetElementPointer {
                                 dest: Register(5),
@@ -1928,7 +1926,7 @@ mod tests {
                         vec![IRType::TypeVar("T3".into())],
                         Box::new(IRType::TypeVar("T4".into()))
                     ),
-                    name: "@_5_foo".into(),
+                    name: format!("@_{}_foo", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -2013,7 +2011,7 @@ mod tests {
                                     vec![IRType::TypeVar("T3".into())],
                                     IRType::TypeVar("T4".into()).into()
                                 ),
-                                RefKind::Func("@_5_foo".into())
+                                RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0),)
                             ),
                             Instr::GetElementPointer {
                                 dest: Register(5),
@@ -2108,11 +2106,7 @@ mod tests {
                                 location: Register(3),
                                 ty: IRType::EMPTY_STRUCT
                             },
-                            Instr::Ref(
-                                Register(4),
-                                foo_func_type.clone(),
-                                RefKind::Func(foo_name)
-                            ),
+                            Instr::Ref(Register(4), foo_func_type.clone(), RefKind::Func(foo_name)),
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 from: Register(1),
@@ -2277,7 +2271,7 @@ mod tests {
                         vec![IRType::TypeVar("T3".into())],
                         IRType::TypeVar("T3".into()).into()
                     ),
-                    name: "@_5_foo".into(),
+                    name: format!("@_{}_foo", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![Instr::Ret(
@@ -2324,7 +2318,7 @@ mod tests {
                                     vec![IRType::TypeVar("T3".into())],
                                     IRType::TypeVar("T3".into()).into()
                                 ),
-                                RefKind::Func("@_5_foo".into())
+                                RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0),)
                             ),
                             // Get a pointer to the env's address in the closure
                             Instr::GetElementPointer {
@@ -2888,7 +2882,7 @@ mod tests {
             vec![
                 IRFunction {
                     ty: add_func_type.clone(),
-                    name: "@_5_add".into(),
+                    name: format!("@_{}_add", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -2941,7 +2935,7 @@ mod tests {
                             Instr::Ref(
                                 Register(5),
                                 add_func_type.clone(),
-                                RefKind::Func("@_5_add".into())
+                                RefKind::Func(format!("@_{}_add", SymbolID::resolved(1).0))
                             ),
                             Instr::GetElementPointer {
                                 dest: Register(6),
@@ -3028,9 +3022,9 @@ mod tests {
                 IRFunction {
                     ty: IRType::Func(
                         vec![IRType::Int],
-                        IRType::Struct(SymbolID::typed(1), vec![IRType::Int]).into()
+                        IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into()
                     ),
-                    name: "@_5_Person_init".into(),
+                    name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -3038,7 +3032,7 @@ mod tests {
                             Instr::GetElementPointer {
                                 dest: Register(2),
                                 from: Register(0), // self is in register 0
-                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
                                 index: 0
                             },
                             Instr::Store {
@@ -3047,17 +3041,17 @@ mod tests {
                                 location: Register(2)
                             },
                             Instr::Load {
-                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
                                 dest: Register(3),
                                 addr: Register(0)
                             },
                             Instr::Ret(
-                                IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
                                 Some(Register(3))
                             )
                         ],
                     }],
-                    env_ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                    env_ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -3068,25 +3062,25 @@ mod tests {
                             Instr::ConstantInt(Register(1), 123),
                             Instr::Alloc {
                                 dest: Register(2),
-                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
                                 count: None
                             },
                             Instr::Ref(
                                 Register(3),
                                 IRType::Func(
                                     vec![IRType::Int],
-                                    IRType::Struct(SymbolID::typed(1), vec![IRType::Int]).into()
+                                    IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into()
                                 ),
-                                RefKind::Func("@_5_Person_init".into())
+                                RefKind::Func(format!("@_{}_Person_init", SymbolID::resolved(1).0))
                             ),
                             Instr::Call {
                                 dest_reg: Register(4),
-                                ty: IRType::Struct(SymbolID::typed(1), vec![IRType::Int]).into(),
+                                ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into(),
                                 callee: Callee::Register(Register(3)),
                                 args: RegisterList(vec![Register(2), Register(1)])
                             },
                             Instr::Ret(
-                                IRType::Struct(SymbolID::typed(1), vec![IRType::Int]),
+                                IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
                                 Some(Register(4))
                             )
                         ],
@@ -3114,7 +3108,7 @@ mod tests {
         )
         .unwrap();
 
-        let person_struct_ty = IRType::Struct(SymbolID::typed(1), vec![IRType::Int]);
+        let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]);
         let person_init_func_ty = IRType::Func(vec![IRType::Int], person_struct_ty.clone().into());
 
         assert_lowered_functions!(
@@ -3122,7 +3116,7 @@ mod tests {
             vec![
                 IRFunction {
                     ty: person_init_func_ty.clone(),
-                    name: "@_5_Person_init".into(),
+                    name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
@@ -3165,7 +3159,7 @@ mod tests {
                             Instr::Ref(
                                 Register(3),
                                 person_init_func_ty.clone(),
-                                RefKind::Func("@_5_Person_init".into())
+                                RefKind::Func(format!("@_{}_Person_init", SymbolID::resolved(1).0))
                             ),
                             Instr::Call {
                                 dest_reg: Register(4),

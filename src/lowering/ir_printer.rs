@@ -169,7 +169,7 @@ mod tests {
         let func = print(&program);
         assert_eq!(
             func.trim(),
-            r#"func @_5_add({} %0, int %1) int
+            r#"func @_11_add({} %0, int %1) int
   entry:
     %2 = int 1;
     %3 = add int %2, %1;
@@ -181,7 +181,7 @@ func @main({} %0) void
     %2 = struct {} ();
     %3 = alloc {} ;
     store {} %2 %3;
-    %4 = ref (int) int @_5_add;
+    %4 = ref (int) int @_11_add;
     %5 = getelementptr {ptr, ptr} %1 1;
     %6 = getelementptr {ptr, ptr} %1 0;
     store ptr %3 %5;

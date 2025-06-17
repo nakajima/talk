@@ -21,6 +21,12 @@ pub trait Phase: Eq {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Raw;
+impl Phase for Raw {
+    type Data = (); // No extra data for parsed
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed;
 impl Phase for Parsed {
     type Data = (); // No extra data for parsed
@@ -109,7 +115,10 @@ impl SourceFile<NameResolved> {
 
 impl SourceFile<Typed> {
     pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr) {
-        self.phase_data.env.typed_exprs.insert(id, typed_expr);
+        self.phase_data
+            .env
+            .typed_exprs
+            .insert((id, self.file_id), typed_expr);
     }
 
     pub fn typed_roots(&self) -> &[TypedExpr] {
@@ -120,16 +129,20 @@ impl SourceFile<Typed> {
         self.phase_data.roots = vec![with];
     }
 
-    pub fn types_mut(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
+    pub fn types_mut(&mut self) -> &mut HashMap<(ExprID, FileID), TypedExpr> {
         &mut self.phase_data.env.typed_exprs
     }
 
-    pub fn typed_exprs(&self) -> &HashMap<ExprID, TypedExpr> {
+    pub fn typed_exprs(&self) -> &HashMap<(ExprID, FileID), TypedExpr> {
         &self.phase_data.env.typed_exprs
     }
 
     pub fn typed_expr(&self, expr_id: &ExprID) -> Option<TypedExpr> {
-        self.phase_data.env.typed_exprs.get(expr_id).cloned()
+        self.phase_data
+            .env
+            .typed_exprs
+            .get(&(*expr_id, self.file_id))
+            .cloned()
     }
 
     pub fn type_defs(&self) -> TypeDefs {
@@ -141,15 +154,30 @@ impl SourceFile<Typed> {
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {
-        self.phase_data.env.typed_exprs.get_mut(&id).unwrap().ty = ty;
+        self.phase_data
+            .env
+            .typed_exprs
+            .get_mut(&(id, self.file_id))
+            .unwrap()
+            .ty = ty;
     }
 
     pub fn type_for(&self, id: ExprID) -> Ty {
-        self.phase_data.env.typed_exprs.get(&id).unwrap().ty.clone()
+        self.phase_data
+            .env
+            .typed_exprs
+            .get(&(id, self.file_id))
+            .unwrap()
+            .ty
+            .clone()
     }
 
     pub fn type_from_symbol(&self, symbol_id: &SymbolID, symbol_table: &SymbolTable) -> Option<Ty> {
         if let Some(info) = symbol_table.get(symbol_id) {
+            println!(
+                "type from symbol: {symbol_id:?}, {:?}",
+                self.type_for(info.expr_id)
+            );
             return Some(self.type_for(info.expr_id));
         }
 

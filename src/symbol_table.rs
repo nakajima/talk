@@ -24,11 +24,6 @@ impl SymbolID {
     pub fn resolved(index: i32) -> SymbolID {
         SymbolID(index + compile_prelude_for_name_resolver().symbols.max_id())
     }
-
-    // Remove the prelude's symbol offset
-    pub fn typed(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude().symbols.max_id())
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    SymbolID,
+    FileID, SymbolID,
     parser::ExprID,
     prelude::{Prelude, compile_prelude},
     type_checker::{Ty, TypeError},
@@ -106,7 +106,7 @@ pub enum TypeDef {
     Struct(StructDef),
 }
 
-pub type TypedExprs = HashMap<ExprID, TypedExpr>;
+pub type TypedExprs = HashMap<(ExprID, FileID), TypedExpr>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {

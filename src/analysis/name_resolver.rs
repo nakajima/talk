@@ -719,7 +719,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{compiling::driver::Driver, expr::Expr, parser::parse};
+    use crate::{compiling::driver::Driver, expr::Expr};
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
