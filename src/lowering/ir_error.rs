@@ -12,7 +12,9 @@ impl IRError {
     pub fn message(&self) -> String {
         match self {
             Self::ParseError => "Parse error".into(),
-            Self::InvalidPointer(name) => format!("Invalid pointer `{}`", name),
+            Self::InvalidPointer(name) => {
+                format!("Invalid pointer `{name}`")
+            },
             Self::PartialInitialization(_, properties) => format!(
                 "Not all properties initialized. Missing: {}",
                 properties

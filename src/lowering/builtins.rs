@@ -32,8 +32,7 @@ fn lower_alloc(
 
     if args.len() != 1 {
         return Err(IRError::Unknown(format!(
-            "__alloc takes an Int, got no arguments {:?}",
-            args
+            "__alloc takes an Int, got no arguments {args:?}",
         )));
     }
 

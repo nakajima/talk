@@ -17,13 +17,13 @@ use crate::span::Span;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub enum NameResolverError {
-    InvalidSelf
+    InvalidSelf,
 }
 
 impl NameResolverError {
     pub fn message(&self) -> String {
         match self {
-            Self::InvalidSelf => format!("`self` can't be used outside type")
+            Self::InvalidSelf => format!("`self` can't be used outside type"),
         }
     }
 }
@@ -120,6 +120,7 @@ impl NameResolver {
                     self.resolve_nodes(&[body], source_file, symbol_table);
                     self.type_symbol_stack.pop();
                 }
+                Break => (),
                 Init(_, func_id) => {
                     let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
                         log::error!("no type found for initializer");
@@ -1126,8 +1127,12 @@ mod tests {
     #[test]
     fn resolves_array_builtin() {
         let resolved = resolve("func c() -> Array<Int> {}");
+        let Expr::Func { generics, .. } = resolved.roots()[0].unwrap() else {
+            panic!("didn't get a func");
+        };
+
         assert_eq!(
-            *resolved.get(&1).unwrap(),
+            *resolved.get(&generics[0]).unwrap(),
             TypeRepr(
                 Name::Resolved(SymbolID::ARRAY, "Array".into()),
                 vec![0],

@@ -8,16 +8,16 @@ use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind,
     DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, Location, OneOf, Position, Range,
+    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, FullDocumentDiagnosticReport,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, Location, OneOf, Position, Range,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
     SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport, Url,
-    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -82,13 +82,6 @@ impl LanguageServer for ServerState {
                             },
                         ),
                     ),
-                    workspace: Some(WorkspaceServerCapabilities {
-                        file_operations: None,
-                        workspace_folders: Some(WorkspaceFoldersServerCapabilities {
-                            change_notifications: Some(OneOf::Left(true)),
-                            supported: Some(true),
-                        }),
-                    }),
                     semantic_tokens_provider: Some(
                         SemanticTokensServerCapabilities::SemanticTokensOptions(
                             SemanticTokensOptions {
@@ -205,38 +198,6 @@ impl LanguageServer for ServerState {
                 .map(|c| c.trigger_kind == CompletionTriggerKind::TRIGGER_CHARACTER)
                 .unwrap_or(false),
         };
-
-        // let symbols = source_file.scope_tree.get_symbols_in_scope(scope);
-        // let completion_items: Vec<CompletionItem> = symbols
-        //     .iter()
-        //     .filter_map(|sym| self.driver.symbol_table.get(sym))
-        //     .map(|info| {
-        //         let kind = match &info.kind {
-        //             SymbolKind::Func => CompletionItemKind::FUNCTION,
-        //             SymbolKind::Param => CompletionItemKind::VARIABLE,
-        //             SymbolKind::Local => CompletionItemKind::VARIABLE,
-        //             SymbolKind::Enum => CompletionItemKind::ENUM,
-        //             SymbolKind::Struct => CompletionItemKind::STRUCT,
-        //             SymbolKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
-        //             SymbolKind::BuiltinType => CompletionItemKind::CLASS,
-        //             SymbolKind::BuiltinFunc => CompletionItemKind::FUNCTION,
-        //             _ => CompletionItemKind::VARIABLE,
-        //         };
-
-        //         let detail = if let Some(typed_expr) = source_file.typed_expr(&info.expr_id) {
-        //             Some(format!("{:?}", &typed_expr.ty))
-        //         } else {
-        //             None
-        //         };
-
-        //         CompletionItem {
-        //             label: info.name.clone(),
-        //             kind: Some(kind),
-        //             detail,
-        //             ..Default::default()
-        //         }
-        //     })
-        //     .collect();
         let completion_items = completion.get_completions();
         log::info!("completion_items: {completion_items:?}");
         Box::pin(async move {
@@ -306,14 +267,6 @@ impl LanguageServer for ServerState {
         )));
 
         Box::pin(async { response })
-    }
-
-    fn did_change_workspace_folders(
-        &mut self,
-        _params: <async_lsp::lsp_types::lsp_notification!("workspace/didChangeWorkspaceFolders")as async_lsp::lsp_types::notification::Notification>::Params,
-    ) -> Self::NotifyResult {
-        eprintln!("did change workspace folders??");
-        ControlFlow::Continue(())
     }
 
     fn hover(
@@ -500,32 +453,4 @@ pub async fn start() {
         }
         Err(e) => eprintln!("server.run_buffered err: {e:?}"),
     }
-}
-
-#[allow(unused)]
-fn find_files_by_extension(dir: &Path, extension: &str) -> std::io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    find_files_recursive(dir, extension, &mut files)?;
-    Ok(files)
-}
-
-fn find_files_recursive(
-    dir: &Path,
-    extension: &str,
-    files: &mut Vec<PathBuf>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            find_files_recursive(&path, extension, files)?;
-        } else if path.is_file()
-            && let Some(ext) = path.extension()
-            && ext.to_str() == Some(extension)
-        {
-            files.push(path);
-        }
-    }
-    Ok(())
 }

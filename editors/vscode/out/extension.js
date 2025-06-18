@@ -6,14 +6,16 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
+const os_1 = require("os");
 const vscode_1 = require("vscode");
 const node_1 = require("vscode-languageclient/node");
 let client;
 function activate(context) {
     // If the extension is launched in debug mode then the debug server options are used
     // Otherwise the run options are used
+    console.info((0, os_1.homedir)());
     const serverOptions = {
-        command: "/Users/nakajima/apps/talk-rs/target/debug/talk",
+        command: (0, os_1.homedir)() + "/apps/talk-rs/target/debug/talk",
         transport: node_1.TransportKind.stdio,
         args: ["lsp"],
         options: {

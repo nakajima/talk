@@ -340,6 +340,9 @@ impl TypeChecker {
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, env, source_file)
             }
+            Expr::Break => {
+                Ok(Ty::Void)
+            }
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -1502,7 +1505,7 @@ mod struct_tests {
         .unwrap();
 
         assert_eq!(
-            checked.type_for(checked.root_ids()[1]),
+            checked.type_for(checked.root_ids()[1]).unwrap(),
             Ty::Struct(SymbolID::resolved(1), vec![])
         );
 
@@ -1534,7 +1537,7 @@ mod struct_tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1554,7 +1557,7 @@ mod struct_tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1578,7 +1581,7 @@ mod struct_tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]

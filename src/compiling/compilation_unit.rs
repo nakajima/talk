@@ -13,7 +13,10 @@ use crate::{
     type_checker::{TypeChecker, TypeError},
 };
 
-pub trait StageTrait {}
+pub trait StageTrait: std::fmt::Debug {
+    type SourceFilePhase: source_file::Phase;
+    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<Self::SourceFilePhase>>;
+}
 
 #[derive(Debug)]
 pub enum CompilationError {
@@ -35,12 +38,22 @@ impl<Stage: StageTrait> CompilationUnit<Stage> {
         self.src_cache.insert(path.clone(), src);
         Ok(self.src_cache.get(path).expect("src cache bad").as_str())
     }
+
+    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<Stage::SourceFilePhase>> {
+        self.stage.source_file(path)
+    }
 }
 
+#[derive(Debug)]
 pub struct Raw {}
-impl StageTrait for Raw {}
+impl StageTrait for Raw {
+    type SourceFilePhase = source_file::Parsed;
+    fn source_file(&self, _path: &PathBuf) -> Option<&SourceFile> {
+        None
+    }
+}
 
-#[allow(unused)]
+#[derive(Debug)]
 pub struct CompilationUnit<Stage = Raw>
 where
     Stage: StageTrait,
@@ -96,18 +109,19 @@ impl CompilationUnit<Raw> {
     }
 }
 
-#[allow(unused)]
+#[derive(Debug)]
 pub struct Parsed {
     pub files: Vec<SourceFile<source_file::Parsed>>,
 }
 
-impl StageTrait for Parsed {}
+impl StageTrait for Parsed {
+    type SourceFilePhase = source_file::Parsed;
+    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
+        self.files.iter().find(|f| f.path == *path)
+    }
+}
 
 impl CompilationUnit<Parsed> {
-    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
-        self.stage.files.iter().find(|f| f.path == *path)
-    }
-
     pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
         let mut files = vec![];
         for file in self.stage.files {
@@ -123,16 +137,18 @@ impl CompilationUnit<Parsed> {
     }
 }
 
+#[derive(Debug)]
 pub struct Resolved {
     files: Vec<SourceFile<NameResolved>>,
 }
-impl StageTrait for Resolved {}
+impl StageTrait for Resolved {
+    type SourceFilePhase = source_file::NameResolved;
+    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::NameResolved>> {
+        self.files.iter().find(|f| f.path == *path)
+    }
+}
 
 impl CompilationUnit<Resolved> {
-    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::NameResolved>> {
-        self.stage.files.iter().find(|f| f.path == *path)
-    }
-
     pub fn typed(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Typed> {
         let prelude = compile_prelude();
         let mut env = Environment::new();
@@ -158,17 +174,19 @@ impl CompilationUnit<Resolved> {
     }
 }
 
+#[derive(Debug)]
 pub struct Typed {
     pub environment: Environment,
     pub files: Vec<SourceFile<source_file::Typed>>,
 }
-impl StageTrait for Typed {}
+impl StageTrait for Typed {
+    type SourceFilePhase = source_file::Typed;
+    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
+        self.files.iter().find(|f| f.path == *path)
+    }
+}
 
 impl CompilationUnit<Typed> {
-    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
-        self.stage.files.iter().find(|f| f.path == *path)
-    }
-
     pub fn lower(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
         let mut module = IRModule::new();
         let mut files = vec![];
@@ -185,19 +203,21 @@ impl CompilationUnit<Typed> {
     }
 }
 
+#[derive(Debug)]
 pub struct Lowered {
     pub module: IRModule,
     pub files: Vec<SourceFile<source_file::Lowered>>,
 }
 
-impl StageTrait for Lowered {}
+impl StageTrait for Lowered {
+    type SourceFilePhase = source_file::Lowered;
+    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Lowered>> {
+        self.files.iter().find(|f| f.path == *path)
+    }
+}
 
 impl CompilationUnit<Lowered> {
     pub fn module(self) -> IRModule {
         self.stage.module
-    }
-
-    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Lowered>> {
-        self.stage.files.iter().find(|f| f.path == *path)
     }
 }

@@ -176,6 +176,7 @@ impl<'a> Lexer<'a> {
             "match" => Match,
             "return" => Return,
             "struct" => Struct,
+            "break" => Break,
             "init" => Init,
             _ => Identifier(self.code[start_idx..=end_idx].to_string()),
         }

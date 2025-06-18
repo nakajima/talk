@@ -149,13 +149,17 @@ impl SourceFile<Typed> {
         self.phase_data.env.typed_exprs.get_mut(&id).unwrap().ty = ty;
     }
 
-    pub fn type_for(&self, id: ExprID) -> Ty {
-        self.phase_data.env.typed_exprs.get(&id).unwrap().ty.clone()
+    pub fn type_for(&self, id: ExprID) -> Option<Ty> {
+        if let Some(typed_expr) = self.phase_data.env.typed_exprs.get(&id) {
+            Some(typed_expr.ty.clone())
+        } else {
+            None
+        }
     }
 
     pub fn type_from_symbol(&self, symbol_id: &SymbolID, symbol_table: &SymbolTable) -> Option<Ty> {
         if let Some(info) = symbol_table.get(symbol_id) {
-            return Some(self.type_for(info.expr_id));
+            return self.type_for(info.expr_id);
         }
 
         None

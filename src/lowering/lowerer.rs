@@ -427,9 +427,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let Some(typed_expr) = self.source_file.typed_expr(expr_id).clone() else {
-            return None;
-        };
+        let typed_expr = self.source_file.typed_expr(expr_id).clone()?;
 
         match typed_expr.expr {
             Expr::LiteralInt(_)
@@ -477,7 +475,7 @@ impl<'a> Lowerer<'a> {
             expr => {
                 self.source_file.diagnostics.insert(Diagnostic::lowering(
                     *expr_id,
-                    IRError::Unknown(format!("Cannot lower {:?}", expr)),
+                    IRError::Unknown(format!("Cannot lower {expr:?}")),
                 ));
 
                 None
@@ -557,11 +555,8 @@ impl<'a> Lowerer<'a> {
         }
 
         for (i, item) in items.iter().enumerate() {
-            let Some(lowered_item) = self.lower_expr(&item) else {
-                return None;
-            };
-
-            let ty = self.source_file.type_for(*item).to_ir(self);
+            let lowered_item = self.lower_expr(item)?;
+            let ty = self.source_file.type_for(*item).map(|ty| ty.to_ir(self))?;
 
             let item_reg = self.allocate_register();
             self.push_instr(Instr::GetElementPointer {
@@ -585,7 +580,8 @@ impl<'a> Lowerer<'a> {
             ty: IRType::array(),
             addr: array_reg,
         });
-        return Some(loaded);
+
+        Some(loaded)
     }
 
     fn lower_struct(&mut self, expr_id: &ExprID, struct_id: SymbolID) -> Option<Register> {
@@ -1157,7 +1153,7 @@ impl<'a> Lowerer<'a> {
                     dest: member_reg,
                     base: receiver,
                     ty: receiver_typed.ty.to_ir(self).clone(),
-                    index: index,
+                    index,
                 });
 
                 Some(member_reg)
@@ -1249,9 +1245,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_binary_op(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let Some(typed_expr) = self.source_file.typed_expr(expr_id) else {
-            return None;
-        };
+        let typed_expr = self.source_file.typed_expr(expr_id)?;
 
         let Expr::Binary(lhs, op, rhs) = typed_expr.expr else {
             panic!("Did not get binary expr");
@@ -1269,17 +1263,55 @@ impl<'a> Lowerer<'a> {
             Minus => Instr::Sub(return_reg, typed_expr.ty.to_ir(self), operand_1, operand_2),
             Star => Instr::Mul(return_reg, typed_expr.ty.to_ir(self), operand_1, operand_2),
             Slash => Instr::Div(return_reg, typed_expr.ty.to_ir(self), operand_1, operand_2),
-            BangEquals => Instr::Ne(return_reg, operand_ty.to_ir(self), operand_1, operand_2),
-            EqualsEquals => Instr::Eq(return_reg, operand_ty.to_ir(self), operand_1, operand_2),
+            BangEquals => Instr::Ne(
+                return_reg,
+                operand_ty
+                    .map(|ty| ty.to_ir(self))
+                    .unwrap_or(Ty::Void.to_ir(self)),
+                operand_1,
+                operand_2,
+            ),
+            EqualsEquals => Instr::Eq(
+                return_reg,
+                operand_ty
+                    .map(|ty| ty.to_ir(self))
+                    .unwrap_or(Ty::Void.to_ir(self)),
+                operand_1,
+                operand_2,
+            ),
 
-            Less => Instr::LessThan(return_reg, operand_ty.to_ir(self), operand_1, operand_2),
-            LessEquals => {
-                Instr::LessThanEq(return_reg, operand_ty.to_ir(self), operand_1, operand_2)
-            }
-            Greater => Instr::GreaterThan(return_reg, operand_ty.to_ir(self), operand_1, operand_2),
-            GreaterEquals => {
-                Instr::GreaterThanEq(return_reg, operand_ty.to_ir(self), operand_1, operand_2)
-            }
+            Less => Instr::LessThan(
+                return_reg,
+                operand_ty
+                    .map(|ty| ty.to_ir(self))
+                    .unwrap_or(Ty::Void.to_ir(self)),
+                operand_1,
+                operand_2,
+            ),
+            LessEquals => Instr::LessThanEq(
+                return_reg,
+                operand_ty
+                    .map(|ty| ty.to_ir(self))
+                    .unwrap_or(Ty::Void.to_ir(self)),
+                operand_1,
+                operand_2,
+            ),
+            Greater => Instr::GreaterThan(
+                return_reg,
+                operand_ty
+                    .map(|ty| ty.to_ir(self))
+                    .unwrap_or(Ty::Void.to_ir(self)),
+                operand_1,
+                operand_2,
+            ),
+            GreaterEquals => Instr::GreaterThanEq(
+                return_reg,
+                operand_ty
+                    .map(|ty| ty.to_ir(self))
+                    .unwrap_or(Ty::Void.to_ir(self)),
+                operand_1,
+                operand_2,
+            ),
             _ => panic!("Cannot lower binary operation: {op:?}"),
         };
 
@@ -1289,10 +1321,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assignment(&mut self, lhs_id: &ExprID, rhs_id: &ExprID) -> Option<Register> {
-        let Some(rhs) = self.lower_expr(rhs_id) else {
-            return None;
-        };
-
+        let rhs = self.lower_expr(rhs_id)?;
         let lhs = self.source_file.typed_expr(lhs_id).unwrap().clone();
 
         match &lhs.expr {
@@ -1310,11 +1339,9 @@ impl<'a> Lowerer<'a> {
                 match value {
                     SymbolValue::Register(_reg) => {
                         let new_reg = self.allocate_register();
-                        self.push_instr(Instr::StoreLocal(
-                            new_reg,
-                            self.source_file.type_for(*rhs_id).to_ir(self),
-                            rhs,
-                        ));
+                        let ty = self.source_file.type_for(*rhs_id)?;
+
+                        self.push_instr(Instr::StoreLocal(new_reg, ty.to_ir(self), rhs));
                         self.current_func_mut()
                             .register_symbol(*symbol, new_reg.into());
                         None
@@ -1383,9 +1410,7 @@ impl<'a> Lowerer<'a> {
             panic!("Unresolved variable: {name:?} {expr:?}")
         };
 
-        let Some(value) = self.lookup_register(symbol_id) else {
-            return None;
-        };
+        let value = self.lookup_register(symbol_id)?;
 
         match value.clone() {
             SymbolValue::Register(reg) => Some(reg),
@@ -1760,7 +1785,7 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        struct_def.properties.iter().position(|k| &k.name == name)
+        struct_def.properties.iter().position(|k| k.name == name)
     }
 }
 

@@ -55,6 +55,7 @@ pub enum TokenKind {
     RightBracket,
     Comma,
     Struct,
+    Break,
     Int(String),
     Float(String),
     Identifier(String),
@@ -131,6 +132,7 @@ impl TokenKind {
             TokenKind::EOF => "EOF",
             TokenKind::Generated => "(generated)",
             TokenKind::Init => "init",
+            TokenKind::Break => "break",
         }
         .to_string()
     }

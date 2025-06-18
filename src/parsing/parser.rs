@@ -340,6 +340,12 @@ impl<'a> Parser<'a> {
         self.add_expr(EnumDecl(Name::Raw(name), generics, body), tok)
     }
 
+    pub(crate) fn break_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Break)?;
+        self.add_expr(Expr::Break, tok)
+    }
+
     pub(crate) fn return_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Return)?;
@@ -559,13 +565,8 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Loop)?;
 
         let mut condition = None;
-        if let Some(Token {
-            kind: TokenKind::LeftBrace,
-            ..
-        }) = self.current
-        {
-        } else {
-            condition = Some(self.parse_with_precedence(Precedence::Any)?)
+        if !self.peek_is(TokenKind::LeftBrace) {
+            condition = Some(self.parse_with_precedence(Precedence::None)?)
         }
 
         let body = self.block(can_assign)?;
@@ -838,7 +839,7 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
-        let (name, _) = self.try_identifier().unwrap();
+        let name = self.identifier()?;
         let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None), tok)?;
 
         self.skip_newlines();
@@ -1054,7 +1055,10 @@ impl<'a> Parser<'a> {
         callee: ExprID,
         can_assign: bool,
     ) -> Result<Option<ExprID>, ParserError> {
-        if self.did_match(TokenKind::Less)? {
+        if self.peek_is(TokenKind::Less)
+            && self.previous.as_ref().unwrap().end == self.current.as_ref().unwrap().start
+        {
+            self.consume(TokenKind::Less)?;
             let mut generics = vec![];
             while !self.did_match(TokenKind::Greater)? {
                 self.skip_newlines();
@@ -1709,12 +1713,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_break() {
+        let parsed = parse("loop { break }");
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(None, 1));
+        assert_eq!(*parsed.get(&1).unwrap(), Expr::Block(vec![0]));
+        assert_eq!(*parsed.get(&0).unwrap(), Expr::Break);
+    }
+
+    #[test]
     fn parses_loop_with_condition() {
         let parsed = parse("loop true { 123 }");
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(0), 2));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
+    }
+
+    #[test]
+    fn parses_loop_with_binary_condition() {
+        let parsed = parse("loop i < self.count { 123 }");
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(3), 5));
+        assert_eq!(
+            *parsed.get(&3).unwrap(),
+            Expr::Binary(0, TokenKind::Less, 2)
+        );
+        assert_eq!(
+            *parsed.get(&2).unwrap(),
+            Expr::Member(Some(1), "count".into())
+        );
+        assert_eq!(*parsed.get(&1).unwrap(), Variable("self".into(), None));
     }
 
     #[test]

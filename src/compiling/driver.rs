@@ -4,7 +4,7 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
     SourceFile, SymbolID, SymbolTable,
-    compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, Typed},
+    compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
     prelude::compile_prelude,
     source_file,
 };
@@ -107,13 +107,46 @@ impl Driver {
     }
 
     pub fn diagnostics(&mut self, path: &PathBuf) -> Vec<Diagnostic> {
-        let lowered = self.lower();
         let mut result = vec![];
+        let mut round = 0;
 
-        for unit in lowered {
+        while result.is_empty() && round < 3 {
+            let diagnostics = match round {
+                0 => {
+                    let parsed = self.parse();
+                    round += 1;
+                    self.diagnostics_from(path, parsed)
+                }
+                1 => {
+                    let checked = self.check();
+                    round += 1;
+                    self.diagnostics_from(path, checked)
+                }
+                _ => {
+                    let lowered = self.lower();
+                    round += 1;
+                    self.diagnostics_from(path, lowered)
+                }
+            };
+
+            result.extend(diagnostics);
+        }
+
+        result
+    }
+
+    fn diagnostics_from<S: StageTrait>(
+        &self,
+        path: &PathBuf,
+        units: Vec<CompilationUnit<S>>,
+    ) -> Vec<Diagnostic> {
+        let mut result = vec![];
+        for unit in units {
+            log::info!("checking {unit:?} for diagnostics");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
             {
+                log::info!("checking {:?} for diagnostics", source_file.path);
                 for diag in &source_file.diagnostics() {
                     let diag_range = diag.range(source_file);
                     let range = Range::new(
@@ -132,7 +165,6 @@ impl Driver {
                 }
             }
         }
-
         result
     }
 

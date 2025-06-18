@@ -72,6 +72,7 @@ pub enum Expr {
     },
     Pattern(Pattern),
     Return(Option<ExprID>),
+    Break,
     Struct(
         Name,        /* name */
         Vec<ExprID>, /* generics */

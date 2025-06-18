@@ -3,6 +3,8 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
+import { fstat } from "fs";
+import { homedir } from "os";
 import * as path from "path";
 import { workspace, ExtensionContext } from "vscode";
 
@@ -18,8 +20,9 @@ let client: LanguageClient;
 export function activate(context: ExtensionContext) {
   // If the extension is launched in debug mode then the debug server options are used
   // Otherwise the run options are used
+  console.info(homedir());
   const serverOptions: ServerOptions = {
-    command: "/Users/nakajima/apps/talk-rs/target/debug/talk",
+    command: homedir() + "/apps/talk-rs/target/debug/talk",
     transport: TransportKind.stdio,
     args: ["lsp"],
     options: {

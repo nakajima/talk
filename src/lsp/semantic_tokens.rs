@@ -94,6 +94,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 result.extend(self.tokens_from_exprs(&[*lhs, *rhs]))
             }
             Expr::Tuple(items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::Break => result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD)),
             Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Call {
                 callee,
@@ -301,6 +302,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::RightBracket => (),
                 TokenKind::Comma => (),
                 TokenKind::Struct => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Break => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Int(_) => self.make(tok, SemanticTokenType::NUMBER, &mut tokens),
                 TokenKind::Float(_) => self.make(tok, SemanticTokenType::NUMBER, &mut tokens),
                 TokenKind::Identifier(_) => (),

@@ -139,6 +139,7 @@ impl<'a> Formatter<'a> {
             Expr::Binary(lhs, op, rhs) => self.format_binary(*lhs, op, *rhs),
             Expr::Tuple(items) => self.format_tuple(items),
             Expr::Block(stmts) => self.format_block(stmts),
+            Expr::Break => text("break"),
             Expr::Call {
                 callee,
                 type_args,

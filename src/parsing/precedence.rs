@@ -87,6 +87,12 @@ impl Precedence {
                 precedence: Precedence::Primary,
             },
 
+            TokenKind::Break => ParseHandler {
+                prefix: Some(Parser::break_expr),
+                infix: None,
+                precedence: Precedence::Primary
+            },
+
             TokenKind::True => ParseHandler {
                 prefix: Some(Parser::boolean),
                 infix: None,

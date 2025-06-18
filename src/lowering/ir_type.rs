@@ -57,9 +57,9 @@ impl IRType {
         match self {
             IRType::Struct(_, members) => {
                 let mut offset = 0;
-                for i in 0..index {
+                (0..index).for_each(|i| {
                     offset += members[i].mem_size();
-                }
+                });
 
                 Ok(Pointer(from.0 + offset))
             }

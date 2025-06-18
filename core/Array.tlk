@@ -8,4 +8,28 @@ struct Array<T> {
 		self.capacity = capacity
 		self.storage = __alloc<T>(capacity)
 	}
+
+	func push(element: T) {
+
+	}
+
+	func get(index: Int) -> T {
+		__load<T>(self.storage, index)
+	}
+
+	func resizeIfNeeded() {
+		if self.count + 1 > self.capacity {
+			let newStorage = __realloc<T>(self.storage, self.capacity * 2)
+			let i = 0
+			loop {
+				__store<T>(newStorage, i, self.get(i))
+				i = i + 1
+				if i == self.count {
+					break
+				}
+			}
+			__free(self.storage)
+			self.storage = newStorage
+		}
+	}
 }
