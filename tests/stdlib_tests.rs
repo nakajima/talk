@@ -133,7 +133,9 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(9),
                             base: Register(7),
-                            ty: IRType::array(),
+                            ty: IRType::Array {
+                                element: IRType::Int.into()
+                            },
                             index: 0
                         },
                         Instr::Store {
@@ -146,7 +148,9 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(11),
                             base: Register(7),
-                            ty: IRType::array(),
+                            ty: IRType::Array {
+                                element: IRType::Int.into()
+                            },
                             index: 1
                         },
                         Instr::Store {
@@ -159,7 +163,9 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(13),
                             base: Register(7),
-                            ty: IRType::array(),
+                            ty: IRType::Array {
+                                element: IRType::Int.into()
+                            },
                             index: 2
                         },
                         Instr::Store {
@@ -167,19 +173,24 @@ mod array_tests {
                             val: Register(12),
                             location: Register(13)
                         },
+                        Instr::Load {
+                            dest: Register(14),
+                            ty: IRType::array(),
+                            addr: Register(1),
+                        },
                         // Get .count
                         Instr::GetElementPointer {
-                            dest: Register(14),
-                            base: Register(1),
+                            dest: Register(15),
+                            base: Register(14),
                             ty: IRType::array(),
                             index: 0
                         },
                         Instr::Load {
-                            dest: Register(15),
+                            dest: Register(16),
                             ty: IRType::Int,
-                            addr: Register(14)
+                            addr: Register(15)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(15)))
+                        Instr::Ret(IRType::Int, Some(Register(16)))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),

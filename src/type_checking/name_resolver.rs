@@ -1127,12 +1127,14 @@ mod tests {
     #[test]
     fn resolves_array_builtin() {
         let resolved = resolve("func c() -> Array<Int> {}");
-        let Expr::Func { generics, .. } = resolved.roots()[0].unwrap() else {
+
+        println!("{:?}", resolved.diagnostics());
+        let Expr::Func { ret, .. } = resolved.roots()[0].unwrap() else {
             panic!("didn't get a func");
         };
 
         assert_eq!(
-            *resolved.get(&generics[0]).unwrap(),
+            *resolved.get(&ret.unwrap()).unwrap(),
             TypeRepr(
                 Name::Resolved(SymbolID::ARRAY, "Array".into()),
                 vec![0],
