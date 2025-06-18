@@ -104,9 +104,9 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::Int /* capacity */],
                 Ty::Pointer.into(),
-                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+                vec![Ty::TypeVar(TypeVarID(-5, TypeVarKind::Element))],
             ),
-            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            unbound_vars: vec![TypeVarID(-5, TypeVarKind::Element)],
             type_def: None,
         },
         Builtin {
@@ -151,13 +151,12 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![
                     Ty::Pointer,
-                    Ty::Int,
-                    Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)),
+                    Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)).into(),
                 ],
                 Ty::Void.into(),
-                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+                vec![Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element))],
             ),
-            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            unbound_vars: vec![TypeVarID(-8, TypeVarKind::Element)],
             type_def: None,
         },
         Builtin {
@@ -170,7 +169,7 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::Pointer, Ty::Int],
+                vec![Ty::Pointer],
                 Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element)).into(),
                 vec![Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element))],
             ),
@@ -291,12 +290,16 @@ mod tests {
         let checked = check(
             "
         let ptr = __alloc<Int>(10)
-        __store<Int>(ptr, 0, 4)
+        __store<Int>(ptr, 4)
         ",
         )
         .unwrap();
 
-        assert!(checked.diagnostics().is_empty());
+        assert!(
+            checked.diagnostics().is_empty(),
+            "{:#?}",
+            checked.diagnostics()
+        );
         assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Void);
     }
 
@@ -305,12 +308,12 @@ mod tests {
         let checked = check(
             "
         let ptr = __alloc<Int>(10)
-        __store<Int>(ptr, 0, 4)
+        __load<Int>(ptr)
         ",
         )
         .unwrap();
 
         assert!(checked.diagnostics().is_empty());
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Void));
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Int));
     }
 }

@@ -27,32 +27,6 @@ pub mod lowering_tests {
     }
 
     #[test]
-    fn lowers_alloc() {
-        let lowered = lower("__alloc<Int>(4)").unwrap();
-        assert_lowered_functions!(
-            lowered,
-            vec![IRFunction {
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        Instr::ConstantInt(Register(2), 4),
-                        Instr::Alloc {
-                            dest: Register(1),
-                            ty: IRType::Int,
-                            count: Some(Register(2)),
-                        },
-                        Instr::Ret(IRType::Pointer, Some(Register(1)))
-                    ],
-                }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                env_reg: Register(0)
-            }],
-        )
-    }
-
-    #[test]
     fn lowers_nested_function() {
         let lowered = lower("func foo() { 123 }").unwrap();
 

@@ -29,7 +29,6 @@ mod array_tests {
         expr::Expr,
         lowering::{
             instr::Instr,
-            ir_module::IRModule,
             ir_type::IRType,
             lowerer::{BasicBlock, BasicBlockID, IRFunction},
             register::Register,
@@ -196,6 +195,165 @@ mod array_tests {
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),
                 env_reg: Register(0)
             }]
+        )
+    }
+}
+
+#[cfg(test)]
+mod stdlib_tests {
+    use talk::{
+        SymbolID, assert_lowered_functions,
+        compiling::driver::Driver,
+        lowering::{
+            instr::Instr,
+            ir_type::IRType,
+            lowerer::{BasicBlock, BasicBlockID, IRFunction},
+            register::Register,
+        },
+    };
+
+    #[test]
+    fn lowers_alloc() {
+        let mut driver = Driver::with_str("__alloc<Int>(4)");
+        let lowered = driver.lower().into_iter().next().unwrap().module();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        Instr::ConstantInt(Register(2), 4),
+                        Instr::Alloc {
+                            dest: Register(1),
+                            ty: IRType::Int,
+                            count: Some(Register(2)),
+                        },
+                        Instr::Ret(IRType::Pointer, Some(Register(1)))
+                    ],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            }],
+        )
+    }
+
+    #[test]
+    fn lowers_realloc() {
+        let mut driver = Driver::with_str(
+            "
+        let ptr = __alloc<Int>(2)
+        __realloc<Int>(ptr, 4)
+        ",
+        );
+        let lowered = driver.lower().into_iter().next().unwrap().module();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        // First alloc
+                        Instr::ConstantInt(Register(2), 2),
+                        Instr::Alloc {
+                            dest: Register(1),
+                            ty: IRType::Int,
+                            count: Some(Register(2)),
+                        },
+                        // Realloc
+                        Instr::ConstantInt(Register(4), 4),
+                        Instr::Alloc {
+                            dest: Register(3),
+                            ty: IRType::Int,
+                            count: Some(Register(4)),
+                        },
+                        Instr::Ret(IRType::Pointer, Some(Register(3)))
+                    ],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            }],
+        )
+    }
+
+    #[test]
+    fn lowers_store() {
+        let mut driver = Driver::with_str(
+            "
+        let ptr = __alloc<Int>(2)
+        __store<Int>(ptr, 1)
+        ",
+        );
+        let lowered = driver.lower().into_iter().next().unwrap().module();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        // First alloc (so we can get a pointer)
+                        Instr::ConstantInt(Register(2), 2),
+                        Instr::Alloc {
+                            dest: Register(1),
+                            ty: IRType::Int,
+                            count: Some(Register(2)),
+                        },
+                        // Load
+                        Instr::ConstantInt(Register(4), 1),
+                        Instr::Store {
+                            val: Register(4),
+                            ty: IRType::Int,
+                            location: Register(1)
+                        },
+                        Instr::Ret(IRType::Void, Some(Register(3)))
+                    ],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            }],
+        )
+    }
+
+    #[test]
+    fn lowers_load() {
+        let mut driver = Driver::with_str(
+            "
+        let ptr = __alloc<Int>(2)
+        __load<Int>(ptr)
+        ",
+        );
+        let lowered = driver.lower().into_iter().next().unwrap().module();
+        assert_lowered_functions!(
+            lowered,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        // First alloc (so we can get a pointer)
+                        Instr::ConstantInt(Register(2), 2),
+                        Instr::Alloc {
+                            dest: Register(1),
+                            ty: IRType::Int,
+                            count: Some(Register(2)),
+                        },
+                        Instr::Load {
+                            dest: Register(3),
+                            ty: IRType::Int.into(),
+                            addr: Register(1)
+                        },
+                        Instr::Ret(IRType::Int, Some(Register(3)))
+                    ],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            }],
         )
     }
 }
