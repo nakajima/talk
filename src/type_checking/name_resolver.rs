@@ -1128,7 +1128,6 @@ mod tests {
     fn resolves_array_builtin() {
         let resolved = resolve("func c() -> Array<Int> {}");
 
-        println!("{:?}", resolved.diagnostics());
         let Expr::Func { ret, .. } = resolved.roots()[0].unwrap() else {
             panic!("didn't get a func");
         };
