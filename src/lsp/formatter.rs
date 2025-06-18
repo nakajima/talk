@@ -163,7 +163,7 @@ impl<'a> Formatter<'a> {
                 body,
                 ret,
                 ..
-            } => self.format_func(name, generics, params, *body, ret.as_ref()),
+            } => self.format_func(name, generics, params, *body, ret.as_ref(), false),
             Expr::Parameter(name, type_repr) => self.format_parameter(name, type_repr.as_ref()),
             Expr::Let(name, type_repr) => self.format_let(name, type_repr.as_ref()),
             Expr::Assignment(lhs, rhs) => self.format_assignment(*lhs, *rhs),
@@ -180,7 +180,21 @@ impl<'a> Formatter<'a> {
                 self.format_pattern_variant(enum_name, variant_name, bindings)
             }
             Expr::CallArg { label, value } => self.format_arg(label, value),
-            Expr::Init(_, func_id) => self.format_expr(*func_id),
+            Expr::Init(_, func_id) => {
+                let Some(Expr::Func {
+                    name,
+                    generics,
+                    params,
+                    body,
+                    ret,
+                    ..
+                }) = self.source_file.get(func_id)
+                else {
+                    return Doc::Empty;
+                };
+
+                self.format_func(name, generics, params, *body, ret.as_ref(), true)
+            }
         }
     }
 
@@ -189,7 +203,10 @@ impl<'a> Formatter<'a> {
             return self.format_expr(*value);
         };
 
-        group(concat(self.format_name(name), self.format_expr(*value)))
+        group(concat(
+            concat(self.format_name(name), text(": ")),
+            self.format_expr(*value),
+        ))
     }
 
     fn format_array_literal(&self, items: &[ExprID]) -> Doc {
@@ -267,38 +284,43 @@ impl<'a> Formatter<'a> {
             return concat(text("{"), text("}"));
         }
 
-        let mut docs = Vec::new();
-        let mut last_meta: Option<&ExprMeta> = None;
-
-        for &stmt_id in stmts {
-            let meta = self.meta_cache.get(&stmt_id);
-
-            // Check if we need to preserve a blank line
-            if let (Some(last), Some(current)) = (last_meta, meta)
-                && current.start.line - last.end.line > 1
-            {
-                docs.push(hardline());
-            }
-
-            docs.push(self.format_expr(stmt_id));
-            last_meta = meta.map(|v| &**v);
-        }
-
-        // For single-statement blocks, allow single-line formatting
+        // Handle the special case for single-line blocks
         if stmts.len() == 1 && !self.contains_control_flow(&stmts[0]) {
             return group(concat(
                 text("{"),
-                concat(
-                    concat(text(" "), docs.into_iter().next().unwrap()),
-                    text(" }"),
-                ),
+                concat(concat(text(" "), self.format_expr(stmts[0])), text(" }")),
             ));
+        }
+
+        // --- Corrected Logic ---
+        let mut final_doc = empty();
+        let mut last_meta: Option<&ExprMeta> = None;
+
+        for (i, &stmt_id) in stmts.iter().enumerate() {
+            let meta = self.meta_cache.get(&stmt_id);
+
+            // Add separators *before* each statement, except the first one.
+            if i > 0 {
+                // Always add at least one newline.
+                final_doc = concat(final_doc, hardline());
+
+                // If preserving a blank line, add a second newline.
+                if let (Some(last), Some(current)) = (last_meta, meta)
+                    && current.start.line - last.end.line > 1
+                {
+                    final_doc = concat(final_doc, hardline());
+                }
+            }
+
+            // Add the formatted statement itself.
+            final_doc = concat(final_doc, self.format_expr(stmt_id));
+            last_meta = meta.map(|v| &**v);
         }
 
         concat(
             text("{"),
             concat(
-                nest(1, concat(hardline(), join(docs, hardline()))),
+                nest(1, concat(hardline(), final_doc)),
                 concat(hardline(), text("}")),
             ),
         )
@@ -476,11 +498,17 @@ impl<'a> Formatter<'a> {
         params: &[ExprID],
         body: ExprID,
         ret: Option<&ExprID>,
+        is_init: bool,
     ) -> Doc {
-        let mut result = text("func");
+        let mut result = Doc::Empty;
 
-        if let Some(n) = name {
-            result = concat_space(result, self.format_name(n));
+        if is_init {
+            result = text("init");
+        } else {
+            result = text("func");
+            if let Some(n) = name {
+                result = concat_space(result, self.format_name(n));
+            }
         }
 
         if !generics.is_empty() {

@@ -1,11 +1,7 @@
 use crate::{
     SymbolID,
     expr::Expr,
-    lowering::{
-        instr::Instr,
-        lowerer::{IRError, Lowerer},
-        register::Register,
-    },
+    lowering::{instr::Instr, ir_error::IRError, lowerer::Lowerer, register::Register},
     parser::ExprID,
     type_checker::Ty,
     typed_expr::TypedExpr,

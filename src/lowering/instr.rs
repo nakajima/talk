@@ -1,8 +1,9 @@
 use std::{fmt::Display, str::FromStr};
 
 use crate::lowering::{
+    ir_error::IRError,
     ir_type::IRType,
-    lowerer::{BasicBlockID, IRError, PhiPredecessors, RefKind, RegisterList},
+    lowerer::{BasicBlockID, PhiPredecessors, RefKind, RegisterList},
     register::{self, Register},
 };
 

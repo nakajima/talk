@@ -2,12 +2,16 @@ use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
+    analysis::{
+        cfg::ControlFlowGraph, function_analysis::definite_initialization::DefiniteInitizationPass,
+        function_analysis_pass::FunctionAnalysisPass,
+    },
     diagnostic::Diagnostic,
-    environment::{Property, StructDef, TypeDef},
+    environment::{StructDef, TypeDef},
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
-        instr::Instr, ir_module::IRModule, ir_type::IRType, parsing::parser::ParserError,
-        register::Register,
+        instr::Instr, ir_error::IRError, ir_module::IRModule, ir_type::IRType,
+        parsing::parser::ParserError, register::Register,
     },
     name::Name,
     parser::ExprID,
@@ -16,20 +20,6 @@ use crate::{
     type_checker::Ty,
     typed_expr::TypedExpr,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum IRError {
-    ParseError,
-    InvalidPointer(String),
-    PartialInitialization(String, Vec<Property>),
-    Unknown(String),
-}
-
-impl IRError {
-    pub fn message(&self) -> String {
-        "".into()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RefKind {
@@ -436,7 +426,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id).unwrap().clone();
+        let Some(typed_expr) = self.source_file.typed_expr(expr_id).clone() else {
+            return None;
+        };
+
         match typed_expr.expr {
             Expr::LiteralInt(_)
             | Expr::LiteralFloat(_)
@@ -478,6 +471,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_struct(expr_id, struct_id)
             } // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
+            Expr::TypeRepr(_, _, _) => None, // these are just for the type system
             expr => todo!("Cannot lower {:?}", expr),
         }
     }
@@ -496,6 +490,20 @@ impl<'a> Lowerer<'a> {
 
         for initializer in &struct_def.initializers {
             self.lower_expr(initializer);
+
+            // TODO this is awkward
+            if let Some(init_func) = self.lowered_functions.last().clone() {
+                let cfg = ControlFlowGraph::new(&init_func);
+                let pass = DefiniteInitizationPass::new(struct_def.clone());
+                match pass.run(&init_func, &cfg) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        self.source_file
+                            .diagnostics
+                            .insert(Diagnostic::lowering(*initializer, e));
+                    }
+                }
+            }
         }
 
         self.current_func_mut()
@@ -1028,18 +1036,20 @@ impl<'a> Lowerer<'a> {
                 unreachable!()
             };
 
-            let index = self.property_index(name, receiver_typed.ty.to_ir(self));
+            if let Some(index) = self.property_index(name, receiver_typed.ty.to_ir(self)) {
+                let member_reg = self.allocate_register();
 
-            let member_reg = self.allocate_register();
+                self.push_instr(Instr::GetElementPointer {
+                    dest: member_reg,
+                    base: receiver,
+                    ty: receiver_typed.ty.to_ir(self).clone(),
+                    index: index,
+                });
 
-            self.push_instr(Instr::GetElementPointer {
-                dest: member_reg,
-                base: receiver,
-                ty: receiver_typed.ty.to_ir(self).clone(),
-                index,
-            });
-
-            Some(member_reg)
+                Some(member_reg)
+            } else {
+                None
+            }
         } else {
             todo!("wtf")
         }
@@ -1123,10 +1133,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_binary_op(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self
-            .source_file
-            .typed_expr(expr_id)
-            .expect("Did not get binary typed expr");
+        let Some(typed_expr) = self.source_file.typed_expr(expr_id) else {
+            return None;
+        };
 
         let Expr::Binary(lhs, op, rhs) = typed_expr.expr else {
             panic!("Did not get binary expr");
@@ -1164,9 +1173,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assignment(&mut self, lhs_id: &ExprID, rhs_id: &ExprID) -> Option<Register> {
-        let rhs = self
-            .lower_expr(rhs_id)
-            .expect("Did not get rhs for assignment");
+        let Some(rhs) = self.lower_expr(rhs_id) else {
+            return None;
+        };
 
         let lhs = self.source_file.typed_expr(lhs_id).unwrap().clone();
 
@@ -1255,12 +1264,11 @@ impl<'a> Lowerer<'a> {
             panic!("Unresolved variable: {name:?} {expr:?}")
         };
 
-        let value = self
-            .lookup_register(symbol_id)
-            .unwrap_or_else(|| panic!("no value for name: {name:?} at {expr_id:?}"))
-            .clone();
+        let Some(value) = self.lookup_register(symbol_id) else {
+            return None;
+        };
 
-        match value {
+        match value.clone() {
             SymbolValue::Register(reg) => Some(reg),
             SymbolValue::Capture(idx, ty) => {
                 let env_ptr = self.allocate_register();
@@ -1274,7 +1282,7 @@ impl<'a> Lowerer<'a> {
                 let reg = self.allocate_register();
                 self.push_instr(Instr::Load {
                     dest: reg,
-                    ty,
+                    ty: ty.clone(),
                     addr: env_ptr,
                 });
 
@@ -1602,7 +1610,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    pub fn property_index(&self, name: &str, irtype: IRType) -> usize {
+    pub fn property_index(&self, name: &str, irtype: IRType) -> Option<usize> {
         let IRType::Struct(symbol_id, _) = irtype else {
             unreachable!()
         };
@@ -1611,11 +1619,7 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        struct_def
-            .properties
-            .keys()
-            .position(|k| k == name)
-            .expect("did not get property")
+        struct_def.properties.keys().position(|k| k == name)
     }
 }
 

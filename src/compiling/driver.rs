@@ -107,10 +107,10 @@ impl Driver {
     }
 
     pub fn diagnostics(&mut self, path: &PathBuf) -> Vec<Diagnostic> {
-        let checked = self.check();
+        let lowered = self.lower();
         let mut result = vec![];
 
-        for unit in checked {
+        for unit in lowered {
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
             {

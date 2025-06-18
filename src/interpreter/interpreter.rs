@@ -7,8 +7,9 @@ use crate::{
     },
     lowering::{
         instr::Instr,
+        ir_error::IRError,
         ir_module::IRModule,
-        lowerer::{BasicBlock, BasicBlockID, IRError, IRFunction, RefKind, RegisterList},
+        lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList},
         register::Register,
     },
 };

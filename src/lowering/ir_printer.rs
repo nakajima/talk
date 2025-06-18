@@ -141,11 +141,7 @@ pub fn format_block_id(id: &BasicBlockID) -> String {
 mod tests {
     use crate::{
         SymbolID, SymbolTable, check,
-        lowering::{
-            ir_module::IRModule,
-            ir_printer::print,
-            lowerer::{IRError, Lowerer},
-        },
+        lowering::{ir_error::IRError, ir_module::IRModule, ir_printer::print, lowerer::Lowerer},
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {

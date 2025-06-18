@@ -5,10 +5,7 @@ use crate::{
     constraint_solver::ConstraintSolver,
     environment::Environment,
     lexer::LexerError,
-    lowering::{
-        ir_module::IRModule,
-        lowerer::{IRError, Lowerer},
-    },
+    lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
     parser::{ParserError, parse},
     prelude::compile_prelude,

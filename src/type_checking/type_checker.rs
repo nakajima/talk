@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt::Display,
     hash::Hash,
 };
 
@@ -69,10 +70,10 @@ impl TypeError {
             Self::UnknownVariant(name) => format!("No case named {}", name.name_str()),
             Self::Unknown(err) => format!("Unknown error: {err}"),
             Self::UnexpectedType(actual, expected) => {
-                format!("Unexpected type: {expected:?}, expected: {actual:?}")
+                format!("Unexpected type: {expected}, expected: {actual}")
             }
             Self::Mismatch(expected, actual) => {
-                format!("Unexpected type: {expected:?}, expected: {actual:?}")
+                format!("Unexpected type: {expected}, expected: {actual}")
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),
@@ -102,6 +103,50 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
+}
+
+impl Display for Ty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Ty::Void => write!(f, "void"),
+            Ty::Int => write!(f, "Int"),
+            Ty::Bool => write!(f, "Bool"),
+            Ty::Float => write!(f, "Float"),
+            Ty::Init(_, params) => write!(
+                f,
+                "init({})",
+                params
+                    .iter()
+                    .map(|p| format!("{p}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Ty::Func(params, ty, _) => write!(
+                f,
+                "func({}) -> {ty}",
+                params
+                    .iter()
+                    .map(|p| format!("{p}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Ty::Closure { func, .. } => write!(f, "{func}"),
+            Ty::TypeVar(type_var_id) => write!(f, "{type_var_id:?}"),
+            Ty::Enum(_, _) => write!(f, "enum"),
+            Ty::EnumVariant(_, _) => write!(f, "enum variant"),
+            Ty::Tuple(items) => write!(
+                f,
+                "({})",
+                items
+                    .iter()
+                    .map(|i| format!("{i}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Ty::Array(ty) => write!(f, "Array<{ty}>"),
+            Ty::Struct(_, _) => write!(f, "struct"),
+        }
+    }
 }
 
 impl Hash for Ty {

@@ -1,7 +1,7 @@
 use crate::{
     SourceFile,
     lexer::LexerError,
-    lowering::lowerer::IRError,
+    lowering::ir_error::IRError,
     name_resolver::NameResolverError,
     parser::{ExprID, ParserError},
     token::Token,

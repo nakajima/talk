@@ -5,7 +5,8 @@ use crate::{
     environment::{Property, StructDef},
     lowering::{
         instr::Instr,
-        lowerer::{BasicBlockID, IRError, IRFunction},
+        ir_error::IRError,
+        lowerer::{BasicBlockID, IRFunction},
         register::Register,
     },
 };

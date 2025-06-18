@@ -5,11 +5,11 @@ mod lowering_tests {
         compiling::driver::Driver,
         lowering::{
             instr::{Callee, Instr},
+            ir_error::IRError,
             ir_module::IRModule,
             ir_type::IRType,
             lowerer::{
-                BasicBlock, BasicBlockID, IRError, IRFunction, PhiPredecessors, RefKind,
-                RegisterList,
+                BasicBlock, BasicBlockID, IRFunction, PhiPredecessors, RefKind, RegisterList,
             },
             register::Register,
         },

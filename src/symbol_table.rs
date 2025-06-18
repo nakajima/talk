@@ -158,7 +158,9 @@ impl SymbolTable {
     }
 
     pub fn mark_as_captured(&mut self, symbol_id: &SymbolID) {
-        self.symbols.get_mut(symbol_id).unwrap().is_captured = true;
+        if let Some(info) = self.symbols.get_mut(symbol_id) {
+            info.is_captured = true;
+        }
     }
 
     #[track_caller]

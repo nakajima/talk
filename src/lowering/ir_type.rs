@@ -3,7 +3,7 @@ use std::str::FromStr;
 use crate::{
     SymbolID,
     interpreter::heap::Pointer,
-    lowering::{lowerer::IRError, parsing::parser::ParserError},
+    lowering::{ir_error::IRError, parsing::parser::ParserError},
 };
 
 #[derive(Debug, Clone, PartialEq)]
