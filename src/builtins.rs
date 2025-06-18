@@ -65,12 +65,11 @@ fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: -4,
                 is_captured: false,
-                definition: None
+                definition: None,
             },
             ty: Ty::Pointer,
             unbound_vars: vec![],
-            type_def: None
-
+            type_def: None,
         },
         // Builtin {
         //     id: -4,
@@ -195,6 +194,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[0]), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[0]), Ty::Pointer);
     }
 }

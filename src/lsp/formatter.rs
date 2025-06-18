@@ -500,7 +500,7 @@ impl<'a> Formatter<'a> {
         ret: Option<&ExprID>,
         is_init: bool,
     ) -> Doc {
-        let mut result = Doc::Empty;
+        let mut result;
 
         if is_init {
             result = text("init");

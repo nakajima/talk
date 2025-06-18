@@ -68,10 +68,11 @@ mod lowering_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
+                        Instr::ConstantInt(Register(2), 4),
                         Instr::Alloc {
                             dest: Register(1),
                             ty: IRType::Int,
-                            count: Some(4),
+                            count: Some(Register(2)),
                         },
                         Instr::Ret(IRType::Pointer, Some(Register(1)))
                     ],
