@@ -10,7 +10,7 @@ use crate::{
     environment::{StructDef, TypeDef},
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
-        instr::Instr, ir_error::IRError, ir_module::IRModule, ir_type::IRType,
+        instr::Instr, ir_error::IRError, ir_module::IRModule, ir_type::IRType, ir_value::IRValue,
         parsing::parser::ParserError, register::Register,
     },
     name::Name,
@@ -119,7 +119,7 @@ impl AddAssign<u32> for BasicBlockID {
 }
 
 impl FromStr for BasicBlockID {
-    type Err = ParserError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "entry" {
@@ -167,14 +167,14 @@ impl std::fmt::Display for PhiPredecessors {
 }
 
 impl FromStr for PhiPredecessors {
-    type Err = ParserError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let inner = s
             .trim()
             .strip_prefix('[')
             .and_then(|s| s.strip_suffix(']'))
-            .ok_or(ParserError::UnexpectedEOF)?;
+            .ok_or(IRError::ParseError)?;
 
         if inner.trim().is_empty() {
             return Ok(PhiPredecessors(vec![]));
@@ -185,11 +185,11 @@ impl FromStr for PhiPredecessors {
             .map(|pair_str| {
                 let mut parts = pair_str.trim().splitn(2, ':');
 
-                let bb_str = parts.next().ok_or(ParserError::UnexpectedEOF)?.trim();
-                let reg_str = parts.next().ok_or(ParserError::UnexpectedEOF)?.trim();
+                let bb_str = parts.next().ok_or(IRError::ParseError)?.trim();
+                let reg_str = parts.next().ok_or(IRError::ParseError)?.trim();
 
                 let bb = bb_str.parse::<BasicBlockID>()?;
-                let reg = reg_str.parse::<Register>().map_err(ParserError::from)?;
+                let reg = reg_str.parse::<Register>()?;
 
                 Ok((reg, bb))
             })
@@ -225,7 +225,7 @@ impl std::fmt::Display for RegisterList {
 
 // Replace the old implementation with this one.
 impl FromStr for RegisterList {
-    type Err = ParserError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // The input 's' is the content *between* the parentheses, e.g., "%1, %2" or "".
@@ -240,7 +240,7 @@ impl FromStr for RegisterList {
             .map(|part| part.trim().parse::<Register>())
             .collect::<Result<Vec<Register>, _>>()
             .map(RegisterList)
-            .map_err(|e| e.into())
+            .map_err(|_e| IRError::ParseError)
     }
 }
 
@@ -500,7 +500,7 @@ impl<'a> Lowerer<'a> {
             dest: count_ptr_reg,
             base: array_reg,
             ty: IRType::array(),
-            index: 0,
+            index: IRValue::ImmediateInt(0),
         });
         self.push_instr(Instr::Store {
             ty: IRType::Int,
@@ -516,7 +516,7 @@ impl<'a> Lowerer<'a> {
             dest: capacity_ptr_reg,
             base: array_reg,
             ty: IRType::array(),
-            index: 1,
+            index: IRValue::ImmediateInt(1),
         });
         self.push_instr(Instr::Store {
             ty: IRType::Int,
@@ -530,7 +530,7 @@ impl<'a> Lowerer<'a> {
             dest: storage_ptr_reg,
             base: array_reg,
             ty: IRType::array(),
-            index: 2,
+            index: IRValue::ImmediateInt(2),
         });
         let storage_reg = self.allocate_register();
         self.push_instr(Instr::Alloc {
@@ -565,7 +565,7 @@ impl<'a> Lowerer<'a> {
                 ty: IRType::Array {
                     element: ty.clone().into(),
                 },
-                index: i,
+                index: IRValue::ImmediateInt(i as i64),
             });
             self.push_instr(Instr::Store {
                 ty,
@@ -1153,7 +1153,7 @@ impl<'a> Lowerer<'a> {
                     dest: member_reg,
                     base: receiver,
                     ty: receiver_typed.ty.to_ir(self).clone(),
-                    index,
+                    index: IRValue::ImmediateInt(index as i64),
                 });
 
                 Some(member_reg)
@@ -1353,7 +1353,7 @@ impl<'a> Lowerer<'a> {
                             dest: capture_ptr,
                             base: Register(0),
                             ty: env_ty,
-                            index: idx,
+                            index: IRValue::ImmediateInt(idx as i64),
                         });
                         self.push_instr(Instr::Store {
                             ty: ty.clone(),
@@ -1420,7 +1420,7 @@ impl<'a> Lowerer<'a> {
                     dest: env_ptr,
                     base: Register(0),
                     ty: IRType::closure(),
-                    index: idx,
+                    index: IRValue::ImmediateInt(idx as i64),
                 });
 
                 let reg = self.allocate_register();
@@ -1604,7 +1604,7 @@ impl<'a> Lowerer<'a> {
             dest: func_ptr,
             base: callee_reg,
             ty: IRType::closure(),
-            index: 0,
+            index: IRValue::ImmediateInt(0),
         });
         self.push_instr(Instr::Load {
             dest: func_reg,
@@ -1619,7 +1619,7 @@ impl<'a> Lowerer<'a> {
             dest: env_ptr,
             base: callee_reg,
             ty: IRType::closure(),
-            index: 1,
+            index: IRValue::ImmediateInt(1),
         });
         self.push_instr(Instr::Load {
             dest: env_reg,
@@ -1689,13 +1689,13 @@ impl<'a> Lowerer<'a> {
             dest: env_ptr,
             base: closure_ptr,
             ty: IRType::closure(),
-            index: 1,
+            index: IRValue::ImmediateInt(1),
         });
         self.push_instr(Instr::GetElementPointer {
             dest: fn_ptr,
             base: closure_ptr,
             ty: IRType::closure(),
-            index: 0,
+            index: IRValue::ImmediateInt(0),
         });
 
         // Store the environment and function pointers

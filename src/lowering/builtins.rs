@@ -1,7 +1,9 @@
 use crate::{
     SymbolID,
     expr::Expr,
-    lowering::{instr::Instr, ir_error::IRError, lowerer::Lowerer, register::Register},
+    lowering::{
+        instr::Instr, ir_error::IRError, ir_type::IRType, lowerer::Lowerer, register::Register,
+    },
     parser::ExprID,
     type_checker::Ty,
     typed_expr::TypedExpr,
@@ -125,22 +127,41 @@ fn lower_store(
         unreachable!("didn't get call arg for store")
     };
 
-    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[1]).cloned() else {
-        unreachable!("didn't get call arg for store")
+    let Some(ptr) = lowerer.lower_expr(&ptr) else {
+        unreachable!("didn't get ptr for store")
     };
 
-    let Some(dest_pointer) = lowerer.lower_expr(&ptr) else {
-        unreachable!("didn't get dest pointer");
+    let Some(Expr::CallArg { value: offset, .. }) = lowerer.source_file.get(&args[1]).cloned()
+    else {
+        unreachable!("didn't get offset arg for store")
+    };
+
+    let Some(offset) = lowerer.lower_expr(&offset) else {
+        unreachable!("didn't get offset for store")
+    };
+
+    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[1]).cloned() else {
+        unreachable!("didn't get call arg for store")
     };
 
     let Some(value) = lowerer.lower_expr(&value) else {
         unreachable!("didn't get value");
     };
 
+    let location = lowerer.allocate_register();
+    lowerer.push_instr(Instr::GetElementPointer {
+        dest: location,
+        base: ptr,
+        ty: IRType::Array {
+            element: type_params[0].to_ir(lowerer).into(),
+        },
+        index: offset.into(),
+    });
+
     lowerer.push_instr(Instr::Store {
         ty: type_params[0].to_ir(lowerer),
         val: value,
-        location: dest_pointer,
+        location,
     });
 
     Ok(Some(dest))
@@ -161,14 +182,33 @@ fn lower_load(
         unreachable!("didn't get call arg for load")
     };
 
-    let Some(dest_pointer) = lowerer.lower_expr(&ptr) else {
-        unreachable!("didn't get dest pointer");
+    let Some(ptr) = lowerer.lower_expr(&ptr) else {
+        unreachable!("didn't get ptr for load")
     };
+
+    let Some(Expr::CallArg { value: offset, .. }) = lowerer.source_file.get(&args[1]).cloned()
+    else {
+        unreachable!("didn't get offset arg for load")
+    };
+
+    let Some(offset) = lowerer.lower_expr(&offset) else {
+        unreachable!("didn't get offset for load")
+    };
+
+    let location = lowerer.allocate_register();
+    lowerer.push_instr(Instr::GetElementPointer {
+        dest: location,
+        base: ptr,
+        ty: IRType::Array {
+            element: type_params[0].to_ir(lowerer).into(),
+        },
+        index: offset.into(),
+    });
 
     lowerer.push_instr(Instr::Load {
         dest,
         ty: type_params[0].to_ir(lowerer),
-        addr: dest_pointer,
+        addr: location,
     });
 
     Ok(Some(dest))

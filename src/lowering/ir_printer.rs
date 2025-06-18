@@ -179,8 +179,8 @@ func @main({{}} %0) void
     %3 = alloc {{}} ;
     store {{}} %2 %3;
     %4 = ref (int) int @_{}_add;
-    %5 = getelementptr {{ptr, ptr}} %1 1;
-    %6 = getelementptr {{ptr, ptr}} %1 0;
+    %5 = getelementptr {{ptr, ptr}} %1 =i1;
+    %6 = getelementptr {{ptr, ptr}} %1 =i0;
     store ptr %3 %5;
     store ptr %4 %6;
     ret ptr %1;

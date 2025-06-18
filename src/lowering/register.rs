@@ -1,12 +1,14 @@
-use std::{num::ParseIntError, str::FromStr};
+use std::str::FromStr;
+
+use crate::lowering::ir_error::IRError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub struct Register(pub i32);
 impl FromStr for Register {
-    type Err = ParseIntError;
+    type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let reg = Register(str::parse(&s[1..])?);
+        let reg = Register(str::parse(&s[1..]).map_err(|_e| IRError::ParseError)?);
         Ok(reg)
     }
 }

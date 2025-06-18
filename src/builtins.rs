@@ -151,6 +151,7 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![
                     Ty::Pointer,
+                    Ty::Int,
                     Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)).into(),
                 ],
                 Ty::Void.into(),
@@ -169,7 +170,7 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::Pointer],
+                vec![Ty::Pointer, Ty::Int],
                 Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element)).into(),
                 vec![Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element))],
             ),
@@ -178,10 +179,6 @@ fn builtins() -> Vec<Builtin> {
         },
     ]
 }
-
-// fn array_override(generics: &TypeParams) -> Ty {
-//     Ty::Array(Box::new(generics[0].clone()))
-// }
 
 pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
     let mut result = HashMap::default();
@@ -290,7 +287,7 @@ mod tests {
         let checked = check(
             "
         let ptr = __alloc<Int>(10)
-        __store<Int>(ptr, 4)
+        __store<Int>(ptr, 4, 123)
         ",
         )
         .unwrap();
@@ -308,7 +305,7 @@ mod tests {
         let checked = check(
             "
         let ptr = __alloc<Int>(10)
-        __load<Int>(ptr)
+        __load<Int>(ptr, 1)
         ",
         )
         .unwrap();

@@ -83,13 +83,13 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 base: Register(1),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 base: Register(1),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Store {
@@ -139,7 +139,7 @@ pub mod lowering_tests {
                                 dest: Register(2),
                                 base: Register(0),
                                 ty: IRType::closure(),
-                                index: 0
+                                index: 0.into(),
                             },
                             Instr::Load {
                                 dest: Register(3),
@@ -150,7 +150,7 @@ pub mod lowering_tests {
                                 dest: Register(4),
                                 base: Register(3),
                                 ty: IRType::closure(),
-                                index: 0
+                                index: 0.into(),
                             },
                             Instr::Load {
                                 dest: Register(5),
@@ -164,7 +164,7 @@ pub mod lowering_tests {
                                 dest: Register(6),
                                 base: Register(3),
                                 ty: IRType::closure(),
-                                index: 1
+                                index: 1.into(),
                             },
                             Instr::Load {
                                 dest: Register(7),
@@ -222,13 +222,13 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 base: Register(1),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 base: Register(1),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Store {
@@ -318,13 +318,13 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 base: Register(1),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 base: Register(1),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Store {
@@ -404,13 +404,13 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(5),
                                 base: Register(1),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 base: Register(1),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Store {
@@ -434,7 +434,7 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(8),
                                 base: Register(1),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Load {
@@ -445,7 +445,7 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(10),
                                 base: Register(1),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Load {
@@ -537,14 +537,14 @@ pub mod lowering_tests {
                                 dest: Register(5),
                                 base: Register(1),
                                 ty: IRType::closure(),
-                                index: 1
+                                index: 1.into(),
                             },
                             // Get a pointer to the fn's address in the closure
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 base: Register(1),
                                 ty: IRType::closure(),
-                                index: 0
+                                index: 0.into(),
                             },
                             // Store the env into the closure
                             Instr::Store {
@@ -1189,7 +1189,7 @@ pub mod lowering_tests {
                                 dest: Register(2),
                                 ty: IRType::closure(),
                                 base: Register(0),
-                                index: 0
+                                index: 0.into(),
                             },
                             Instr::Load {
                                 dest: Register(3),
@@ -1240,13 +1240,13 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(6),
                                 base: Register(2),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::GetElementPointer {
                                 dest: Register(7),
                                 base: Register(2),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Store {
@@ -1264,7 +1264,7 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(9),
                                 base: Register(2),
-                                index: 0,
+                                index: 0.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Load {
@@ -1275,7 +1275,7 @@ pub mod lowering_tests {
                             Instr::GetElementPointer {
                                 dest: Register(11),
                                 base: Register(2),
-                                index: 1,
+                                index: 1.into(),
                                 ty: IRType::closure()
                             },
                             Instr::Load {
@@ -1334,7 +1334,7 @@ pub mod lowering_tests {
                                 dest: Register(2),
                                 base: Register(0), // self is in register 0
                                 ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
-                                index: 0
+                                index: 0.into(),
                             },
                             Instr::Store {
                                 ty: IRType::Int,
@@ -1428,7 +1428,7 @@ pub mod lowering_tests {
                                 dest: Register(2),
                                 base: Register(0), // self is in register 0
                                 ty: person_struct_ty.clone(),
-                                index: 0
+                                index: 0.into(),
                             },
                             Instr::Store {
                                 ty: IRType::Int,
@@ -1476,7 +1476,7 @@ pub mod lowering_tests {
                                 dest: Register(5),
                                 base: Register(4),
                                 ty: person_struct_ty,
-                                index: 0,
+                                index: 0.into(),
                             },
                             Instr::Load {
                                 dest: Register(6),

@@ -6,6 +6,7 @@ use crate::{
     lowering::{
         instr::Instr,
         ir_error::IRError,
+        ir_value::IRValue,
         lowerer::{BasicBlockID, IRFunction},
         register::Register,
     },
@@ -122,7 +123,13 @@ impl DefiniteInitizationPass {
                     && *base == self_reg
                 {
                     // The index of the gep corresponds to the property index.
-                    if let Some(property) = self.struct_def.properties.iter().nth(*index) {
+
+                    let index = match index {
+                        IRValue::ImmediateInt(index) => index,
+                        IRValue::Register(_register) => todo!(),
+                    };
+
+                    if let Some(property) = self.struct_def.properties.iter().nth(*index as usize) {
                         property_pointers.insert(*dest, property.clone());
                     }
                 }

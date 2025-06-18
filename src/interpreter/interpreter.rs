@@ -9,6 +9,7 @@ use crate::{
         instr::Instr,
         ir_error::IRError,
         ir_module::IRModule,
+        ir_value::IRValue,
         lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList},
         register::Register,
     },
@@ -349,8 +350,19 @@ impl IRInterpreter {
                     );
                 };
 
+                let index = match index {
+                    IRValue::ImmediateInt(int) => int,
+                    IRValue::Register(reg) => {
+                        let val = self.register_value(&reg);
+                        match val {
+                            Value::Int(int) => int,
+                            _ => return Err(InterpreterError::TypeError(val, Value::Int(123))),
+                        }
+                    }
+                };
+
                 let pointer = ty
-                    .get_element_pointer(ptr, index)
+                    .get_element_pointer(ptr, index as usize)
                     .map_err(InterpreterError::IRError)?;
 
                 self.set_register_value(&dest, Value::Pointer(pointer));

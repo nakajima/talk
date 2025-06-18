@@ -3,6 +3,7 @@ use std::{fmt::Display, str::FromStr};
 use crate::lowering::{
     ir_error::IRError,
     ir_type::IRType,
+    ir_value::IRValue,
     lowerer::{BasicBlockID, PhiPredecessors, RefKind, RegisterList},
     register::{self, Register},
 };
@@ -138,7 +139,7 @@ pub enum Instr {
         dest: Register,
         base: Register,
         ty: IRType,
-        index: usize,
+        index: IRValue,
     },
 
     #[doc = "$dest = struct $ty ($values);"]

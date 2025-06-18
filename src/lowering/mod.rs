@@ -5,6 +5,7 @@ pub mod ir_error;
 pub mod ir_module;
 pub mod ir_printer;
 pub mod ir_type;
+pub mod ir_value;
 pub mod lowerer;
 pub mod parsing;
 pub mod register;

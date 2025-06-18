@@ -89,7 +89,7 @@ mod array_tests {
                             dest: Register(3),
                             base: Register(1),
                             ty: IRType::array(),
-                            index: 0
+                            index: 0.into(),
                         },
                         Instr::Store {
                             location: Register(3),
@@ -102,7 +102,7 @@ mod array_tests {
                             dest: Register(5),
                             base: Register(1),
                             ty: IRType::array(),
-                            index: 1
+                            index: 1.into(),
                         },
                         Instr::Store {
                             location: Register(5),
@@ -114,7 +114,7 @@ mod array_tests {
                             dest: Register(6),
                             base: Register(1),
                             ty: IRType::array(),
-                            index: 2
+                            index: 2.into(),
                         },
                         // Alloc space for the items
                         Instr::Alloc {
@@ -135,7 +135,7 @@ mod array_tests {
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: 0
+                            index: 0.into(),
                         },
                         Instr::Store {
                             ty: IRType::Int,
@@ -150,7 +150,7 @@ mod array_tests {
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: 1
+                            index: 1.into(),
                         },
                         Instr::Store {
                             ty: IRType::Int,
@@ -165,7 +165,7 @@ mod array_tests {
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: 2
+                            index: 2.into(),
                         },
                         Instr::Store {
                             ty: IRType::Int,
@@ -182,7 +182,7 @@ mod array_tests {
                             dest: Register(15),
                             base: Register(14),
                             ty: IRType::array(),
-                            index: 0
+                            index: 0.into(),
                         },
                         Instr::Load {
                             dest: Register(16),
@@ -284,7 +284,7 @@ mod stdlib_tests {
         let mut driver = Driver::with_str(
             "
         let ptr = __alloc<Int>(2)
-        __store<Int>(ptr, 1)
+        __store<Int>(ptr, 1, 123)
         ",
         );
         let lowered = driver.lower().into_iter().next().unwrap().module();
@@ -303,12 +303,20 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(2)),
                         },
-                        // Load
                         Instr::ConstantInt(Register(4), 1),
+                        Instr::ConstantInt(Register(5), 1),
+                        Instr::GetElementPointer {
+                            dest: Register(6),
+                            base: Register(1),
+                            ty: IRType::Array {
+                                element: IRType::Int.into()
+                            },
+                            index: Register(4).into(),
+                        },
                         Instr::Store {
-                            val: Register(4),
+                            val: Register(5),
                             ty: IRType::Int,
-                            location: Register(1)
+                            location: Register(6)
                         },
                         Instr::Ret(IRType::Void, Some(Register(3)))
                     ],
@@ -324,7 +332,7 @@ mod stdlib_tests {
         let mut driver = Driver::with_str(
             "
         let ptr = __alloc<Int>(2)
-        __load<Int>(ptr)
+        __load<Int>(ptr, 1)
         ",
         );
         let lowered = driver.lower().into_iter().next().unwrap().module();
@@ -343,10 +351,19 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(2)),
                         },
+                        Instr::ConstantInt(Register(4), 1),
+                        Instr::GetElementPointer {
+                            dest: Register(5),
+                            base: Register(1),
+                            ty: IRType::Array {
+                                element: IRType::Int.into()
+                            },
+                            index: Register(4).into()
+                        },
                         Instr::Load {
                             dest: Register(3),
                             ty: IRType::Int.into(),
-                            addr: Register(1)
+                            addr: Register(5)
                         },
                         Instr::Ret(IRType::Int, Some(Register(3)))
                     ],

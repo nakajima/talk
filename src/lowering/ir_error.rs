@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::environment::Property;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -14,7 +16,7 @@ impl IRError {
             Self::ParseError => "Parse error".into(),
             Self::InvalidPointer(name) => {
                 format!("Invalid pointer `{name}`")
-            },
+            }
             Self::PartialInitialization(_, properties) => format!(
                 "Not all properties initialized. Missing: {}",
                 properties
@@ -25,5 +27,11 @@ impl IRError {
             ),
             Self::Unknown(msg) => msg.clone(),
         }
+    }
+}
+
+impl Display for IRError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message())
     }
 }
