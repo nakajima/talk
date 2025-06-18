@@ -314,7 +314,7 @@ impl Environment {
                 }
                 Ty::Array(ty) => Ty::Array(Box::new(walk(*ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p.clone(), map)).collect()),
-                Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
+                Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
             }
         }
 
@@ -451,7 +451,7 @@ impl Environment {
                     .map(|t| self.substitute_ty_with_map(t.clone(), substitutions))
                     .collect(),
             ),
-            Ty::Void | Ty::Int | Ty::Float | Ty::Bool => ty,
+            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty,
         }
     }
 

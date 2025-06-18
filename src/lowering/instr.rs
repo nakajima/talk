@@ -116,7 +116,7 @@ pub enum Instr {
     Alloc {
         dest: Register,
         ty: IRType,
-        count: Option<usize>,
+        count: Option<Register>,
     },
 
     #[doc = "store $ty $val $location;"]

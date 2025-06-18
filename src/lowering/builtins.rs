@@ -27,21 +27,43 @@ fn lower_alloc(
     let dest = lowerer.allocate_register();
 
     let Ty::Func(_, _, type_params) = &typed_callee.ty else {
-        unreachable!()
+        return Err(IRError::Unknown("Did not get __alloc func".to_string()));
     };
 
-    let Expr::CallArg { value: val, .. } = lowerer.source_file.get(&args[0]).unwrap() else {
-        unreachable!()
+    if args.len() != 1 {
+        return Err(IRError::Unknown(format!(
+            "__alloc takes an Int, got no arguments {:?}",
+            args
+        )));
+    }
+
+    let Some(Expr::CallArg { value: val, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
+        return Err(IRError::Unknown(format!(
+            "Did not get argument for __alloc, got: {:?}",
+            lowerer.source_file.get(&args[0])
+        )));
     };
 
-    let Some(Expr::LiteralInt(val)) = lowerer.source_file.get(val) else {
-        unreachable!()
+    let Some(typed_expr) = lowerer.source_file.typed_expr(&val) else {
+        return Err(IRError::Unknown(format!(
+            "__alloc takes an Int, got {:?}",
+            lowerer.source_file.get(&val)
+        )));
     };
+
+    if !matches!(typed_expr.ty, Ty::Int) {
+        return Err(IRError::Unknown(format!(
+            "__alloc takes an Int, got {:?}",
+            lowerer.source_file.get(&val)
+        )));
+    }
+
+    let register = lowerer.lower_expr(&val);
 
     lowerer.push_instr(Instr::Alloc {
         dest,
         ty: type_params[0].to_ir(lowerer),
-        count: Some(str::parse(val).unwrap()),
+        count: register,
     });
 
     Ok(Some(dest))

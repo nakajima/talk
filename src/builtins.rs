@@ -58,6 +58,20 @@ fn builtins() -> Vec<Builtin> {
             unbound_vars: vec![],
             type_def: None,
         },
+        Builtin {
+            id: -4,
+            info: SymbolInfo {
+                name: "Pointer".into(),
+                kind: SymbolKind::BuiltinType,
+                expr_id: -4,
+                is_captured: false,
+                definition: None
+            },
+            ty: Ty::Pointer,
+            unbound_vars: vec![],
+            type_def: None
+
+        },
         // Builtin {
         //     id: -4,
         //     info: SymbolInfo {
@@ -90,7 +104,7 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Func(
                 vec![Ty::Int /* capacity */],
-                Ty::Int.into(),
+                Ty::Pointer.into(),
                 vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
             ),
             unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],

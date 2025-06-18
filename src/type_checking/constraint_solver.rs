@@ -297,6 +297,7 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         match ty {
+            Ty::Pointer => ty.clone(),
             Ty::Int => ty.clone(),
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),

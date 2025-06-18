@@ -1,11 +1,11 @@
 struct Array<T> {
 	let count: Int  
 	let capacity: Int
-	let storage: Int
+	let storage: Pointer
 
-	init(count: Int, capacity: Int, storage: Int) {
-		self.count = count
+	init(capacity: Int) {
 		self.capacity = capacity
-		self.storage = storage
+		self.count = 0
+		self.storage = __alloc<T>(capacity)
 	}
 }

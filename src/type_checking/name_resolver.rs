@@ -5,6 +5,7 @@ use crate::NameResolved;
 use crate::SymbolID;
 use crate::SymbolKind;
 use crate::SymbolTable;
+use crate::diagnostic::Diagnostic;
 use crate::expr::Expr;
 use crate::expr::Expr::*;
 use crate::expr::Pattern;
@@ -15,11 +16,15 @@ use crate::source_file::SourceFile;
 use crate::span::Span;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
-pub enum NameResolverError {}
+pub enum NameResolverError {
+    InvalidSelf
+}
 
 impl NameResolverError {
     pub fn message(&self) -> String {
-        "".into()
+        match self {
+            Self::InvalidSelf => format!("`self` can't be used outside type")
+        }
     }
 }
 
@@ -298,12 +303,15 @@ impl NameResolver {
                 Variable(name, _) => match name {
                     Name::Raw(name_str) => {
                         let name = if name_str == "self" {
-                            Name::_Self(
-                                *self
-                                    .type_symbol_stack
-                                    .last()
-                                    .expect("used self outside of type"),
-                            )
+                            if let Some(last_symbol) = self.type_symbol_stack.last() {
+                                Name::_Self(*last_symbol)
+                            } else {
+                                source_file.diagnostics.insert(Diagnostic::resolve(
+                                    *node_id,
+                                    NameResolverError::InvalidSelf,
+                                ));
+                                Name::_Self(SymbolID(0))
+                            }
                         } else {
                             let (symbol_id, depth) = self.lookup(&name_str);
                             log::trace!("Replacing variable {name_str} with {symbol_id:?}");

@@ -56,6 +56,7 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
+            Ty::Pointer => IRType::Pointer,
             Ty::Init(_, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
@@ -425,7 +426,7 @@ impl<'a> Lowerer<'a> {
         self.source_file.to_lowered()
     }
 
-    fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
+    pub fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
         let Some(typed_expr) = self.source_file.typed_expr(expr_id).clone() else {
             return None;
         };
@@ -445,7 +446,7 @@ impl<'a> Lowerer<'a> {
                 type_args,
                 args,
             } => self.lower_call(callee, type_args, args, typed_expr.ty),
-            Expr::Func { .. } => Some(self.lower_function(expr_id)),
+            Expr::Func { .. } => self.lower_function(expr_id),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(receiver, name) => {
@@ -472,7 +473,14 @@ impl<'a> Lowerer<'a> {
             } // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
             Expr::TypeRepr(_, _, _) => None, // these are just for the type system
-            expr => todo!("Cannot lower {:?}", expr),
+            expr => {
+                self.source_file.diagnostics.insert(Diagnostic::lowering(
+                    *expr_id,
+                    IRError::Unknown(format!("Cannot lower {:?}", expr)),
+                ));
+
+                None
+            }
         }
     }
 
@@ -492,10 +500,10 @@ impl<'a> Lowerer<'a> {
             self.lower_expr(initializer);
 
             // TODO this is awkward
-            if let Some(init_func) = self.lowered_functions.last().clone() {
-                let cfg = ControlFlowGraph::new(&init_func);
+            if let Some(init_func) = self.lowered_functions.last() {
+                let cfg = ControlFlowGraph::new(init_func);
                 let pass = DefiniteInitizationPass::new(struct_def.clone());
-                match pass.run(&init_func, &cfg) {
+                match pass.run(init_func, &cfg) {
                     Ok(_) => (),
                     Err(e) => {
                         self.source_file
@@ -545,7 +553,8 @@ impl<'a> Lowerer<'a> {
             let Expr::Parameter(Name::Resolved(symbol, _), _) =
                 self.source_file.get(&param).unwrap().clone()
             else {
-                panic!("didn't get parameter")
+                self.push_err("Did not get parameter", param);
+                return None;
             };
 
             let register = self.allocate_register();
@@ -565,7 +574,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::Ret(struct_ty.clone(), Some(loaded_reg)));
 
         let Ty::Func(params, _ret, generics) = typed_func.ty else {
-            unreachable!()
+            return None;
         };
 
         // Override func type for init to always return the struct
@@ -600,7 +609,7 @@ impl<'a> Lowerer<'a> {
         // Some(Register(1))
     }
 
-    fn lower_function(&mut self, expr_id: &ExprID) -> Register {
+    fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
         let typed_expr = self
             .source_file
             .typed_expr(expr_id)
@@ -638,7 +647,8 @@ impl<'a> Lowerer<'a> {
         } = &typed_expr.ty
         {
             let Name::Resolved(self_symbol, _) = self.resolve_name(name.clone()) else {
-                panic!("no symbol: {name:?}")
+                self.push_err(&format!("no symbol: {name:?}"), *expr_id);
+                return None;
             };
 
             // Define an environment object for our captures. If there aren't any captures we don't care,
@@ -753,7 +763,7 @@ impl<'a> Lowerer<'a> {
         self.current_func_mut()
             .register_symbol(symbol, SymbolValue::Register(closure_ptr));
 
-        closure_ptr
+        Some(closure_ptr)
     }
 
     fn lower_match(&mut self, scrutinee: &ExprID, arms: &[ExprID], ty: &Ty) -> Option<Register> {
@@ -1029,7 +1039,11 @@ impl<'a> Lowerer<'a> {
 
         if let Some(receiver_id) = receiver_id {
             let Some(receiver) = self.lower_expr(receiver_id) else {
-                todo!("did not get receiver register: {:?}", receiver_id)
+                self.push_err(
+                    &format!("did not get receiver register: {:?}", typed_expr.expr),
+                    *receiver_id,
+                );
+                return None;
             };
 
             let Some(receiver_typed) = self.source_file.typed_expr(receiver_id) else {
@@ -1113,23 +1127,25 @@ impl<'a> Lowerer<'a> {
             Expr::LiteralInt(val) => {
                 self.current_block_mut()
                     .push_instr(Instr::ConstantInt(register, str::parse(&val).unwrap()));
+                Some(register)
             }
             Expr::LiteralFloat(val) => {
                 self.current_block_mut()
                     .push_instr(Instr::ConstantFloat(register, str::parse(&val).unwrap()));
+                Some(register)
             }
             Expr::LiteralFalse => {
                 self.current_block_mut()
                     .push_instr(Instr::ConstantBool(register, false));
+                Some(register)
             }
             Expr::LiteralTrue => {
                 self.current_block_mut()
                     .push_instr(Instr::ConstantBool(register, true));
+                Some(register)
             }
-            _ => unreachable!(),
+            _ => None,
         }
-
-        Some(register)
     }
 
     fn lower_binary_op(&mut self, expr_id: &ExprID) -> Option<Register> {
@@ -1226,13 +1242,16 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Expr::Member(Some(receiver_id), name) => {
-                let dest = self.lower_member(&Some(*receiver_id), lhs_id, name);
-                self.push_instr(Instr::Store {
-                    ty: lhs.ty.to_ir(self),
-                    val: rhs,
-                    location: dest.unwrap(),
-                });
-                Some(rhs)
+                if let Some(dest) = self.lower_member(&Some(*receiver_id), lhs_id, name) {
+                    self.push_instr(Instr::Store {
+                        ty: lhs.ty.to_ir(self),
+                        val: rhs,
+                        location: dest,
+                    });
+                    Some(rhs)
+                } else {
+                    None
+                }
             }
             _ => todo!("don't know how to lower: {:?}", lhs),
         }
@@ -1362,8 +1381,18 @@ impl<'a> Lowerer<'a> {
         {
             let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
             if crate::builtins::is_builtin_func(&symbol) {
-                return super::builtins::lower_builtin(&symbol, &callee_typed_expr, &args, self)
-                    .unwrap();
+                return match super::builtins::lower_builtin(
+                    &symbol,
+                    &callee_typed_expr,
+                    &args,
+                    self,
+                ) {
+                    Ok(res) => return res,
+                    Err(e) => {
+                        self.push_err(e.message().as_str(), callee);
+                        None
+                    }
+                };
             }
         }
 
@@ -1372,7 +1401,7 @@ impl<'a> Lowerer<'a> {
             if let Some(arg_reg) = self.lower_expr(arg) {
                 arg_registers.push(arg_reg);
             } else {
-                panic!("Argument expression did not produce a value for call");
+                self.push_err("Argument expression did not produce a value for call", *arg);
             }
         }
 
@@ -1437,10 +1466,13 @@ impl<'a> Lowerer<'a> {
             return Some(initialized_struct_reg);
         }
 
-        let callee_reg = self
-            .lower_expr(&callee)
-            .unwrap_or_else(|| panic!("did not get callee: {:?}", self.source_file.get(&callee)));
-
+        let Some(callee_reg) = self.lower_expr(&callee) else {
+            self.push_err(
+                &format!("did not get callee: {:?}", self.source_file.get(&callee)),
+                callee,
+            );
+            return None;
+        };
         let func_ptr = self.allocate_register();
         let func_reg = self.allocate_register();
         self.push_instr(Instr::GetElementPointer {
@@ -1608,6 +1640,15 @@ impl<'a> Lowerer<'a> {
             }
             _ => todo!(),
         }
+    }
+
+    pub fn push_err(&mut self, message: &str, expr_id: ExprID) -> IRError {
+        self.source_file.diagnostics.insert(Diagnostic::lowering(
+            expr_id,
+            IRError::Unknown(message.to_string()),
+        ));
+
+        IRError::Unknown(message.to_string())
     }
 
     pub fn property_index(&self, name: &str, irtype: IRType) -> Option<usize> {

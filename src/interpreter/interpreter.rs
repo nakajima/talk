@@ -307,7 +307,17 @@ impl IRInterpreter {
                 );
             }
             Instr::Alloc { dest, count, ty } => {
-                let ptr = self.heap.alloc(ty.mem_size() * count.unwrap_or(1));
+                let count = if let Some(register) = count {
+                    if let Value::Int(count) = self.register_value(&register) {
+                        count
+                    } else {
+                        return Err(InterpreterError::UnreachableReached);
+                    }
+                } else {
+                    1
+                };
+
+                let ptr = self.heap.alloc(ty.mem_size() * count as usize);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => {

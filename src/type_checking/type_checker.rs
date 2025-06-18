@@ -103,6 +103,7 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
+    Pointer,
 }
 
 impl Display for Ty {
@@ -145,6 +146,7 @@ impl Display for Ty {
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
             Ty::Struct(_, _) => write!(f, "struct"),
+            Ty::Pointer => write!(f, "pointer"),
         }
     }
 }
@@ -375,8 +377,19 @@ impl TypeChecker {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let Ty::Func(params, _, _) = self.infer_node(func_id, env, &None, source_file)? else {
-            unreachable!()
+        let inferred = self.infer_node(func_id, env, &None, source_file)?;
+        let params = match inferred {
+            Ty::Func(params, _, _) => params,
+            Ty::Closure {
+                func: box Ty::Func(params, _, _),
+                ..
+            } => params,
+            _ => {
+                return Err(TypeError::Unknown(format!(
+                    "Did not get init func, got: {:?}",
+                    inferred
+                )));
+            }
         };
 
         Ok(Ty::Init(*struct_id, params))
@@ -583,9 +596,9 @@ impl TypeChecker {
         let lhs_ty = self.infer_node(lhs, env, &None, source_file)?;
         let rhs_ty = self.infer_node(rhs, env, &None, source_file)?;
 
-        env.constrain_equality(*lhs, lhs_ty.clone(), rhs_ty);
+        env.constrain_equality(*rhs, rhs_ty.clone(), lhs_ty);
 
-        Ok(lhs_ty)
+        Ok(rhs_ty)
     }
 
     fn infer_type_repr(

@@ -73,7 +73,7 @@ mod lowering_tests {
                             ty: IRType::Int,
                             count: Some(4),
                         },
-                        Instr::Ret(IRType::Int, Some(Register(1)))
+                        Instr::Ret(IRType::Pointer, Some(Register(1)))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),
