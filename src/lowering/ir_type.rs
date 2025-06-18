@@ -63,6 +63,7 @@ impl IRType {
 
                 Ok(Pointer(from.0 + offset))
             }
+            IRType::Array { element } => Ok(Pointer(from.0 + element.mem_size() * index)),
             _ => Err(IRError::InvalidPointer(format!(
                 "Unable to index into {self:?}"
             ))),

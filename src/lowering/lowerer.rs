@@ -547,7 +547,13 @@ impl<'a> Lowerer<'a> {
         });
 
         if items.is_empty() {
-            return Some(array_reg);
+            let loaded = self.allocate_register();
+            self.push_instr(Instr::Load {
+                dest: loaded,
+                ty: IRType::array(),
+                addr: array_reg,
+            });
+            return Some(loaded);
         }
 
         for (i, item) in items.iter().enumerate() {
@@ -555,23 +561,31 @@ impl<'a> Lowerer<'a> {
                 return None;
             };
 
-            let ty = self.source_file.type_for(*item);
+            let ty = self.source_file.type_for(*item).to_ir(self);
 
             let item_reg = self.allocate_register();
             self.push_instr(Instr::GetElementPointer {
                 dest: item_reg,
                 base: storage_reg,
-                ty: IRType::array(),
+                ty: IRType::Array {
+                    element: ty.clone().into(),
+                },
                 index: i,
             });
             self.push_instr(Instr::Store {
-                ty: ty.to_ir(self),
+                ty,
                 val: lowered_item,
                 location: item_reg,
             });
         }
 
-        Some(array_reg)
+        let loaded = self.allocate_register();
+        self.push_instr(Instr::Load {
+            dest: loaded,
+            ty: IRType::array(),
+            addr: array_reg,
+        });
+        return Some(loaded);
     }
 
     fn lower_struct(&mut self, expr_id: &ExprID, struct_id: SymbolID) -> Option<Register> {
