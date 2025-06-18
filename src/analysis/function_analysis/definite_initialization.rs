@@ -72,7 +72,7 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
         }
 
         let all_properties: HashSet<Property> =
-            HashSet::from_iter(self.struct_def.properties.values().cloned());
+            HashSet::from_iter(self.struct_def.properties.clone());
         let mut props_initialized_on_all_paths: Option<HashSet<Property>> = None;
 
         for block in &func.blocks {
@@ -122,7 +122,7 @@ impl DefiniteInitizationPass {
                     && *base == self_reg
                 {
                     // The index of the gep corresponds to the property index.
-                    if let Some(property) = self.struct_def.properties.values().nth(*index) {
+                    if let Some(property) = self.struct_def.properties.iter().nth(*index) {
                         property_pointers.insert(*dest, property.clone());
                     }
                 }

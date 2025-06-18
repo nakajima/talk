@@ -154,7 +154,11 @@ impl<'a> ConstraintSolver<'a> {
                             Self::unify(&method.ty, &result_ty, substitutions)?;
                         }
 
-                        if let Some(property) = struct_def.properties.get(member_name) {
+                        if let Some(property) = struct_def
+                            .properties
+                            .iter()
+                            .find(|p| &p.name == member_name)
+                        {
                             Self::unify(&property.ty, &result_ty, substitutions)?;
                         }
                     }

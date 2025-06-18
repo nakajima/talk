@@ -83,8 +83,8 @@ impl<'a> CompletionContext<'a> {
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));
-                    completions.extend(struct_def.properties.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(struct_def.properties.iter().map(|prop| CompletionItem {
+                        label: prop.name.clone(),
                         kind: Some(CompletionItemKind::PROPERTY),
                         ..Default::default()
                     }));

@@ -87,7 +87,7 @@ impl Ty {
                     *symbol_id,
                     struct_def
                         .properties
-                        .values()
+                        .iter()
                         .map(|p| p.ty.to_ir(lowerer))
                         .collect(),
                 )
@@ -473,6 +473,7 @@ impl<'a> Lowerer<'a> {
             } // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
             Expr::TypeRepr(_, _, _) => None, // these are just for the type system
+            Expr::LiteralArray(items) => self.lower_array(items),
             expr => {
                 self.source_file.diagnostics.insert(Diagnostic::lowering(
                     *expr_id,
@@ -482,6 +483,95 @@ impl<'a> Lowerer<'a> {
                 None
             }
         }
+    }
+
+    fn lower_array(&mut self, items: Vec<ExprID>) -> Option<Register> {
+        // Allocate the array
+        let array_reg = self.allocate_register();
+        self.push_instr(Instr::Alloc {
+            dest: array_reg,
+            ty: IRType::array(),
+            count: None,
+        });
+
+        // Set the array's count
+        let count_reg = self.allocate_register();
+        self.push_instr(Instr::ConstantInt(count_reg, items.len() as i64));
+        let count_ptr_reg = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: count_ptr_reg,
+            base: array_reg,
+            ty: IRType::array(),
+            index: 0,
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::Int,
+            val: count_reg,
+            location: count_ptr_reg,
+        });
+
+        // Set the array's capacity
+        let capacity_reg = self.allocate_register();
+        self.push_instr(Instr::ConstantInt(capacity_reg, items.len() as i64));
+        let capacity_ptr_reg = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: capacity_ptr_reg,
+            base: array_reg,
+            ty: IRType::array(),
+            index: 1,
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::Int,
+            val: capacity_reg,
+            location: capacity_ptr_reg,
+        });
+
+        // Alloc the array's storage
+        let storage_ptr_reg = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: storage_ptr_reg,
+            base: array_reg,
+            ty: IRType::array(),
+            index: 2,
+        });
+        let storage_reg = self.allocate_register();
+        self.push_instr(Instr::Alloc {
+            dest: storage_reg,
+            ty: IRType::Int,
+            count: Some(count_reg),
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::Pointer,
+            val: storage_reg,
+            location: storage_ptr_reg,
+        });
+
+        if items.is_empty() {
+            return Some(array_reg);
+        }
+
+        for (i, item) in items.iter().enumerate() {
+            let Some(lowered_item) = self.lower_expr(&item) else {
+                return None;
+            };
+
+            let ty = self.source_file.type_for(*item);
+
+            let item_reg = self.allocate_register();
+            self.push_instr(Instr::GetElementPointer {
+                dest: item_reg,
+                base: storage_reg,
+                ty: IRType::array(),
+                index: i,
+            });
+            self.push_instr(Instr::Store {
+                ty: ty.to_ir(self),
+                val: lowered_item,
+                location: item_reg,
+            });
+        }
+
+        Some(array_reg)
     }
 
     fn lower_struct(&mut self, expr_id: &ExprID, struct_id: SymbolID) -> Option<Register> {
@@ -534,7 +624,7 @@ impl<'a> Lowerer<'a> {
             *symbol_id,
             struct_def
                 .properties
-                .values()
+                .iter()
                 .map(|p| p.ty.to_ir(self))
                 .collect(),
         );
@@ -582,11 +672,7 @@ impl<'a> Lowerer<'a> {
             params,
             Ty::Struct(
                 *symbol_id,
-                struct_def
-                    .properties
-                    .values()
-                    .map(|p| p.ty.clone())
-                    .collect(),
+                struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
             )
             .into(),
             generics,
@@ -1660,7 +1746,7 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        struct_def.properties.keys().position(|k| k == name)
+        struct_def.properties.iter().position(|k| &k.name == name)
     }
 }
 

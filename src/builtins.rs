@@ -109,6 +109,74 @@ fn builtins() -> Vec<Builtin> {
             unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
             type_def: None,
         },
+        Builtin {
+            id: -6,
+            info: SymbolInfo {
+                name: "__realloc".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -6,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Func(
+                vec![Ty::Pointer, Ty::Int],
+                Ty::Pointer.into(),
+                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+            ),
+            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            type_def: None,
+        },
+        Builtin {
+            id: -7,
+            info: SymbolInfo {
+                name: "__free".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -7,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Func(vec![Ty::Pointer], Ty::Void.into(), vec![]),
+            unbound_vars: vec![],
+            type_def: None,
+        },
+        Builtin {
+            id: -8,
+            info: SymbolInfo {
+                name: "__store".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -8,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Func(
+                vec![
+                    Ty::Pointer,
+                    Ty::Int,
+                    Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)),
+                ],
+                Ty::Void.into(),
+                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+            ),
+            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            type_def: None,
+        },
+        Builtin {
+            id: -9,
+            info: SymbolInfo {
+                name: "__load".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -9,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Func(
+                vec![Ty::Pointer, Ty::Int],
+                Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element)).into(),
+                vec![Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element))],
+            ),
+            unbound_vars: vec![TypeVarID(-9, TypeVarKind::Element)],
+            type_def: None,
+        },
     ]
 }
 
@@ -194,6 +262,49 @@ mod tests {
         )
         .unwrap();
 
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(checked.type_for(checked.root_ids()[0]), Ty::Pointer);
+    }
+
+    #[test]
+    fn checks_realloc() {
+        let checked = check(
+            "
+        let ptr = __alloc<Int>(1)
+        __realloc<Int>(ptr, 10)
+        ",
+        )
+        .unwrap();
+
+        assert!(checked.diagnostics().is_empty());
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Pointer);
+    }
+
+    #[test]
+    fn checks_store() {
+        let checked = check(
+            "
+        let ptr = __alloc<Int>(10)
+        __store<Int>(ptr, 0, 4)
+        ",
+        )
+        .unwrap();
+
+        assert!(checked.diagnostics().is_empty());
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Void);
+    }
+
+    #[test]
+    fn checks_load() {
+        let checked = check(
+            "
+        let ptr = __alloc<Int>(10)
+        __store<Int>(ptr, 0, 4)
+        ",
+        )
+        .unwrap();
+
+        assert!(checked.diagnostics().is_empty());
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Ty::Void);
     }
 }

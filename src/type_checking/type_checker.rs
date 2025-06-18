@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Display,
-    hash::Hash,
-};
+use std::{collections::HashMap, fmt::Display, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
@@ -1217,7 +1213,7 @@ impl TypeChecker {
             };
 
             let mut methods: HashMap<String, Method> = Default::default();
-            let mut properties: BTreeMap<String, Property> = Default::default();
+            let mut properties: Vec<Property> = Default::default();
             let mut type_parameters = vec![];
             let default_initializers = vec![];
             let initializers = symbol_table
@@ -1279,10 +1275,7 @@ impl TypeChecker {
                         };
 
                         log::trace!("Defining property {name:?} {ty:?}");
-                        properties.insert(
-                            name.to_string(),
-                            Property::new(name.to_string(), ty.unwrap(), symbol),
-                        );
+                        properties.push(Property::new(name.to_string(), ty.unwrap(), symbol));
                     }
                     Expr::Init(_, func_id) => {
                         self.infer_node(func_id, env, &None, source_file).ok();

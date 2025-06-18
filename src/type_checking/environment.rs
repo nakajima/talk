@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     ops::IndexMut,
 };
 
@@ -39,7 +39,7 @@ pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
-    pub properties: BTreeMap<String, Property>,
+    pub properties: Vec<Property>,
     pub methods: HashMap<String, Method>,
     pub initializers: Vec<ExprID>,
 }
@@ -50,7 +50,7 @@ impl StructDef {
         name_str: String,
         type_override: Option<fn(generics: &TypeParams) -> Ty>,
         type_parameters: TypeParams,
-        properties: BTreeMap<String, Property>,
+        properties: Vec<Property>,
         methods: HashMap<String, Method>,
         initializers: Vec<ExprID>,
     ) -> Self {
@@ -66,7 +66,7 @@ impl StructDef {
     }
 
     pub fn member_ty(&self, name: &str) -> Option<&Ty> {
-        if let Some(property) = self.properties.get(name) {
+        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
             return Some(&property.ty);
         }
 

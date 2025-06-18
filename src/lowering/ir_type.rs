@@ -22,6 +22,14 @@ pub enum IRType {
 
 impl IRType {
     pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![]);
+
+    pub fn array() -> IRType {
+        IRType::Struct(
+            SymbolID::ARRAY,
+            vec![IRType::Int, IRType::Int, IRType::Pointer],
+        )
+    }
+
     pub fn closure() -> IRType {
         IRType::Struct(
             SymbolID::GENERATED_MAIN,

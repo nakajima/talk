@@ -23,7 +23,20 @@ mod optional_tests {
 
 #[cfg(test)]
 mod array_tests {
-    use talk::{SymbolID, expr::Expr, parser::parse, type_checker::Ty};
+    use talk::{
+        SymbolID,
+        compiling::driver::Driver,
+        expr::Expr,
+        lowering::{
+            instr::Instr,
+            ir_module::IRModule,
+            ir_type::IRType,
+            lowerer::{BasicBlock, BasicBlockID, IRFunction},
+            register::Register,
+        },
+        parser::parse,
+        type_checker::Ty,
+    };
 
     #[test]
     fn gets_parsed() {
@@ -51,5 +64,127 @@ mod array_tests {
     fn gets_count() {
         let checked = talk::type_checking::check("[1,2,3].count").unwrap();
         assert_eq!(checked.type_for(checked.root_ids()[0]), Ty::Int);
+    }
+
+    #[test]
+    fn lowers_literal() {
+        let mut driver = Driver::with_str("[1,2,3].count");
+        let module = driver.lower().into_iter().next().unwrap().module();
+
+        talk::assert_lowered_functions!(
+            module,
+            vec![IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()).clone(),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        Instr::Alloc {
+                            dest: Register(1),
+                            ty: IRType::array(),
+                            count: None
+                        },
+                        // Set the array's count
+                        Instr::ConstantInt(Register(2), 3),
+                        Instr::GetElementPointer {
+                            dest: Register(3),
+                            base: Register(1),
+                            ty: IRType::array(),
+                            index: 0
+                        },
+                        Instr::Store {
+                            location: Register(3),
+                            ty: IRType::Int,
+                            val: Register(2)
+                        },
+                        // Set the array's capacity
+                        Instr::ConstantInt(Register(4), 3),
+                        Instr::GetElementPointer {
+                            dest: Register(5),
+                            base: Register(1),
+                            ty: IRType::array(),
+                            index: 1
+                        },
+                        Instr::Store {
+                            location: Register(5),
+                            ty: IRType::Int,
+                            val: Register(4)
+                        },
+                        // Get array's storage pointer
+                        Instr::GetElementPointer {
+                            dest: Register(6),
+                            base: Register(1),
+                            ty: IRType::array(),
+                            index: 2
+                        },
+                        // Alloc space for the items
+                        Instr::Alloc {
+                            dest: Register(7),
+                            ty: IRType::Int,
+                            count: Some(Register(2))
+                        },
+                        Instr::Store {
+                            ty: IRType::Pointer,
+                            val: Register(7),
+                            location: Register(6)
+                        },
+                        // Store first element
+                        Instr::ConstantInt(Register(8), 1),
+                        Instr::GetElementPointer {
+                            dest: Register(9),
+                            base: Register(7),
+                            ty: IRType::array(),
+                            index: 0
+                        },
+                        Instr::Store {
+                            ty: IRType::Int,
+                            val: Register(8),
+                            location: Register(9)
+                        },
+                        // Store second element
+                        Instr::ConstantInt(Register(10), 2),
+                        Instr::GetElementPointer {
+                            dest: Register(11),
+                            base: Register(7),
+                            ty: IRType::array(),
+                            index: 1
+                        },
+                        Instr::Store {
+                            ty: IRType::Int,
+                            val: Register(10),
+                            location: Register(11)
+                        },
+                        // Store third element
+                        Instr::ConstantInt(Register(12), 3),
+                        Instr::GetElementPointer {
+                            dest: Register(13),
+                            base: Register(7),
+                            ty: IRType::array(),
+                            index: 2
+                        },
+                        Instr::Store {
+                            ty: IRType::Int,
+                            val: Register(12),
+                            location: Register(13)
+                        },
+                        // Get .count
+                        Instr::GetElementPointer {
+                            dest: Register(14),
+                            base: Register(1),
+                            ty: IRType::array(),
+                            index: 0
+                        },
+                        Instr::Load {
+                            dest: Register(15),
+                            ty: IRType::Int,
+                            addr: Register(14)
+                        },
+                        Instr::Ret(IRType::Int, Some(Register(15)))
+                    ],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            }]
+        )
     }
 }

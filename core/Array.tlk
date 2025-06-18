@@ -4,8 +4,8 @@ struct Array<T> {
 	let storage: Pointer
 
 	init(capacity: Int) {
-		self.capacity = capacity
 		self.count = 0
+		self.capacity = capacity
 		self.storage = __alloc<T>(capacity)
 	}
 }
