@@ -16,6 +16,16 @@ pub struct DriverConfig {
     pub include_prelude: bool,
 }
 
+impl DriverConfig {
+    pub fn new_environment(&self) -> Environment {
+        if self.include_prelude {
+            compile_prelude().environment.clone()
+        } else {
+            Environment::new()
+        }
+    }
+}
+
 impl Default for DriverConfig {
     fn default() -> Self {
         DriverConfig {
@@ -28,7 +38,6 @@ impl Default for DriverConfig {
 pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
-    pub environment: Environment,
     pub config: DriverConfig,
 }
 
@@ -40,25 +49,15 @@ impl Default for Driver {
 
 impl Driver {
     pub fn new(config: DriverConfig) -> Self {
-        let mut driver = Self {
-            units: vec![CompilationUnit::new(vec![])],
+        Self {
+            units: vec![CompilationUnit::new(vec![], config.new_environment())],
             symbol_table: if config.include_prelude {
                 compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
             },
-            environment: if config.include_prelude {
-                compile_prelude().environment.clone()
-            } else {
-                Environment::new()
-            },
             config,
-        };
-
-        // Create a default unit
-        driver.units.push(CompilationUnit::new(vec![]));
-
-        driver
+        }
     }
 
     pub fn with_str(string: &str) -> Self {
@@ -68,19 +67,14 @@ impl Driver {
     }
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
-        let unit = CompilationUnit::new(files);
         let config = DriverConfig::default();
+        let unit = CompilationUnit::new(files, config.new_environment());
         Self {
             units: vec![unit],
             symbol_table: if config.include_prelude {
                 compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
-            },
-            environment: if config.include_prelude {
-                compile_prelude().environment.clone()
-            } else {
-                Environment::new()
             },
             config,
         }
@@ -104,7 +98,7 @@ impl Driver {
 
     pub fn parse(&mut self) -> Vec<CompilationUnit<Parsed>> {
         let mut result = vec![];
-        for unit in &mut self.units {
+        for unit in self.units.clone() {
             result.push(unit.parse());
         }
         result
@@ -113,32 +107,25 @@ impl Driver {
     pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
         let mut result = vec![];
 
-        for unit in &mut self.units {
+        for unit in self.units.clone() {
             let module = if self.config.include_prelude {
                 compile_prelude().module.clone()
             } else {
                 IRModule::new()
             };
 
-            result.push(unit.lower(
-                &mut self.symbol_table,
-                &self.config,
-                module,
-                &mut self.environment,
-            ));
+            result.push(unit.lower(&mut self.symbol_table, &self.config, module));
         }
         result
     }
 
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
-        for unit in &mut self.units {
-            let checked = unit.parse().resolved(&mut self.symbol_table).typed(
-                &mut self.symbol_table,
-                &self.config,
-                &mut self.environment,
-            );
-            result.push(checked);
+        for unit in self.units.clone() {
+            let parsed = unit.parse();
+            let resolved = parsed.resolved(&mut self.symbol_table);
+            let typed = resolved.typed(&mut self.symbol_table, &self.config);
+            result.push(typed);
         }
 
         result
@@ -243,12 +230,29 @@ impl Driver {
     }
 
     pub fn typed_source_file(&mut self, path: &PathBuf) -> Option<SourceFile<source_file::Typed>> {
-        let checked = self.check();
-        for unit in checked.into_iter() {
-            for file in unit.stage.files {
+        for unit in self.units.clone() {
+            let typed = unit
+                .parse()
+                .resolved(&mut self.symbol_table)
+                .typed(&mut self.symbol_table, &self.config);
+            for file in typed.stage.files {
                 if *path == file.path {
                     return Some(file);
                 }
+            }
+        }
+
+        None
+    }
+
+    pub fn resolved_source_file(
+        &mut self,
+        path: &PathBuf,
+    ) -> Option<SourceFile<source_file::NameResolved>> {
+        for unit in self.units.clone() {
+            let typed = unit.parse().resolved(&mut self.symbol_table);
+            if let Some(file) = typed.source_file(path) {
+                return Some(file.clone());
             }
         }
 

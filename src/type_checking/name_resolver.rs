@@ -756,12 +756,7 @@ mod tests {
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
-        driver.units[0]
-            .parse()
-            .resolved(&mut driver.symbol_table)
-            .source_file(&PathBuf::from("-"))
-            .unwrap()
-            .clone()
+        driver.resolved_source_file(&PathBuf::from("-"))
     }
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {

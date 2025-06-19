@@ -28,13 +28,16 @@ impl Constraint {
 }
 
 pub struct ConstraintSolver<'a> {
-    source_file: &'a mut SourceFile<Typed>,
+    source_file: &'a mut SourceFile<Typed<'a>>,
     symbol_table: &'a SymbolTable,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(source_file: &'a mut SourceFile<Typed>, symbol_table: &'a mut SymbolTable) -> Self {
+    pub fn new(
+        source_file: &'a mut SourceFile<Typed<'a>>,
+        symbol_table: &'a mut SymbolTable,
+    ) -> Self {
         Self {
             constraints: source_file.constraints().clone(),
             source_file,

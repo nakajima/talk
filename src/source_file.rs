@@ -19,45 +19,23 @@ use super::{
     parser::ExprID,
 };
 
-pub trait Phase: Eq {
-    type Data: Clone;
-}
+pub trait Phase: Eq {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed;
-impl Phase for Parsed {
-    type Data = (); // No extra data for parsed
-}
+impl Phase for Parsed {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameResolved;
-impl Phase for NameResolved {
-    type Data = (); // No extra data for name resolved (it just transforms the symbol table)
-}
+impl Phase for NameResolved {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Typed;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Typed {}
+impl Phase for Typed {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypedInfo {
-    pub roots: Vec<TypedExpr>,
-    pub env: Environment,
-}
-
-impl Phase for Typed {
-    type Data = TypedInfo;
-}
-
-#[derive(Debug, Clone)]
-pub struct LoweredData {
-    pub env: Environment,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lowered {}
-impl Phase for Lowered {
-    type Data = LoweredData;
-}
+impl Phase for Lowered {}
 
 #[derive(Default, Debug, PartialEq, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
@@ -66,7 +44,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     pub(crate) nodes: HashMap<ExprID, Expr>,
     pub(crate) meta: Vec<ExprMeta>,
     pub diagnostics: HashSet<Diagnostic>,
-    phase_data: P::Data,
+    phase_data: P,
     pub scope_tree: ScopeTree,
 }
 
@@ -77,7 +55,7 @@ impl SourceFile {
             roots: vec![],
             nodes: Default::default(),
             meta: vec![],
-            phase_data: (),
+            phase_data: Parsed,
             diagnostics: Default::default(),
             scope_tree: Default::default(),
         }
@@ -91,7 +69,7 @@ impl SourceFile<Parsed> {
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: (),
+            phase_data: NameResolved,
             diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }
@@ -99,13 +77,13 @@ impl SourceFile<Parsed> {
 }
 
 impl SourceFile<NameResolved> {
-    pub fn to_typed(self, roots: Vec<TypedExpr>, env: Environment) -> SourceFile<Typed> {
+    pub fn to_typed(self) -> SourceFile<Typed> {
         SourceFile {
             path: self.path,
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: TypedInfo { roots, env },
+            phase_data: Typed {},
             diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }
@@ -113,96 +91,82 @@ impl SourceFile<NameResolved> {
 }
 
 impl SourceFile<Typed> {
-    pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr) {
-        self.phase_data
-            .env
-            .typed_exprs
+    pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr, env: &mut Environment) {
+        env.typed_exprs
             .insert((self.path.to_path_buf(), id), typed_expr);
     }
 
-    pub fn typed_roots(&self) -> &[TypedExpr] {
-        &self.phase_data.roots
+    pub fn typed_roots(&self, env: &Environment) -> Vec<TypedExpr> {
+        self.root_ids()
+            .iter()
+            .filter_map(|root| {
+                env.typed_exprs
+                    .get(&(self.path.to_path_buf(), *root))
+                    .cloned()
+            })
+            .collect::<Vec<TypedExpr>>()
     }
 
-    pub fn replace_root_ids(&mut self, with: TypedExpr) {
-        self.phase_data.roots = vec![with];
-    }
+    // pub fn types_mut(&mut self) -> &mut HashMap<(PathBuf, ExprID), TypedExpr> {
+    //     &mut self.phase_data.env.typed_exprs
+    // }
 
-    pub fn types_mut(&mut self) -> &mut HashMap<(PathBuf, ExprID), TypedExpr> {
-        &mut self.phase_data.env.typed_exprs
-    }
+    // pub fn typed_exprs(&self) -> &HashMap<(PathBuf, ExprID), TypedExpr> {
+    //     &self.phase_data.env.typed_exprs
+    // }
 
-    pub fn typed_exprs(&self) -> &HashMap<(PathBuf, ExprID), TypedExpr> {
-        &self.phase_data.env.typed_exprs
-    }
-
-    pub fn typed_expr(&self, expr_id: &ExprID) -> Option<TypedExpr> {
-        self.phase_data
-            .env
-            .typed_exprs
+    pub fn typed_expr(&self, expr_id: &ExprID, env: &Environment) -> Option<TypedExpr> {
+        env.typed_exprs
             .get(&(self.path.to_path_buf(), *expr_id))
             .cloned()
     }
 
-    pub fn type_defs(&self) -> TypeDefs {
-        self.phase_data.env.types.clone()
-    }
+    // pub fn type_defs(&self) -> TypeDefs {
+    //     self.phase_data.env.types.clone()
+    // }
 
-    pub fn type_def(&self, id: &SymbolID) -> Option<&TypeDef> {
-        self.phase_data.env.types.get(id)
-    }
+    // pub fn type_def(&self, id: &SymbolID) -> Option<&TypeDef> {
+    //     self.phase_data.env.types.get(id)
+    // }
 
-    pub fn define(&mut self, id: ExprID, ty: Ty) {
-        if let Some(typed_expr) = self
-            .phase_data
-            .env
-            .typed_exprs
-            .get_mut(&(self.path.to_path_buf(), id))
-        {
-            typed_expr.ty = ty;
-        }
-    }
+    // pub fn define(&mut self, id: ExprID, ty: Ty) {
+    //     if let Some(typed_expr) = self
+    //         .phase_data
+    //         .env
+    //         .typed_exprs
+    //         .get_mut(&(self.path.to_path_buf(), id))
+    //     {
+    //         typed_expr.ty = ty;
+    //     }
+    // }
 
-    pub fn type_for(&self, id: ExprID) -> Option<Ty> {
-        if let Some(typed_expr) = self
-            .phase_data
-            .env
-            .typed_exprs
-            .get(&(self.path.to_path_buf(), id))
-        {
+    pub fn type_for(&self, id: ExprID, env: &Environment) -> Option<Ty> {
+        if let Some(typed_expr) = env.typed_exprs.get(&(self.path.to_path_buf(), id)) {
             Some(typed_expr.ty.clone())
         } else {
             None
         }
     }
 
-    pub fn type_from_symbol(&self, symbol_id: &SymbolID, symbol_table: &SymbolTable) -> Option<Ty> {
-        if let Some(info) = symbol_table.get(symbol_id) {
-            return self.type_for(info.expr_id);
-        }
+    // pub fn type_from_symbol(&self, symbol_id: &SymbolID, symbol_table: &SymbolTable) -> Option<Ty> {
+    //     if let Some(info) = symbol_table.get(symbol_id) {
+    //         return self.type_for(info.expr_id);
+    //     }
 
-        None
-    }
+    //     None
+    // }
 
-    pub fn constraints(&self) -> Vec<Constraint> {
-        self.phase_data.env.constraints()
-    }
+    // pub fn constraints(&self) -> Vec<Constraint> {
+    //     self.phase_data.env.constraints()
+    // }
 
-    pub fn export(self) -> (TypeDefs, Scope, TypedExprs) {
-        let type_defs = self.phase_data.env.types;
-        let typed_exprs = self.phase_data.env.typed_exprs;
-        let scope = self.phase_data.env.scopes[0].clone();
+    // pub fn register_direct_callable(&mut self, id: ExprID, symbol_id: SymbolID) {
+    //     self.phase_data.env.direct_callables.insert(id, symbol_id);
+    // }
 
-        (type_defs, scope, typed_exprs)
-    }
-
-    pub fn register_direct_callable(&mut self, id: ExprID, symbol_id: SymbolID) {
-        self.phase_data.env.direct_callables.insert(id, symbol_id);
-    }
-
-    pub fn get_direct_callable(&self, id: &ExprID) -> Option<SymbolID> {
-        self.phase_data.env.direct_callables.get(id).copied()
-    }
+    // pub fn get_direct_callable(&self, id: &ExprID) -> Option<SymbolID> {
+    //     self.phase_data.env.direct_callables.get(id).copied()
+    // }
 
     pub fn to_parsed(&self) -> SourceFile<Parsed> {
         SourceFile {
@@ -210,7 +174,7 @@ impl SourceFile<Typed> {
             roots: self.roots.clone(),
             nodes: self.nodes.clone(),
             meta: self.meta.clone(),
-            phase_data: (),
+            phase_data: Parsed,
             diagnostics: self.diagnostics.clone(),
             scope_tree: self.scope_tree.clone(),
         }
@@ -222,7 +186,7 @@ impl SourceFile<Typed> {
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: LoweredData {
+            phase_data: Lowered {
                 env: self.phase_data.env,
             },
             diagnostics: self.diagnostics,
@@ -231,11 +195,7 @@ impl SourceFile<Typed> {
     }
 }
 
-impl SourceFile<Lowered> {
-    pub fn type_def(&self, id: &SymbolID) -> Option<&TypeDef> {
-        self.phase_data.env.types.get(id)
-    }
-}
+impl SourceFile<Lowered> {}
 
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID

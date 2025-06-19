@@ -443,7 +443,7 @@ mod tests {
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
         let typed = check(code).unwrap();
         let mut symbol_table = SymbolTable::base();
-        let lowerer = Lowerer::new(typed, &mut symbol_table);
+        let lowerer = Lowerer::new(typed.source_file, &mut symbol_table);
         let mut module = compile_prelude().module.clone();
         lowerer.lower(&mut module, &Default::default());
 

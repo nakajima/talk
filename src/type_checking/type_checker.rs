@@ -250,7 +250,7 @@ impl TypeChecker {
         }
 
         // Now it's safe to move source_file since env is dropped before this line
-        source_file.to_typed(typed_roots, env.clone())
+        source_file.to_typed(env)
     }
 
     pub fn infer_node(

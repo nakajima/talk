@@ -8,7 +8,7 @@ use crate::{
     },
     compiling::driver::DriverConfig,
     diagnostic::Diagnostic,
-    environment::{StructDef, TypeDef},
+    environment::{Environment, StructDef, TypeDef},
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::Instr, ir_error::IRError, ir_module::IRModule, ir_type::IRType, ir_value::IRValue,
@@ -79,8 +79,7 @@ impl Ty {
             Ty::Tuple(_items) => todo!(),
             Ty::Array(_) => todo!(),
             Ty::Struct(symbol_id, _generics) => {
-                let Some(TypeDef::Struct(struct_def)) = lowerer.source_file.type_def(symbol_id)
-                else {
+                let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
                     log::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
                 };
@@ -380,16 +379,22 @@ pub struct Lowerer<'a> {
     lowered_functions: Vec<IRFunction>,
     symbol_table: &'a mut SymbolTable,
     loop_exits: Vec<BasicBlockID>,
+    env: &'a mut Environment,
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(source_file: SourceFile<Typed>, symbol_table: &'a mut SymbolTable) -> Self {
+    pub fn new(
+        source_file: SourceFile<Typed>,
+        symbol_table: &'a mut SymbolTable,
+        env: &'a mut Environment,
+    ) -> Self {
         Self {
             source_file,
             current_functions: vec![],
             lowered_functions: Default::default(),
             symbol_table,
             loop_exits: vec![],
+            env,
         }
     }
 
@@ -400,7 +405,7 @@ impl<'a> Lowerer<'a> {
     ) -> SourceFile<Lowered> {
         if driver_config.executable {
             let (expr_id, did_create) =
-                find_or_create_main(&mut self.source_file, self.symbol_table);
+                find_or_create_main(&mut self.source_file, self.symbol_table, &mut self.env);
 
             // If we created the main function, we need to set it up
             if did_create {
@@ -421,7 +426,17 @@ impl<'a> Lowerer<'a> {
             // If we created the main function, we moved all the typed roots into its body
             // so we don't need to lower them again.
             if !did_create {
-                let typed_roots = self.source_file.typed_roots().to_owned();
+                let typed_roots: Vec<TypedExpr> = self
+                    .source_file
+                    .root_ids()
+                    .iter()
+                    .filter_map(|root| {
+                        self.env
+                            .typed_exprs
+                            .get(&(self.source_file.path.to_path_buf(), *root))
+                            .cloned()
+                    })
+                    .collect();
                 for root in typed_roots {
                     if let Expr::Func { .. } = &root.expr {
                         self.lower_function(&root.id);
@@ -442,7 +457,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id).clone()?;
+        let typed_expr = self.source_file.typed_expr(expr_id, &self.env).clone()?;
 
         match typed_expr.expr {
             Expr::LiteralInt(_)
@@ -463,7 +478,12 @@ impl<'a> Lowerer<'a> {
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(receiver, name) => {
-                let member_ty = self.source_file.typed_expr(expr_id).unwrap().ty.to_ir(self);
+                let member_ty = self
+                    .source_file
+                    .typed_expr(expr_id, &self.env)
+                    .unwrap()
+                    .ty
+                    .to_ir(self);
 
                 if !matches!(member_ty, IRType::Enum(_)) {
                     let member_ptr_reg = self.lower_member(&receiver, expr_id, &name)?;
@@ -626,7 +646,10 @@ impl<'a> Lowerer<'a> {
 
         for (i, item) in items.iter().enumerate() {
             let lowered_item = self.lower_expr(item)?;
-            let ty = self.source_file.type_for(*item).map(|ty| ty.to_ir(self))?;
+            let ty = self
+                .source_file
+                .type_for(*item, &self.env)
+                .map(|ty| ty.to_ir(self))?;
 
             let item_reg = self.allocate_register();
             self.push_instr(Instr::GetElementPointer {
@@ -660,8 +683,7 @@ impl<'a> Lowerer<'a> {
         struct_id: SymbolID,
         body_id: &ExprID,
     ) -> Option<Register> {
-        let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&struct_id).cloned()
-        else {
+        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned() else {
             self.source_file.diagnostics.insert(Diagnostic::lowering(
                 *expr_id,
                 IRError::Unknown(format!(
@@ -698,7 +720,8 @@ impl<'a> Lowerer<'a> {
         };
 
         for member_id in member_ids.clone() {
-            let Some(typed_member) = self.source_file.typed_expr(&member_id).clone() else {
+            let Some(typed_member) = self.source_file.typed_expr(&member_id, &self.env).clone()
+            else {
                 // self.source_file.diagnostics.insert(Diagnostic::lowering(
                 //     member_id,
                 //     IRError::Unknown(format!(
@@ -733,11 +756,10 @@ impl<'a> Lowerer<'a> {
         symbol_id: &SymbolID,
         func_id: &ExprID,
     ) -> Option<(IRType, StructDef, TypedExpr, Register, Option<IRValue>)> {
-        let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(symbol_id).cloned()
-        else {
+        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(symbol_id).cloned() else {
             unreachable!()
         };
-        let typed_func = self.source_file.typed_expr(func_id).unwrap();
+        let typed_func = self.source_file.typed_expr(func_id, &self.env).unwrap();
         let Expr::Func { params, body, .. } = &typed_func.expr else {
             unreachable!()
         };
@@ -877,7 +899,7 @@ impl<'a> Lowerer<'a> {
     fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
         let typed_expr = self
             .source_file
-            .typed_expr(expr_id)
+            .typed_expr(expr_id, &self.env)
             .expect("Did not get typed expr");
 
         let Expr::Func {
@@ -979,7 +1001,12 @@ impl<'a> Lowerer<'a> {
 
         for (i, id) in body_exprs.iter().enumerate() {
             let ret = if let Some(reg) = self.lower_expr(id) {
-                let ty = self.source_file.typed_expr(id).unwrap().ty.to_ir(self);
+                let ty = self
+                    .source_file
+                    .typed_expr(id, &self.env)
+                    .unwrap()
+                    .ty
+                    .to_ir(self);
                 (ty, Some(reg.into()))
             } else {
                 (IRType::Void, None)
@@ -1071,7 +1098,7 @@ impl<'a> Lowerer<'a> {
         cond_block_id: BasicBlockID,
         else_block_id: BasicBlockID,
     ) -> (Register, BasicBlockID) {
-        let typed_arm = self.source_file.typed_expr(expr_id).unwrap();
+        let typed_arm = self.source_file.typed_expr(expr_id, &self.env).unwrap();
         let Expr::MatchArm(pattern_id, body_id) = typed_arm.expr else {
             panic!("Didn't get match arm: {typed_arm:?}");
         };
@@ -1102,7 +1129,7 @@ impl<'a> Lowerer<'a> {
         then_block_id: BasicBlockID,
         else_block_id: BasicBlockID,
     ) {
-        let pattern_typed_expr = self.source_file.typed_expr(pattern_id).unwrap();
+        let pattern_typed_expr = self.source_file.typed_expr(pattern_id, &self.env).unwrap();
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
             panic!("Expected a pattern expression");
         };
@@ -1119,7 +1146,7 @@ impl<'a> Lowerer<'a> {
                     panic!("did not get enum")
                 };
 
-                let TypeDef::Enum(type_def) = self.source_file.type_def(enum_id).cloned().unwrap()
+                let TypeDef::Enum(type_def) = self.env.lookup_type(enum_id).cloned().unwrap()
                 else {
                     unreachable!()
                 };
@@ -1219,7 +1246,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn _lower_pattern(&mut self, pattern_id: &ExprID) -> Register {
-        let pattern_typed_expr = self.source_file.typed_expr(pattern_id).unwrap();
+        let pattern_typed_expr = self.source_file.typed_expr(pattern_id, &self.env).unwrap();
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
             panic!("Didn't get pattern for match arm: {pattern_typed_expr:?}")
         };
@@ -1255,8 +1282,7 @@ impl<'a> Lowerer<'a> {
                 let Ty::Enum(enum_id, _) = pattern_typed_expr.ty else {
                     panic!("didn't get pattern type: {:?}", pattern_typed_expr.ty)
                 };
-                let Some(TypeDef::Enum(type_def)) = self.source_file.type_def(&enum_id).cloned()
-                else {
+                let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
                     panic!("didn't get type def for {enum_id:?}");
                 };
 
@@ -1286,7 +1312,7 @@ impl<'a> Lowerer<'a> {
         expr_id: &ExprID,
         name: &str,
     ) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id).unwrap();
+        let typed_expr = self.source_file.typed_expr(expr_id, &self.env).unwrap();
 
         if let Ty::Enum(sym, _generics) = &typed_expr.ty {
             // Since we got called directly from lower_expr, this is variant that doesn't
@@ -1306,14 +1332,13 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        let Some(receiver_typed) = self.source_file.typed_expr(receiver_id) else {
+        let Some(receiver_typed) = self.source_file.typed_expr(receiver_id, &self.env) else {
             unreachable!()
         };
 
         match receiver_typed.ty {
             Ty::Struct(struct_id, _) => {
-                let Some(TypeDef::Struct(struct_def)) =
-                    self.source_file.type_def(&struct_id).cloned()
+                let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned()
                 else {
                     unreachable!("didn't get struct def");
                 };
@@ -1356,7 +1381,7 @@ impl<'a> Lowerer<'a> {
         ty: &Ty,
         args: &[Register],
     ) -> Option<Register> {
-        let Some(TypeDef::Enum(type_def)) = self.source_file.type_def(&enum_id).cloned() else {
+        let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
             panic!("didn't get type def for {enum_id:?}");
         };
 
@@ -1386,7 +1411,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_return(&mut self, expr_id: &ExprID, rhs: &Option<ExprID>) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id).unwrap();
+        let typed_expr = self.source_file.typed_expr(expr_id, &self.env).unwrap();
 
         if let Some(rhs) = rhs {
             let register = self.lower_expr(rhs)?;
@@ -1429,13 +1454,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_binary_op(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id)?;
+        let typed_expr = self.source_file.typed_expr(expr_id, &self.env)?;
 
         let Expr::Binary(lhs, op, rhs) = typed_expr.expr else {
             panic!("Did not get binary expr");
         };
 
-        let operand_ty = self.source_file.type_for(lhs);
+        let operand_ty = self.source_file.type_for(lhs, &self.env);
 
         let operand_1 = self.lower_expr(&lhs).unwrap();
         let operand_2 = self.lower_expr(&rhs).unwrap();
@@ -1506,7 +1531,11 @@ impl<'a> Lowerer<'a> {
 
     fn lower_assignment(&mut self, lhs_id: &ExprID, rhs_id: &ExprID) -> Option<Register> {
         let rhs = self.lower_expr(rhs_id)?;
-        let lhs = self.source_file.typed_expr(lhs_id).unwrap().clone();
+        let lhs = self
+            .source_file
+            .typed_expr(lhs_id, &self.env)
+            .unwrap()
+            .clone();
 
         match &lhs.expr {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
@@ -1523,7 +1552,7 @@ impl<'a> Lowerer<'a> {
                 match value {
                     SymbolValue::Register(_reg) => {
                         let new_reg = self.allocate_register();
-                        let ty = self.source_file.type_for(*rhs_id)?;
+                        let ty = self.source_file.type_for(*rhs_id, &self.env)?;
 
                         self.push_instr(Instr::StoreLocal(new_reg, ty.to_ir(self), rhs));
                         self.current_func_mut()
@@ -1621,7 +1650,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_if(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id).unwrap();
+        let typed_expr = self.source_file.typed_expr(expr_id, &self.env).unwrap();
         let Expr::If(cond, conseq, alt) = typed_expr.expr else {
             unreachable!()
         };
@@ -1688,7 +1717,7 @@ impl<'a> Lowerer<'a> {
         if let Some(Expr::Variable(Name::Resolved(symbol, _), _)) =
             self.source_file.get(&callee).cloned()
         {
-            let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
+            let callee_typed_expr = self.source_file.typed_expr(&callee, &self.env).unwrap();
             if crate::builtins::is_builtin_func(&symbol) {
                 return match super::builtins::lower_builtin(
                     &symbol,
@@ -1714,7 +1743,7 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        let callee_typed_expr = self.source_file.typed_expr(&callee).unwrap();
+        let callee_typed_expr = self.source_file.typed_expr(&callee, &self.env).unwrap();
 
         // Handle enum variant construction
         if let Ty::Enum(enum_id, _) = &ty {
@@ -1727,8 +1756,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle struct construction
         if let Ty::Init(struct_id, params) = &callee_typed_expr.ty {
-            let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(struct_id).cloned()
-            else {
+            let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned() else {
                 unreachable!()
             };
 
@@ -1780,7 +1808,7 @@ impl<'a> Lowerer<'a> {
                 return None;
             };
 
-            let Some(receiver_ty) = self.source_file.typed_expr(&receiver) else {
+            let Some(receiver_ty) = self.source_file.typed_expr(&receiver, &self.env) else {
                 log::error!("could not determine type of receiver");
                 return None;
             };
@@ -1794,7 +1822,7 @@ impl<'a> Lowerer<'a> {
                 // Not using lower_member because it'll double call? I don't know we need to sort it out.
                 Ty::Struct(struct_id, _) => {
                     let Some(TypeDef::Struct(struct_def)) =
-                        self.source_file.type_def(&struct_id).cloned()
+                        self.env.lookup_type(&struct_id).cloned()
                     else {
                         unreachable!("did not get struct type def: {:?}", receiver_ty);
                     };
@@ -2026,7 +2054,7 @@ impl<'a> Lowerer<'a> {
             unreachable!("didn't get property index for {:?}", irtype)
         };
 
-        let Some(TypeDef::Struct(struct_def)) = self.source_file.type_def(&symbol_id) else {
+        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&symbol_id) else {
             unreachable!("didn't get typedef for {:?}", irtype)
         };
 
@@ -2037,8 +2065,9 @@ impl<'a> Lowerer<'a> {
 fn find_or_create_main(
     source_file: &mut SourceFile<Typed>,
     symbol_table: &mut SymbolTable,
+    env: &mut Environment,
 ) -> (ExprID, bool) {
-    for root in source_file.typed_roots() {
+    for root in source_file.typed_roots(env) {
         if let TypedExpr {
             expr:
                 Expr::Func {
@@ -2081,6 +2110,7 @@ fn find_or_create_main(
             expr: func_expr.clone(),
             ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
         },
+        env,
     );
 
     source_file.add(

@@ -44,7 +44,7 @@ impl<Stage: StageTrait> CompilationUnit<Stage> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Raw {}
 impl StageTrait for Raw {
     type SourceFilePhase = source_file::Parsed;
@@ -53,7 +53,7 @@ impl StageTrait for Raw {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompilationUnit<Stage = Raw>
 where
     Stage: StageTrait,
@@ -61,6 +61,7 @@ where
     pub src_cache: HashMap<PathBuf, String>,
     pub input: Vec<PathBuf>,
     pub stage: Stage,
+    pub env: Environment,
 }
 
 impl<S: StageTrait> CompilationUnit<S> {
@@ -70,15 +71,16 @@ impl<S: StageTrait> CompilationUnit<S> {
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(input: Vec<PathBuf>) -> Self {
+    pub fn new(input: Vec<PathBuf>, env: Environment) -> Self {
         Self {
             src_cache: Default::default(),
             input,
             stage: Raw {},
+            env,
         }
     }
 
-    pub fn parse(&mut self) -> CompilationUnit<Parsed> {
+    pub fn parse(mut self) -> CompilationUnit<Parsed> {
         let mut files = vec![];
 
         for path in self.input.clone() {
@@ -94,22 +96,22 @@ impl CompilationUnit<Raw> {
         }
 
         CompilationUnit {
-            src_cache: self.src_cache.clone(),
-            input: self.input.clone(),
+            src_cache: self.src_cache,
+            input: self.input,
             stage: Parsed { files },
+            env: self.env,
         }
     }
 
     pub fn lower(
-        &mut self,
+        self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
         module: IRModule,
-        env: &mut Environment,
     ) -> CompilationUnit<Lowered> {
         let parsed = self.parse();
         let resolved = parsed.resolved(symbol_table);
-        let typed = resolved.typed(symbol_table, &driver_config, env);
+        let typed = resolved.typed(symbol_table, &driver_config);
         let lowered = typed.lower(symbol_table, &driver_config, module);
         lowered
     }
@@ -139,6 +141,7 @@ impl CompilationUnit<Parsed> {
             src_cache: self.src_cache,
             input: self.input,
             stage: Resolved { files },
+            env: self.env,
         }
     }
 }
@@ -156,18 +159,17 @@ impl StageTrait for Resolved {
 
 impl CompilationUnit<Resolved> {
     pub fn typed(
-        self,
+        mut self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
-        env: &mut Environment,
     ) -> CompilationUnit<Typed> {
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
         for file in self.stage.files {
             let mut typed = if driver_config.include_prelude {
-                TypeChecker.infer(file, symbol_table, env)
+                TypeChecker.infer(file, symbol_table, &mut self.env)
             } else {
-                TypeChecker.infer_without_prelude(env, file, symbol_table)
+                TypeChecker.infer_without_prelude(&mut self.env, file, symbol_table)
             };
             let mut solver = ConstraintSolver::new(&mut typed, symbol_table);
             solver.solve();
@@ -178,11 +180,12 @@ impl CompilationUnit<Resolved> {
             src_cache: self.src_cache,
             input: self.input,
             stage: Typed { files },
+            env: self.env,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Typed {
     pub files: Vec<SourceFile<source_file::Typed>>,
 }
@@ -194,30 +197,6 @@ impl StageTrait for Typed {
 }
 
 impl CompilationUnit<Typed> {
-    pub fn type_defs(&self) -> TypeDefs {
-        let mut type_defs = HashMap::new();
-        for file in &self.stage.files {
-            type_defs.extend(file.type_defs());
-        }
-        type_defs
-    }
-
-    pub fn schemes(&self) -> HashMap<SymbolID, Scheme> {
-        let mut type_defs = HashMap::new();
-        for file in &self.stage.files {
-            type_defs.extend(file.clone().export().1);
-        }
-        type_defs
-    }
-
-    pub fn typed_exprs(&self) -> TypedExprs {
-        let mut type_defs = HashMap::new();
-        for file in &self.stage.files {
-            type_defs.extend(file.clone().export().2);
-        }
-        type_defs
-    }
-
     pub fn lower(
         self,
         symbol_table: &mut SymbolTable,
@@ -237,6 +216,7 @@ impl CompilationUnit<Typed> {
                 module: module.clone(),
                 files,
             },
+            env: self.env,
         }
     }
 }

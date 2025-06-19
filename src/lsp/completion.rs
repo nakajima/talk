@@ -10,7 +10,7 @@ use async_lsp::lsp_types::Position;
 
 pub struct CompletionContext<'a> {
     pub driver: &'a Driver,
-    pub source_file: &'a SourceFile<Typed>,
+    pub source_file: &'a SourceFile<Typed<'a>>,
     pub position: Position,
     pub is_member_lookup: bool,
 }
