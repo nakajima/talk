@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    SourceFile, SymbolID, SymbolTable, Typed, diagnostic::Diagnostic, environment::TypeDef,
-    parser::ExprID, type_checker::TypeError,
+    SourceFile, SymbolID, SymbolTable, Typed,
+    diagnostic::Diagnostic,
+    environment::{Environment, TypeDef},
+    parser::ExprID,
+    type_checker::TypeError,
 };
 
 use super::{
@@ -28,18 +31,21 @@ impl Constraint {
 }
 
 pub struct ConstraintSolver<'a> {
-    source_file: &'a mut SourceFile<Typed<'a>>,
+    source_file: &'a mut SourceFile<Typed>,
+    env: &'a mut Environment,
     symbol_table: &'a SymbolTable,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
     pub fn new(
-        source_file: &'a mut SourceFile<Typed<'a>>,
+        source_file: &'a mut SourceFile<Typed>,
+        env: &'a mut Environment,
         symbol_table: &'a mut SymbolTable,
     ) -> Self {
         Self {
-            constraints: source_file.constraints().clone(),
+            constraints: env.constraints().clone(),
+            env,
             source_file,
             symbol_table,
         }
@@ -60,7 +66,7 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        for typed_expr in &mut self.source_file.types_mut().values_mut() {
+        for typed_expr in &mut self.env.typed_exprs.values_mut() {
             typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
         }
     }
@@ -81,7 +87,10 @@ impl<'a> ConstraintSolver<'a> {
                 })?;
 
                 log::info!("defining {node_id:?} = {lhs:?}");
-                self.source_file.define(*node_id, lhs);
+                self.env
+                    .typed_exprs
+                    .get_mut(&(self.source_file.path.clone(), *node_id))
+                    .map(|expr| expr.ty = lhs);
             }
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
                 let result_ty = Self::apply(result_ty, substitutions, 0);
@@ -94,10 +103,11 @@ impl<'a> ConstraintSolver<'a> {
                         // something compatible with ret_ty
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
                             // Look up the enum and find the variant
-                            if let Some(_enum_info) = self
-                                .source_file
-                                .type_from_symbol(enum_id, self.symbol_table)
-                                && let Some(variant_info) = self.find_variant(enum_id, member_name)
+                            if let Some(_enum_info) = self.source_file.type_from_symbol(
+                                enum_id,
+                                self.symbol_table,
+                                self.env,
+                            ) && let Some(variant_info) = self.find_variant(enum_id, member_name)
                             {
                                 // Create the constructor type for this variant
                                 let constructor_ty = self.create_variant_constructor_type(
@@ -111,25 +121,26 @@ impl<'a> ConstraintSolver<'a> {
                                 Self::unify(&constructor_ty, &result_ty, substitutions)?;
                                 Self::normalize_substitutions(substitutions);
 
-                                self.source_file.register_direct_callable(
-                                    *node_id,
-                                    variant_info.constructor_symbol,
-                                );
+                                // self.source_file.register_direct_callable(
+                                //     *node_id,
+                                //     variant_info.constructor_symbol,
+                                // );
 
-                                self.source_file.define(*node_id, constructor_ty);
+                                self.source_file.define(*node_id, constructor_ty, self.env);
                             }
                         }
                     }
                     Ty::Enum(enum_id, _) => {
                         // This is a valueless constructor like .none
-                        if let Some(_enum_info) = self
-                            .source_file
-                            .type_from_symbol(enum_id, self.symbol_table)
+                        if let Some(_enum_info) =
+                            self.source_file
+                                .type_from_symbol(enum_id, self.symbol_table, self.env)
                             && let Some(variant_info) = self.find_variant(enum_id, member_name)
                             && variant_info.values.is_empty()
                         {
                             // This is a valueless variant, unify with the enum type directly
-                            self.source_file.define(*node_id, result_ty.clone());
+                            self.source_file
+                                .define(*node_id, result_ty.clone(), self.env);
                         }
                     }
                     _ => {
@@ -145,11 +156,10 @@ impl<'a> ConstraintSolver<'a> {
 
                 match &receiver_ty {
                     Ty::Struct(struct_id, _generics) => {
-                        let Some(TypeDef::Struct(struct_def)) =
-                            self.source_file.type_def(struct_id)
+                        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id)
                         else {
                             // For now, just unify with the result type
-                            self.source_file.define(*node_id, result_ty);
+                            self.source_file.define(*node_id, result_ty, self.env);
                             return Ok(());
                         };
 
@@ -167,9 +177,9 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     Ty::Enum(enum_id, generics) => {
                         // Look up the enum definition
-                        if let Some(enum_info) = self
-                            .source_file
-                            .type_from_symbol(enum_id, self.symbol_table)
+                        if let Some(enum_info) =
+                            self.source_file
+                                .type_from_symbol(enum_id, self.symbol_table, self.env)
                         {
                             // Check if this is a variant constructor
                             log::debug!("Enum info: {enum_info:?}");
@@ -187,7 +197,7 @@ impl<'a> ConstraintSolver<'a> {
                                 // Unify with the result type
                                 Self::unify(&variant_ty, &result_ty, substitutions)?;
                                 Self::normalize_substitutions(substitutions);
-                                self.source_file.define(*node_id, variant_ty);
+                                self.source_file.define(*node_id, variant_ty, self.env);
                             } else {
                                 log::debug!("Could not find variant named {member_name:?}");
                             }
@@ -202,7 +212,7 @@ impl<'a> ConstraintSolver<'a> {
                             "For now just unify with the result type: {node_id:?}, {result_ty:?}"
                         );
                         // For now, just unify with the result type
-                        self.source_file.define(*node_id, result_ty);
+                        self.source_file.define(*node_id, result_ty, self.env);
                     }
                 }
             }
@@ -222,7 +232,7 @@ impl<'a> ConstraintSolver<'a> {
         substitutions: &mut HashMap<TypeVarID, Ty>, // Global substitutions being built by the solver
     ) -> Ty {
         // These formal parameters are the Ty::TypeVar created during `hoist_enums`.
-        let enum_def = match self.source_file.type_def(enum_id) {
+        let enum_def = match self.env.lookup_type(enum_id) {
             Some(TypeDef::Enum(ed)) => ed,
             _ => panic!("EnumDef not found for {enum_id:?} during variant constructor creation"),
         };
@@ -278,7 +288,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     fn find_variant(&mut self, enum_id: &SymbolID, name: &String) -> Option<EnumVariant> {
-        let Some(TypeDef::Enum(enum_def)) = self.source_file.type_def(enum_id) else {
+        let Some(TypeDef::Enum(enum_def)) = self.env.lookup_type(enum_id) else {
             return None;
         };
         log::debug!("Variants: {:?}", enum_def.variants);

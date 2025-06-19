@@ -4,14 +4,8 @@ use std::{
 };
 
 use crate::{
-    SymbolID, SymbolTable,
-    constraint_solver::Constraint,
-    diagnostic::Diagnostic,
-    environment::{Environment, Scope, TypeDef, TypedExprs},
-    scope_tree::ScopeTree,
-    span::Span,
-    type_checker::{Ty, TypeDefs},
-    typed_expr::TypedExpr,
+    SymbolID, SymbolTable, diagnostic::Diagnostic, environment::Environment, scope_tree::ScopeTree,
+    span::Span, type_checker::Ty, typed_expr::TypedExpr,
 };
 
 use super::{
@@ -129,16 +123,24 @@ impl SourceFile<Typed> {
     //     self.phase_data.env.types.get(id)
     // }
 
-    // pub fn define(&mut self, id: ExprID, ty: Ty) {
-    //     if let Some(typed_expr) = self
-    //         .phase_data
-    //         .env
-    //         .typed_exprs
-    //         .get_mut(&(self.path.to_path_buf(), id))
-    //     {
-    //         typed_expr.ty = ty;
-    //     }
-    // }
+    pub fn define(&mut self, id: ExprID, ty: Ty, env: &mut Environment) {
+        if let Some(typed_expr) = env.typed_exprs.get_mut(&(self.path.to_path_buf(), id)) {
+            typed_expr.ty = ty;
+        }
+    }
+
+    pub fn type_from_symbol(
+        &self,
+        symbol_id: &SymbolID,
+        symbol_table: &SymbolTable,
+        env: &Environment,
+    ) -> Option<Ty> {
+        if let Some(info) = symbol_table.get(symbol_id) {
+            return self.type_for(info.expr_id, env);
+        }
+
+        None
+    }
 
     pub fn type_for(&self, id: ExprID, env: &Environment) -> Option<Ty> {
         if let Some(typed_expr) = env.typed_exprs.get(&(self.path.to_path_buf(), id)) {
@@ -147,14 +149,6 @@ impl SourceFile<Typed> {
             None
         }
     }
-
-    // pub fn type_from_symbol(&self, symbol_id: &SymbolID, symbol_table: &SymbolTable) -> Option<Ty> {
-    //     if let Some(info) = symbol_table.get(symbol_id) {
-    //         return self.type_for(info.expr_id);
-    //     }
-
-    //     None
-    // }
 
     // pub fn constraints(&self) -> Vec<Constraint> {
     //     self.phase_data.env.constraints()
@@ -186,9 +180,7 @@ impl SourceFile<Typed> {
             roots: self.roots,
             nodes: self.nodes,
             meta: self.meta,
-            phase_data: Lowered {
-                env: self.phase_data.env,
-            },
+            phase_data: Lowered {},
             diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }

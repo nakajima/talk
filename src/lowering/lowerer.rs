@@ -379,7 +379,7 @@ pub struct Lowerer<'a> {
     lowered_functions: Vec<IRFunction>,
     symbol_table: &'a mut SymbolTable,
     loop_exits: Vec<BasicBlockID>,
-    env: &'a mut Environment,
+    pub env: &'a mut Environment,
 }
 
 impl<'a> Lowerer<'a> {
@@ -2138,9 +2138,11 @@ fn find_or_create_main(
 
 #[cfg(test)]
 pub mod lowering_tests {
+    use std::path::PathBuf;
+
     use crate::{
         SymbolID, assert_lowered_functions,
-        compiling::driver::Driver,
+        compiling::driver::{Driver, DriverConfig},
         lowering::{
             instr::{Callee, Instr},
             ir_error::IRError,
@@ -2155,7 +2157,11 @@ pub mod lowering_tests {
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::with_str(input);
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: false,
+        });
+        driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = lowered.source_file(&"-".into()).unwrap().diagnostics();
         let module = lowered.module().clone();
@@ -2494,7 +2500,7 @@ pub mod lowering_tests {
             Box::new(IRType::TypeVar("T3".into())),
         );
 
-        let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
+        let foo_name = format!("@_{}_foo", SymbolID::typed(1).0);
 
         assert_lowered_functions!(
             lowered,

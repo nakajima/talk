@@ -431,21 +431,16 @@ impl IRInterpreter {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolTable, check,
+        compiling::driver::Driver,
         interpreter::{
             interpreter::{IRInterpreter, InterpreterError},
             value::Value,
         },
-        lowering::lowerer::Lowerer,
-        prelude::compile_prelude,
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
-        let typed = check(code).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let lowerer = Lowerer::new(typed.source_file, &mut symbol_table);
-        let mut module = compile_prelude().module.clone();
-        lowerer.lower(&mut module, &Default::default());
+        let mut driver = Driver::with_str(code);
+        let module = driver.lower().into_iter().next().unwrap().module();
 
         // println!("{}", crate::lowering::ir_printer::print(&module));
 

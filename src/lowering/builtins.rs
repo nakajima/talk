@@ -48,7 +48,7 @@ fn lower_alloc(
         )));
     };
 
-    let Some(typed_expr) = lowerer.source_file.typed_expr(&val) else {
+    let Some(typed_expr) = lowerer.source_file.typed_expr(&val, lowerer.env) else {
         return Err(IRError::Unknown(format!(
             "__alloc takes an Int, got {:?}",
             lowerer.source_file.get(&val)

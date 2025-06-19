@@ -258,9 +258,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.diagnostics().is_empty());
+        assert!(checked.source_file.diagnostics().is_empty());
         assert_eq!(
-            checked.type_for(checked.root_ids()[0]).unwrap(),
+            checked.type_for(&checked.root_ids()[0]).unwrap(),
             Ty::Pointer
         );
     }
@@ -275,9 +275,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.diagnostics().is_empty());
+        assert!(checked.source_file.diagnostics().is_empty());
         assert_eq!(
-            checked.type_for(checked.root_ids()[1]).unwrap(),
+            checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Pointer
         );
     }
@@ -293,11 +293,11 @@ mod tests {
         .unwrap();
 
         assert!(
-            checked.diagnostics().is_empty(),
+            checked.source_file.diagnostics().is_empty(),
             "{:#?}",
-            checked.diagnostics()
+            checked.source_file.diagnostics()
         );
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Void);
+        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Void);
     }
 
     #[test]
@@ -310,8 +310,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.diagnostics().is_empty());
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Int));
+        assert!(checked.source_file.diagnostics().is_empty());
+        assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
     }
 }
 
@@ -371,7 +371,7 @@ mod array_tests {
     fn gets_typed() {
         let checked = crate::type_checking::check("[1,2,3]").unwrap();
         assert_eq!(
-            checked.type_for(checked.root_ids()[0]).unwrap(),
+            checked.type_for(&checked.root_ids()[0]).unwrap(),
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
     }
@@ -379,7 +379,7 @@ mod array_tests {
     #[test]
     fn gets_count() {
         let checked = crate::type_checking::check("[1,2,3].count").unwrap();
-        assert_eq!(checked.type_for(checked.root_ids()[0]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::Int);
     }
 
     #[test]

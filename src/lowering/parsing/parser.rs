@@ -414,6 +414,7 @@ pub fn parse(code: &str) -> Result<IRModule, ParserError> {
 mod tests {
     use crate::{
         SymbolTable, check,
+        environment::Environment,
         lowering::{
             instr::Instr,
             ir_error::IRError,
@@ -429,8 +430,9 @@ mod tests {
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let typed = check(input).unwrap();
         let mut symbol_table = SymbolTable::base();
+        let mut env = Environment::new();
         let mut module = IRModule::new();
-        let lowerer = Lowerer::new(typed.source_file, &mut symbol_table);
+        let lowerer = Lowerer::new(typed.source_file, &mut symbol_table, &mut env);
         lowerer.lower(&mut module, &Default::default());
         Ok(module)
     }

@@ -1,16 +1,16 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    NameResolved, SourceFile, SymbolID, SymbolTable,
+    NameResolved, SourceFile, SymbolTable,
     compiling::driver::DriverConfig,
     constraint_solver::ConstraintSolver,
-    environment::{Environment, TypedExprs},
+    environment::Environment,
     lexer::LexerError,
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
     parser::{ParserError, parse},
     source_file,
-    type_checker::{Scheme, TypeChecker, TypeDefs, TypeError},
+    type_checker::{TypeChecker, TypeError},
 };
 
 pub trait StageTrait: std::fmt::Debug {
@@ -171,7 +171,7 @@ impl CompilationUnit<Resolved> {
             } else {
                 TypeChecker.infer_without_prelude(&mut self.env, file, symbol_table)
             };
-            let mut solver = ConstraintSolver::new(&mut typed, symbol_table);
+            let mut solver = ConstraintSolver::new(&mut typed, &mut self.env, symbol_table);
             solver.solve();
             files.push(typed);
         }
@@ -198,14 +198,15 @@ impl StageTrait for Typed {
 
 impl CompilationUnit<Typed> {
     pub fn lower(
-        self,
+        mut self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
         mut module: IRModule,
     ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table).lower(&mut module, driver_config);
+            let lowered =
+                Lowerer::new(file, symbol_table, &mut self.env).lower(&mut module, driver_config);
             files.push(lowered);
         }
 

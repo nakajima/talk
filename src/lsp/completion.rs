@@ -1,6 +1,7 @@
 use crate::SourceFile;
 use crate::Typed;
 use crate::compiling::driver::Driver;
+use crate::environment::Environment;
 use crate::environment::TypeDef;
 use crate::symbol_table::SymbolKind;
 use crate::type_checker::Ty;
@@ -10,7 +11,8 @@ use async_lsp::lsp_types::Position;
 
 pub struct CompletionContext<'a> {
     pub driver: &'a Driver,
-    pub source_file: &'a SourceFile<Typed<'a>>,
+    pub env: &'a Environment,
+    pub source_file: &'a SourceFile<Typed>,
     pub position: Position,
     pub is_member_lookup: bool,
 }
@@ -49,13 +51,13 @@ impl<'a> CompletionContext<'a> {
             .symbol_from_position(position_before_dot, &self.source_file.path)
             .map(|sym| {
                 self.source_file
-                    .type_from_symbol(sym, &self.driver.symbol_table)
+                    .type_from_symbol(sym, &self.driver.symbol_table, self.env)
             })
             .unwrap_or(None)
         {
             let type_def = match ty {
-                Ty::Enum(symbol_id, _) => self.source_file.type_def(&symbol_id),
-                Ty::Struct(symbol_id, _) => self.source_file.type_def(&symbol_id),
+                Ty::Enum(symbol_id, _) => self.env.lookup_type(&symbol_id),
+                Ty::Struct(symbol_id, _) => self.env.lookup_type(&symbol_id),
                 _ => return vec![],
             };
 
@@ -163,12 +165,14 @@ mod tests {
         }
 
         let source_file = &driver.typed_source_file(&"./file-0.tlk".into()).unwrap();
+        let env = &driver.units[0].env.clone();
 
         CompletionContext {
             driver: &driver,
             source_file,
             position,
             is_member_lookup,
+            env,
         }
         .get_completions()
     }

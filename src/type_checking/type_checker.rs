@@ -249,8 +249,7 @@ impl TypeChecker {
             }
         }
 
-        // Now it's safe to move source_file since env is dropped before this line
-        source_file.to_typed(env)
+        source_file.to_typed()
     }
 
     pub fn infer_node(
@@ -1539,7 +1538,7 @@ mod struct_tests {
         .unwrap();
 
         assert_eq!(
-            checked.type_for(checked.root_ids()[1]).unwrap(),
+            checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Struct(SymbolID::resolved(1), vec![])
         );
 
@@ -1551,7 +1550,7 @@ mod struct_tests {
             panic!("did not get call")
         };
 
-        let Some(TypedExpr { ty, .. }) = checked.typed_expr(&callee) else {
+        let Some(ty) = checked.type_for(&callee) else {
             panic!("did not get callee")
         };
 
@@ -1571,7 +1570,7 @@ mod struct_tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1591,7 +1590,7 @@ mod struct_tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1615,7 +1614,7 @@ mod struct_tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1644,27 +1643,28 @@ mod struct_tests {
 #[cfg(test)]
 mod type_checker_tests {
     use crate::{
-        SourceFile, SymbolID, Typed,
+        SymbolID,
         environment::TypeDef,
         expr::Expr,
         name::Name,
         type_checker::{Ty, TypeVarID, TypeVarKind},
+        type_checking::CheckResult,
     };
 
-    fn check(code: &'static str) -> SourceFile<Typed> {
+    fn check(code: &'static str) -> CheckResult {
         crate::check(code).unwrap()
     }
 
     #[test]
     fn checks_an_int() {
         let checker = check("123");
-        assert_eq!(checker.type_for(0).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(&0).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_a_float() {
         let checker = check("123.");
-        assert_eq!(checker.type_for(0).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(&0).unwrap(), Ty::Float);
     }
 
     #[test]
@@ -1672,10 +1672,10 @@ mod type_checker_tests {
         let checker = check("func sup(name) { name }\nsup");
         let root_id = checker.root_ids()[0];
 
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
             panic!(
                 "didnt get a func, got: {:#?}",
-                checker.type_for(root_id).unwrap()
+                checker.type_for(&root_id).unwrap()
             );
         };
 
@@ -1688,11 +1688,11 @@ mod type_checker_tests {
         );
 
         // The second root-expr is the *use* of `sup`.
-        let Ty::Func(params2, return_type2, _) = checker.type_for(checker.root_ids()[1]).unwrap()
+        let Ty::Func(params2, return_type2, _) = checker.type_for(&checker.root_ids()[1]).unwrap()
         else {
             panic!(
                 "expected `sup` to be a function, got: {:?}",
-                checker.type_for(checker.root_ids()[1]).unwrap()
+                checker.type_for(&checker.root_ids()[1]).unwrap()
             );
         };
 
@@ -1708,10 +1708,10 @@ mod type_checker_tests {
     fn checks_a_func_with_return_type() {
         let checker = check("func sup(name) -> Int { name }\n");
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
             panic!(
                 "didnt get a func, got: {:#?}",
-                checker.type_for(root_id).unwrap()
+                checker.type_for(&root_id).unwrap()
             );
         };
 
@@ -1728,14 +1728,14 @@ mod type_checker_tests {
         ",
         );
         let root_id = checker.root_ids()[1];
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(&root_id).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_a_let_assignment() {
         let checker = check("let count = 123\ncount");
         let root_id = checker.root_ids()[1];
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(&root_id).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1748,10 +1748,10 @@ mod type_checker_tests {
         );
 
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
             panic!(
                 "expected `applyTwice` to be a function, got: {:?}",
-                checker.type_for(root_id).unwrap()
+                checker.type_for(&root_id).unwrap()
             );
         };
 
@@ -1783,8 +1783,8 @@ mod type_checker_tests {
         ",
         );
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Bool);
+        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[2]).unwrap(), Ty::Bool);
     }
 
     #[test]
@@ -1799,10 +1799,10 @@ mod type_checker_tests {
         ",
         );
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
             panic!(
                 "expected `compose` to be a function, got: {:?}",
-                checker.type_for(root_id).unwrap()
+                checker.type_for(&root_id).unwrap()
             );
         };
 
@@ -1853,7 +1853,7 @@ mod type_checker_tests {
 
         // the bare `rec` at the top level should be a Func([α], α)
         let root_id = checker.root_ids()[0];
-        let ty = checker.type_for(root_id).unwrap();
+        let ty = checker.type_for(&root_id).unwrap();
         let Ty::Closure {
             func: box Ty::Func(params, ret, _),
             ..
@@ -1882,7 +1882,7 @@ mod type_checker_tests {
         );
 
         let root_id = checker.root_ids()[0];
-        let ty = checker.type_for(root_id).unwrap();
+        let ty = checker.type_for(&root_id).unwrap();
         match ty {
             Ty::Closure {
                 func: box Ty::Func(params, ret, _),
@@ -1911,7 +1911,7 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checked.type_for(checked.root_ids()[2]).unwrap(),
+            checked.type_for(&checked.root_ids()[2]).unwrap(),
             Ty::Enum(SymbolID::typed(1), vec![Ty::Int]),
         );
     }
@@ -1926,8 +1926,8 @@ mod type_checker_tests {
         ",
         );
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(&checker.root_ids()[2]).unwrap(), Ty::Float);
     }
 
     #[test]
@@ -1941,17 +1941,17 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checker.type_for(checker.root_ids()[0]).unwrap(),
+            checker.type_for(&checker.root_ids()[0]).unwrap(),
             Ty::Enum(SymbolID::typed(1), vec![])
         );
 
         // Check the variants
         assert_eq!(
-            checker.type_for(0).unwrap(),
+            checker.type_for(&0).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
         assert_eq!(
-            checker.type_for(1).unwrap(),
+            checker.type_for(&1).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
     }
@@ -1967,17 +1967,17 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checker.type_for(checker.root_ids()[0]).unwrap(),
+            checker.type_for(&checker.root_ids()[0]).unwrap(),
             Ty::Enum(SymbolID::typed(1), vec![])
         );
 
         // Check variant types
         assert_eq!(
-            checker.type_for(1).unwrap(),
+            checker.type_for(&1).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int]),
         );
         assert_eq!(
-            checker.type_for(2).unwrap(),
+            checker.type_for(&2).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
     }
@@ -1992,7 +1992,7 @@ mod type_checker_tests {
             ",
         );
 
-        let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
+        let enum_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
         match enum_ty {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -2017,7 +2017,7 @@ mod type_checker_tests {
         );
 
         // The call to some(42) should return Option type
-        let call_result = checker.type_for(checker.root_ids()[1]).unwrap();
+        let call_result = checker.type_for(&checker.root_ids()[1]).unwrap();
         assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![]));
     }
 
@@ -2034,7 +2034,7 @@ mod type_checker_tests {
         );
 
         // First call should be Option<Int>
-        let call1 = checker.type_for(checker.root_ids()[1]).unwrap();
+        let call1 = checker.type_for(&checker.root_ids()[1]).unwrap();
         match call1 {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -2044,7 +2044,7 @@ mod type_checker_tests {
         }
 
         // Second call should be Option<Float>
-        let call2 = checker.type_for(checker.root_ids()[2]).unwrap();
+        let call2 = checker.type_for(&checker.root_ids()[2]).unwrap();
         match call2 {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -2070,7 +2070,7 @@ mod type_checker_tests {
         );
 
         // Should be Result<Option<Int>, _>
-        let result_ty = checker.type_for(checker.root_ids()[2]).unwrap();
+        let result_ty = checker.type_for(&checker.root_ids()[2]).unwrap();
         match result_ty {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::typed(3)); // Result enum
@@ -2107,7 +2107,7 @@ mod type_checker_tests {
         );
 
         // Function should have type Bool -> Int
-        let func_ty = checker.type_for(checker.root_ids()[1]).unwrap();
+        let func_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
         match func_ty {
             Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
@@ -2135,7 +2135,7 @@ mod type_checker_tests {
         );
 
         // Function should have type Option<Int> -> Int
-        let func_ty = checker.type_for(checker.root_ids()[1]).unwrap();
+        let func_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
         match func_ty {
             Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
@@ -2156,7 +2156,7 @@ mod type_checker_tests {
             ",
         );
 
-        let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
+        let enum_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
         match enum_ty {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -2165,20 +2165,20 @@ mod type_checker_tests {
             _ => panic!("Expected List<T> type, got {enum_ty:?}"),
         }
 
-        let Some(Expr::EnumDecl(_, _, body)) = checker.roots()[0] else {
+        let Some(Expr::EnumDecl(_, _, body)) = checker.expr(&checker.root_ids()[0]) else {
             panic!("did not get enum decl");
         };
 
         assert_eq!(*body, 6);
 
-        let Some(Expr::Block(exprs)) = checker.get(&6) else {
+        let Some(Expr::Block(exprs)) = checker.expr(&6) else {
             panic!("did not get body");
         };
 
         assert_eq!(exprs[0], 4);
 
         // Check cons variant has recursive structure: T, List<T>
-        let cons_variant = checker.type_for(4);
+        let cons_variant = checker.type_for(&4);
         match cons_variant {
             Some(Ty::EnumVariant(enum_id, field_types)) => {
                 assert_eq!(enum_id, SymbolID::typed(1));
@@ -2235,7 +2235,7 @@ mod type_checker_tests {
         );
 
         // Call should type check correctly
-        let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
+        let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         assert_eq!(call_result, Ty::Int);
     }
 
@@ -2256,7 +2256,7 @@ mod type_checker_tests {
             ",
         );
 
-        let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
+        let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![])); // Bool
     }
 
@@ -2274,7 +2274,7 @@ mod type_checker_tests {
             ",
         );
 
-        let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
+        let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
     }
 
@@ -2294,7 +2294,7 @@ mod type_checker_tests {
             ",
         );
 
-        let func_ty = checker.type_for(checker.root_ids()[1]).unwrap();
+        let func_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
         match func_ty {
             Ty::Func(params, ret, _) => {
                 // Input: Either<Int, Float>
@@ -2324,7 +2324,7 @@ mod type_checker_tests {
         );
 
         // x should be Optional<Int>
-        let x_ty = checker.type_for(checker.root_ids()[0]).unwrap();
+        let x_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
         assert_eq!(x_ty, Ty::Int.optional());
         match x_ty {
             Ty::Enum(symbol_id, generics) => {
@@ -2335,7 +2335,7 @@ mod type_checker_tests {
         }
 
         // The match should return Int
-        let match_ty = checker.type_for(checker.root_ids()[2]).unwrap();
+        let match_ty = checker.type_for(&checker.root_ids()[2]).unwrap();
         assert_eq!(match_ty, Ty::Int);
     }
 
@@ -2355,7 +2355,7 @@ mod type_checker_tests {
         );
 
         // Should type check without errors - polymorphic function
-        let Ty::Func(args, ret, _) = checker.type_for(checker.root_ids()[0]).unwrap() else {
+        let Ty::Func(args, ret, _) = checker.type_for(&checker.root_ids()[0]).unwrap() else {
             panic!("did not get func")
         };
 
@@ -2396,7 +2396,7 @@ mod type_checker_tests {
             .into()
         );
 
-        let call_result = checker.type_for(checker.root_ids()[1]).unwrap();
+        let call_result = checker.type_for(&checker.root_ids()[1]).unwrap();
         match call_result {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
@@ -2421,10 +2421,10 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checked.typed_roots()[0].ty,
-            Ty::Enum(SymbolID::typed(1), vec![])
+            checked.type_for(&checked.root_ids()[0]),
+            Some(Ty::Enum(SymbolID::typed(1), vec![]))
         );
-        let Some(TypeDef::Enum(enum_def)) = checked.type_def(&SymbolID::typed(1)) else {
+        let Some(TypeDef::Enum(enum_def)) = checked.env.lookup_type(&SymbolID::typed(1)) else {
             panic!();
         };
         assert_eq!(enum_def.methods.len(), 2);
@@ -2454,7 +2454,7 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checked.type_for(8).unwrap(),
+            checked.type_for(&8).unwrap(),
             Ty::Closure {
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
                 captures: vec![Ty::Int]
@@ -2471,7 +2471,7 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checked.type_for(checked.root_ids()[0]).unwrap(),
+            checked.type_for(&checked.root_ids()[0]).unwrap(),
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
     }
@@ -2501,11 +2501,11 @@ mod type_checker_tests {
         );
 
         assert_eq!(
-            checked.type_for(checked.root_ids()[1]).unwrap(),
+            checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
         assert_eq!(
-            checked.type_for(checked.root_ids()[2]).unwrap(),
+            checked.type_for(&checked.root_ids()[2]).unwrap(),
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Float])
         );
     }
@@ -2514,18 +2514,18 @@ mod type_checker_tests {
 #[cfg(test)]
 mod pending {
     use crate::{
-        SourceFile, Typed,
         diagnostic::Diagnostic,
         type_checker::{Ty, TypeError},
+        type_checking::CheckResult,
     };
 
-    fn check_err(code: &'static str) -> Result<SourceFile<Typed>, TypeError> {
+    fn check_err(code: &'static str) -> Result<CheckResult, TypeError> {
         crate::check(code)
     }
 
     fn check(code: &'static str) -> Ty {
         let typed = check_err(code).unwrap();
-        typed.type_for(typed.root_ids()[0]).unwrap()
+        typed.type_for(&typed.root_ids()[0]).unwrap()
     }
 
     // #[test]
@@ -2591,12 +2591,12 @@ mod pending {
         let checked = check_err("loop 1.2 { 1 }").unwrap();
         assert_eq!(checked.diagnostics().len(), 1);
         assert!(
-            checked.diagnostics.contains(&Diagnostic::typing(
+            checked.diagnostics().contains(&&Diagnostic::typing(
                 0,
                 TypeError::UnexpectedType(Ty::Bool, Ty::Float)
             )),
             "{:?}",
-            checked.diagnostics
+            checked.diagnostics()
         )
     }
 

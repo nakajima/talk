@@ -1,8 +1,13 @@
-use std::path::PathBuf;
-
 #[cfg(test)]
-use crate::environment::Environment;
-use crate::{SourceFile, SymbolTable, Typed, compiling::driver::Driver, type_checker::TypeError};
+use crate::{
+    SourceFile, Typed,
+    diagnostic::Diagnostic,
+    environment::Environment,
+    expr::Expr,
+    parser::ExprID,
+    type_checker::{Ty, TypeError},
+    typed_expr::TypedExpr,
+};
 
 pub mod constraint_solver;
 pub mod environment;
@@ -13,13 +18,48 @@ pub mod type_checker;
 pub mod typed_expr;
 
 #[cfg(test)]
-struct CheckResult {
+pub struct CheckResult {
     pub source_file: SourceFile<Typed>,
     pub env: Environment,
 }
 
 #[cfg(test)]
+impl CheckResult {
+    pub fn type_for(&self, id: &ExprID) -> Option<Ty> {
+        self.source_file.type_for(*id, &self.env)
+    }
+
+    pub fn expr(&self, id: &ExprID) -> Option<&Expr> {
+        self.source_file.get(id)
+    }
+
+    pub fn typed_expr(&self, id: &ExprID) -> Option<TypedExpr> {
+        self.source_file.typed_expr(id, &self.env)
+    }
+
+    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
+        self.source_file.diagnostics()
+    }
+
+    pub fn root_ids(&self) -> Vec<ExprID> {
+        self.source_file.root_ids()
+    }
+
+    pub fn roots(&self) -> Vec<Ty> {
+        self.source_file
+            .root_ids()
+            .iter()
+            .filter_map(|id| self.type_for(id))
+            .collect()
+    }
+}
+
+#[cfg(test)]
 pub fn check(input: &str) -> Result<CheckResult, TypeError> {
+    use std::path::PathBuf;
+
+    use crate::compiling::driver::Driver;
+
     let path = &PathBuf::from("./test.tlk");
     let mut driver = Driver::new(Default::default());
     driver.update_file(path, input.into());

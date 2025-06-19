@@ -65,11 +65,12 @@ pub fn _compile_prelude() -> Prelude {
     let mut driver = fresh_driver();
     let module = driver.lower().into_iter().next().unwrap().module();
     let symbols = driver.symbol_table;
+    let environment = driver.units[0].clone().env;
     // println!("prelude module:\n{}", ir_printer::print(&module));
 
     Prelude {
         symbols,
-        environment: driver.environment,
+        environment,
         module,
     }
 }

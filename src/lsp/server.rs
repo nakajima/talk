@@ -191,6 +191,7 @@ impl LanguageServer for ServerState {
         let completion = CompletionContext {
             source_file: &source_file,
             driver: &self.driver,
+            env: &self.driver.units[0].env,
             position,
             is_member_lookup: params
                 .context

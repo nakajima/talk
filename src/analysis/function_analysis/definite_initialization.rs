@@ -146,24 +146,25 @@ mod tests {
     use crate::{
         SourceFile, SymbolID,
         compiling::driver::Driver,
-        environment::{Property, TypeDef},
+        environment::{Environment, Property, TypeDef},
         lowering::ir_module::IRModule,
         source_file,
         type_checker::Ty,
     };
 
-    fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>) {
+    fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>, Environment) {
         let mut driver = Driver::with_str(code);
 
         let lowered = driver.lower().into_iter().next().unwrap();
         let file = lowered.source_file(&"-".into()).unwrap().clone();
+        let env = lowered.env.clone();
         let module = lowered.module();
-        (module, file)
+        (module, file, env)
     }
 
     #[test]
     fn does_nothing_when_its_fine() {
-        let (module, file) = lower(
+        let (module, _, env) = lower(
             "
       struct Person {
         let age: Int
@@ -182,7 +183,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = file.type_def(&person_id) else {
+        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -197,7 +198,7 @@ mod tests {
 
     #[test]
     fn provides_error_with_missing_properties() {
-        let (module, file) = lower(
+        let (module, _file, env) = lower(
             "
       struct Person {
         let age: Int
@@ -214,7 +215,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = file.type_def(&person_id) else {
+        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -235,7 +236,7 @@ mod tests {
 
     #[test]
     fn provides_error_with_conditional() {
-        let (module, file) = lower(
+        let (module, _, env) = lower(
             "
       struct Person {
         let age: Int
@@ -256,7 +257,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = file.type_def(&person_id) else {
+        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -277,7 +278,7 @@ mod tests {
 
     #[test]
     fn provides_is_ok_with_else_conditional() {
-        let (module, file) = lower(
+        let (module, _file, env) = lower(
             "
         struct Person {
           let age: Int
@@ -300,7 +301,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = file.type_def(&person_id) else {
+        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 

@@ -140,16 +140,14 @@ pub fn format_block_id(id: &BasicBlockID) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolID, SymbolTable, check,
-        lowering::{ir_error::IRError, ir_module::IRModule, ir_printer::print, lowerer::Lowerer},
+        SymbolID,
+        compiling::driver::Driver,
+        lowering::{ir_error::IRError, ir_module::IRModule, ir_printer::print},
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let lowerer = Lowerer::new(typed.source_file, &mut symbol_table);
-        let mut module = IRModule::new();
-        lowerer.lower(&mut module, &Default::default());
+        let mut driver = Driver::with_str(input);
+        let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }
 
