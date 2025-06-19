@@ -9,7 +9,6 @@ use crate::{
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
     parser::{ParserError, parse},
-    prelude::compile_prelude,
     source_file,
     type_checker::{Scheme, TypeChecker, TypeDefs, TypeError},
 };
@@ -105,11 +104,13 @@ impl CompilationUnit<Raw> {
         &mut self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
+        module: IRModule,
+        env: &mut Environment,
     ) -> CompilationUnit<Lowered> {
         let parsed = self.parse();
         let resolved = parsed.resolved(symbol_table);
-        let typed = resolved.typed(symbol_table, &driver_config);
-        let lowered = typed.lower(symbol_table, &driver_config);
+        let typed = resolved.typed(symbol_table, &driver_config, env);
+        let lowered = typed.lower(symbol_table, &driver_config, module);
         lowered
     }
 }
@@ -158,21 +159,15 @@ impl CompilationUnit<Resolved> {
         self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
+        env: &mut Environment,
     ) -> CompilationUnit<Typed> {
-        let mut env = Environment::new();
-
-        if driver_config.include_prelude {
-            let prelude = compile_prelude();
-            env.import_prelude(prelude);
-        }
-
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
         for file in self.stage.files {
             let mut typed = if driver_config.include_prelude {
-                TypeChecker.infer(file, symbol_table, &mut env)
+                TypeChecker.infer(file, symbol_table, env)
             } else {
-                TypeChecker.infer_without_prelude(&mut env, file, symbol_table)
+                TypeChecker.infer_without_prelude(env, file, symbol_table)
             };
             let mut solver = ConstraintSolver::new(&mut typed, symbol_table);
             solver.solve();
@@ -182,17 +177,13 @@ impl CompilationUnit<Resolved> {
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Typed {
-                environment: env,
-                files,
-            },
+            stage: Typed { files },
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Typed {
-    pub environment: Environment,
     pub files: Vec<SourceFile<source_file::Typed>>,
 }
 impl StageTrait for Typed {
@@ -231,8 +222,8 @@ impl CompilationUnit<Typed> {
         self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
+        mut module: IRModule,
     ) -> CompilationUnit<Lowered> {
-        let mut module = IRModule::new();
         let mut files = vec![];
         for file in self.stage.files {
             let lowered = Lowerer::new(file, symbol_table).lower(&mut module, driver_config);
@@ -264,7 +255,7 @@ impl StageTrait for Lowered {
 }
 
 impl CompilationUnit<Lowered> {
-    pub fn module(self) -> IRModule {
-        self.stage.module
+    pub fn module(&self) -> IRModule {
+        self.stage.module.clone()
     }
 }

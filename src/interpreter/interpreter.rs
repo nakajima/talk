@@ -169,7 +169,9 @@ impl IRInterpreter {
                     .functions
                     .iter()
                     .position(|f| f.name == name)
-                    .unwrap_or_else(|| panic!("couldn't find ref: {}", name));
+                    .unwrap_or_else(|| {
+                        panic!("couldn't find ref {} in {:?}", name, self.program.functions)
+                    });
                 self.set_register_value(&dest, Value::Func(Pointer(idx)));
             }
             Instr::Call {
@@ -434,14 +436,15 @@ mod tests {
             interpreter::{IRInterpreter, InterpreterError},
             value::Value,
         },
-        lowering::{ir_module::IRModule, lowerer::Lowerer},
+        lowering::lowerer::Lowerer,
+        prelude::compile_prelude,
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
         let typed = check(code).unwrap();
         let mut symbol_table = SymbolTable::base();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        let mut module = IRModule::new();
+        let mut module = compile_prelude().module.clone();
         lowerer.lower(&mut module, &Default::default());
 
         // println!("{}", crate::lowering::ir_printer::print(&module));

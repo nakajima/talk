@@ -81,14 +81,17 @@ pub fn synthesize_inits(
             );
 
             // Make sure it's resolved
-            source_file.nodes[init_func as usize] = Expr::Func {
-                name: Some(Name::Resolved(init_sym, "init".into())),
-                generics: vec![],
-                params: params.clone(),
-                body,
-                ret: None,
-                captures: vec![],
-            };
+            source_file.nodes.insert(
+                init_func,
+                Expr::Func {
+                    name: Some(Name::Resolved(init_sym, "init".into())),
+                    generics: vec![],
+                    params: params.clone(),
+                    body,
+                    ret: None,
+                    captures: vec![],
+                },
+            );
 
             let Some(Expr::Struct(_, _, body)) = source_file.get(&struct_info.expr_id).cloned()
             else {

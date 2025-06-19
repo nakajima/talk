@@ -63,7 +63,7 @@ impl Phase for Lowered {
 pub struct SourceFile<P: Phase = Parsed> {
     pub path: PathBuf,
     roots: Vec<ExprID>,
-    pub(crate) nodes: Vec<Expr>,
+    pub(crate) nodes: HashMap<ExprID, Expr>,
     pub(crate) meta: Vec<ExprMeta>,
     pub diagnostics: HashSet<Diagnostic>,
     phase_data: P::Data,
@@ -75,7 +75,7 @@ impl SourceFile {
         Self {
             path,
             roots: vec![],
-            nodes: vec![],
+            nodes: Default::default(),
             meta: vec![],
             phase_data: (),
             diagnostics: Default::default(),
@@ -114,7 +114,10 @@ impl SourceFile<NameResolved> {
 
 impl SourceFile<Typed> {
     pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr) {
-        self.phase_data.env.typed_exprs.insert(id, typed_expr);
+        self.phase_data
+            .env
+            .typed_exprs
+            .insert((self.path.to_path_buf(), id), typed_expr);
     }
 
     pub fn typed_roots(&self) -> &[TypedExpr] {
@@ -125,16 +128,20 @@ impl SourceFile<Typed> {
         self.phase_data.roots = vec![with];
     }
 
-    pub fn types_mut(&mut self) -> &mut HashMap<ExprID, TypedExpr> {
+    pub fn types_mut(&mut self) -> &mut HashMap<(PathBuf, ExprID), TypedExpr> {
         &mut self.phase_data.env.typed_exprs
     }
 
-    pub fn typed_exprs(&self) -> &HashMap<ExprID, TypedExpr> {
+    pub fn typed_exprs(&self) -> &HashMap<(PathBuf, ExprID), TypedExpr> {
         &self.phase_data.env.typed_exprs
     }
 
     pub fn typed_expr(&self, expr_id: &ExprID) -> Option<TypedExpr> {
-        self.phase_data.env.typed_exprs.get(expr_id).cloned()
+        self.phase_data
+            .env
+            .typed_exprs
+            .get(&(self.path.to_path_buf(), *expr_id))
+            .cloned()
     }
 
     pub fn type_defs(&self) -> TypeDefs {
@@ -146,11 +153,23 @@ impl SourceFile<Typed> {
     }
 
     pub fn define(&mut self, id: ExprID, ty: Ty) {
-        self.phase_data.env.typed_exprs.get_mut(&id).unwrap().ty = ty;
+        if let Some(typed_expr) = self
+            .phase_data
+            .env
+            .typed_exprs
+            .get_mut(&(self.path.to_path_buf(), id))
+        {
+            typed_expr.ty = ty;
+        }
     }
 
     pub fn type_for(&self, id: ExprID) -> Option<Ty> {
-        if let Some(typed_expr) = self.phase_data.env.typed_exprs.get(&id) {
+        if let Some(typed_expr) = self
+            .phase_data
+            .env
+            .typed_exprs
+            .get(&(self.path.to_path_buf(), id))
+        {
             Some(typed_expr.ty.clone())
         } else {
             None
@@ -222,7 +241,7 @@ impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID
     pub fn add(&mut self, expr: Expr, meta: ExprMeta) -> ExprID {
         let id = self.nodes.len() as ExprID;
-        self.nodes.push(expr);
+        self.nodes.insert(id, expr);
         self.meta.push(meta);
         id
     }
@@ -250,24 +269,12 @@ impl<P: Phase> SourceFile<P> {
 
     // Gets the expr at a given index
     pub fn get(&self, index: &ExprID) -> Option<&Expr> {
-        let index = *index as usize;
-
-        if self.nodes.len() <= index {
-            None
-        } else {
-            Some(&self.nodes[index])
-        }
+        self.nodes.get(index)
     }
 
     // Gets the expr at a given index
     pub fn get_mut(&mut self, index: &ExprID) -> Option<&mut Expr> {
-        let index = *index as usize;
-
-        if self.nodes.len() <= index {
-            None
-        } else {
-            Some(&mut self.nodes[index])
-        }
+        self.nodes.get_mut(index)
     }
 
     pub fn span(&self, expr_id: &ExprID) -> Span {

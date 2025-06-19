@@ -110,8 +110,10 @@ impl NameResolver {
                                 symbol_table,
                             );
                             self.type_symbol_stack.push(symbol_id);
-                            source_file.nodes[*node_id as usize] =
-                                Struct(Name::Resolved(symbol_id, name_str), generics.clone(), body)
+                            source_file.nodes.insert(
+                                *node_id,
+                                Struct(Name::Resolved(symbol_id, name_str), generics.clone(), body),
+                            );
                         }
                         _ => continue,
                     }
@@ -129,7 +131,9 @@ impl NameResolver {
 
                     symbol_table.add_initializer(symbol_id, *node_id);
                     self.resolve_nodes(&[func_id], source_file, symbol_table);
-                    source_file.nodes[*node_id as usize] = Expr::Init(Some(symbol_id), func_id);
+                    source_file
+                        .nodes
+                        .insert(*node_id, Expr::Init(Some(symbol_id), func_id));
                 }
                 Property {
                     type_repr,
@@ -154,11 +158,14 @@ impl NameResolver {
                             symbol_table,
                         );
 
-                        source_file.nodes[*node_id as usize] = Expr::Property {
-                            name: Name::Resolved(symbol_id, name_str),
-                            type_repr,
-                            default_value,
-                        };
+                        source_file.nodes.insert(
+                            *node_id,
+                            Expr::Property {
+                                name: Name::Resolved(symbol_id, name_str),
+                                type_repr,
+                                default_value,
+                            },
+                        );
                     }
                 }
                 Return(rhs) => {
@@ -204,7 +211,7 @@ impl NameResolver {
                         self.resolve_nodes(&[rhs], source_file, symbol_table);
                     }
 
-                    source_file.nodes[*node_id as usize] = Let(name, rhs);
+                    source_file.nodes.insert(*node_id, Let(name, rhs));
                 }
                 Call {
                     callee,
@@ -295,8 +302,10 @@ impl NameResolver {
                         Name::Raw(name_str) => {
                             let (symbol_id, _) = self.lookup(&name_str);
                             symbol_table.add_map(source_file, node_id, &symbol_id);
-                            source_file.nodes[*node_id as usize] =
-                                Parameter(Name::Resolved(symbol_id, name_str), ty_repr);
+                            source_file.nodes.insert(
+                                *node_id,
+                                Parameter(Name::Resolved(symbol_id, name_str), ty_repr),
+                            );
                         }
                         Name::Resolved(_, _) | Name::_Self(_) => (),
                     }
@@ -338,7 +347,7 @@ impl NameResolver {
                             Name::Resolved(symbol_id, name_str)
                         };
 
-                        source_file.nodes[*node_id as usize] = Variable(name, None);
+                        source_file.nodes.insert(*node_id, Variable(name, None));
                     }
                     Name::Resolved(_, _) | Name::_Self(_) => (),
                 },
@@ -372,10 +381,13 @@ impl NameResolver {
 
                     // Update the existing TypeRepr node with the resolved name.
                     // The node type remains TypeRepr.
-                    source_file.nodes[*node_id as usize] = TypeRepr(
-                        resolved_name_for_node,
-                        generics.clone(), // Keep original generics ExprIDs
-                        is_type_parameter_decl,
+                    source_file.nodes.insert(
+                        *node_id,
+                        TypeRepr(
+                            resolved_name_for_node,
+                            generics.clone(), // Keep original generics ExprIDs
+                            is_type_parameter_decl,
+                        ),
                     );
 
                     // Recursively resolve any type arguments within this TypeRepr.
@@ -399,11 +411,14 @@ impl NameResolver {
                                 symbol_table,
                             );
                             self.type_symbol_stack.push(symbol_id);
-                            source_file.nodes[*node_id as usize] = EnumDecl(
-                                Name::Resolved(symbol_id, name_str),
-                                generics.clone(),
-                                body,
-                            )
+                            source_file.nodes.insert(
+                                *node_id,
+                                EnumDecl(
+                                    Name::Resolved(symbol_id, name_str),
+                                    generics.clone(),
+                                    body,
+                                ),
+                            );
                         }
                         _ => continue,
                     }
@@ -432,7 +447,7 @@ impl NameResolver {
                 Pattern(pattern) => {
                     let pattern =
                         self.resolve_pattern(&pattern, source_file, symbol_table, node_id);
-                    source_file.nodes[*node_id as usize] = Pattern(pattern);
+                    source_file.nodes.insert(*node_id, Pattern(pattern));
                 }
                 PatternVariant(_, _, _items) => todo!(),
             }
@@ -463,14 +478,17 @@ impl NameResolver {
                     symbol_table,
                 );
 
-                source_file.nodes[*id as usize] = Func {
-                    name: Some(Name::Resolved(symbol_id, name)),
-                    generics,
-                    params,
-                    body,
-                    ret,
-                    captures,
-                };
+                source_file.nodes.insert(
+                    *id,
+                    Func {
+                        name: Some(Name::Resolved(symbol_id, name)),
+                        generics,
+                        params,
+                        body,
+                        ret,
+                        captures,
+                    },
+                );
             }
         }
     }
@@ -498,8 +516,10 @@ impl NameResolver {
 
             self.resolve_nodes(&generics, source_file, symbol_table);
 
-            source_file.nodes[*id as usize] =
-                Struct(Name::Resolved(struct_symbol, name_str), generics, body_expr);
+            source_file.nodes.insert(
+                *id,
+                Struct(Name::Resolved(struct_symbol, name_str), generics, body_expr),
+            );
 
             // Hoist properties
             let Some(Block(ids)) = source_file.get(&body_expr) else {
@@ -552,8 +572,10 @@ impl NameResolver {
 
             self.resolve_nodes(&generics, source_file, symbol_table);
 
-            source_file.nodes[*id as usize] =
-                EnumDecl(Name::Resolved(enum_symbol, name_str), generics, body_expr);
+            source_file.nodes.insert(
+                *id,
+                EnumDecl(Name::Resolved(enum_symbol, name_str), generics, body_expr),
+            );
 
             // Hoist variants
             self.type_symbol_stack.push(enum_symbol);
@@ -634,8 +656,10 @@ impl NameResolver {
                 self.resolve_nodes(&field_types, source_file, symbol_table);
 
                 // Update the AST
-                source_file.nodes[*variant_id as usize] =
-                    EnumVariant(Name::Raw(variant_name), field_types);
+                source_file.nodes.insert(
+                    *variant_id,
+                    EnumVariant(Name::Raw(variant_name), field_types),
+                );
             }
         }
 
@@ -870,7 +894,7 @@ mod tests {
         );
 
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.get(&0.into()).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID(0), "a".into()), None)
         );
     }
@@ -944,11 +968,11 @@ mod tests {
 
         assert_eq!(
             *tree.get(rhs).unwrap(),
-            Expr::Member(Some(1), "none".into())
+            Expr::Member(Some(1.into()), "none".into())
         );
 
         assert_eq!(
-            *tree.get(&1).unwrap(),
+            *tree.get(&1.into()).unwrap(),
             Variable(Name::Resolved(SymbolID::OPTIONAL, "Optional".into()), None)
         );
     }
@@ -987,22 +1011,25 @@ mod tests {
             Expr::EnumDecl(
                 Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
                 vec![],
-                2
+                2.into()
             )
         );
-        assert_eq!(*resolved.get(&2).unwrap(), Expr::Block(vec![0, 1]));
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.get(&2.into()).unwrap(),
+            Expr::Block(vec![0.into(), 1.into()])
+        );
+        assert_eq!(
+            *resolved.get(&0.into()).unwrap(),
             EnumVariant(Name::Raw("foo".into()), vec![])
         );
         assert_eq!(
-            *resolved.get(&1).unwrap(),
+            *resolved.get(&1.into()).unwrap(),
             EnumVariant(Name::Raw("bar".into()), vec![])
         );
 
         assert_eq!(
             *resolved.roots()[1].unwrap(),
-            Expr::Member(Some(4), "foo".into())
+            Expr::Member(Some(4.into()), "foo".into())
         );
     }
 
@@ -1023,33 +1050,36 @@ mod tests {
             Expr::EnumDecl(
                 Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
                 vec![],
-                3
+                3.into()
             )
         );
-        assert_eq!(*resolved.get(&3).unwrap(), Expr::Block(vec![1, 2]));
         assert_eq!(
-            *resolved.get(&1).unwrap(),
-            EnumVariant(Name::Raw("foo".into()), vec![0])
+            *resolved.get(&3.into()).unwrap(),
+            Expr::Block(vec![1.into(), 2.into()])
         );
         assert_eq!(
-            *resolved.get(&2).unwrap(),
+            *resolved.get(&1.into()).unwrap(),
+            EnumVariant(Name::Raw("foo".into()), vec![0.into()])
+        );
+        assert_eq!(
+            *resolved.get(&2.into()).unwrap(),
             EnumVariant(Name::Raw("bar".into()), vec![])
         );
 
         assert_eq!(
             *resolved.roots()[1].unwrap(),
             Call {
-                callee: 6,
+                callee: 6.into(),
                 type_args: vec![],
-                args: vec![8]
+                args: vec![8.into()]
             }
         );
         assert_eq!(
-            *resolved.get(&6).unwrap(),
-            Expr::Member(Some(5), "foo".into())
+            *resolved.get(&6.into()).unwrap(),
+            Expr::Member(Some(5.into()), "foo".into())
         );
         assert_eq!(
-            *resolved.get(&5).unwrap(),
+            *resolved.get(&5.into()).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Fizz".into()), None)
         );
     }
@@ -1067,7 +1097,7 @@ mod tests {
         );
 
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.get(&0.into()).unwrap(),
             Expr::Variable(Name::_Self(SymbolID::resolved(1)), None)
         );
     }
@@ -1098,9 +1128,12 @@ mod tests {
         ",
         );
 
-        assert_eq!(*resolved.roots()[0].unwrap(), Assignment(0, 1),);
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.roots()[0].unwrap(),
+            Assignment(0.into(), 1.into()),
+        );
+        assert_eq!(
+            *resolved.get(&0.into()).unwrap(),
             Let(Name::Resolved(SymbolID::resolved(2), "count".into()), None)
         );
 
@@ -1117,7 +1150,7 @@ mod tests {
                 name: Some(Name::Resolved(SymbolID::resolved(1), "counter".into())),
                 generics: vec![],
                 params: vec![],
-                body: 5,
+                body: 5.into(),
                 ret: None,
                 captures: vec![SymbolID::resolved(2)],
             }
@@ -1133,15 +1166,15 @@ mod tests {
         };
 
         assert_eq!(
-            *resolved.get(&ret.unwrap()).unwrap(),
+            *resolved.get(&ret.unwrap().into()).unwrap(),
             TypeRepr(
                 Name::Resolved(SymbolID::ARRAY, "Array".into()),
-                vec![0],
+                vec![0.into()],
                 false
             )
         );
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.get(&0.into()).unwrap(),
             TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
     }
@@ -1154,19 +1187,19 @@ mod tests {
             Struct(
                 Name::Resolved(SymbolID::resolved(1), "Person".into()),
                 vec![],
-                0
+                0.into()
             )
         );
         assert_eq!(
             *resolved.roots()[1].unwrap(),
             Expr::Call {
-                callee: 2,
+                callee: 2.into(),
                 type_args: vec![],
-                args: vec![]
+                args: vec![],
             }
         );
         assert_eq!(
-            *resolved.get(&2).unwrap(),
+            *resolved.get(&2.into()).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Person".into()), None)
         )
     }
@@ -1185,19 +1218,19 @@ mod tests {
             Struct(
                 Name::Resolved(SymbolID::resolved(1), "Person".into()),
                 vec![],
-                2
+                2.into()
             )
         );
         assert_eq!(
-            *resolved.get(&1).unwrap(),
+            *resolved.get(&1.into()).unwrap(),
             Expr::Property {
                 name: Name::Resolved(SymbolID::resolved(2), "age".into()),
-                type_repr: Some(0),
+                type_repr: Some(0.into()),
                 default_value: None
             }
         );
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.get(&0.into()).unwrap(),
             Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
     }
@@ -1220,19 +1253,19 @@ mod tests {
             Struct(
                 Name::Resolved(SymbolID::resolved(1), "Person".into()),
                 vec![],
-                11
+                11.into()
             )
         );
         assert_eq!(
-            *resolved.get(&1).unwrap(),
+            *resolved.get(&1.into()).unwrap(),
             Expr::Property {
                 name: Name::Resolved(SymbolID::resolved(2), "age".into()),
-                type_repr: Some(0),
+                type_repr: Some(0.into()),
                 default_value: None
             }
         );
         assert_eq!(
-            *resolved.get(&0).unwrap(),
+            *resolved.get(&0.into()).unwrap(),
             Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
 

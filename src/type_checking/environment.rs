@@ -1,12 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::IndexMut,
+    path::PathBuf,
 };
 
 use crate::{
     SymbolID,
     parser::ExprID,
-    prelude::{Prelude, compile_prelude},
     type_checker::{Ty, TypeError},
 };
 
@@ -41,7 +41,7 @@ pub struct StructDef {
     pub type_parameters: TypeParams,
     pub properties: Vec<Property>,
     pub methods: HashMap<String, Method>,
-    pub initializers: Vec<ExprID>,
+    pub initializers: Vec<(PathBuf, ExprID)>,
 }
 
 impl StructDef {
@@ -52,7 +52,7 @@ impl StructDef {
         type_parameters: TypeParams,
         properties: Vec<Property>,
         methods: HashMap<String, Method>,
-        initializers: Vec<ExprID>,
+        initializers: Vec<(PathBuf, ExprID)>,
     ) -> Self {
         Self {
             symbol_id,
@@ -106,7 +106,7 @@ pub enum TypeDef {
     Struct(StructDef),
 }
 
-pub type TypedExprs = HashMap<ExprID, TypedExpr>;
+pub type TypedExprs = HashMap<(PathBuf, ExprID), TypedExpr>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Property {
@@ -137,22 +137,29 @@ impl Method {
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
-    constraints: Vec<Constraint>,
+    pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub direct_callables: HashMap<ExprID, SymbolID>,
 }
 
-impl Default for Environment {
-    fn default() -> Self {
-        let mut env = Self::new();
-        env.import_prelude(compile_prelude());
-        env
-    }
-}
+// impl Default for Environment {
+//     fn default() -> Self {
+//         let mut env = Self::new();
+//         env.import_prelude(compile_prelude());
+//         env
+//     }
+// }
 
 impl Environment {
+    #[track_caller]
     pub fn new() -> Self {
+        println!("-> New environment!");
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            println!("from {}:{}", loc.file(), loc.line());
+        }
+
         Self {
             typed_exprs: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
@@ -193,16 +200,15 @@ impl Environment {
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
 
-    pub fn import_prelude(&mut self, prelude: &Prelude) {
-        // Import types
-        self.types.extend(prelude.types.clone());
+    // pub fn import_prelude(&mut self, prelude: Environment) {
+    //     println!("-> Importing prelude!");
 
-        self.typed_exprs.extend(prelude.typed_exprs.clone());
-
-        // Import schemes into global scope
-        log::debug!("Importing schemes: {:?}", prelude.schemes);
-        self.scopes[0].extend(prelude.schemes.clone());
-    }
+    //     // Import types
+    //     self.types = prelude.types;
+    //     self.typed_exprs = prelude.typed_exprs;
+    //     self.scopes = prelude.scopes;
+    //     self.type_var_id = prelude.type_var_id;
+    // }
 
     /// Look up the scheme for `sym`, then immediately instantiate it.
     pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {

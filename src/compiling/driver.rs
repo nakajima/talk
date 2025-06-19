@@ -5,6 +5,8 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use crate::{
     SourceFile, SymbolID, SymbolTable,
     compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+    environment::Environment,
+    lowering::ir_module::IRModule,
     prelude::compile_prelude,
     source_file,
 };
@@ -26,6 +28,7 @@ impl Default for DriverConfig {
 pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
+    pub environment: Environment,
     pub config: DriverConfig,
 }
 
@@ -43,6 +46,11 @@ impl Driver {
                 compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
+            },
+            environment: if config.include_prelude {
+                compile_prelude().environment.clone()
+            } else {
+                Environment::new()
             },
             config,
         };
@@ -68,6 +76,11 @@ impl Driver {
                 compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
+            },
+            environment: if config.include_prelude {
+                compile_prelude().environment.clone()
+            } else {
+                Environment::new()
             },
             config,
         }
@@ -99,8 +112,20 @@ impl Driver {
 
     pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
         let mut result = vec![];
+
         for unit in &mut self.units {
-            result.push(unit.lower(&mut self.symbol_table, &self.config));
+            let module = if self.config.include_prelude {
+                compile_prelude().module.clone()
+            } else {
+                IRModule::new()
+            };
+
+            result.push(unit.lower(
+                &mut self.symbol_table,
+                &self.config,
+                module,
+                &mut self.environment,
+            ));
         }
         result
     }
@@ -108,10 +133,11 @@ impl Driver {
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
         for unit in &mut self.units {
-            let checked = unit
-                .parse()
-                .resolved(&mut self.symbol_table)
-                .typed(&mut self.symbol_table, &self.config);
+            let checked = unit.parse().resolved(&mut self.symbol_table).typed(
+                &mut self.symbol_table,
+                &self.config,
+                &mut self.environment,
+            );
             result.push(checked);
         }
 

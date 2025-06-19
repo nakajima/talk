@@ -14,11 +14,7 @@ pub fn check(input: &str) -> Result<SourceFile<Typed>, TypeError> {
     let path = &PathBuf::from("./test.tlk");
     let mut driver = Driver::new(Default::default());
     driver.update_file(path, input.into());
-    let typed = driver.units[0]
-        .parse()
-        .resolved(&mut driver.symbol_table)
-        .typed(&mut driver.symbol_table, &Default::default());
-
+    let typed = driver.check().into_iter().next().unwrap();
     Ok(typed.source_file(path).unwrap().clone())
 }
 

@@ -3,14 +3,14 @@ macro_rules! assert_lowered_functions {
     ($left:expr, $right:expr $(,)?) => {
         match (&$left, &$right) {
             (left_val, right_val) => {
-                use talk::lowering::ir_module::IRModule;
+                use crate::lowering::ir_module::IRModule;
                 if !(*left_val.functions == *right_val) {
                     let right_program = IRModule {
                         functions: right_val.clone(),
                     };
 
+                    use crate::lowering::ir_printer::print;
                     use prettydiff::{diff_chars, diff_lines};
-                    use talk::lowering::ir_printer::print;
                     println!(
                         "{}",
                         diff_chars(
