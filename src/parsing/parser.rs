@@ -15,6 +15,7 @@ use super::{
 };
 
 pub type ExprID = i32;
+pub type ExprIDWithPath = (PathBuf, ExprID);
 pub type VariableID = u32;
 
 // for tracking begin/end tokens

@@ -4,8 +4,9 @@ use std::{
 };
 
 use crate::{
-    SymbolID, SymbolTable, diagnostic::Diagnostic, environment::Environment, scope_tree::ScopeTree,
-    span::Span, type_checker::Ty, typed_expr::TypedExpr,
+    SymbolID, SymbolTable, diagnostic::Diagnostic, environment::Environment,
+    parser::ExprIDWithPath, scope_tree::ScopeTree, span::Span, type_checker::Ty,
+    typed_expr::TypedExpr,
 };
 
 use super::{
@@ -209,6 +210,10 @@ impl<P: Phase> SourceFile<P> {
     // Gets the root expr of the tree
     pub fn root_ids(&self) -> Vec<ExprID> {
         self.roots.clone()
+    }
+
+    pub fn expr_id(&self, id: ExprID) -> ExprIDWithPath {
+        (self.path.to_path_buf(), id)
     }
 
     // Gets the expr at a given index

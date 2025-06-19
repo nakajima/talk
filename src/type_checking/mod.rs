@@ -15,6 +15,8 @@ pub mod name_resolver;
 pub mod scope_tree;
 pub mod synthesis;
 pub mod type_checker;
+#[cfg(test)]
+pub mod type_checker_tests;
 pub mod typed_expr;
 
 #[cfg(test)]
@@ -56,12 +58,30 @@ impl CheckResult {
 
 #[cfg(test)]
 pub fn check(input: &str) -> Result<CheckResult, TypeError> {
+    use crate::compiling::driver::Driver;
     use std::path::PathBuf;
 
-    use crate::compiling::driver::Driver;
-
-    let path = &PathBuf::from("./test.tlk");
+    let path = &PathBuf::from("-");
     let mut driver = Driver::new(Default::default());
+    driver.update_file(path, input.into());
+    let typed_compilation_unit = driver.check().into_iter().next().unwrap();
+    let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+    Ok(CheckResult {
+        source_file,
+        env: typed_compilation_unit.env,
+    })
+}
+
+#[cfg(test)]
+pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
+    use crate::compiling::driver::{Driver, DriverConfig};
+    use std::path::PathBuf;
+
+    let path = &PathBuf::from("-");
+    let mut driver = Driver::new(DriverConfig {
+        executable: false,
+        include_prelude: false,
+    });
     driver.update_file(path, input.into());
     let typed_compilation_unit = driver.check().into_iter().next().unwrap().clone();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();

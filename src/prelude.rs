@@ -5,7 +5,7 @@ use crate::{
     SymbolTable,
     compiling::driver::{Driver, DriverConfig},
     environment::Environment,
-    lowering::{ir_module::IRModule, ir_printer},
+    lowering::ir_module::IRModule,
 };
 
 pub struct Prelude {
@@ -52,9 +52,10 @@ pub fn _compile_prelude() -> Prelude {
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
     }
 
-    let module = driver.lower().into_iter().next().unwrap().module();
+    let unit = driver.lower().into_iter().next().unwrap();
+    let environment = unit.env.clone();
+    let module = unit.module();
     let symbols = driver.symbol_table;
-    let environment = driver.units[0].clone().env;
 
     Prelude {
         symbols,

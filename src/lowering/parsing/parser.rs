@@ -413,15 +413,13 @@ pub fn parse(code: &str) -> Result<IRModule, ParserError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolTable, check,
         compiling::driver::Driver,
-        environment::Environment,
         lowering::{
             instr::Instr,
             ir_error::IRError,
             ir_module::IRModule,
             ir_type::IRType,
-            lowerer::{BasicBlockID, Lowerer, PhiPredecessors, RefKind},
+            lowerer::{BasicBlockID, PhiPredecessors, RefKind},
             parsing::parser::parse,
             register::Register,
         },

@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     SymbolID,
-    parser::ExprID,
+    parser::{ExprID, ExprIDWithPath},
     type_checker::{Ty, TypeError},
 };
 
@@ -158,7 +158,7 @@ impl Environment {
     }
 
     #[track_caller]
-    pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
+    pub fn constrain_equality(&mut self, id: ExprIDWithPath, lhs: Ty, rhs: Ty) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::warn!(
@@ -173,12 +173,23 @@ impl Environment {
         self.constraints.push(Constraint::Equality(id, lhs, rhs))
     }
 
-    pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
+    pub fn constrain_unqualified_member(
+        &mut self,
+        id: ExprIDWithPath,
+        name: String,
+        result_ty: Ty,
+    ) {
         self.constraints
             .push(Constraint::UnqualifiedMember(id, name, result_ty))
     }
 
-    pub fn constrain_member(&mut self, id: ExprID, receiver: Ty, name: String, result_ty: Ty) {
+    pub fn constrain_member(
+        &mut self,
+        id: ExprIDWithPath,
+        receiver: Ty,
+        name: String,
+        result_ty: Ty,
+    ) {
         self.constraints
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
