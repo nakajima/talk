@@ -23,7 +23,7 @@ pub enum NameResolverError {
 impl NameResolverError {
     pub fn message(&self) -> String {
         match self {
-            Self::InvalidSelf => format!("`self` can't be used outside type"),
+            Self::InvalidSelf => "`self` can't be used outside type".to_string(),
         }
     }
 }

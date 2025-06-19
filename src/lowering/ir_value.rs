@@ -40,7 +40,7 @@ impl FromStr for IRValue {
                 match chars.next() {
                     Some('i') => {
                         let mut string = String::new();
-                        while let Some(next_char) = chars.next() {
+                        for next_char in chars {
                             string.push(next_char);
                         }
                         Ok(IRValue::ImmediateInt(

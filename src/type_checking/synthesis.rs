@@ -11,7 +11,7 @@ pub fn synthesize_inits(
 ) {
     for (sym, table) in symbol_table.types.clone() {
         if table.initializers.is_empty() {
-            log::trace!("Synthesizing init for {:?}", sym);
+            log::trace!("Synthesizing init for {sym:?}");
             let mut body_exprs: Vec<ExprID> = vec![];
 
             // We need to generate an initializer for this struct

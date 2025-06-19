@@ -152,7 +152,7 @@ fn builtins() -> Vec<Builtin> {
                 vec![
                     Ty::Pointer,
                     Ty::Int,
-                    Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)).into(),
+                    Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)),
                 ],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element))],

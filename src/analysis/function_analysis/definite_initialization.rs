@@ -129,7 +129,7 @@ impl DefiniteInitizationPass {
                         IRValue::Register(_register) => todo!(),
                     };
 
-                    if let Some(property) = self.struct_def.properties.iter().nth(*index as usize) {
+                    if let Some(property) = self.struct_def.properties.get(*index as usize) {
                         property_pointers.insert(*dest, property.clone());
                     }
                 }

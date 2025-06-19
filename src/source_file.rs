@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    SymbolID, SymbolTable, diagnostic::Diagnostic, environment::Environment,
+    diagnostic::Diagnostic, environment::Environment,
     parser::ExprIDWithPath, scope_tree::ScopeTree, span::Span, type_checker::Ty,
     typed_expr::TypedExpr,
 };
@@ -139,11 +139,7 @@ impl SourceFile<Typed> {
     // }
 
     pub fn type_for(&self, id: ExprID, env: &Environment) -> Option<Ty> {
-        if let Some(typed_expr) = env.typed_exprs.get(&(self.path.to_path_buf(), id)) {
-            Some(typed_expr.ty.clone())
-        } else {
-            None
-        }
+        env.typed_exprs.get(&(self.path.to_path_buf(), id)).map(|typed_expr| typed_expr.ty.clone())
     }
 
     // pub fn constraints(&self) -> Vec<Constraint> {

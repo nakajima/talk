@@ -142,6 +142,12 @@ pub struct Environment {
     pub types: HashMap<SymbolID, TypeDef>,
 }
 
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Environment {
     pub fn new() -> Self {
         Self {

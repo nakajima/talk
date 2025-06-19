@@ -110,7 +110,7 @@ impl<'a> ConstraintSolver<'a> {
                 log::info!("defining {node_id:?} = {lhs:?}");
                 self.env
                     .typed_exprs
-                    .get_mut(&node_id)
+                    .get_mut(node_id)
                     .map(|expr| expr.ty = lhs);
             }
             Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {

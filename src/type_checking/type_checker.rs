@@ -193,7 +193,7 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
 impl TypeChecker {
     pub fn infer(
         &self,
-        mut source_file: SourceFile<NameResolved>,
+        source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
         env: &mut Environment,
     ) -> SourceFile<Typed> {
@@ -393,8 +393,7 @@ impl TypeChecker {
             } => params,
             _ => {
                 return Err(TypeError::Unknown(format!(
-                    "Did not get init func, got: {:?}",
-                    inferred
+                    "Did not get init func, got: {inferred:?}"
                 )));
             }
         };
@@ -1264,7 +1263,7 @@ impl TypeChecker {
                 properties.clone(),
                 methods.clone(),
                 initializers
-                    .into_iter()
+                    .iter()
                     .map(|i| (source_file.path.clone(), *i))
                     .collect(),
             ));
@@ -1328,8 +1327,7 @@ impl TypeChecker {
                             Err((
                                 *id,
                                 TypeError::Unknown(
-                                    format!("Unhandled property: {:?}", source_file.get(&expr_id))
-                                        .into(),
+                                    format!("Unhandled property: {:?}", source_file.get(&expr_id)),
                                 ),
                             ))
                         };
@@ -1345,7 +1343,7 @@ impl TypeChecker {
                 properties,
                 methods,
                 initializers
-                    .into_iter()
+                    .iter()
                     .map(|i| (source_file.path.clone(), *i))
                     .collect(),
             );
