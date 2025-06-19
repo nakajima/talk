@@ -9,6 +9,7 @@ use crate::{
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
     parser::{ParserError, parse},
+    prelude::compile_prelude,
     source_file,
     type_checker::{TypeChecker, TypeError},
 };
@@ -167,6 +168,10 @@ impl CompilationUnit<Resolved> {
 
         for file in self.stage.files {
             let mut typed = if driver_config.include_prelude {
+                println!(
+                    "Inferring with env --------------------------------------------------------"
+                );
+                println!("{:#?}", compile_prelude().environment);
                 TypeChecker.infer(file, symbol_table, &mut self.env)
             } else {
                 TypeChecker.infer_without_prelude(&mut self.env, file, symbol_table)

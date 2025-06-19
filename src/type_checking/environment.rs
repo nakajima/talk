@@ -140,33 +140,16 @@ pub struct Environment {
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
-    pub direct_callables: HashMap<ExprID, SymbolID>,
 }
 
-// impl Default for Environment {
-//     fn default() -> Self {
-//         let mut env = Self::new();
-//         env.import_prelude(compile_prelude());
-//         env
-//     }
-// }
-
 impl Environment {
-    #[track_caller]
     pub fn new() -> Self {
-        println!("-> New environment!");
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            println!("from {}:{}", loc.file(), loc.line());
-        }
-
         Self {
             typed_exprs: HashMap::new(),
             type_var_id: TypeVarID(0, TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
-            direct_callables: Default::default(),
         }
     }
 
@@ -200,16 +183,6 @@ impl Environment {
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
 
-    // pub fn import_prelude(&mut self, prelude: Environment) {
-    //     println!("-> Importing prelude!");
-
-    //     // Import types
-    //     self.types = prelude.types;
-    //     self.typed_exprs = prelude.typed_exprs;
-    //     self.scopes = prelude.scopes;
-    //     self.type_var_id = prelude.type_var_id;
-    // }
-
     /// Look up the scheme for `sym`, then immediately instantiate it.
     pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
         let Some(scheme) = self
@@ -234,11 +207,11 @@ impl Environment {
     }
 
     pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        log::trace!(
+        log::info!(
             "Declaring {:?} {:?} in {:?}",
             symbol_id,
             scheme,
-            self.scopes
+            self.scopes.len()
         );
         self.scopes
             .index_mut(self.scopes.len() - 2)

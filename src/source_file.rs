@@ -154,14 +154,6 @@ impl SourceFile<Typed> {
     //     self.phase_data.env.constraints()
     // }
 
-    // pub fn register_direct_callable(&mut self, id: ExprID, symbol_id: SymbolID) {
-    //     self.phase_data.env.direct_callables.insert(id, symbol_id);
-    // }
-
-    // pub fn get_direct_callable(&self, id: &ExprID) -> Option<SymbolID> {
-    //     self.phase_data.env.direct_callables.get(id).copied()
-    // }
-
     pub fn to_parsed(&self) -> SourceFile<Parsed> {
         SourceFile {
             path: self.path.clone(),

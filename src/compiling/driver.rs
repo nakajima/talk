@@ -11,6 +11,7 @@ use crate::{
     source_file,
 };
 
+#[derive(Debug)]
 pub struct DriverConfig {
     pub executable: bool,
     pub include_prelude: bool,
@@ -35,6 +36,7 @@ impl Default for DriverConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,

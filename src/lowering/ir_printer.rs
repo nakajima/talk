@@ -14,6 +14,12 @@ pub fn print(program: &IRModule) -> String {
     printer.buffer
 }
 
+pub fn format_func(function: &IRFunction) -> String {
+    let mut printer = IRPrinter::default();
+    print_func(function, &mut printer);
+    printer.buffer
+}
+
 #[derive(Default)]
 pub struct IRPrinter {
     pub buffer: String,

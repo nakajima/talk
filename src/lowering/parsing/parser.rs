@@ -414,6 +414,7 @@ pub fn parse(code: &str) -> Result<IRModule, ParserError> {
 mod tests {
     use crate::{
         SymbolTable, check,
+        compiling::driver::Driver,
         environment::Environment,
         lowering::{
             instr::Instr,
@@ -428,12 +429,8 @@ mod tests {
     use indoc::formatdoc;
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let mut env = Environment::new();
-        let mut module = IRModule::new();
-        let lowerer = Lowerer::new(typed.source_file, &mut symbol_table, &mut env);
-        lowerer.lower(&mut module, &Default::default());
+        let mut driver = Driver::with_str(input);
+        let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }
 

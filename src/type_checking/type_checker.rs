@@ -5,6 +5,7 @@ use crate::{
     diagnostic::Diagnostic,
     environment::{EnumVariant, Method, Property, StructDef, free_type_vars},
     expr::{Expr, Pattern},
+    lsp::formatter::Formatter,
     match_builtin,
     name::Name,
     name_resolver::NameResolverError,
@@ -191,17 +192,12 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
 }
 
 impl TypeChecker {
-    #[track_caller]
     pub fn infer(
         &self,
         mut source_file: SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
         env: &mut Environment,
     ) -> SourceFile<Typed> {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            println!("TypeChecker.infer {}:{}", loc.file(), loc.line());
-        }
         synthesize_inits(&mut source_file, symbol_table);
         self.infer_without_prelude(env, source_file, symbol_table)
     }
@@ -260,8 +256,6 @@ impl TypeChecker {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let expr = source_file.get(id).unwrap().clone();
-        log::trace!("Inferring {id:?} {expr:?}");
-
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
@@ -1364,6 +1358,8 @@ impl TypeChecker {
             let expr = source_file.get(id).unwrap().clone();
 
             if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
+                println!("@@@ hoisting enum: {:?}", expr);
+
                 let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
                     unreachable!()
                 };

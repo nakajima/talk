@@ -53,7 +53,7 @@ impl<'a> ConstraintSolver<'a> {
 
     pub fn solve(&mut self) {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
-        log::info!("solving {:#?}", self.constraints);
+        log::info!("solving {:?}", self.constraints);
 
         while let Some(constraint) = self.constraints.pop() {
             match self.solve_constraint(&constraint, &mut substitutions) {
