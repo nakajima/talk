@@ -185,6 +185,18 @@ impl SourceFile<Typed> {
         self.phase_data.env.direct_callables.get(id).copied()
     }
 
+    pub fn to_parsed(&self) -> SourceFile<Parsed> {
+        SourceFile {
+            path: self.path.clone(),
+            roots: self.roots.clone(),
+            nodes: self.nodes.clone(),
+            meta: self.meta.clone(),
+            phase_data: (),
+            diagnostics: self.diagnostics.clone(),
+            scope_tree: self.scope_tree.clone(),
+        }
+    }
+
     pub fn to_lowered(self) -> SourceFile<Lowered> {
         SourceFile {
             path: self.path,

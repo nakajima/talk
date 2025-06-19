@@ -189,7 +189,7 @@ mod array_tests {
                             ty: IRType::Int,
                             addr: Register(15)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(16)))
+                        Instr::Ret(IRType::Int, Some(Register(16).into()))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),
@@ -230,7 +230,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(2)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(1)))
+                        Instr::Ret(IRType::Pointer, Some(Register(1).into()))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),
@@ -270,7 +270,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(4)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(3)))
+                        Instr::Ret(IRType::Pointer, Some(Register(3).into()))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),
@@ -318,7 +318,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             location: Register(6)
                         },
-                        Instr::Ret(IRType::Void, Some(Register(3)))
+                        Instr::Ret(IRType::Void, Some(Register(3).into()))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),
@@ -365,7 +365,7 @@ mod stdlib_tests {
                             ty: IRType::Int.into(),
                             addr: Register(5)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(3)))
+                        Instr::Ret(IRType::Int, Some(Register(3).into()))
                     ],
                 }],
                 env_ty: IRType::Struct(SymbolID::ENV, vec![]),

@@ -7,10 +7,11 @@ use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind,
     DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, Location, OneOf, Position, Range,
+    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, FullDocumentDiagnosticReport,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, Location, OneOf, Position, Range,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
@@ -366,6 +367,17 @@ impl LanguageServer for ServerState {
         &mut self,
         _: DidChangeConfigurationParams,
     ) -> ControlFlow<async_lsp::Result<()>> {
+        ControlFlow::Continue(())
+    }
+
+    fn did_change_watched_files(
+        &mut self,
+        _params: DidChangeWatchedFilesParams,
+    ) -> Self::NotifyResult {
+        ControlFlow::Continue(())
+    }
+
+    fn did_close(&mut self, _params: DidCloseTextDocumentParams) -> Self::NotifyResult {
         ControlFlow::Continue(())
     }
 }

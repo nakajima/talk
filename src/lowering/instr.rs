@@ -187,7 +187,7 @@ pub enum Instr {
 
     // Flow control
     #[doc = "ret $0 $1;"]
-    Ret(IRType, Option<Register>),
+    Ret(IRType, Option<IRValue>),
 
     #[doc = "jump $0;"]
     Jump(BasicBlockID),

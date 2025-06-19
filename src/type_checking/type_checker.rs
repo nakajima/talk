@@ -340,9 +340,7 @@ impl TypeChecker {
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, env, source_file)
             }
-            Expr::Break => {
-                Ok(Ty::Void)
-            }
+            Expr::Break => Ok(Ty::Void),
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -1299,7 +1297,13 @@ impl TypeChecker {
                     _ => {
                         return {
                             log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
-                            Err((*id, TypeError::Unknown("Unhandled property".into())))
+                            Err((
+                                *id,
+                                TypeError::Unknown(
+                                    format!("Unhandled property: {:?}", source_file.get(&expr_id))
+                                        .into(),
+                                ),
+                            ))
                         };
                     }
                 }

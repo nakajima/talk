@@ -1,16 +1,17 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    NameResolved, SourceFile, SymbolTable,
+    NameResolved, SourceFile, SymbolID, SymbolTable,
+    compiling::driver::DriverConfig,
     constraint_solver::ConstraintSolver,
-    environment::Environment,
+    environment::{Environment, TypedExprs},
     lexer::LexerError,
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
     parser::{ParserError, parse},
     prelude::compile_prelude,
     source_file,
-    type_checker::{TypeChecker, TypeError},
+    type_checker::{Scheme, TypeChecker, TypeDefs, TypeError},
 };
 
 pub trait StageTrait: std::fmt::Debug {
@@ -100,11 +101,15 @@ impl CompilationUnit<Raw> {
         }
     }
 
-    pub fn lower(&mut self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
+    pub fn lower(
+        &mut self,
+        symbol_table: &mut SymbolTable,
+        driver_config: &DriverConfig,
+    ) -> CompilationUnit<Lowered> {
         let parsed = self.parse();
         let resolved = parsed.resolved(symbol_table);
-        let typed = resolved.typed(symbol_table);
-        let lowered = typed.lower(symbol_table);
+        let typed = resolved.typed(symbol_table, &driver_config);
+        let lowered = typed.lower(symbol_table, &driver_config);
         lowered
     }
 }
@@ -149,15 +154,26 @@ impl StageTrait for Resolved {
 }
 
 impl CompilationUnit<Resolved> {
-    pub fn typed(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Typed> {
-        let prelude = compile_prelude();
+    pub fn typed(
+        self,
+        symbol_table: &mut SymbolTable,
+        driver_config: &DriverConfig,
+    ) -> CompilationUnit<Typed> {
         let mut env = Environment::new();
-        env.import_prelude(prelude);
+
+        if driver_config.include_prelude {
+            let prelude = compile_prelude();
+            env.import_prelude(prelude);
+        }
 
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
         for file in self.stage.files {
-            let mut typed = TypeChecker.infer(file, symbol_table, &mut env);
+            let mut typed = if driver_config.include_prelude {
+                TypeChecker.infer(file, symbol_table, &mut env)
+            } else {
+                TypeChecker.infer_without_prelude(&mut env, file, symbol_table)
+            };
             let mut solver = ConstraintSolver::new(&mut typed, symbol_table);
             solver.solve();
             files.push(typed);
@@ -187,18 +203,49 @@ impl StageTrait for Typed {
 }
 
 impl CompilationUnit<Typed> {
-    pub fn lower(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
+    pub fn type_defs(&self) -> TypeDefs {
+        let mut type_defs = HashMap::new();
+        for file in &self.stage.files {
+            type_defs.extend(file.type_defs());
+        }
+        type_defs
+    }
+
+    pub fn schemes(&self) -> HashMap<SymbolID, Scheme> {
+        let mut type_defs = HashMap::new();
+        for file in &self.stage.files {
+            type_defs.extend(file.clone().export().1);
+        }
+        type_defs
+    }
+
+    pub fn typed_exprs(&self) -> TypedExprs {
+        let mut type_defs = HashMap::new();
+        for file in &self.stage.files {
+            type_defs.extend(file.clone().export().2);
+        }
+        type_defs
+    }
+
+    pub fn lower(
+        self,
+        symbol_table: &mut SymbolTable,
+        driver_config: &DriverConfig,
+    ) -> CompilationUnit<Lowered> {
         let mut module = IRModule::new();
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table).lower(&mut module);
+            let lowered = Lowerer::new(file, symbol_table).lower(&mut module, driver_config);
             files.push(lowered);
         }
 
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Lowered { module, files },
+            stage: Lowered {
+                module: module.clone(),
+                files,
+            },
         }
     }
 }

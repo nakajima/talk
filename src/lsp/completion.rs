@@ -157,7 +157,7 @@ mod tests {
         position: Position,
         is_member_lookup: bool,
     ) -> Vec<CompletionItem> {
-        let mut driver = Driver::new();
+        let mut driver = Driver::new(Default::default());
         for (i, file) in files.iter().enumerate() {
             driver.update_file(&(&format!("./file-{}.tlk", i)).into(), file.to_string());
         }

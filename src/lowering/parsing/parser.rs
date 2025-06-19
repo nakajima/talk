@@ -431,7 +431,7 @@ mod tests {
         let mut symbol_table = SymbolTable::base();
         let mut module = IRModule::new();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
-        lowerer.lower(&mut module);
+        lowerer.lower(&mut module, &Default::default());
         Ok(module)
     }
 
@@ -463,7 +463,7 @@ mod tests {
         );
         assert_eq!(
             bb.instructions[3],
-            Instr::Ret(IRType::Int, Some(Register(3)))
+            Instr::Ret(IRType::Int, Some(Register(3).into()))
         );
     }
 

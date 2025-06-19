@@ -169,7 +169,7 @@ impl IRInterpreter {
                     .functions
                     .iter()
                     .position(|f| f.name == name)
-                    .unwrap();
+                    .unwrap_or_else(|| panic!("couldn't find ref: {}", name));
                 self.set_register_value(&dest, Value::Func(Pointer(idx)));
             }
             Instr::Call {
@@ -229,7 +229,11 @@ impl IRInterpreter {
             }
             Instr::Ret(_ret, reg) => {
                 if let Some(reg) = reg {
-                    let retval = self.register_value(&reg);
+                    let retval = match reg {
+                        IRValue::Register(reg) => self.register_value(&reg),
+                        IRValue::ImmediateInt(int) => Value::Int(int),
+                    };
+
                     self.stack.pop();
                     return Ok(Some(retval));
                 } else {
@@ -438,7 +442,7 @@ mod tests {
         let mut symbol_table = SymbolTable::base();
         let lowerer = Lowerer::new(typed, &mut symbol_table);
         let mut module = IRModule::new();
-        lowerer.lower(&mut module);
+        lowerer.lower(&mut module, &Default::default());
 
         // println!("{}", crate::lowering::ir_printer::print(&module));
 
@@ -614,6 +618,21 @@ mod tests {
 		counter()
     counter()
     counter()
+        "
+            )
+            .unwrap()
+        )
+    }
+
+    #[test]
+    fn interprets_array_push_get() {
+        assert_eq!(
+            Value::Int(4),
+            interpret(
+                "
+                let a = [1, 2, 3]
+                a.push(4)
+                a.get(3)
         "
             )
             .unwrap()

@@ -9,22 +9,42 @@ use crate::{
     source_file,
 };
 
+pub struct DriverConfig {
+    pub executable: bool,
+    pub include_prelude: bool,
+}
+
+impl Default for DriverConfig {
+    fn default() -> Self {
+        DriverConfig {
+            executable: true,
+            include_prelude: true,
+        }
+    }
+}
+
 pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
+    pub config: DriverConfig,
 }
 
 impl Default for Driver {
     fn default() -> Self {
-        Self::new()
+        Self::new(Default::default())
     }
 }
 
 impl Driver {
-    pub fn new() -> Self {
+    pub fn new(config: DriverConfig) -> Self {
         let mut driver = Self {
             units: vec![CompilationUnit::new(vec![])],
-            symbol_table: compile_prelude().symbols.clone(),
+            symbol_table: if config.include_prelude {
+                compile_prelude().symbols.clone()
+            } else {
+                SymbolTable::base()
+            },
+            config,
         };
 
         // Create a default unit
@@ -34,16 +54,22 @@ impl Driver {
     }
 
     pub fn with_str(string: &str) -> Self {
-        let mut driver = Driver::new();
+        let mut driver = Driver::default();
         driver.update_file(&PathBuf::from("-"), string.into());
         driver
     }
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
         let unit = CompilationUnit::new(files);
+        let config = DriverConfig::default();
         Self {
             units: vec![unit],
-            symbol_table: compile_prelude().symbols.clone(),
+            symbol_table: if config.include_prelude {
+                compile_prelude().symbols.clone()
+            } else {
+                SymbolTable::base()
+            },
+            config,
         }
     }
 
@@ -74,7 +100,7 @@ impl Driver {
     pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
         let mut result = vec![];
         for unit in &mut self.units {
-            result.push(unit.lower(&mut self.symbol_table));
+            result.push(unit.lower(&mut self.symbol_table, &self.config));
         }
         result
     }
@@ -85,7 +111,7 @@ impl Driver {
             let checked = unit
                 .parse()
                 .resolved(&mut self.symbol_table)
-                .typed(&mut self.symbol_table);
+                .typed(&mut self.symbol_table, &self.config);
             result.push(checked);
         }
 
