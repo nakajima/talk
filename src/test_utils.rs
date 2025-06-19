@@ -40,7 +40,15 @@ macro_rules! assert_lowered_function {
                     .iter()
                     .find(|f| &f.name == function_name)
                     .unwrap_or_else(|| {
-                        panic!("did not find function in compiled ir: {}", function_name)
+                        panic!(
+                            "did not find function in compiled ir: {} in {:?}",
+                            function_name,
+                            module
+                                .functions
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect::<Vec<String>>()
+                        )
                     });
 
                 if function != &expected_function {

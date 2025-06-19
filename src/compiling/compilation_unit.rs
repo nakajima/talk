@@ -111,9 +111,8 @@ impl CompilationUnit<Raw> {
     ) -> CompilationUnit<Lowered> {
         let parsed = self.parse();
         let resolved = parsed.resolved(symbol_table);
-        let typed = resolved.typed(symbol_table, &driver_config);
-        let lowered = typed.lower(symbol_table, &driver_config, module);
-        lowered
+        let typed = resolved.typed(symbol_table, driver_config);
+        typed.lower(symbol_table, driver_config, module)
     }
 }
 

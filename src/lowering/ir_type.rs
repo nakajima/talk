@@ -110,6 +110,10 @@ impl FromStr for IRType {
 
             // Recursively parse the return type
             Ok(IRType::Struct(SymbolID(0), args))
+        } else if s.starts_with('[') && s.ends_with(']') {
+            Ok(IRType::Array {
+                element: IRType::from_str(&s[1..s.len() - 1])?.into(),
+            })
         } else {
             // Handle simple, non-function types
             match s {

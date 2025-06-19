@@ -514,6 +514,8 @@ impl NameResolver {
                 symbol_table,
             );
 
+            symbol_table.initialize_type_table(struct_symbol);
+
             self.resolve_nodes(&generics, source_file, symbol_table);
 
             source_file.nodes.insert(
@@ -702,6 +704,7 @@ impl NameResolver {
             path: source_file.path.clone(),
             line: meta.start.line,
             col: meta.start.col,
+            sym: None,
         };
 
         let symbol_id = symbol_table.add(&name, kind, *expr_id, Some(definition));
@@ -913,7 +916,8 @@ mod tests {
             &Definition {
                 path: "-".into(),
                 line: 2,
-                col: 11
+                col: 11,
+                sym: None
             }
         )
     }

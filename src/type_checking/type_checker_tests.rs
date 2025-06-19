@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod struct_tests {
+mod tests {
     use crate::{SymbolID, check, expr::Expr, type_checker::Ty, typed_expr::TypedExpr};
 
     #[test]
@@ -123,7 +123,7 @@ mod struct_tests {
 }
 
 #[cfg(test)]
-mod type_checker_tests {
+mod type_tests {
     use crate::{
         SymbolID,
         environment::TypeDef,
@@ -412,6 +412,51 @@ mod type_checker_tests {
 
         assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
         assert_eq!(checker.type_for(&checker.root_ids()[2]).unwrap(), Ty::Float);
+    }
+
+    #[test]
+    fn updates_definition() {
+        let checker = check(
+            "
+            struct Person {}
+
+            let person = Person()
+
+            person
+        ",
+        );
+
+        let symbols = checker.symbols.all();
+        let person_local = symbols
+            .values()
+            .find_map(|info| {
+                if info.name == "person" {
+                    Some(info)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let person_struct = symbols
+            .iter()
+            .find_map(|(id, info)| {
+                if info.name == "Person" {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert_eq!(person_local.name, "person");
+        assert_eq!(
+            person_local.definition.as_ref().unwrap().sym.unwrap(),
+            *person_struct
+        );
+        assert_eq!(
+            checker.type_for(&checker.root_ids()[1]).unwrap(),
+            Ty::Struct(*person_struct, vec![])
+        );
     }
 
     #[test]
@@ -804,12 +849,13 @@ mod type_checker_tests {
             .some(val) -> val
             .none -> 0
         }
+
+        Optional.some(123)
         ",
         );
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
-        println!("checker: {:?}", checker.env.typed_exprs);
         assert_eq!(x_ty, Ty::Int.optional());
         match x_ty {
             Ty::Enum(symbol_id, generics) => {
@@ -822,6 +868,10 @@ mod type_checker_tests {
         // The match should return Int
         let match_ty = checker.type_for(&checker.root_ids()[2]).unwrap();
         assert_eq!(match_ty, Ty::Int);
+        assert_eq!(
+            checker.type_for(&checker.root_ids()[3]).unwrap(),
+            Ty::Int.optional()
+        );
     }
 
     #[test]
@@ -840,7 +890,7 @@ mod type_checker_tests {
         );
 
         // Should type check without errors - polymorphic function
-        let Ty::Func(args, ret, _) = checker.type_for(&checker.root_ids()[0]).unwrap() else {
+        let Ty::Func(args, _ret, _) = checker.type_for(&checker.root_ids()[0]).unwrap() else {
             panic!("did not get func")
         };
 

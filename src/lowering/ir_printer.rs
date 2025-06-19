@@ -9,6 +9,7 @@ use crate::lowering::{
 pub fn print(program: &IRModule) -> String {
     let mut printer = IRPrinter::default();
     for func in &program.functions {
+        println!("{}", format_func(func));
         print_func(func, &mut printer);
     }
     printer.buffer
@@ -147,12 +148,16 @@ pub fn format_block_id(id: &BasicBlockID) -> String {
 mod tests {
     use crate::{
         SymbolID,
-        compiling::driver::Driver,
+        compiling::driver::{Driver, DriverConfig},
         lowering::{ir_error::IRError, ir_module::IRModule, ir_printer::print},
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::with_str(input);
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: false,
+        });
+        driver.update_file(&"-".into(), input.into());
         let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }
@@ -189,8 +194,8 @@ func @main({{}} %0) void
     store ptr %4 %6;
     ret ptr %1;
                 "#,
-                SymbolID::resolved(1).0,
-                SymbolID::resolved(1).0,
+                SymbolID(1).0,
+                SymbolID(1).0,
             )
             .trim()
         )

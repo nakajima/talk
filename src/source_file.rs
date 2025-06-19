@@ -130,18 +130,13 @@ impl SourceFile<Typed> {
         }
     }
 
-    pub fn type_from_symbol(
-        &self,
-        symbol_id: &SymbolID,
-        symbol_table: &SymbolTable,
-        env: &Environment,
-    ) -> Option<Ty> {
-        if let Some(info) = symbol_table.get(symbol_id) {
-            return self.type_for(info.expr_id, env);
-        }
-
-        None
-    }
+    // pub fn type_from_symbol(
+    //     &self,
+    //     symbol_id: &SymbolID,
+    //     symbol_table: &SymbolTable,
+    //     env: &Environment,
+    // ) -> Option<Ty> {
+    // }
 
     pub fn type_for(&self, id: ExprID, env: &Environment) -> Option<Ty> {
         if let Some(typed_expr) = env.typed_exprs.get(&(self.path.to_path_buf(), id)) {

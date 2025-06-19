@@ -26,7 +26,7 @@ impl SymbolID {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SymbolKind {
     Func,
     Param,
@@ -49,6 +49,7 @@ pub struct Definition {
     pub path: PathBuf,
     pub line: u32,
     pub col: u32,
+    pub sym: Option<SymbolID>,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
@@ -58,7 +59,7 @@ pub struct PropertyInfo {
     pub default_value_id: Option<ExprID>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
@@ -181,6 +182,15 @@ impl SymbolTable {
         symbol_id
     }
 
+    pub fn initialize_type_table(&mut self, to_symbol_id: SymbolID) {
+        let table = TypeTable {
+            initializers: vec![],
+            properties: vec![],
+        };
+
+        self.types.insert(to_symbol_id, table);
+    }
+
     pub fn add_property(
         &mut self,
         to_symbol_id: SymbolID,
@@ -194,16 +204,11 @@ impl SymbolTable {
             default_value_id,
         };
 
-        if let Some(table) = self.types.get_mut(&to_symbol_id) {
-            table.properties.push(info);
-        } else {
-            let table = TypeTable {
-                initializers: vec![],
-                properties: vec![info],
-            };
+        let Some(table) = self.types.get_mut(&to_symbol_id) else {
+            unreachable!("type table unititalized for: {:?}", to_symbol_id)
+        };
 
-            self.types.insert(to_symbol_id, table);
-        }
+        table.properties.push(info);
     }
 
     pub fn add_initializer(&mut self, to_symbol_id: SymbolID, id: ExprID) {
@@ -217,6 +222,10 @@ impl SymbolTable {
 
             self.types.insert(to_symbol_id, table);
         }
+    }
+
+    pub fn initializer_for(&self, struct_id: &SymbolID) -> Option<ExprID> {
+        self.types.get(struct_id).map(|table| table.initializers[0])
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
@@ -233,5 +242,9 @@ impl SymbolTable {
 
     pub fn get(&self, symbol_id: &SymbolID) -> Option<&SymbolInfo> {
         self.symbols.get(symbol_id)
+    }
+
+    pub fn get_mut(&mut self, symbol_id: &SymbolID) -> Option<&mut SymbolInfo> {
+        self.symbols.get_mut(symbol_id)
     }
 }

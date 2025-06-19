@@ -4,6 +4,8 @@ use crate::{
     SourceFile, SymbolID, SymbolTable, Typed,
     diagnostic::Diagnostic,
     environment::{Environment, TypeDef},
+    expr::Expr,
+    name::Name,
     parser::{ExprID, ExprIDWithPath},
     type_checker::TypeError,
 };
@@ -33,7 +35,7 @@ impl Constraint {
 pub struct ConstraintSolver<'a> {
     source_file: &'a mut SourceFile<Typed>,
     env: &'a mut Environment,
-    symbol_table: &'a SymbolTable,
+    symbol_table: &'a mut SymbolTable,
     constraints: Vec<Constraint>,
 }
 
@@ -65,8 +67,28 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        for typed_expr in &mut self.env.typed_exprs.values_mut() {
+        for (_id, typed_expr) in &mut self.env.typed_exprs.iter_mut() {
             typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
+
+            let this_symbol = match typed_expr.expr {
+                Expr::Variable(Name::Resolved(symbol_id, _), _) => symbol_id,
+                _ => continue,
+            };
+
+            let def_symbol = match typed_expr.ty {
+                Ty::Struct(struct_id, _) => struct_id,
+                Ty::Enum(enum_id, _) => enum_id,
+                _ => continue,
+            };
+
+            let Some(symbol_info) = self.symbol_table.get_mut(&this_symbol) else {
+                continue;
+            };
+
+            symbol_info
+                .definition
+                .as_mut()
+                .map(|d| d.sym = Some(def_symbol));
         }
     }
 
@@ -102,12 +124,7 @@ impl<'a> ConstraintSolver<'a> {
                         // something compatible with ret_ty
                         if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
                             // Look up the enum and find the variant
-                            if let Some(_enum_info) = self.source_file.type_from_symbol(
-                                enum_id,
-                                self.symbol_table,
-                                self.env,
-                            ) && let Some(variant_info) = self.find_variant(enum_id, member_name)
-                            {
+                            if let Some(variant_info) = self.find_variant(enum_id, member_name) {
                                 // Create the constructor type for this variant
                                 let constructor_ty = self.create_variant_constructor_type(
                                     enum_id,
@@ -131,10 +148,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     Ty::Enum(enum_id, _) => {
                         // This is a valueless constructor like .none
-                        if let Some(_enum_info) =
-                            self.source_file
-                                .type_from_symbol(enum_id, self.symbol_table, self.env)
-                            && let Some(variant_info) = self.find_variant(enum_id, member_name)
+                        if let Some(variant_info) = self.find_variant(enum_id, member_name)
                             && variant_info.values.is_empty()
                         {
                             // This is a valueless variant, unify with the enum type directly
@@ -174,10 +188,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     Ty::Enum(enum_id, generics) => {
                         // Look up the enum definition
-                        if let Some(enum_info) =
-                            self.source_file
-                                .type_from_symbol(enum_id, self.symbol_table, self.env)
-                        {
+                        if let Some(enum_info) = self.env.lookup_enum(enum_id) {
                             // Check if this is a variant constructor
                             log::debug!("Enum info: {enum_info:?}");
                             if let Some(variant_info) = self.find_variant(enum_id, member_name) {
@@ -196,16 +207,16 @@ impl<'a> ConstraintSolver<'a> {
                                 Self::normalize_substitutions(substitutions);
                                 self.source_file.define(node_id.1, variant_ty, self.env);
                             } else {
-                                log::debug!("Could not find variant named {member_name:?}");
+                                log::error!("Could not find variant named {member_name:?}");
                             }
                             // Future: Check for methods, fields, etc.
                         } else {
-                            log::debug!("Could not find type from symbol: {enum_id:?}");
+                            panic!("Could not find type from symbol: {enum_id:?}");
                         }
                     }
                     // Future: Handle other receiver types (structs, etc.)
                     _ => {
-                        log::debug!(
+                        log::error!(
                             "For now just unify with the result type: {node_id:?}, {result_ty:?}"
                         );
                         // For now, just unify with the result type

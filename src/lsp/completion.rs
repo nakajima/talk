@@ -46,23 +46,22 @@ impl<'a> CompletionContext<'a> {
             self.position.character.saturating_sub(1),
         );
 
-        if let Some(ty) = self
+        if let Some(type_def) = self
             .driver
             .symbol_from_position(position_before_dot, &self.source_file.path)
-            .map(|sym| {
-                self.source_file
-                    .type_from_symbol(sym, &self.driver.symbol_table, self.env)
-            })
-            .unwrap_or(None)
+            .and_then(|sym| self.driver.symbol_table.get(sym))
+            .and_then(|info| info.definition.clone())
+            .and_then(|definition| definition.sym)
+            .and_then(|sym| self.env.lookup_type(&sym))
         {
-            let type_def = match ty {
-                Ty::Enum(symbol_id, _) => self.env.lookup_type(&symbol_id),
-                Ty::Struct(symbol_id, _) => self.env.lookup_type(&symbol_id),
-                _ => return vec![],
-            };
+            // let type_def = match ty {
+            //     Ty::Enum(symbol_id, _) => self.env.lookup_type(&symbol_id),
+            //     Ty::Struct(symbol_id, _) => self.env.lookup_type(&symbol_id),
+            //     _ => return vec![],
+            // };
 
             match type_def {
-                Some(TypeDef::Enum(enum_def)) => {
+                TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
                     completions.extend(enum_def.methods.keys().map(|label| CompletionItem {
                         label: label.clone(),
@@ -78,7 +77,7 @@ impl<'a> CompletionContext<'a> {
 
                     completions
                 }
-                Some(TypeDef::Struct(struct_def)) => {
+                TypeDef::Struct(struct_def) => {
                     let mut completions = vec![];
                     completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
                         label: label.clone(),
@@ -92,9 +91,9 @@ impl<'a> CompletionContext<'a> {
                     }));
                     completions
                 }
-                _ => vec![],
             }
         } else {
+            println!("did not get struct: {:?}", self.env.types);
             vec![]
         }
     }
@@ -164,8 +163,10 @@ mod tests {
             driver.update_file(&(&format!("./file-{}.tlk", i)).into(), file.to_string());
         }
 
-        let source_file = &driver.typed_source_file(&"./file-0.tlk".into()).unwrap();
-        let env = &driver.units[0].env.clone();
+        let checked = driver.check();
+        let checked_unit = checked.iter().next().unwrap();
+        let source_file = checked_unit.source_file(&"./file-0.tlk".into()).unwrap();
+        let env = &checked_unit.env.clone();
 
         CompletionContext {
             driver: &driver,

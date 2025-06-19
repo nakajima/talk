@@ -1,6 +1,6 @@
 #[cfg(test)]
 use crate::{
-    SourceFile, Typed,
+    SourceFile, SymbolTable, Typed,
     diagnostic::Diagnostic,
     environment::Environment,
     expr::Expr,
@@ -23,6 +23,7 @@ pub mod typed_expr;
 pub struct CheckResult {
     pub source_file: SourceFile<Typed>,
     pub env: Environment,
+    pub symbols: SymbolTable,
 }
 
 #[cfg(test)]
@@ -66,9 +67,11 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     driver.update_file(path, input.into());
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+
     Ok(CheckResult {
         source_file,
         env: typed_compilation_unit.env,
+        symbols: driver.symbol_table,
     })
 }
 
@@ -88,6 +91,7 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
     Ok(CheckResult {
         source_file,
         env: typed_compilation_unit.env,
+        symbols: driver.symbol_table,
     })
 }
 

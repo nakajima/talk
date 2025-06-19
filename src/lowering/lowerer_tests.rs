@@ -16,6 +16,7 @@ pub mod lowering_tests {
             },
             register::Register,
         },
+        prelude::compile_prelude,
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
@@ -28,7 +29,7 @@ pub mod lowering_tests {
         let diagnostics = lowered.source_file(&"-".into()).unwrap().diagnostics();
         let module = lowered.module().clone();
 
-        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         Ok(module)
     }
 
@@ -129,13 +130,16 @@ pub mod lowering_tests {
         )
         .unwrap();
 
+        let t3 = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
+        let t4 = format!("T{}", compile_prelude().environment.type_var_id.0 + 4);
+
         assert_lowered_functions!(
             lowered,
             vec![
                 IRFunction {
                     ty: IRType::Func(
-                        vec![IRType::TypeVar("T3".into())],
-                        Box::new(IRType::TypeVar("T4".into()))
+                        vec![IRType::TypeVar(t3.clone())],
+                        Box::new(IRType::TypeVar(t4.clone()))
                     ),
                     name: format!("@_{}_foo", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
@@ -161,8 +165,8 @@ pub mod lowering_tests {
                             Instr::Load {
                                 dest: Register(5),
                                 ty: IRType::Func(
-                                    vec![IRType::TypeVar("T3".into())],
-                                    IRType::TypeVar("T4".into()).into()
+                                    vec![IRType::TypeVar(t3.clone())],
+                                    IRType::TypeVar(t4.clone()).into()
                                 ),
                                 addr: Register(4)
                             },
@@ -179,13 +183,13 @@ pub mod lowering_tests {
                             },
                             Instr::Call {
                                 dest_reg: Register(8),
-                                ty: IRType::TypeVar("T4".into()),
+                                ty: IRType::TypeVar(t4.clone()),
                                 callee: Callee::Register(Register(5)),
                                 args: RegisterList(vec![Register(7), Register(1)])
                             },
                             // The `return x` becomes a Ret instruction using the argument register.
                             // In our calling convention, the env is %0, so x is %1.
-                            Instr::Ret(IRType::TypeVar("T4".into()), Some(Register(8).into())),
+                            Instr::Ret(IRType::TypeVar(t4.clone()), Some(Register(8).into())),
                         ],
                     }],
                     env_ty: IRType::Struct(SymbolID::ENV, vec![IRType::Pointer]),
@@ -220,8 +224,8 @@ pub mod lowering_tests {
                             Instr::Ref(
                                 Register(4),
                                 IRType::Func(
-                                    vec![IRType::TypeVar("T3".into())],
-                                    IRType::TypeVar("T4".into()).into()
+                                    vec![IRType::TypeVar(t3.clone())],
+                                    IRType::TypeVar(t4.clone()).into()
                                 ),
                                 RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0))
                             ),
@@ -361,128 +365,134 @@ pub mod lowering_tests {
     fn lowers_calls() {
         let lowered = lower("func foo(x) { x }\nfoo(123)").unwrap();
 
+        let type_var = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
+
         let foo_func_type = IRType::Func(
-            vec![IRType::TypeVar("T3".into())],
-            Box::new(IRType::TypeVar("T3".into())),
+            vec![IRType::TypeVar(type_var.clone().into())],
+            Box::new(IRType::TypeVar(type_var.clone().into())),
         );
 
-        let foo_name = format!("@_{}_foo", SymbolID::typed(1).0);
+        let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
 
-        assert_lowered_functions!(
+        assert_lowered_function!(
             lowered,
-            vec![
-                IRFunction {
-                    ty: foo_func_type.clone(),
-                    name: foo_name.clone(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![Instr::Ret(
-                            IRType::TypeVar("T3".into()),
-                            Some(Register(1).into())
-                        )],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                    env_reg: Register(0)
-                },
-                IRFunction {
-                    ty: IRType::Func(vec![], IRType::Void.into()),
-                    name: "@main".into(),
-                    blocks: vec![BasicBlock {
-                        id: BasicBlockID(0),
-                        instructions: vec![
-                            Instr::Alloc {
-                                dest: Register(1),
-                                count: None,
-                                ty: IRType::closure()
-                            },
-                            Instr::MakeStruct {
-                                dest: Register(2),
-                                ty: IRType::EMPTY_STRUCT,
-                                values: RegisterList::EMPTY
-                            },
-                            Instr::Alloc {
-                                dest: Register(3),
-                                count: None,
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Store {
-                                val: Register(2),
-                                location: Register(3),
-                                ty: IRType::EMPTY_STRUCT
-                            },
-                            Instr::Ref(Register(4), foo_func_type.clone(), RefKind::Func(foo_name)),
-                            Instr::GetElementPointer {
-                                dest: Register(5),
-                                base: Register(1),
-                                index: 1.into(),
-                                ty: IRType::closure()
-                            },
-                            Instr::GetElementPointer {
-                                dest: Register(6),
-                                base: Register(1),
-                                index: 0.into(),
-                                ty: IRType::closure()
-                            },
-                            Instr::Store {
-                                val: Register(3),
-                                location: Register(5),
-                                ty: IRType::Pointer
-                            },
-                            Instr::Store {
-                                val: Register(4),
-                                location: Register(6),
-                                ty: IRType::Pointer
-                            },
-                            // %4 now holds the pointer to the `foo` closure.
+            foo_name,
+            IRFunction {
+                ty: foo_func_type.clone(),
+                name: foo_name.clone(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![Instr::Ret(
+                        IRType::TypeVar(type_var.into()),
+                        Some(Register(1).into())
+                    )],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            }
+        );
+        assert_lowered_function!(
+            lowered,
+            "@main",
+            IRFunction {
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        Instr::Alloc {
+                            dest: Register(1),
+                            count: None,
+                            ty: IRType::closure()
+                        },
+                        Instr::MakeStruct {
+                            dest: Register(2),
+                            ty: IRType::EMPTY_STRUCT,
+                            values: RegisterList::EMPTY
+                        },
+                        Instr::Alloc {
+                            dest: Register(3),
+                            count: None,
+                            ty: IRType::EMPTY_STRUCT
+                        },
+                        Instr::Store {
+                            val: Register(2),
+                            location: Register(3),
+                            ty: IRType::EMPTY_STRUCT
+                        },
+                        Instr::Ref(Register(4), foo_func_type.clone(), RefKind::Func(foo_name)),
+                        Instr::GetElementPointer {
+                            dest: Register(5),
+                            base: Register(1),
+                            index: 1.into(),
+                            ty: IRType::closure()
+                        },
+                        Instr::GetElementPointer {
+                            dest: Register(6),
+                            base: Register(1),
+                            index: 0.into(),
+                            ty: IRType::closure()
+                        },
+                        Instr::Store {
+                            val: Register(3),
+                            location: Register(5),
+                            ty: IRType::Pointer
+                        },
+                        Instr::Store {
+                            val: Register(4),
+                            location: Register(6),
+                            ty: IRType::Pointer
+                        },
+                        // %4 now holds the pointer to the `foo` closure.
 
-                            // === Part 2: Call the closure ===
+                        // === Part 2: Call the closure ===
 
-                            // 1. Prepare the explicit argument(s).
-                            Instr::ConstantInt(Register(7), 123),
-                            // 2. Unpack the closure object from %4.
-                            // You need to introduce a Load instruction here.
-                            Instr::GetElementPointer {
-                                dest: Register(8),
-                                base: Register(1),
-                                index: 0.into(),
-                                ty: IRType::closure()
-                            },
-                            Instr::Load {
-                                dest: Register(9),
-                                ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
-                                addr: Register(8)
-                            }, // Load the func_ptr
-                            Instr::GetElementPointer {
-                                dest: Register(10),
-                                base: Register(1),
-                                index: 1.into(),
-                                ty: IRType::closure()
-                            },
-                            Instr::Load {
-                                dest: Register(11),
-                                ty: IRType::Pointer,
-                                addr: Register(10)
-                            }, // Load the env_ptr
-                            // 3. Make the indirect call.
-                            Instr::Call {
-                                dest_reg: Register(12),
-                                ty: IRType::Int,
-                                callee: Register(9).into(), // The loaded function pointer
-                                args: RegisterList(vec![Register(11), Register(7)]), // (env_ptr, arg)
-                            },
-                            // 4. Return the result of the call.
-                            Instr::Ret(IRType::Int, Some(Register(12).into()))
-                        ],
-                    }],
-                    env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                    env_reg: Register(0)
-                },
-            ]
-        )
+                        // 1. Prepare the explicit argument(s).
+                        Instr::ConstantInt(Register(7), 123),
+                        // 2. Unpack the closure object from %4.
+                        // You need to introduce a Load instruction here.
+                        Instr::GetElementPointer {
+                            dest: Register(8),
+                            base: Register(1),
+                            index: 0.into(),
+                            ty: IRType::closure()
+                        },
+                        Instr::Load {
+                            dest: Register(9),
+                            ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                            addr: Register(8)
+                        }, // Load the func_ptr
+                        Instr::GetElementPointer {
+                            dest: Register(10),
+                            base: Register(1),
+                            index: 1.into(),
+                            ty: IRType::closure()
+                        },
+                        Instr::Load {
+                            dest: Register(11),
+                            ty: IRType::Pointer,
+                            addr: Register(10)
+                        }, // Load the env_ptr
+                        // 3. Make the indirect call.
+                        Instr::Call {
+                            dest_reg: Register(12),
+                            ty: IRType::Int,
+                            callee: Register(9).into(), // The loaded function pointer
+                            args: RegisterList(vec![Register(11), Register(7)]), // (env_ptr, arg)
+                        },
+                        // 4. Return the result of the call.
+                        Instr::Ret(IRType::Int, Some(Register(12).into()))
+                    ],
+                }],
+                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
+                env_reg: Register(0)
+            },
+        );
     }
 
     #[test]
     fn lowers_func_with_params() {
+        let type_var = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
         let lowered = lower("func foo(x) { x }").unwrap();
         let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
         assert_lowered_function!(
@@ -490,14 +500,14 @@ pub mod lowering_tests {
             foo_name,
             IRFunction {
                 ty: IRType::Func(
-                    vec![IRType::TypeVar("T3".into())],
-                    IRType::TypeVar("T3".into()).into()
+                    vec![IRType::TypeVar(type_var.clone())],
+                    IRType::TypeVar(type_var.clone()).into()
                 ),
                 name: format!("@_{}_foo", SymbolID::resolved(1).0),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![Instr::Ret(
-                        IRType::TypeVar("T3".into()),
+                        IRType::TypeVar(type_var.clone()),
                         Some(Register(1).into())
                     )],
                 }],
@@ -542,8 +552,8 @@ pub mod lowering_tests {
                         Instr::Ref(
                             Register(4),
                             IRType::Func(
-                                vec![IRType::TypeVar("T3".into())],
-                                IRType::TypeVar("T3".into()).into()
+                                vec![IRType::TypeVar(type_var.clone())],
+                                IRType::TypeVar(type_var.clone()).into()
                             ),
                             RefKind::Func(format!("@_{}_foo", SymbolID::resolved(1).0))
                         ),

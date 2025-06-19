@@ -323,8 +323,8 @@ impl<'a> Parser<'a> {
     }
 
     fn type_repr(&mut self) -> Result<IRType, ParserError> {
-        let ty = match &self.current {
-            Some(tok) => match tok.kind {
+        let ty = match self.current.clone() {
+            Some(tok) => match &tok.kind {
                 Tokind::Int => {
                     self.advance();
                     IRType::Int
@@ -359,6 +359,10 @@ impl<'a> Parser<'a> {
                     }
 
                     IRType::Struct(SymbolID(0), types)
+                }
+                Tokind::Identifier(name) if name.starts_with("T") => {
+                    self.advance();
+                    IRType::TypeVar(name.clone())
                 }
                 _ => todo!("{:?}", tok.kind),
             },
@@ -631,6 +635,6 @@ mod tests {
         // println!("{}", func);
         let parsed = parse(&func).unwrap();
 
-        assert_eq!(parsed.functions.len(), 2);
+        assert_eq!(parsed.functions.len(), 5);
     }
 }

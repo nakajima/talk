@@ -98,7 +98,7 @@ impl Driver {
             .insert(path.clone(), contents.clone());
     }
 
-    pub fn parse(&mut self) -> Vec<CompilationUnit<Parsed>> {
+    pub fn parse(&self) -> Vec<CompilationUnit<Parsed>> {
         let mut result = vec![];
         for unit in self.units.clone() {
             result.push(unit.parse());
@@ -110,14 +110,19 @@ impl Driver {
         let mut result = vec![];
 
         for unit in self.units.clone() {
+            let parsed = unit.parse();
+            let resolved = parsed.resolved(&mut self.symbol_table);
+            let typed = resolved.typed(&mut self.symbol_table, &self.config);
+
             let module = if self.config.include_prelude {
                 compile_prelude().module.clone()
             } else {
                 IRModule::new()
             };
 
-            result.push(unit.lower(&mut self.symbol_table, &self.config, module));
+            result.push(typed.lower(&mut self.symbol_table, &self.config, module));
         }
+
         result
     }
 
@@ -284,7 +289,7 @@ mod tests {
 
     #[test]
     fn handle_parse_err() {
-        let mut driver = Driver::with_files(vec!["../../dev/fixtures/parse_err/fizz.tlk".into()]);
+        let driver = Driver::with_files(vec!["../../dev/fixtures/parse_err/fizz.tlk".into()]);
         driver.parse();
     }
 }

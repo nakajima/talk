@@ -1713,25 +1713,19 @@ impl<'a> Lowerer<'a> {
         args: Vec<ExprID>,
         ty: Ty,
     ) -> Option<Register> {
+        let callee_typed_expr = self.source_file.typed_expr(&callee, self.env)?;
+
         // Handle builtins
-        if let Some(Expr::Variable(Name::Resolved(symbol, _), _)) =
-            self.source_file.get(&callee).cloned()
+        if let Expr::Variable(Name::Resolved(symbol, _), _) = &callee_typed_expr.expr
+            && crate::builtins::is_builtin_func(symbol)
         {
-            let callee_typed_expr = self.source_file.typed_expr(&callee, &self.env).unwrap();
-            if crate::builtins::is_builtin_func(&symbol) {
-                return match super::builtins::lower_builtin(
-                    &symbol,
-                    &callee_typed_expr,
-                    &args,
-                    self,
-                ) {
-                    Ok(res) => return res,
-                    Err(e) => {
-                        self.push_err(e.message().as_str(), callee);
-                        None
-                    }
-                };
-            }
+            return match super::builtins::lower_builtin(symbol, &callee_typed_expr, &args, self) {
+                Ok(res) => return res,
+                Err(e) => {
+                    self.push_err(e.message().as_str(), callee);
+                    None
+                }
+            };
         }
 
         let mut arg_registers = vec![];
@@ -1742,8 +1736,6 @@ impl<'a> Lowerer<'a> {
                 self.push_err("Argument expression did not produce a value for call", *arg);
             }
         }
-
-        let callee_typed_expr = self.source_file.typed_expr(&callee, &self.env).unwrap();
 
         // Handle enum variant construction
         if let Ty::Enum(enum_id, _) = &ty {
@@ -1814,7 +1806,7 @@ impl<'a> Lowerer<'a> {
             };
 
             let Some(receiver) = self.lower_expr(&receiver) else {
-                log::error!("could not lower member receiver");
+                log::error!("could not lower member receiver: {:?}", ty);
                 return None;
             };
 

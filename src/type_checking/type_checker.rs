@@ -197,7 +197,6 @@ impl TypeChecker {
         symbol_table: &mut SymbolTable,
         env: &mut Environment,
     ) -> SourceFile<Typed> {
-        synthesize_inits(&mut source_file, symbol_table);
         self.infer_without_prelude(env, source_file, symbol_table)
     }
 
@@ -226,7 +225,7 @@ impl TypeChecker {
         symbol_table: &mut SymbolTable,
     ) -> SourceFile<Typed> {
         let root_ids = source_file.root_ids();
-
+        synthesize_inits(&mut source_file, symbol_table);
         self.hoist(&root_ids, env, &mut source_file, symbol_table);
 
         let mut typed_roots = vec![];
@@ -761,7 +760,7 @@ impl TypeChecker {
             func_var = Some(type_var.clone());
             let scheme = env.generalize(&Ty::TypeVar(type_var));
             env.declare(*symbol_id, scheme);
-            log::debug!("Declared scheme for named func {symbol_id:?}, {env:?}");
+            log::debug!("Declared scheme for named func {symbol_id:?}");
         }
 
         env.start_scope();
