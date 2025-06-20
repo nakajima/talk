@@ -1,6 +1,6 @@
 use crate::{
     interpreter::{heap::Pointer, interpreter::InterpreterError},
-    lowering::ir_type::IRType,
+    lowering::{ir_type::IRType, register::Register},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +21,9 @@ pub enum Value {
         count: usize,
         capacity: usize,
     },
+    // This one is kind of a hack. Until we start emulating a stack and the other Pointer makes
+    // sense we're going with this.
+    GEPPointer(Register, usize),
 }
 
 impl Value {
@@ -119,6 +122,9 @@ impl Value {
                         .collect::<Vec<u8>>(),
                 );
                 bytes
+            }
+            Value::GEPPointer(_reg, _index) => {
+                vec![]
             }
         }
     }

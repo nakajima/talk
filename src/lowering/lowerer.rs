@@ -808,11 +808,8 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_init(&mut self, symbol_id: &SymbolID, func_id: &ExprID) -> Option<Register> {
-        let Some((struct_ty, struct_def, typed_func, env, _)) =
-            self.setup_self_context(symbol_id, func_id)
-        else {
-            return None;
-        };
+        let (struct_ty, struct_def, typed_func, env, _) =
+            self.setup_self_context(symbol_id, func_id)?;
 
         let loaded_reg = self.allocate_register();
         self.push_instr(Instr::Load {
@@ -859,11 +856,8 @@ impl<'a> Lowerer<'a> {
         func_id: &ExprID,
         name: &str,
     ) -> Option<Register> {
-        let Some((struct_ty, struct_def, typed_func, env, ret)) =
-            self.setup_self_context(symbol_id, func_id)
-        else {
-            return None;
-        };
+        let (struct_ty, struct_def, typed_func, env, ret) =
+            self.setup_self_context(symbol_id, func_id)?;
 
         let (Ty::Func(_, ret_ty, _)
         | Ty::Closure {
@@ -1308,7 +1302,7 @@ impl<'a> Lowerer<'a> {
         expr_id: &ExprID,
         name: &str,
     ) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id, self.env).unwrap();
+        let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         if let Ty::Enum(sym, _generics) = &typed_expr.ty {
             // Since we got called directly from lower_expr, this is variant that doesn't
@@ -1317,7 +1311,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let Some(receiver_id) = receiver_id else {
-            unreachable!();
+            unreachable!("we shouldn't have a receiver but it's not an enum");
         };
 
         let Some(receiver) = self.lower_expr(receiver_id) else {

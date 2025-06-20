@@ -1553,7 +1553,6 @@ pub mod lowering_tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID(0),
                         instructions: vec![
-                            // self.age = age
                             Instr::GetElementPointer {
                                 dest: Register(2),
                                 base: Register(0), // self is in register 0

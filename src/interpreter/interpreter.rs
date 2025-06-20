@@ -334,28 +334,25 @@ impl IRInterpreter {
 
                 self.heap.store(&ptr, &self.register_value(&val), &ty)
             }
-            Instr::Load { dest, addr, ty } => {
-                let Value::Pointer(ptr) = self.register_value(&addr) else {
-                    panic!("no pointer at location: {addr}")
-                };
-
-                let val = self.heap.load(&ptr, &ty);
-                self.set_register_value(&dest, val.clone());
-            }
+            Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
+                Value::Pointer(ptr) => {
+                    let val = self.heap.load(&ptr, &ty);
+                    self.set_register_value(&dest, val.clone());
+                }
+                Value::GEPPointer(reg, index) => {
+                    let Value::Struct(values) = self.register_value(&reg) else {
+                        panic!("no register found for gep");
+                    };
+                    self.set_register_value(&dest, values[index].clone());
+                }
+                _ => panic!("unable to load {:?}", self.register_value(&addr)),
+            },
             Instr::GetElementPointer {
                 dest,
                 base: from,
                 index,
                 ty,
             } => {
-                let Value::Pointer(ptr) = self.register_value(&from) else {
-                    panic!(
-                        "no pointer found in register: {} in {:?}",
-                        from,
-                        self.stack.last().unwrap().registers
-                    );
-                };
-
                 let index = match index {
                     IRValue::ImmediateInt(int) => int,
                     IRValue::Register(reg) => {
@@ -366,12 +363,19 @@ impl IRInterpreter {
                         }
                     }
                 };
+                match self.register_value(&from) {
+                    Value::Pointer(ptr) => {
+                        let pointer = ty
+                            .get_element_pointer(ptr, index as usize)
+                            .map_err(InterpreterError::IRError)?;
 
-                let pointer = ty
-                    .get_element_pointer(ptr, index as usize)
-                    .map_err(InterpreterError::IRError)?;
-
-                self.set_register_value(&dest, Value::Pointer(pointer));
+                        self.set_register_value(&dest, Value::Pointer(pointer));
+                    }
+                    Value::Struct(_) => {
+                        self.set_register_value(&dest, Value::GEPPointer(from, index as usize));
+                    }
+                    _ => panic!("unable to gep: {:?}", self.register_value(&from)),
+                }
             }
             Instr::MakeStruct { dest, values, .. } => {
                 let structure = Value::Struct(self.register_values(&values));
@@ -442,7 +446,7 @@ mod tests {
         let mut driver = Driver::with_str(code);
         let module = driver.lower().into_iter().next().unwrap().module();
 
-        // println!("{}", crate::lowering::ir_printer::print(&module));
+        println!("{}", crate::lowering::ir_printer::print(&module));
 
         IRInterpreter::new(module).run()
     }
