@@ -331,6 +331,7 @@ impl NameResolver {
                             // Check to see if this is a capture
                             if let Some((func_id, func_depth)) = self.func_stack.last()
                                 && &depth < func_depth
+                                && symbol_id.0 > 0
                             {
                                 let Func { captures, .. } = source_file.get_mut(func_id).unwrap()
                                 else {
@@ -1153,6 +1154,29 @@ mod tests {
                 body: 5.into(),
                 ret: None,
                 captures: vec![SymbolID::resolved(2)],
+            }
+        );
+    }
+
+    #[test]
+    fn doesnt_mark_builtins_as_captured() {
+        let resolved = resolve(
+            "
+        func fizz() {
+            __alloc<Int>(123)
+        }
+        ",
+        );
+
+        assert_eq!(
+            *resolved.roots()[0].unwrap(),
+            Func {
+                name: Some(Name::Resolved(SymbolID::resolved(1), "fizz".into())),
+                generics: vec![],
+                params: vec![],
+                body: 5.into(),
+                ret: None,
+                captures: vec![],
             }
         );
     }

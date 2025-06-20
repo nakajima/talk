@@ -139,7 +139,9 @@ impl SymbolTable {
     }
 
     pub fn mark_as_captured(&mut self, symbol_id: &SymbolID) {
-        if let Some(info) = self.symbols.get_mut(symbol_id) {
+        if let Some(info) = self.symbols.get_mut(symbol_id)
+            && symbol_id.0 > 0
+        {
             info.is_captured = true;
         }
     }

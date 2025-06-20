@@ -8,7 +8,7 @@ use crate::{
     },
     compiling::driver::DriverConfig,
     diagnostic::Diagnostic,
-    environment::{EnumVariant, Environment, StructDef, TypeDef},
+    environment::{Environment, StructDef, TypeDef},
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::Instr, ir_error::IRError, ir_module::IRModule, ir_type::IRType, ir_value::IRValue,
@@ -348,7 +348,7 @@ impl CurrentFunction {
         self.symbol_registers.insert(symbol_id, register);
     }
 
-    fn lookup_symbol(&self, symbol_id: &SymbolID) -> Option<&SymbolValue> {
+    fn _lookup_symbol(&self, symbol_id: &SymbolID) -> Option<&SymbolValue> {
         self.symbol_registers.get(symbol_id)
     }
 }
@@ -408,6 +408,7 @@ pub struct Lowerer<'a> {
     lowered_functions: Vec<IRFunction>,
     symbol_table: &'a mut SymbolTable,
     loop_exits: Vec<BasicBlockID>,
+    globals: HashMap<SymbolID, SymbolValue>,
     pub env: &'a mut Environment,
 }
 
@@ -422,6 +423,7 @@ impl<'a> Lowerer<'a> {
             current_functions: vec![],
             lowered_functions: Default::default(),
             symbol_table,
+            globals: HashMap::new(),
             loop_exits: vec![],
             env,
         }
@@ -774,8 +776,7 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        self.current_func_mut()
-            .register_symbol(struct_id, SymbolValue::Struct(struct_def));
+        self.register_global(&struct_id, SymbolValue::Struct(struct_def));
 
         None
     }
@@ -1421,7 +1422,6 @@ impl<'a> Lowerer<'a> {
         };
 
         let mut tag: Option<u16> = None;
-        let mut variant: Option<&EnumVariant> = None;
 
         for (i, var) in type_def.variants.iter().enumerate() {
             if var.name != variant_name {
@@ -1429,7 +1429,6 @@ impl<'a> Lowerer<'a> {
             }
 
             tag = Some(i as u16);
-            variant = Some(var);
         }
 
         let Some(tag) = tag else {
@@ -1755,7 +1754,8 @@ impl<'a> Lowerer<'a> {
         | Ty::Closure {
             func: box Ty::Func(params, _, _),
             ..
-        }) = &callee_typed_expr.ty
+        }
+        | Ty::Init(_, params)) = &callee_typed_expr.ty
         else {
             return None;
         };
@@ -2052,10 +2052,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lookup_register(&self, symbol_id: &SymbolID) -> Option<&SymbolValue> {
-        self.current_functions
+        self.lookup_symbol(symbol_id)
+    }
+
+    fn lookup_symbol(&self, symbol_id: &SymbolID) -> Option<&SymbolValue> {
+        if let Some(val) = self
+            .current_functions
             .last()
-            .unwrap()
-            .lookup_symbol(symbol_id)
+            .and_then(|f| f._lookup_symbol(symbol_id))
+        {
+            return Some(val);
+        }
+
+        return self.globals.get(symbol_id);
+    }
+
+    fn register_global(&mut self, symbol_id: &SymbolID, value: SymbolValue) {
+        self.globals.insert(*symbol_id, value);
     }
 
     fn current_func_mut(&mut self) -> &mut CurrentFunction {
