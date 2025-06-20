@@ -6,7 +6,7 @@ use crate::{
     lowering::{ir_error::IRError, parsing::parser::ParserError},
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IRType {
     Void,
     Int,

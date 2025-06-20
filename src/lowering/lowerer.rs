@@ -8,7 +8,7 @@ use crate::{
     },
     compiling::driver::DriverConfig,
     diagnostic::Diagnostic,
-    environment::{Environment, StructDef, TypeDef},
+    environment::{EnumVariant, Environment, StructDef, TypeDef},
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::Instr, ir_error::IRError, ir_module::IRModule, ir_type::IRType, ir_value::IRValue,
@@ -200,16 +200,16 @@ impl FromStr for PhiPredecessors {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct RegisterList(pub Vec<Register>);
+pub struct TypedRegister {
+    ty: IRType,
+    register: Register,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegisterList(pub Vec<TypedRegister>);
 
 impl RegisterList {
     pub const EMPTY: RegisterList = RegisterList(vec![]);
-}
-
-impl From<Vec<Register>> for RegisterList {
-    fn from(value: Vec<Register>) -> Self {
-        Self(value)
-    }
 }
 
 impl std::fmt::Display for RegisterList {
@@ -218,9 +218,30 @@ impl std::fmt::Display for RegisterList {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{reg}")?;
+            write!(f, "{} {}", reg.ty, reg.register)?;
         }
         Ok(())
+    }
+}
+impl FromStr for TypedRegister {
+    type Err = IRError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let mut parts = s.split(' ');
+
+        let Some(ty_str) = parts.next() else {
+            return Err(IRError::ParseError);
+        };
+
+        let Some(reg_str) = parts.next() else {
+            return Err(IRError::ParseError);
+        };
+
+        Ok(TypedRegister {
+            ty: str::parse(ty_str).map_err(|_| IRError::ParseError)?,
+            register: str::parse(reg_str).map_err(|_| IRError::ParseError)?,
+        })
     }
 }
 
@@ -238,8 +259,8 @@ impl FromStr for RegisterList {
 
         // For non-empty arguments, split by comma and parse each part.
         s.split(',')
-            .map(|part| part.trim().parse::<Register>())
-            .collect::<Result<Vec<Register>, _>>()
+            .map(|part| part.trim().parse::<TypedRegister>())
+            .collect::<Result<Vec<TypedRegister>, _>>()
             .map(RegisterList)
             .map_err(|_e| IRError::ParseError)
     }
@@ -1276,18 +1297,34 @@ impl<'a> Lowerer<'a> {
                     panic!("didn't get type def for {enum_id:?}");
                 };
 
-                let tag = type_def
+                let (tag, variant) = type_def
                     .variants
                     .iter()
-                    .position(|v| v.name == variant_name)
-                    .unwrap() as u16;
+                    .enumerate()
+                    .find_map(|(i, v)| {
+                        if v.name == variant_name {
+                            Some((i, v))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
 
                 let dest = self.allocate_register();
-                let args = RegisterList(fields.iter().map(|f| self._lower_pattern(f)).collect());
+                let args = RegisterList(
+                    fields
+                        .iter()
+                        .zip(&variant.values)
+                        .map(|(f, ty)| TypedRegister {
+                            ty: ty.to_ir(self),
+                            register: self._lower_pattern(f),
+                        })
+                        .collect(),
+                );
                 self.push_instr(Instr::TagVariant(
                     dest,
                     pattern_typed_expr.ty.to_ir(self),
-                    tag,
+                    tag as u16,
                     args,
                 ));
 
@@ -1369,13 +1406,14 @@ impl<'a> Lowerer<'a> {
         enum_id: SymbolID,
         variant_name: &str,
         ty: &Ty,
-        args: &[Register],
+        args: &[TypedRegister],
     ) -> Option<Register> {
         let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
             panic!("didn't get type def for {enum_id:?}");
         };
 
         let mut tag: Option<u16> = None;
+        let mut variant: Option<&EnumVariant> = None;
 
         for (i, var) in type_def.variants.iter().enumerate() {
             if var.name != variant_name {
@@ -1383,6 +1421,7 @@ impl<'a> Lowerer<'a> {
             }
 
             tag = Some(i as u16);
+            variant = Some(var);
         }
 
         let Some(tag) = tag else {
@@ -1394,7 +1433,7 @@ impl<'a> Lowerer<'a> {
             dest,
             ty.to_ir(self),
             tag,
-            args.to_vec().into(),
+            RegisterList(args.to_vec()),
         ));
 
         Some(dest)
@@ -1704,6 +1743,14 @@ impl<'a> Lowerer<'a> {
         ty: Ty,
     ) -> Option<Register> {
         let callee_typed_expr = self.source_file.typed_expr(&callee, self.env)?;
+        let (Ty::Func(params, _, _)
+        | Ty::Closure {
+            func: box Ty::Func(params, _, _),
+            ..
+        }) = &callee_typed_expr.ty
+        else {
+            return None;
+        };
 
         // Handle builtins
         if let Expr::Variable(Name::Resolved(symbol, _), _) = &callee_typed_expr.expr
@@ -1719,9 +1766,12 @@ impl<'a> Lowerer<'a> {
         }
 
         let mut arg_registers = vec![];
-        for arg in &args {
+        for (i, arg) in args.iter().enumerate() {
             if let Some(arg_reg) = self.lower_expr(arg) {
-                arg_registers.push(arg_reg);
+                arg_registers.push(TypedRegister {
+                    ty: params[i].to_ir(self),
+                    register: arg_reg,
+                });
             } else {
                 self.push_err("Argument expression did not produce a value for call", *arg);
             }
@@ -1769,7 +1819,10 @@ impl<'a> Lowerer<'a> {
             ));
 
             // The first argument to the init function is the struct instance itself
-            let mut call_args = vec![struct_instance_reg];
+            let mut call_args = vec![TypedRegister {
+                ty: struct_ty.clone(),
+                register: struct_instance_reg,
+            }];
             call_args.extend(arg_registers);
 
             // 3. Call the initializer function
@@ -1832,7 +1885,11 @@ impl<'a> Lowerer<'a> {
             };
 
             // The first argument to the init function is the struct instance itself
-            let mut call_args = vec![receiver];
+            let mut call_args = vec![TypedRegister {
+                ty: receiver_ty.ty.to_ir(self),
+                register: receiver,
+            }];
+
             call_args.extend(arg_registers);
 
             let result_reg = self.allocate_register();
@@ -1882,7 +1939,13 @@ impl<'a> Lowerer<'a> {
             addr: env_ptr,
         });
 
-        arg_registers.insert(0, env_reg);
+        arg_registers.insert(
+            0,
+            TypedRegister {
+                ty: IRType::Pointer,
+                register: env_reg,
+            },
+        );
 
         let dest_reg = self.allocate_register();
 
@@ -1911,11 +1974,17 @@ impl<'a> Lowerer<'a> {
     ) {
         // Create the environment struct
         let environment_register = self.allocate_register();
-        let environment_type = IRType::Struct(SymbolID(0), capture_types);
+        let environment_type = IRType::Struct(SymbolID(0), capture_types.clone());
         self.push_instr(Instr::MakeStruct {
             dest: environment_register,
             ty: environment_type.clone(),
-            values: RegisterList(capture_registers),
+            values: RegisterList(
+                capture_types
+                    .into_iter()
+                    .zip(capture_registers)
+                    .map(|(ty, register)| TypedRegister { ty, register })
+                    .collect(),
+            ),
         });
 
         // Allocate space for the environment

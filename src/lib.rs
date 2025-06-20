@@ -17,6 +17,7 @@ pub mod compiling;
 pub mod diagnostic;
 pub mod interpreter;
 pub mod lowering;
+pub mod transforms;
 
 #[cfg(feature = "cli")]
 pub mod lsp;
