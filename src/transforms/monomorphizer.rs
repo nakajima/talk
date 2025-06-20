@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::lowering::{
     instr::{Callee, Instr},
@@ -7,10 +7,18 @@ use crate::lowering::{
     lowerer::{BasicBlock, IRFunction, RegisterList, TypedRegister},
 };
 
-type InstantiationCache = HashMap<String, IRFunction>;
-
+/// The Monomorphizer monomorphizes. So it takes a func like this:
+///
+///     func identity(x) { x }
+///
+/// which lowers to (T1) -> T1. And then given a call like this:
+///
+///     identity(123)
+///
+/// and it'll generate a version of identity that lowers to (Int) -> Int.
+/// It'll also update calls to the generic form to the specialized form.
 pub struct Monomorphizer {
-    cache: InstantiationCache,
+    cache: HashSet<String>,
     generic_functions: Vec<IRFunction>,
 }
 
@@ -28,24 +36,14 @@ impl Monomorphizer {
         let (generic_templates, concrete_funcs): (Vec<_>, Vec<_>) =
             module.functions.into_iter().partition(|f| is_generic(f));
 
-        // The generic functions will be used as templates for instantiation.
         self.generic_functions = generic_templates;
 
-        // This will hold the final list of functions for our monomorphized module.
         let mut final_functions = Vec::new();
 
-        // Process all the initially concrete functions.
-        // This may trigger the creation of new, monomorphized functions, which will be
-        // added to `self.instantiated_functions`.
         for func in concrete_funcs {
             final_functions.push(self.detect_monomorphizations_in(func));
         }
 
-        // Now, `self.instantiated_functions` contains the original generic templates
-        // plus all the new concrete functions we generated during the process.
-        // We'll filter out the original templates and add the new concrete functions
-        // to our final list.
-        println!("-- self.generic_functions: {:?}", &self.generic_functions);
         let instantiated_functions = self.generic_functions;
         final_functions.extend(
             instantiated_functions
@@ -77,7 +75,6 @@ impl Monomorphizer {
                     };
 
                     if contains_type_var(&callee_function.ty) {
-                        println!("MONOMORPHIZING: {:?} {:?}", callee, callee_function);
                         let monomorphized_name = self.monomorphize_function(
                             &callee_function,
                             args.0.iter().map(|a| a.ty.clone()).collect(),
@@ -89,15 +86,13 @@ impl Monomorphizer {
             }
         }
 
-        println!("finalized: {:?}", function);
-
         function
     }
 
     fn monomorphize_function<'a>(&mut self, function: &IRFunction, args: Vec<IRType>) -> String {
         let mangled_name = self.mangle_name(&function.name, &args);
 
-        if self.cache.contains_key(&mangled_name) {
+        if self.cache.contains(&mangled_name) {
             return mangled_name;
         }
 
@@ -130,8 +125,7 @@ impl Monomorphizer {
             env_ty: self.apply_type(&function.env_ty, &substitutions),
         };
 
-        self.cache
-            .insert(mangled_name.clone(), monomorphized_function.clone());
+        self.cache.insert(mangled_name.clone());
         self.generic_functions.push(monomorphized_function);
 
         return mangled_name;
@@ -346,6 +340,29 @@ mod tests {
                         IRType::Int,
                         Some(IRValue::Register(Register(0))),
                     )],
+                }],
+                env_ty: IRType::closure(),
+                env_reg: Register(0)
+            }
+        );
+
+        assert_lowered_function!(
+            monomorphized,
+            "@main",
+            IRFunction {
+                name: "@main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID::ENTRY,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(1), 123),
+                        Instr::Call {
+                            dest_reg: Register(2),
+                            ty: IRType::Int,
+                            callee: Callee::Name("@_123_identity<Int>".into()),
+                            args: RegisterList(vec![TypedRegister::new(IRType::Int, Register(1),)]),
+                        },
+                    ],
                 }],
                 env_ty: IRType::closure(),
                 env_reg: Register(0)
