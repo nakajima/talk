@@ -268,7 +268,11 @@ impl IRInterpreter {
                     &dest,
                     Value::Enum {
                         tag,
-                        values: values.0.iter().map(|r| self.register_value(r)).collect(),
+                        values: values
+                            .0
+                            .iter()
+                            .map(|r| self.register_value(&r.register))
+                            .collect(),
                     },
                 );
             }
@@ -407,7 +411,7 @@ impl IRInterpreter {
         registers
             .0
             .iter()
-            .map(|r| self.register_value(r).clone())
+            .map(|r| self.register_value(&r.register).clone())
             .collect()
     }
 

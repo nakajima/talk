@@ -201,8 +201,14 @@ impl FromStr for PhiPredecessors {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedRegister {
-    ty: IRType,
-    register: Register,
+    pub ty: IRType,
+    pub register: Register,
+}
+
+impl TypedRegister {
+    pub fn new(ty: IRType, register: Register) -> Self {
+        Self { ty, register }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,8 +244,10 @@ impl FromStr for TypedRegister {
             return Err(IRError::ParseError);
         };
 
+        println!("IR TYPE STRING: {}", ty_str);
+
         Ok(TypedRegister {
-            ty: str::parse(ty_str).map_err(|_| IRError::ParseError)?,
+            ty: IRType::from_str(ty_str).map_err(|_| IRError::ParseError)?,
             register: str::parse(reg_str).map_err(|_| IRError::ParseError)?,
         })
     }

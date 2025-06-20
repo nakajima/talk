@@ -13,6 +13,7 @@ pub mod lowering_tests {
             ir_value::IRValue,
             lowerer::{
                 BasicBlock, BasicBlockID, IRFunction, PhiPredecessors, RefKind, RegisterList,
+                TypedRegister,
             },
             register::Register,
         },
@@ -185,7 +186,10 @@ pub mod lowering_tests {
                                 dest_reg: Register(8),
                                 ty: IRType::TypeVar(t4.clone()),
                                 callee: Callee::Register(Register(5)),
-                                args: RegisterList(vec![Register(7), Register(1)])
+                                args: RegisterList(vec![
+                                    TypedRegister::new(IRType::Pointer, Register(7)),
+                                    TypedRegister::new(IRType::TypeVar(t3.clone()), Register(1))
+                                ])
                             },
                             // The `return x` becomes a Ret instruction using the argument register.
                             // In our calling convention, the env is %0, so x is %1.
@@ -209,7 +213,10 @@ pub mod lowering_tests {
                             Instr::MakeStruct {
                                 dest: Register(2),
                                 ty: IRType::Struct(SymbolID(0), vec![IRType::Pointer]),
-                                values: RegisterList(vec![Register(1)])
+                                values: RegisterList(vec![TypedRegister::new(
+                                    IRType::Pointer,
+                                    Register(1)
+                                )])
                             },
                             Instr::Alloc {
                                 dest: Register(3),
@@ -478,7 +485,10 @@ pub mod lowering_tests {
                             dest_reg: Register(12),
                             ty: IRType::Int,
                             callee: Register(9).into(), // The loaded function pointer
-                            args: RegisterList(vec![Register(11), Register(7)]), // (env_ptr, arg)
+                            args: RegisterList(vec![
+                                TypedRegister::new(IRType::Pointer, Register(11)),
+                                TypedRegister::new(IRType::Int, Register(7))
+                            ]), // (env_ptr, arg)
                         },
                         // 4. Return the result of the call.
                         Instr::Ret(IRType::Int, Some(Register(12).into()))
@@ -861,7 +871,12 @@ pub mod lowering_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
-                        Instr::TagVariant(Register(1), IRType::Enum(vec![]), 1, vec![].into()),
+                        Instr::TagVariant(
+                            Register(1),
+                            IRType::Enum(vec![]),
+                            1,
+                            RegisterList::EMPTY
+                        ),
                         Instr::Ret(IRType::Enum(vec![]), Some(Register(1).into()))
                     ],
                 }],
@@ -888,7 +903,7 @@ pub mod lowering_tests {
                             Register(2),
                             IRType::Enum(vec![IRType::Int]),
                             0,
-                            RegisterList(vec![Register(1)])
+                            RegisterList(vec![TypedRegister::new(IRType::Int, Register(1))])
                         ),
                         Instr::Ret(IRType::Enum(vec![IRType::Int]), Some(Register(2).into()))
                     ],
@@ -1015,7 +1030,7 @@ pub mod lowering_tests {
                                 Register(2),
                                 IRType::Enum(vec![IRType::Int]),
                                 0,
-                                RegisterList(vec![Register(1)])
+                                RegisterList(vec![TypedRegister::new(IRType::Int, Register(1))])
                             ),
                             Instr::Jump(BasicBlockID(2)),
                         ],
@@ -1247,7 +1262,10 @@ pub mod lowering_tests {
                             Instr::MakeStruct {
                                 dest: Register(3),
                                 ty: env_struct_type.clone(),
-                                values: RegisterList(vec![Register(1)])
+                                values: RegisterList(vec![TypedRegister::new(
+                                    IRType::Pointer,
+                                    Register(1)
+                                )])
                             },
                             Instr::Alloc {
                                 dest: Register(4),
@@ -1315,7 +1333,10 @@ pub mod lowering_tests {
                                 dest_reg: Register(13),
                                 ty: IRType::Int,
                                 callee: Register(10).into(),
-                                args: RegisterList(vec![Register(12), Register(8)]),
+                                args: RegisterList(vec![
+                                    TypedRegister::new(IRType::Pointer, Register(12)),
+                                    TypedRegister::new(IRType::Int, Register(8))
+                                ]),
                             },
                             Instr::Ret(IRType::Int, Some(Register(13).into())),
                         ],
@@ -1406,7 +1427,10 @@ pub mod lowering_tests {
                                 dest_reg: Register(4),
                                 ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into(),
                                 callee: Callee::Register(Register(3)),
-                                args: RegisterList(vec![Register(2), Register(1)])
+                                args: RegisterList(vec![
+                                    TypedRegister::new(IRType::Pointer, Register(2)),
+                                    TypedRegister::new(IRType::Int, Register(1))
+                                ])
                             },
                             Instr::Ret(
                                 IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
@@ -1496,7 +1520,10 @@ pub mod lowering_tests {
                                 dest_reg: Register(4),
                                 ty: person_struct_ty.clone(),
                                 callee: Callee::Register(Register(3)),
-                                args: RegisterList(vec![Register(2), Register(1)])
+                                args: RegisterList(vec![
+                                    TypedRegister::new(IRType::Pointer, Register(2)),
+                                    TypedRegister::new(IRType::Int, Register(1))
+                                ])
                             },
                             // .age
                             Instr::GetElementPointer {
@@ -1621,7 +1648,10 @@ pub mod lowering_tests {
                                 dest_reg: Register(4),
                                 ty: person_struct_ty.clone(),
                                 callee: Callee::Register(Register(3)),
-                                args: RegisterList(vec![Register(2), Register(1)])
+                                args: RegisterList(vec![
+                                    TypedRegister::new(IRType::Pointer, Register(2)),
+                                    TypedRegister::new(IRType::Int, Register(1))
+                                ])
                             },
                             Instr::Ref(
                                 Register(5),
@@ -1635,7 +1665,10 @@ pub mod lowering_tests {
                                 dest_reg: Register(6),
                                 ty: IRType::Func(vec![], IRType::Int.into()).into(),
                                 callee: Callee::Register(Register(5)),
-                                args: RegisterList(vec![Register(4)])
+                                args: RegisterList(vec![TypedRegister::new(
+                                    IRType::Pointer,
+                                    Register(4)
+                                )])
                             },
                             Instr::Ret(IRType::Int, Some(Register(6).into()))
                         ],

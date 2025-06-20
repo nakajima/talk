@@ -117,10 +117,10 @@ impl FromStr for IRType {
         } else {
             // Handle simple, non-function types
             match s {
-                "void" => Ok(IRType::Void),
-                "int" => Ok(IRType::Int),
-                "float" => Ok(IRType::Float),
-                "bool" => Ok(IRType::Bool),
+                "Void" => Ok(IRType::Void),
+                "Int" => Ok(IRType::Int),
+                "Float" => Ok(IRType::Float),
+                "Bool" => Ok(IRType::Bool),
                 "ptr" => Ok(IRType::Pointer),
                 "enum" => Ok(IRType::Enum(vec![])), // Basic enum
                 _ if s.starts_with('T') => Ok(IRType::TypeVar(s.to_string())),
@@ -136,10 +136,10 @@ impl FromStr for IRType {
 impl std::fmt::Display for IRType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Void => f.write_str("void"),
-            Self::Int => f.write_str("int"),
-            Self::Float => f.write_str("float"),
-            Self::Bool => f.write_str("bool"),
+            Self::Void => f.write_str("Void"),
+            Self::Int => f.write_str("Int"),
+            Self::Float => f.write_str("Float"),
+            Self::Bool => f.write_str("Bool"),
             Self::Func(args, ret) => {
                 write!(
                     f,

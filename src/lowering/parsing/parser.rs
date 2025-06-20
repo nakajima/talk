@@ -423,7 +423,7 @@ mod tests {
             ir_error::IRError,
             ir_module::IRModule,
             ir_type::IRType,
-            lowerer::{BasicBlockID, PhiPredecessors, RefKind},
+            lowerer::{BasicBlockID, PhiPredecessors, RefKind, RegisterList, TypedRegister},
             parsing::parser::parse,
             register::Register,
         },
@@ -507,7 +507,7 @@ mod tests {
             Instr::Call {
                 dest_reg: Register(1),
                 callee: "@foo".into(),
-                args: vec![].into(),
+                args: RegisterList::EMPTY,
                 ty: IRType::Int,
             }
         );
@@ -593,7 +593,12 @@ mod tests {
         // This is consistent with how other types are parsed.
         assert_eq!(
             entry_bb.instructions[8],
-            Instr::TagVariant(Register(8), IRType::Int, 0, vec![Register(1)].into())
+            Instr::TagVariant(
+                Register(8),
+                IRType::Int,
+                0,
+                RegisterList(vec![TypedRegister::new(IRType::Int, Register(1))])
+            )
         );
         assert_eq!(
             entry_bb.instructions[9],

@@ -4,21 +4,21 @@ use crate::lowering::{
     instr::{Callee, Instr},
     ir_module::IRModule,
     ir_type::IRType,
-    lowerer::IRFunction,
+    lowerer::{BasicBlock, IRFunction, RegisterList, TypedRegister},
 };
 
-type InstantiationCache<'a> = HashMap<(String, Vec<&'a IRType>), String>;
+type InstantiationCache = HashMap<String, IRFunction>;
 
-pub struct Monomorphizer<'a> {
-    cache: InstantiationCache<'a>,
-    instantiated_functions: Vec<IRFunction>,
+pub struct Monomorphizer {
+    cache: InstantiationCache,
+    generic_functions: Vec<IRFunction>,
 }
 
-impl Monomorphizer<'_> {
+impl Monomorphizer {
     pub fn new() -> Self {
         Self {
             cache: Default::default(),
-            instantiated_functions: Default::default(),
+            generic_functions: Default::default(),
         }
     }
 
@@ -29,7 +29,7 @@ impl Monomorphizer<'_> {
             module.functions.into_iter().partition(|f| is_generic(f));
 
         // The generic functions will be used as templates for instantiation.
-        self.instantiated_functions = generic_templates;
+        self.generic_functions = generic_templates;
 
         // This will hold the final list of functions for our monomorphized module.
         let mut final_functions = Vec::new();
@@ -38,14 +38,15 @@ impl Monomorphizer<'_> {
         // This may trigger the creation of new, monomorphized functions, which will be
         // added to `self.instantiated_functions`.
         for func in concrete_funcs {
-            final_functions.push(self.monomorphize_function(func));
+            final_functions.push(self.detect_monomorphizations_in(func));
         }
 
         // Now, `self.instantiated_functions` contains the original generic templates
         // plus all the new concrete functions we generated during the process.
         // We'll filter out the original templates and add the new concrete functions
         // to our final list.
-        let instantiated_functions = self.instantiated_functions;
+        println!("-- self.generic_functions: {:?}", &self.generic_functions);
+        let instantiated_functions = self.generic_functions;
         final_functions.extend(
             instantiated_functions
                 .into_iter()
@@ -56,122 +57,198 @@ impl Monomorphizer<'_> {
         module
     }
 
-    fn monomorphize_function(&mut self, mut function: IRFunction) -> IRFunction {
+    fn detect_monomorphizations_in(&mut self, mut function: IRFunction) -> IRFunction {
         for block in function.blocks.iter_mut() {
             for instruction in block.instructions.iter_mut() {
                 if let Instr::Call {
-                    ty: IRType::Func(params, ret),
                     callee: Callee::Name(callee),
+                    args,
                     ..
                 } = instruction
                 {
-                    let mut type_vars: Vec<&IRType> =
-                        params.iter().filter(|p| contains_type_var(&p)).collect();
-                    if contains_type_var(&ret) {
-                        type_vars.push(ret);
-                    }
+                    let Some(callee_function) = self
+                        .generic_functions
+                        .iter()
+                        .find(|f| f.name == *callee)
+                        .cloned()
+                    else {
+                        log::error!("Did not find callee function");
+                        return function;
+                    };
 
-                    if type_vars.is_empty() {
-                        continue;
-                    }
+                    if contains_type_var(&callee_function.ty) {
+                        println!("MONOMORPHIZING: {:?} {:?}", callee, callee_function);
+                        let monomorphized_name = self.monomorphize_function(
+                            &callee_function,
+                            args.0.iter().map(|a| a.ty.clone()).collect(),
+                        );
 
-                    let mangled_name = self.instantiate_if_needed(&callee, &type_vars);
-                    *callee = mangled_name.into();
+                        *callee = monomorphized_name;
+                    }
                 }
             }
         }
+
+        println!("finalized: {:?}", function);
+
         function
     }
 
-    // This is the core logic: create a new monomorphized function if we haven't already.
-    fn instantiate_if_needed(&mut self, callee_name: &str, type_args: &[&IRType]) -> String {
-        let key = (callee_name.to_string(), type_args.to_vec());
-        if let Some(mangled_name) = self.cache.get(&key) {
-            return mangled_name.clone();
+    fn monomorphize_function<'a>(&mut self, function: &IRFunction, args: Vec<IRType>) -> String {
+        let mangled_name = self.mangle_name(&function.name, &args);
+
+        if self.cache.contains_key(&mangled_name) {
+            return mangled_name;
         }
 
-        // Find the generic function template.
-        let generic_func = self
-            .instantiated_functions
-            .iter()
-            .find(|f| f.name == callee_name)
-            .expect("Cannot find generic function to instantiate.")
-            .clone();
+        let IRType::Func(params, ret) = &function.ty else {
+            unreachable!()
+        };
 
-        // Create a substitution map from generic parameters to concrete types.
-        let mut substitution = HashMap::new();
-        if let IRType::Func(_, _) = &generic_func.ty {
-            for (param, arg) in generics.iter().zip(type_args.iter()) {
-                if let IRType::TypeVar(tv) = param {
-                    substitution.insert(tv.clone(), arg.clone());
-                }
+        let mut substitutions = HashMap::new();
+        for (param, concrete_arg) in params.into_iter().zip(&args) {
+            if contains_type_var(param) {
+                substitutions.insert(param.clone(), concrete_arg.clone());
             }
         }
 
-        let mangled_name = self.mangle_name(callee_name, type_args);
+        let monomorphized_function = IRFunction {
+            name: mangled_name.clone(),
+            ty: IRType::Func(
+                params
+                    .iter()
+                    .map(|p| self.apply_type(p, &substitutions))
+                    .collect(),
+                self.apply_type(ret, &substitutions).into(),
+            ),
+            blocks: function
+                .blocks
+                .iter()
+                .map(|block| self.apply_block(block, &substitutions))
+                .collect(),
+            env_reg: function.env_reg,
+            env_ty: self.apply_type(&function.env_ty, &substitutions),
+        };
 
-        let mut new_func = generic_func.clone();
-        new_func.name = mangled_name.clone();
-        new_func.ty = self.substitute_type(&new_func.ty, &substitution);
+        self.cache
+            .insert(mangled_name.clone(), monomorphized_function.clone());
+        self.generic_functions.push(monomorphized_function);
 
-        for instr in new_func.instructions.iter_mut() {
-            self.substitute_instr(instr, &substitution);
-        }
-
-        self.cache.insert(key, mangled_name.clone());
-        self.instantiated_functions.push(new_func);
-
-        mangled_name
+        return mangled_name;
     }
 
-    fn substitute_instr(&self, instr: &mut Instr, substitution: &HashMap<String, IRType>) {
-        match instr {
-            Instr::Alloc { ty, .. } => *ty = self.substitute_type(ty, substitution),
-            Instr::Add(.., ty, _, _)
-            | Instr::Sub(.., ty, _, _)
-            | Instr::Mul(.., ty, _, _)
-            | Instr::Div(.., ty, _, _) => *ty = self.substitute_type(ty, substitution),
-            // and so on for all instructions that have a type.
-            _ => {}
+    fn apply_block(
+        &self,
+        block: &BasicBlock,
+        substitutions: &HashMap<IRType, IRType>,
+    ) -> BasicBlock {
+        BasicBlock {
+            id: block.id,
+            instructions: block
+                .instructions
+                .iter()
+                .map(|i| self.apply_instruction(i, substitutions))
+                .collect(),
         }
     }
 
-    fn substitute_type(&self, ty: &IRType, substitution: &HashMap<String, IRType>) -> IRType {
+    fn apply_instruction(&self, instr: &Instr, substitutions: &HashMap<IRType, IRType>) -> Instr {
+        let mut applied_instruction = instr.clone();
+        match &mut applied_instruction {
+            Instr::Add(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::Sub(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::Mul(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::Div(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::StoreLocal(_, ty, _1) => *ty = self.apply_type(ty, substitutions),
+            Instr::LoadLocal(_, ty, _1) => *ty = self.apply_type(ty, substitutions),
+            Instr::Phi(_, ty, _) => *ty = self.apply_type(ty, substitutions),
+            Instr::Ref(_, ty, _) => *ty = self.apply_type(ty, substitutions),
+            Instr::Eq(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::Ne(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::LessThan(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::LessThanEq(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::GreaterThan(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::GreaterThanEq(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
+            Instr::Alloc { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::Store { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::Load { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::GetElementPointer { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::MakeStruct { ty, values, .. } => {
+                *ty = self.apply_type(ty, substitutions);
+                *values = RegisterList(
+                    values
+                        .0
+                        .iter()
+                        .map(|v| {
+                            TypedRegister::new(self.apply_type(&v.ty, substitutions), v.register)
+                        })
+                        .collect(),
+                );
+            }
+            Instr::GetValueOf { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::Call { ty, args, .. } => {
+                *ty = self.apply_type(ty, substitutions);
+                *args = RegisterList(
+                    args.0
+                        .iter()
+                        .map(|a| {
+                            TypedRegister::new(self.apply_type(&a.ty, substitutions), a.register)
+                        })
+                        .collect(),
+                )
+            }
+            Instr::GetEnumTag(_, _1) => todo!(),
+            Instr::GetEnumValue(_, ty, _1, _, _) => *ty = self.apply_type(ty, substitutions),
+            Instr::TagVariant(_, ty, _, __list) => *ty = self.apply_type(ty, substitutions),
+            Instr::Ret(ty, _) => *ty = self.apply_type(ty, substitutions),
+            Instr::Jump(_) => (),
+            Instr::Branch { .. } => (),
+            Instr::Unreachable => (),
+            Instr::ConstantInt(_, _) => (),
+            Instr::ConstantFloat(_, _) => (),
+            Instr::ConstantBool(_, _) => (),
+        }
+
+        applied_instruction
+    }
+
+    fn apply_type(&self, ty: &IRType, substitutions: &HashMap<IRType, IRType>) -> IRType {
         match ty {
-            IRType::TypeVar(tv) => substitution.get(tv).cloned().unwrap_or_else(|| ty.clone()),
+            IRType::TypeVar(_) => substitutions.get(ty).cloned().unwrap_or(ty.clone()),
             IRType::Func(params, ret) => IRType::Func(
                 params
-                    .iter()
-                    .map(|p| self.substitute_type(p, substitution))
+                    .into_iter()
+                    .map(|p| self.apply_type(p, substitutions))
                     .collect(),
-                Box::new(self.substitute_type(ret, substitution)),
+                self.apply_type(ret, substitutions).into(),
             ),
-            IRType::Struct(id, params) => IRType::Struct(
-                *id,
-                params
-                    .iter()
-                    .map(|p| self.substitute_type(p, substitution))
+
+            IRType::Enum(generics) => IRType::Enum(
+                generics
+                    .into_iter()
+                    .map(|g| self.apply_type(g, substitutions))
                     .collect(),
             ),
-            IRType::Enum(params) => IRType::Enum(
-                params
-                    .iter()
-                    .map(|p| self.substitute_type(p, substitution))
+            IRType::Struct(symbol_id, generics) => IRType::Struct(
+                *symbol_id,
+                generics
+                    .into_iter()
+                    .map(|g| self.apply_type(g, substitutions))
                     .collect(),
             ),
             IRType::Array { element } => IRType::Array {
-                element: Box::new(self.substitute_type(element, substitution)),
+                element: self.apply_type(element, substitutions).clone().into(),
             },
             _ => ty.clone(),
         }
     }
 
-    fn mangle_name(&self, callee_name: &str, type_args: &[&IRType]) -> String {
+    fn mangle_name(&self, callee_name: &str, args: &[IRType]) -> String {
         let mut mangled = String::new();
         mangled.push_str(callee_name);
         mangled.push('<');
         mangled.push_str(
-            &type_args
+            &args
                 .into_iter()
                 .map(|t| format!("{t}"))
                 .collect::<Vec<String>>()
@@ -198,48 +275,21 @@ fn contains_type_var(ty: &IRType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use crate::{
         assert_lowered_function,
-        compiling::driver::{Driver, DriverConfig},
         lowering::{
             instr::{Callee, Instr},
-            ir_error::IRError,
             ir_module::IRModule,
             ir_type::IRType,
             ir_value::IRValue,
-            lowerer::{BasicBlock, BasicBlockID, IRFunction, RegisterList},
+            lowerer::{BasicBlock, BasicBlockID, IRFunction, RegisterList, TypedRegister},
             register::Register,
         },
         transforms::monomorphizer::Monomorphizer,
     };
 
-    fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::new(DriverConfig {
-            executable: true,
-            include_prelude: false,
-        });
-        driver.update_file(&PathBuf::from("-"), input.into());
-        let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = lowered.source_file(&"-".into()).unwrap().diagnostics();
-        let module = lowered.module().clone();
-
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        Ok(module)
-    }
-
     #[test]
     fn monomorphizes_generic_func() {
-        let lowered = lower(
-            "
-        func identity(x) { x }
-        identity(123)
-        identity(45.6)
-        ",
-        )
-        .unwrap();
-
         let module = IRModule {
             functions: vec![
                 IRFunction {
@@ -251,7 +301,7 @@ mod tests {
                     blocks: vec![BasicBlock {
                         id: BasicBlockID::ENTRY,
                         instructions: vec![Instr::Ret(
-                            IRType::TypeVar("1".into()),
+                            IRType::TypeVar("T1".into()),
                             Some(IRValue::Register(Register(0))),
                         )],
                     }],
@@ -267,12 +317,12 @@ mod tests {
                             Instr::ConstantInt(Register(1), 123),
                             Instr::Call {
                                 dest_reg: Register(2),
-                                ty: IRType::Func(
-                                    vec![IRType::TypeVar("T1".into())],
-                                    IRType::TypeVar("T1".into()).into(),
-                                ),
+                                ty: IRType::Int,
                                 callee: Callee::Name("@_123_identity".into()),
-                                args: RegisterList(vec![Register(1)]),
+                                args: RegisterList(vec![TypedRegister::new(
+                                    IRType::Int,
+                                    Register(1),
+                                )]),
                             },
                         ],
                     }],
