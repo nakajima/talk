@@ -9,12 +9,12 @@ use crate::{
         instr::{Callee, Instr},
         ir_error::IRError,
         ir_module::IRModule,
-        ir_printer::{self, print},
+        ir_printer::{self},
         ir_value::IRValue,
         lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList},
         register::Register,
     },
-    transforms::monomorphizer::{self, Monomorphizer},
+    transforms::monomorphizer::Monomorphizer,
 };
 
 #[derive(Debug)]
@@ -116,8 +116,9 @@ impl IRInterpreter {
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
         log::info!(
-            "\n{} {}\n\t{}",
+            "\n{}\n{:?}\n{}\n\t{}",
             self.stack.last().unwrap().function.name,
+            instr,
             ir_printer::format_instruction(&instr),
             self.stack
                 .last()
@@ -351,13 +352,19 @@ impl IRInterpreter {
                 let ptr = self.heap.alloc(ty.mem_size() * count as usize);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
-            Instr::Store { val, location, ty } => {
-                let Value::Pointer(ptr) = self.register_value(&location) else {
-                    panic!("no pointer at location: {location}")
-                };
+            Instr::Store { val, location, ty } => match self.register_value(&location) {
+                Value::Pointer(ptr) => self.heap.store(&ptr, &self.register_value(&val), &ty),
+                Value::GEPPointer(reg, offset) => {
+                    let Value::Struct(mut values) = self.register_value(&reg) else {
+                        panic!("no register found for gep");
+                    };
 
-                self.heap.store(&ptr, &self.register_value(&val), &ty)
-            }
+                    values[offset] = self.register_value(&val);
+
+                    self.set_register_value(&reg, Value::Struct(values))
+                }
+                _ => panic!("no pointer in {location}"),
+            },
             Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
                 Value::Pointer(ptr) => {
                     let val = self.heap.load(&ptr, &ty);

@@ -74,6 +74,7 @@ impl Monomorphizer {
                 if let Instr::Call {
                     callee: Callee::Name(callee),
                     args,
+                    ty,
                     ..
                 } = instruction
                 {
@@ -91,6 +92,7 @@ impl Monomorphizer {
                         let monomorphized_name = self.monomorphize_function(
                             &callee_function,
                             args.0.iter().map(|a| a.ty.clone()).collect(),
+                            &ty,
                             &mut HashMap::new(),
                         );
 
@@ -107,6 +109,7 @@ impl Monomorphizer {
         &mut self,
         function: &IRFunction,
         args: Vec<IRType>,
+        expected_ret: &IRType,
         substitutions: &mut HashMap<IRType, IRType>,
     ) -> String {
         let mangled_name = self.mangle_name(&function.name, &args);
@@ -115,11 +118,13 @@ impl Monomorphizer {
             return mangled_name;
         }
 
-        log::warn!("monomorphizing: {}", mangled_name);
+        println!("monomorphizing: {} -> {:?}", mangled_name, expected_ret);
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
         };
+
+        substitutions.insert(*ret.clone(), expected_ret.clone());
 
         for (param, concrete_arg) in params.iter().zip(&args) {
             if contains_type_var(param) {
@@ -127,7 +132,7 @@ impl Monomorphizer {
             }
         }
 
-        let monomorphized_function = IRFunction {
+        let mut monomorphized_function = IRFunction {
             name: mangled_name.clone(),
             ty: IRType::Func(
                 params
@@ -147,6 +152,16 @@ impl Monomorphizer {
                 .as_ref()
                 .map(|ty| Self::apply_type(ty, &substitutions)),
         };
+
+        monomorphized_function.ty = Self::apply_type(&monomorphized_function.ty, substitutions);
+
+        println!(
+            "monomorphized {} ({}): {:?}, {:#?}",
+            mangled_name,
+            is_generic(&monomorphized_function),
+            Self::apply_type(monomorphized_function.ret(), &substitutions),
+            substitutions
+        );
 
         self.cache.insert(mangled_name.clone());
         self.generic_functions.push(monomorphized_function);
@@ -230,6 +245,7 @@ impl Monomorphizer {
                     let new_callee = self.monomorphize_function(
                         &func,
                         applied_args.iter().map(|a| a.ty.clone()).collect(),
+                        ty,
                         substitutions,
                     );
 
@@ -326,7 +342,8 @@ fn contains_type_var(ty: &IRType) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_lowered_function,
+        SymbolID, assert_lowered_function,
+        compiling::driver::Driver,
         lowering::{
             instr::{Callee, Instr},
             ir_module::IRModule,
@@ -424,5 +441,60 @@ mod tests {
                 env_reg: None,
             }
         )
+    }
+
+    #[test]
+    fn monomorphs_array_get() {
+        let mut driver = Driver::with_str(
+            "
+      let a = [1,2,3]
+      a.get(0)
+      ",
+        );
+
+        let module = driver.lower().into_iter().next().unwrap().module();
+        let monomorphed = Monomorphizer::new().run(module);
+
+        assert_lowered_function!(
+            monomorphed,
+            "@_Array_3_get<int>",
+            IRFunction {
+                name: "@_Array_get<int>".into(),
+                ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        // First alloc (so we can get a pointer)
+                        Instr::ConstantInt(Register(1), 2),
+                        Instr::Alloc {
+                            dest: Register(0),
+                            ty: IRType::Int,
+                            count: Some(Register(1)),
+                        },
+                        Instr::ConstantInt(Register(3), 1),
+                        Instr::GetElementPointer {
+                            dest: Register(4),
+                            base: Register(0),
+                            ty: IRType::Array {
+                                element: IRType::Int.into()
+                            },
+                            index: Register(3).into()
+                        },
+                        Instr::Load {
+                            dest: Register(2),
+                            ty: IRType::Int.into(),
+                            addr: Register(4)
+                        },
+                        Instr::Ret(IRType::Int, Some(Register(2).into()))
+                    ]
+                }],
+                env_ty: Some(IRType::Struct(
+                    SymbolID::ARRAY,
+                    vec![IRType::Int, IRType::Int, IRType::Pointer],
+                    vec![IRType::Int]
+                )),
+                env_reg: Some(Register(0))
+            }
+        );
     }
 }

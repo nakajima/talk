@@ -505,7 +505,13 @@ impl<'a> Lowerer<'a> {
                 callee,
                 type_args,
                 args,
-            } => self.lower_call(callee, type_args, args, typed_expr.ty),
+            } => self.lower_call(
+                callee,
+                type_args,
+                &typed_expr.ty.to_ir(self),
+                args,
+                typed_expr.ty,
+            ),
             Expr::Func { .. } => self.lower_function(expr_id),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
@@ -1620,13 +1626,9 @@ impl<'a> Lowerer<'a> {
                     .clone();
 
                 match value {
-                    SymbolValue::Register(_reg) => {
-                        let new_reg = self.allocate_register();
+                    SymbolValue::Register(reg) => {
                         let ty = self.source_file.type_for(*rhs_id, self.env)?;
-
-                        self.push_instr(Instr::StoreLocal(new_reg, ty.to_ir(self), rhs));
-                        self.current_func_mut()
-                            .register_symbol(*symbol, new_reg.into());
+                        self.push_instr(Instr::StoreLocal(reg, ty.to_ir(self), rhs));
                         None
                     }
                     SymbolValue::Capture(idx, ty) => {
@@ -1790,10 +1792,12 @@ impl<'a> Lowerer<'a> {
         &mut self,
         callee: ExprID,
         _type_args: Vec<ExprID>,
+        ret_ty: &IRType,
         args: Vec<ExprID>,
         ty: Ty,
     ) -> Option<Register> {
         let callee_typed_expr = self.source_file.typed_expr(&callee, self.env)?;
+
         let (Ty::Func(params, _, _)
         | Ty::Closure {
             func: box Ty::Func(params, _, _),
@@ -1844,8 +1848,15 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle method calls
+        println!("__________ {ret_ty:?}");
         if let Expr::Member(receiver_id, name) = &callee_typed_expr.expr {
-            return self.lower_method_call(&callee_typed_expr, &receiver_id, &name, arg_registers);
+            return self.lower_method_call(
+                &callee_typed_expr,
+                &receiver_id,
+                &ret_ty,
+                &name,
+                arg_registers,
+            );
         }
 
         // Check to see if we can call this function directly (because its SymbolKind is FuncDef). If it is,
@@ -2041,6 +2052,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         callee_typed_expr: &TypedExpr,
         receiver_id: &Option<ExprID>,
+        ret_ty: &IRType,
         name: &str,
         mut arg_registers: Vec<TypedRegister>,
     ) -> Option<Register> {
@@ -2090,7 +2102,7 @@ impl<'a> Lowerer<'a> {
         let result_reg = self.allocate_register();
         self.push_instr(Instr::Call {
             dest_reg: result_reg,
-            ty: callee_typed_expr.ty.to_ir(self),
+            ty: ret_ty.clone(),
             callee: Callee::Name(callee_name),
             args: RegisterList(arg_registers),
         });

@@ -170,7 +170,7 @@ impl<'a> ConstraintSolver<'a> {
                     Ty::Struct(struct_id, _generics) => {
                         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id)
                         else {
-                            // For now, just unify with the result type
+                            log::info!("For now, just unify with the result type");
                             self.source_file.define(node_id.1, result_ty, self.env);
                             return Ok(());
                         };
@@ -342,10 +342,8 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
             Ty::Enum(name, generics) => {
-                let applied_generics = generics
-                    .iter()
-                    .map(|generic| Self::apply(generic, substitutions, depth + 1))
-                    .collect();
+                let applied_generics = Self::apply_multiple(generics, substitutions, depth + 1);
+
                 Ty::Enum(*name, applied_generics)
             }
             Ty::EnumVariant(enum_id, values) => {
@@ -372,10 +370,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Array(ty) => Ty::Array(Self::apply(ty, substitutions, depth + 1).into()),
             Ty::Struct(sym, generics) => Ty::Struct(
                 *sym,
-                generics
-                    .iter()
-                    .map(|t| Self::apply(t, substitutions, depth + 1))
-                    .collect(),
+                Self::apply_multiple(generics, substitutions, depth + 1),
             ),
             Ty::Init(struct_id, params) => Ty::Init(
                 *struct_id,
@@ -438,6 +433,7 @@ impl<'a> ConstraintSolver<'a> {
                     Err(TypeError::OccursConflict)
                 } else {
                     substitutions.insert(v.clone(), ty.clone());
+                    Self::normalize_substitutions(substitutions);
                     Ok(())
                 }
             }
@@ -460,6 +456,7 @@ impl<'a> ConstraintSolver<'a> {
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
                 Self::unify(&lhs_func, &rhs_func, substitutions)?;
+                Self::normalize_substitutions(substitutions);
                 Ok(())
             }
             (func, Ty::Closure { func: closure, .. })
@@ -467,12 +464,21 @@ impl<'a> ConstraintSolver<'a> {
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
                 Self::unify(&func, &closure, substitutions)?;
+                Self::normalize_substitutions(substitutions);
                 Ok(())
             }
             (Ty::Enum(_, lhs_types), Ty::Enum(_, rhs_types))
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
+                    Self::unify(lhs, &rhs, substitutions)?;
+                    Self::normalize_substitutions(substitutions);
+                }
+
+                Ok(())
+            }
+            (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
+                for (lhs, rhs) in lhs.iter().zip(rhs) {
                     Self::unify(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
                 }

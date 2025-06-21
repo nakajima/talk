@@ -73,7 +73,7 @@ mod tests {
             panic!("did not get callee")
         };
 
-        assert_eq!(ret, Ty::TypeVar(TypeVarID(78, TypeVarKind::CallReturn)));
+        assert_eq!(ret, Ty::Float);
     }
 
     #[test]
@@ -1056,6 +1056,18 @@ mod type_tests {
                 vec![],
             )
         );
+    }
+
+    #[test]
+    fn checks_array_get() {
+        let checked = check(
+            "
+        let a = [1,2,3]
+        a.get(0)
+        ",
+        );
+
+        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
     }
 
     #[test]

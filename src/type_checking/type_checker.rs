@@ -303,7 +303,7 @@ impl TypeChecker {
                 source_file,
             ),
             Expr::Let(Name::Resolved(symbol_id, _), rhs) => {
-                self.infer_let(env, *symbol_id, rhs, source_file)
+                self.infer_let(env, *symbol_id, rhs, expected, source_file)
             }
             Expr::Variable(Name::Resolved(symbol_id, name), _) => {
                 self.infer_variable(env, *symbol_id, name)
@@ -543,6 +543,7 @@ impl TypeChecker {
         }
 
         match source_file.get(callee).cloned() {
+            // Handle struct initialization
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
                 if env.is_struct_symbol(&symbol_id) =>
             {
@@ -607,8 +608,10 @@ impl TypeChecker {
         rhs: &ExprID,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let lhs_ty = self.infer_node(lhs, env, &None, source_file)?;
         let rhs_ty = self.infer_node(rhs, env, &None, source_file)?;
+
+        // Expect lhs to be the same as rhs
+        let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.clone()), source_file)?;
 
         env.constrain_equality(source_file.expr_id(*rhs), rhs_ty.clone(), lhs_ty);
 
@@ -875,10 +878,13 @@ impl TypeChecker {
         env: &mut Environment,
         symbol_id: SymbolID,
         rhs: &Option<ExprID>,
+        expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let rhs_ty = if let Some(rhs) = rhs {
             self.infer_node(rhs, env, &None, source_file)?
+        } else if let Some(expected) = expected {
+            expected.clone()
         } else {
             Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
         };

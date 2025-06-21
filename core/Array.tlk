@@ -32,6 +32,8 @@ struct Array<T> {
 		}
 		__free(self.storage)
 		self.storage = newStorage
+		self.capacity = self.capacity * 2
+
 		return
 	}
 }
