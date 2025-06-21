@@ -15,8 +15,14 @@ pub enum IRType {
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
     Enum(Vec<IRType>),
-    Struct(SymbolID, Vec<IRType> /* properties */, Vec<IRType> /* type vars */),
-    Array { element: Box<IRType>, /* element */ },
+    Struct(
+        SymbolID,
+        Vec<IRType>, /* properties */
+        Vec<IRType>, /* type vars */
+    ),
+    Array {
+        element: Box<IRType>, /* element */
+    },
     Pointer,
 }
 
@@ -27,7 +33,7 @@ impl IRType {
         IRType::Struct(
             SymbolID::ARRAY,
             vec![IRType::Int, IRType::Int, IRType::Pointer],
-            vec![IRType::TypeVar("T".into())]
+            vec![IRType::TypeVar("T".into())],
         )
     }
 
@@ -35,7 +41,7 @@ impl IRType {
         IRType::Struct(
             SymbolID::GENERATED_MAIN,
             vec![IRType::Pointer, IRType::Pointer],
-            vec![]
+            vec![],
         )
     }
 
@@ -52,23 +58,6 @@ impl IRType {
             IRType::Struct(_, irtypes, _) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Pointer => 8,
             IRType::Array { .. } => IRType::Pointer.mem_size(),
-        }
-    }
-
-    pub fn get_element_pointer(&self, from: Pointer, index: usize) -> Result<Pointer, IRError> {
-        match self {
-            IRType::Struct(_, members, _) => {
-                let mut offset = 0;
-                (0..index).for_each(|i| {
-                    offset += members[i].mem_size();
-                });
-
-                Ok(Pointer(from.0 + offset))
-            }
-            IRType::Array { element } => Ok(Pointer(from.0 + element.mem_size() * index)),
-            _ => Err(IRError::InvalidPointer(format!(
-                "Unable to index into {self:?}"
-            ))),
         }
     }
 }

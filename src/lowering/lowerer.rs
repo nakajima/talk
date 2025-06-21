@@ -20,7 +20,7 @@ use crate::{
         register::Register,
     },
     name::Name,
-    parser::ExprID,
+    parser::{ExprID, ExprIDWithPath},
     token::Token,
     token_kind::TokenKind,
     type_checker::Ty,
@@ -453,7 +453,7 @@ impl<'a> Lowerer<'a> {
                 self.set_current_block(entry);
             }
 
-            self.lower_function(&expr_id);
+            self.lower_function(&self.source_file.expr_id(expr_id));
 
             // If we created the main function, we moved all the typed roots into its body
             // so we don't need to lower them again.
@@ -512,7 +512,7 @@ impl<'a> Lowerer<'a> {
                 args,
                 typed_expr.ty,
             ),
-            Expr::Func { .. } => self.lower_function(expr_id),
+            Expr::Func { .. } => self.lower_function(&self.source_file.expr_id(*expr_id)),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(receiver, name) => {
@@ -878,6 +878,7 @@ impl<'a> Lowerer<'a> {
         );
 
         let name_str = struct_def.name_str.clone();
+        println!("INIT LOWERED -> {:?}", init_func_ty.to_ir(self));
         let func = IRFunction {
             ty: init_func_ty.to_ir(self),
             name: Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
@@ -913,6 +914,7 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(Instr::Ret(ret_ty.to_ir(self), ret));
 
+        println!("METHOD LOWERED -> {:?}", typed_func);
         let func = IRFunction {
             ty: typed_func.ty.to_ir(self),
             name: Name::Resolved(*symbol_id, format!("{}_{name}", struct_def.name_str))
@@ -928,10 +930,12 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
+    fn lower_function(&mut self, expr_id: &ExprIDWithPath) -> Option<Register> {
         let typed_expr = self
-            .source_file
-            .typed_expr(expr_id, self.env)
+            .env
+            .typed_exprs
+            .get(expr_id)
+            .cloned()
             .expect("Did not get typed expr");
 
         let Expr::Func {
@@ -945,7 +949,7 @@ impl<'a> Lowerer<'a> {
         else {
             panic!(
                 "Attempted to lower non-function: {:?}",
-                self.source_file.get(expr_id)
+                self.source_file.get(&expr_id.1)
             );
         };
 
@@ -993,7 +997,7 @@ impl<'a> Lowerer<'a> {
             } = &typed_expr.ty
             {
                 let Name::Resolved(self_symbol, _) = &name else {
-                    self.push_err(&format!("no symbol: {name:?}"), *expr_id);
+                    self.push_err(&format!("no symbol: {name:?}"), expr_id.1);
                     return None;
                 };
 
@@ -1085,8 +1089,8 @@ impl<'a> Lowerer<'a> {
             };
 
             if i == body_exprs.len() - 1 {
-                // we don't pass around functions, we pass around pointers (closures)
                 let ty = if matches!(ret.0, IRType::Func(_, _)) {
+                    // we don't pass around functions, we pass around pointers (closures)
                     IRType::Pointer
                 } else {
                     ret.0
@@ -1096,6 +1100,9 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        if typed_expr.ty == Ty::Pointer {
+            println!("FUNCTION LOWERED -> {:?}", typed_expr);
+        }
         let func = IRFunction {
             ty: typed_expr.ty.to_ir(self),
             name: name.mangled(&typed_expr.ty),
@@ -2299,7 +2306,7 @@ fn find_or_create_main(
         } = root
             && name == "main"
         {
-            return (root.id, false);
+            return (root.id.1, false);
         }
     }
 
@@ -2326,7 +2333,7 @@ fn find_or_create_main(
     source_file.set_typed_expr(
         SymbolID::GENERATED_MAIN.0,
         TypedExpr {
-            id: SymbolID::GENERATED_MAIN.0,
+            id: ("GENERATED".into(), SymbolID::GENERATED_MAIN.0),
             expr: func_expr.clone(),
             ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
         },

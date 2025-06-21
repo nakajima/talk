@@ -1,11 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{
-        SymbolID, check,
-        expr::Expr,
-        type_checker::{Ty, TypeVarID, TypeVarKind},
-        typed_expr::TypedExpr,
-    };
+    use crate::{SymbolID, check, expr::Expr, type_checker::Ty, typed_expr::TypedExpr};
 
     #[test]
     fn checks_initializer() {
@@ -62,7 +57,7 @@ mod tests {
         .unwrap();
 
         let Some(TypedExpr {
-            expr: Expr::Call { callee, .. },
+            expr: Expr::Call { .. },
             ..
         }) = checked.typed_expr(&checked.root_ids()[1])
         else {

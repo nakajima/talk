@@ -6,7 +6,7 @@ use crate::{
     environment::{Environment, TypeDef},
     expr::Expr,
     name::Name,
-    parser::{ExprID, ExprIDWithPath},
+    parser::ExprIDWithPath,
     type_checker::TypeError,
 };
 
@@ -23,11 +23,11 @@ pub enum Constraint {
 }
 
 impl Constraint {
-    fn expr_id(&self) -> ExprID {
+    fn expr_id(&self) -> &ExprIDWithPath {
         match self {
-            Self::Equality(id, _, _) => id.1,
-            Self::MemberAccess(id, _, _, _) => id.1,
-            Self::UnqualifiedMember(id, _, _) => id.1,
+            Self::Equality(id, _, _) => id,
+            Self::MemberAccess(id, _, _, _) => id,
+            Self::UnqualifiedMember(id, _, _) => id,
         }
     }
 }
@@ -62,7 +62,7 @@ impl<'a> ConstraintSolver<'a> {
                 Err(err) => {
                     self.source_file
                         .diagnostics
-                        .insert(Diagnostic::typing(constraint.expr_id(), err));
+                        .insert(Diagnostic::typing(constraint.expr_id().1, err));
                 }
             }
         }

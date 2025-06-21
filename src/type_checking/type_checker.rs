@@ -355,10 +355,17 @@ impl TypeChecker {
             ))),
         };
 
+        if *id == 18 {
+            println!(
+                "TYPE CHECKER infer_node: {:?}:{:?} {:?}",
+                source_file.path, expr, ty
+            );
+        }
+
         match &ty {
             Ok(ty) => {
                 let typed_expr = TypedExpr {
-                    id: *id,
+                    id: source_file.expr_id(*id),
                     expr,
                     ty: ty.clone(),
                 };
@@ -577,7 +584,7 @@ impl TypeChecker {
                 env.typed_exprs.insert(
                     (source_file.path.clone(), *callee),
                     TypedExpr {
-                        id: *callee,
+                        id: source_file.expr_id(*callee),
                         expr: source_file.get(callee).cloned().unwrap(),
                         ty: init_ty.clone(),
                     },
@@ -833,7 +840,7 @@ impl TypeChecker {
                 env.typed_exprs.insert(
                     (source_file.path.clone(), *param),
                     TypedExpr {
-                        id: *param,
+                        id: source_file.expr_id(*param),
                         expr: expr.unwrap(),
                         ty: var_ty,
                     },
@@ -1110,8 +1117,8 @@ impl TypeChecker {
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
                 let member_var = match receiver_ty {
-                    Ty::Struct(id, _) => env
-                        .lookup_struct(&id)
+                    Ty::Struct(struct_id, _) => env
+                        .lookup_struct(&struct_id)
                         .and_then(|s| s.member_ty(member_name))
                         .cloned(),
                     _ => None,
@@ -1120,6 +1127,15 @@ impl TypeChecker {
 
                 let member_var =
                     member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
+
+                if member_var == Ty::Pointer {
+                    println!(
+                        "___________INFERMEMBER: {} {:?} {:?}",
+                        id,
+                        source_file.get(id),
+                        member_var
+                    );
+                }
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain_member(
@@ -1496,7 +1512,7 @@ impl TypeChecker {
                         env.typed_exprs.insert(
                             (source_file.path.clone(), expr_id),
                             TypedExpr {
-                                id: expr_id,
+                                id: source_file.expr_id(expr_id),
                                 expr: expr.clone(),
                                 ty: ty.clone(),
                             },
@@ -1522,7 +1538,8 @@ impl TypeChecker {
                     methods,
                 });
 
-                let typed_expr = TypedExpr::new(*id, expr.clone(), enum_ty.clone());
+                let typed_expr =
+                    TypedExpr::new(source_file.expr_id(*id), expr.clone(), enum_ty.clone());
                 env.typed_exprs
                     .insert((source_file.path.clone(), *id), typed_expr);
             }
@@ -1548,7 +1565,7 @@ impl TypeChecker {
                 let fn_var =
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
 
-                let typed_expr = TypedExpr::new(*id, expr, fn_var.clone());
+                let typed_expr = TypedExpr::new(source_file.expr_id(*id), expr, fn_var.clone());
                 env.typed_exprs
                     .insert((source_file.path.clone(), *id), typed_expr);
 

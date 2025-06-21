@@ -9,6 +9,7 @@ use crate::lowering::{
 pub fn print(program: &IRModule) -> String {
     let mut printer = IRPrinter::default();
     for func in &program.functions {
+        println!("???????? {:?}", func);
         println!("{}", format_func(func));
         print_func(func, &mut printer);
     }
