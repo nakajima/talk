@@ -2,7 +2,7 @@ use std::{collections::HashMap, usize};
 
 use crate::{
     interpreter::{
-        heap::{Heap, Pointer},
+        memory::{Memory, Pointer},
         value::Value,
     },
     lowering::{
@@ -28,30 +28,32 @@ pub enum InterpreterError {
 }
 
 #[derive(Debug)]
-struct StackFrame {
+struct StackFrame<'a> {
     pred: Option<BasicBlockID>,
-    function: IRFunction,
+    function: &'a IRFunction,
     block_idx: usize,
     pc: usize,
+    sp: usize,
+    fp: usize,
     registers: HashMap<Register, Value>,
 }
 
-pub struct IRInterpreter {
+pub struct IRInterpreter<'a> {
     program: IRModule,
-    stack: Vec<StackFrame>,
-    heap: Heap,
+    stack: Vec<StackFrame<'a>>,
+    memory: Memory,
 }
 
-impl IRInterpreter {
+impl<'a> IRInterpreter<'a> {
     pub fn new(program: IRModule) -> Self {
         Self {
             program,
             stack: vec![],
-            heap: Heap::new(),
+            memory: Memory::new(),
         }
     }
 
-    pub fn run(&mut self) -> Result<Value, InterpreterError> {
+    pub fn run(mut self) -> Result<Value, InterpreterError> {
         log::info!("Monomorphizing module");
         self.program = Monomorphizer::new().run(self.program.clone());
 
@@ -61,9 +63,10 @@ impl IRInterpreter {
             .program
             .functions
             .iter()
-            .position(|f| f.name == "@main");
+            .find(|f| f.name == "@main")
+            .cloned();
         if let Some(main) = main {
-            self.execute_function(self.load_function(&Pointer(main)).unwrap(), vec![])
+            self.execute_function(&main, vec![])
         } else {
             Err(InterpreterError::NoMainFunc)
         }
@@ -85,7 +88,7 @@ impl IRInterpreter {
 
     fn execute_function(
         &mut self,
-        function: IRFunction,
+        function: &'a IRFunction,
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         // let blocks = function.blocks.clone();
@@ -93,6 +96,8 @@ impl IRInterpreter {
             pred: None,
             block_idx: 0,
             pc: 0,
+            sp: 0,
+            fp: 0,
             function,
             registers: Default::default(),
         });
@@ -203,7 +208,7 @@ impl IRInterpreter {
 
                         usize::MAX
                     });
-                self.set_register_value(&dest, Value::Func(Pointer(idx)));
+                self.set_register_value(&dest, Value::Func(idx));
             }
             Instr::Call {
                 dest_reg,
@@ -221,7 +226,7 @@ impl IRInterpreter {
                             ),
                         };
 
-                        let Some(function_to_call) = self.load_function(&callee_id) else {
+                        let Some(function_to_call) = self.load_function(callee_id) else {
                             return Err(InterpreterError::CalleeNotFound);
                         };
 
@@ -239,7 +244,7 @@ impl IRInterpreter {
                 };
 
                 let arg_values = self.register_values(&args);
-                let result = self.execute_function(callee, arg_values)?;
+                let result = self.execute_function(&callee, arg_values)?;
                 self.set_register_value(&dest_reg, result);
             }
             Instr::Branch {
@@ -348,54 +353,24 @@ impl IRInterpreter {
                     self.register_value(&a).gte(&self.register_value(&b))?,
                 );
             }
-            Instr::Alloc { dest, .. } => {
-                let ptr = self.heap.alloc();
+            Instr::Alloc { dest, ty, count } => {
+                let ptr = self.memory.heap_alloc(&ty, count);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
-            Instr::Store { val, location, .. } => match self.register_value(&location) {
+            Instr::Store { val, location, ty } => match self.register_value(&location) {
                 Value::Pointer(ptr) => {
                     println!(
                         "heap pointer store {:?}: {:?}",
                         self.register_value(&val),
                         self.register_value(&location)
                     );
-                    self.heap.store(&ptr, self.register_value(&val))
-                }
-                Value::GEPPointer(reg, offset) => {
-                    let mut values = match self.register_value(&reg) {
-                        Value::Struct(values) => values,
-                        Value::Pointer(ptr) => {
-                            let Value::Struct(values) = self.heap.load(&ptr) else {
-                                panic!("didn't load gep values");
-                            };
-
-                            values
-                        }
-                        _ => {
-                            panic!(
-                                "no register found for gep: {:?} {:?}",
-                                reg,
-                                self.register_value(&reg)
-                            );
-                        }
-                    };
-
-                    println!(
-                        "gep pointer store {}: {:?} {:?}",
-                        offset,
-                        values,
-                        self.register_value(&val)
-                    );
-
-                    values[offset] = self.register_value(&val);
-
-                    self.set_register_value(&reg, Value::Struct(values))
+                    self.memory.store(&ptr, self.register_value(&val), &ty)
                 }
                 _ => panic!("no pointer in {location}"),
             },
-            Instr::Load { dest, addr, .. } => match self.register_value(&addr) {
+            Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
                 Value::Pointer(ptr) => {
-                    let val = self.heap.load(&ptr);
+                    let val = self.memory.load(&ptr, &ty);
                     self.set_register_value(&dest, val.clone());
                 }
                 Value::GEPPointer(reg, index) => {
@@ -474,8 +449,8 @@ impl IRInterpreter {
             .clone()
     }
 
-    fn load_function(&self, idx: &Pointer) -> Option<IRFunction> {
-        self.program.functions.get(idx.0).cloned()
+    fn load_function(&self, idx: usize) -> Option<IRFunction> {
+        self.program.functions.get(idx).cloned()
     }
 }
 
