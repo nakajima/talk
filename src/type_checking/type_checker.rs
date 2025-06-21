@@ -1109,18 +1109,27 @@ impl TypeChecker {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
-                // Create a type variable for the member
-                let member_var = env.new_type_variable(TypeVarKind::Member);
+                let member_var = match receiver_ty {
+                    Ty::Struct(id, _) => env
+                        .lookup_struct(&id)
+                        .and_then(|s| s.member_ty(member_name))
+                        .cloned(),
+                    _ => None,
+                }
+                .clone();
+
+                let member_var =
+                    member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain_member(
                     source_file.expr_id(*id),
                     receiver_ty,
                     member_name.to_string(),
-                    Ty::TypeVar(member_var.clone()),
+                    member_var.clone(),
                 );
 
-                Ok(Ty::TypeVar(member_var))
+                Ok(member_var.clone())
             }
         }
     }

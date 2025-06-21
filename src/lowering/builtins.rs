@@ -140,13 +140,14 @@ fn lower_store(
         unreachable!("didn't get offset for store")
     };
 
-    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[1]).cloned() else {
+    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[2]).cloned() else {
         unreachable!("didn't get call arg for store")
     };
 
     let Some(value) = lowerer.lower_expr(&value) else {
         unreachable!("didn't get value");
     };
+    println!("ok type_params[0]: {:?}", type_params[0]);
 
     let location = lowerer.allocate_register();
     lowerer.push_instr(Instr::GetElementPointer {

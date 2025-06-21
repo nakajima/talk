@@ -353,11 +353,25 @@ impl IRInterpreter {
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => match self.register_value(&location) {
-                Value::Pointer(ptr) => self.heap.store(&ptr, &self.register_value(&val), &ty),
+                Value::Pointer(ptr) => {
+                    println!(
+                        "heap pointer store {:?}: {:?}",
+                        self.register_value(&val),
+                        self.register_value(&location)
+                    );
+                    self.heap.store(&ptr, &self.register_value(&val), &ty)
+                }
                 Value::GEPPointer(reg, offset) => {
                     let Value::Struct(mut values) = self.register_value(&reg) else {
                         panic!("no register found for gep");
                     };
+
+                    println!(
+                        "gep pointer store {}: {:?} {:?}",
+                        offset,
+                        values,
+                        self.register_value(&val)
+                    );
 
                     values[offset] = self.register_value(&val);
 
@@ -480,7 +494,7 @@ mod tests {
         let unit = driver.lower().into_iter().next().unwrap();
 
         let diagnostics = unit.source_file(&PathBuf::from("-")).unwrap().diagnostics();
-        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let module = unit.module();
 
         IRInterpreter::new(module).run()
@@ -669,7 +683,7 @@ mod tests {
                 "
                 let a = [1, 2, 3]
                 a.push(4)
-                a.get(4)
+                a.get(3)
         "
             )
             .unwrap()

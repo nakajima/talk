@@ -1427,6 +1427,13 @@ impl<'a> Lowerer<'a> {
                         index: IRValue::ImmediateInt(index as i64),
                     });
 
+                    let member_loaded_reg = self.allocate_register();
+                    self.push_instr(Instr::Load {
+                        dest: member_loaded_reg,
+                        addr: member_reg,
+                        ty: typed_expr.ty.to_ir(self),
+                    });
+
                     return Some(member_reg);
                 }
 
