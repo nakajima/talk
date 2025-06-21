@@ -387,68 +387,69 @@ mod array_tests {
         let mut driver = Driver::with_str("[1,2,3].count");
         let module = driver.lower().into_iter().next().unwrap().module();
 
-        crate::assert_lowered_functions!(
+        crate::assert_lowered_function!(
             module,
-            vec![IRFunction {
+            "@main",
+            IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()).clone(),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::Alloc {
-                            dest: Register(1),
+                            dest: Register(0),
                             ty: IRType::array(),
                             count: None
                         },
                         // Set the array's count
-                        Instr::ConstantInt(Register(2), 3),
+                        Instr::ConstantInt(Register(1), 3),
                         Instr::GetElementPointer {
-                            dest: Register(3),
-                            base: Register(1),
+                            dest: Register(2),
+                            base: Register(0),
                             ty: IRType::array(),
                             index: 0.into(),
                         },
                         Instr::Store {
-                            location: Register(3),
+                            location: Register(2),
                             ty: IRType::Int,
-                            val: Register(2)
+                            val: Register(1)
                         },
                         // Set the array's capacity
-                        Instr::ConstantInt(Register(4), 3),
+                        Instr::ConstantInt(Register(3), 3),
                         Instr::GetElementPointer {
-                            dest: Register(5),
-                            base: Register(1),
+                            dest: Register(4),
+                            base: Register(0),
                             ty: IRType::array(),
                             index: 1.into(),
                         },
                         Instr::Store {
-                            location: Register(5),
+                            location: Register(4),
                             ty: IRType::Int,
-                            val: Register(4)
+                            val: Register(3)
                         },
                         // Get array's storage pointer
                         Instr::GetElementPointer {
-                            dest: Register(6),
-                            base: Register(1),
+                            dest: Register(5),
+                            base: Register(0),
                             ty: IRType::array(),
                             index: 2.into(),
                         },
                         // Alloc space for the items
                         Instr::Alloc {
-                            dest: Register(7),
+                            dest: Register(6),
                             ty: IRType::Int,
-                            count: Some(Register(2))
+                            count: Some(Register(1))
                         },
                         Instr::Store {
                             ty: IRType::Pointer,
-                            val: Register(7),
-                            location: Register(6)
+                            val: Register(6),
+                            location: Register(5)
                         },
                         // Store first element
-                        Instr::ConstantInt(Register(8), 1),
+                        Instr::ConstantInt(Register(7), 1),
                         Instr::GetElementPointer {
-                            dest: Register(9),
-                            base: Register(7),
+                            dest: Register(8),
+                            base: Register(6),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
@@ -456,14 +457,14 @@ mod array_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(8),
-                            location: Register(9)
+                            val: Register(7),
+                            location: Register(8)
                         },
                         // Store second element
-                        Instr::ConstantInt(Register(10), 2),
+                        Instr::ConstantInt(Register(9), 2),
                         Instr::GetElementPointer {
-                            dest: Register(11),
-                            base: Register(7),
+                            dest: Register(10),
+                            base: Register(6),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
@@ -471,14 +472,14 @@ mod array_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(10),
-                            location: Register(11)
+                            val: Register(9),
+                            location: Register(10)
                         },
                         // Store third element
-                        Instr::ConstantInt(Register(12), 3),
+                        Instr::ConstantInt(Register(11), 3),
                         Instr::GetElementPointer {
-                            dest: Register(13),
-                            base: Register(7),
+                            dest: Register(12),
+                            base: Register(6),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
@@ -486,40 +487,40 @@ mod array_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(12),
-                            location: Register(13)
+                            val: Register(11),
+                            location: Register(12)
                         },
                         Instr::Load {
-                            dest: Register(14),
+                            dest: Register(13),
                             ty: IRType::array(),
-                            addr: Register(1),
+                            addr: Register(0),
                         },
                         // Get .count
                         Instr::GetElementPointer {
-                            dest: Register(15),
-                            base: Register(14),
+                            dest: Register(14),
+                            base: Register(13),
                             ty: IRType::array(),
                             index: 0.into(),
                         },
                         Instr::Load {
-                            dest: Register(16),
+                            dest: Register(15),
                             ty: IRType::Int,
-                            addr: Register(15)
+                            addr: Register(14)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(16).into()))
+                        Instr::Ret(IRType::Int, Some(Register(15).into()))
                     ],
                 }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                env_reg: Register(0)
-            }]
-        )
+                env_ty: None,
+                env_reg: None,
+            }
+        );
     }
 }
 
 #[cfg(test)]
 mod stdlib_tests {
     use crate::{
-        SymbolID, assert_lowered_functions,
+        assert_lowered_function, assert_lowered_functions,
         compiling::driver::Driver,
         lowering::{
             instr::Instr,
@@ -541,17 +542,17 @@ mod stdlib_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
-                        Instr::ConstantInt(Register(2), 4),
+                        Instr::ConstantInt(Register(1), 4),
                         Instr::Alloc {
-                            dest: Register(1),
+                            dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(2)),
+                            count: Some(Register(1)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(1).into()))
+                        Instr::Ret(IRType::Pointer, Some(Register(0).into()))
                     ],
                 }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                env_reg: Register(0)
+                env_ty: None,
+                env_reg: None,
             }],
         )
     }
@@ -574,24 +575,24 @@ mod stdlib_tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         // First alloc
-                        Instr::ConstantInt(Register(2), 2),
+                        Instr::ConstantInt(Register(1), 2),
                         Instr::Alloc {
-                            dest: Register(1),
+                            dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(2)),
+                            count: Some(Register(1)),
                         },
                         // Realloc
-                        Instr::ConstantInt(Register(4), 4),
+                        Instr::ConstantInt(Register(3), 4),
                         Instr::Alloc {
-                            dest: Register(3),
+                            dest: Register(2),
                             ty: IRType::Int,
-                            count: Some(Register(4)),
+                            count: Some(Register(3)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(3).into()))
+                        Instr::Ret(IRType::Pointer, Some(Register(2).into()))
                     ],
                 }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                env_reg: Register(0)
+                env_ty: None,
+                env_reg: None,
             }],
         )
     }
@@ -605,43 +606,44 @@ mod stdlib_tests {
         ",
         );
         let lowered = driver.lower().into_iter().next().unwrap().module();
-        assert_lowered_functions!(
+        assert_lowered_function!(
             lowered,
-            vec![IRFunction {
+            "@main",
+            IRFunction {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
                         // First alloc (so we can get a pointer)
-                        Instr::ConstantInt(Register(2), 2),
+                        Instr::ConstantInt(Register(1), 2),
                         Instr::Alloc {
-                            dest: Register(1),
+                            dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(2)),
+                            count: Some(Register(1)),
                         },
+                        Instr::ConstantInt(Register(3), 1),
                         Instr::ConstantInt(Register(4), 1),
-                        Instr::ConstantInt(Register(5), 1),
                         Instr::GetElementPointer {
-                            dest: Register(6),
-                            base: Register(1),
+                            dest: Register(5),
+                            base: Register(0),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: Register(4).into(),
+                            index: Register(3).into(),
                         },
                         Instr::Store {
-                            val: Register(5),
+                            val: Register(4),
                             ty: IRType::Int,
-                            location: Register(6)
+                            location: Register(5)
                         },
-                        Instr::Ret(IRType::Void, Some(Register(3).into()))
+                        Instr::Ret(IRType::Void, Some(Register(2).into()))
                     ],
                 }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                env_reg: Register(0)
-            }],
-        )
+                env_ty: None,
+                env_reg: None,
+            }
+        );
     }
 
     #[test]
@@ -662,31 +664,31 @@ mod stdlib_tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         // First alloc (so we can get a pointer)
-                        Instr::ConstantInt(Register(2), 2),
+                        Instr::ConstantInt(Register(1), 2),
                         Instr::Alloc {
-                            dest: Register(1),
+                            dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(2)),
+                            count: Some(Register(1)),
                         },
-                        Instr::ConstantInt(Register(4), 1),
+                        Instr::ConstantInt(Register(3), 1),
                         Instr::GetElementPointer {
-                            dest: Register(5),
-                            base: Register(1),
+                            dest: Register(4),
+                            base: Register(0),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: Register(4).into()
+                            index: Register(3).into()
                         },
                         Instr::Load {
-                            dest: Register(3),
+                            dest: Register(2),
                             ty: IRType::Int.into(),
-                            addr: Register(5)
+                            addr: Register(4)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(3).into()))
+                        Instr::Ret(IRType::Int, Some(Register(2).into()))
                     ],
                 }],
-                env_ty: IRType::Struct(SymbolID::ENV, vec![]),
-                env_reg: Register(0)
+                env_ty: None,
+                env_reg: None,
             }],
         )
     }

@@ -33,6 +33,14 @@ impl Name {
             }
         }
     }
+
+    pub fn try_symbol_id(&self) -> SymbolID {
+        match self {
+            Name::Raw(name_str) => panic!("Cannot get symbol ID from unresolved {:?}", name_str),
+            Name::Resolved(symbol_id, _) => *symbol_id,
+            Name::_Self(symbol_id) => *symbol_id,
+        }
+    }
 }
 
 impl From<String> for Name {

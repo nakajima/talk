@@ -68,6 +68,10 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
 
+    for diagnostic in source_file.diagnostics() {
+        log::error!("{:?}", diagnostic);
+    }
+
     Ok(CheckResult {
         source_file,
         env: typed_compilation_unit.env,

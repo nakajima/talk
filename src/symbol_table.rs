@@ -28,7 +28,7 @@ impl SymbolID {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolKind {
-    Func,
+    FuncDef,
     Param,
     Local,
     Enum,

@@ -185,7 +185,8 @@ fn regex_for_type(ty: &Type) -> &'static str {
         "f64" => r"(-?\d+\.\d+)",
         "bool" => r"(true|false)",
         "BasicBlockID" => r"(#\d+|entry)",
-        "RegisterList" => r"((?:%\d+(?:,\s*%\d+)*)?)",
+        "RegisterList" => r"((?:(?:[^\s]*)\s+%\d+(?:\s*%\d+)*,?)?)",
+        "Callee" => r"([@%][^\(]+)",
 
         // FIX: Use a specific regex for types that start with '@'
         "RefKind" | "FuncName" => r"(@\S+)",

@@ -120,6 +120,7 @@ impl DefiniteInitizationPass {
                 if let Instr::GetElementPointer {
                     dest, base, index, ..
                 } = instr
+                    && let Some(self_reg) = self_reg
                     && *base == self_reg
                 {
                     // The index of the gep corresponds to the property index.
@@ -135,7 +136,10 @@ impl DefiniteInitizationPass {
                 }
             }
         }
-        (self_reg, property_pointers)
+        (
+            self_reg.expect("Didn't get self register for property pointers"),
+            property_pointers,
+        )
     }
 }
 

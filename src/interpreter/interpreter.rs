@@ -6,13 +6,15 @@ use crate::{
         value::Value,
     },
     lowering::{
-        instr::Instr,
+        instr::{Callee, Instr},
         ir_error::IRError,
         ir_module::IRModule,
+        ir_printer::{self, print},
         ir_value::IRValue,
         lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList},
         register::Register,
     },
+    transforms::monomorphizer::{self, Monomorphizer},
 };
 
 #[derive(Debug)]
@@ -50,6 +52,9 @@ impl IRInterpreter {
     }
 
     pub fn run(&mut self) -> Result<Value, InterpreterError> {
+        log::info!("Monomorphizing module");
+        self.program = Monomorphizer::new().run(self.program.clone());
+
         let main = self
             .program
             .functions
@@ -109,7 +114,7 @@ impl IRInterpreter {
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
         log::trace!("Reg: {:?}", self.stack.last().unwrap().registers);
-        log::info!("{instr:?}");
+        log::info!("{}", ir_printer::format_instruction(&instr));
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -180,35 +185,35 @@ impl IRInterpreter {
                 args,
                 ..
             } => {
-                // 1. The `callee` register holds a `Value::Func` variant containing the mangled name
-                //    of the function to be called. We first get this value.
-                let callee_value = self.register_value(&callee.try_register().unwrap());
-                let callee_id = match callee_value {
-                    Value::Func(id) => id,
-                    _ => panic!(
-                        "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
-                    ),
+                let callee = match callee {
+                    Callee::Register(reg) => {
+                        let callee_value = self.register_value(&reg);
+                        let callee_id = match callee_value {
+                            Value::Func(id) => id,
+                            _ => panic!(
+                                "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
+                            ),
+                        };
+
+                        let Some(function_to_call) = self.load_function(&callee_id) else {
+                            return Err(InterpreterError::CalleeNotFound);
+                        };
+
+                        function_to_call
+                    }
+                    Callee::Name(name) => {
+                        let Some(function_to_call) =
+                            self.program.functions.iter().find(|f| f.name == name)
+                        else {
+                            return Err(InterpreterError::CalleeNotFound);
+                        };
+
+                        function_to_call.clone()
+                    }
                 };
 
-                // 2. We use the function name to look up the corresponding `IRFunction`
-                //    definition from the program's module.
-                let Some(function_to_call) = self.load_function(&callee_id) else {
-                    return Err(InterpreterError::CalleeNotFound);
-                };
-
-                // 3. The `args` list contains the registers for the arguments. The first argument
-                //    is always the environment pointer for the closure, followed by the
-                //    user-specified arguments. We resolve these registers to their current values.
                 let arg_values = self.register_values(&args);
-
-                // 4. We call `execute_function`, which handles pushing a new stack frame,
-                //    running the function's code, and returning the result. This is a synchronous
-                //    operation within the interpreter.
-                let result = self.execute_function(function_to_call, arg_values)?;
-
-                // 5. Once the function returns, `execute_function` pops the callee's stack frame.
-                //    We are now back in the caller's frame. We take the return value and
-                //    store it in the destination register specified by the `Call` instruction.
+                let result = self.execute_function(callee, arg_values)?;
                 self.set_register_value(&dest_reg, result);
             }
             Instr::Branch {
@@ -438,6 +443,8 @@ impl IRInterpreter {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
         compiling::driver::Driver,
         interpreter::{
@@ -448,9 +455,13 @@ mod tests {
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
         let mut driver = Driver::with_str(code);
-        let module = driver.lower().into_iter().next().unwrap().module();
+        let unit = driver.lower().into_iter().next().unwrap();
 
-        println!("{}", crate::lowering::ir_printer::print(&module));
+        let diagnostics = unit.source_file(&PathBuf::from("-")).unwrap().diagnostics();
+        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
+        let module = unit.module();
+
+        // println!("{}", crate::lowering::ir_printer::print(&module));
 
         IRInterpreter::new(module).run()
     }

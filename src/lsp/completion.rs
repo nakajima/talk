@@ -92,7 +92,7 @@ impl<'a> CompletionContext<'a> {
                 }
             }
         } else {
-            println!("did not get struct: {:?}", self.env.types);
+            log::error!("did not get struct: {:?}", self.env.types);
             vec![]
         }
     }
@@ -121,7 +121,7 @@ impl<'a> CompletionContext<'a> {
             for symbol_id in self.source_file.scope_tree.get_symbols_in_scope(scope) {
                 if let Some(symbol_info) = self.driver.symbol_table.get(&symbol_id) {
                     let kind = match symbol_info.kind {
-                        SymbolKind::Func => CompletionItemKind::FUNCTION,
+                        SymbolKind::FuncDef => CompletionItemKind::FUNCTION,
                         SymbolKind::Param => CompletionItemKind::VARIABLE,
                         SymbolKind::Local => CompletionItemKind::VARIABLE,
                         SymbolKind::Enum => CompletionItemKind::ENUM,

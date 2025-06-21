@@ -1,6 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use crate::{SymbolID, check, expr::Expr, type_checker::Ty, typed_expr::TypedExpr};
+    use crate::{
+        SymbolID, check,
+        expr::Expr,
+        type_checker::{Ty, TypeVarID, TypeVarKind},
+        typed_expr::TypedExpr,
+    };
 
     #[test]
     fn checks_initializer() {
@@ -37,6 +42,38 @@ mod tests {
         };
 
         assert_eq!(ty, Ty::Init(SymbolID::resolved(1), vec![Ty::Int]));
+    }
+
+    #[test]
+    fn checks_generic_init() {
+        let checked = check(
+            "
+        struct Person<T> {
+            init() {
+            }
+
+            func foo(t: T) { t }
+        }
+
+        Person().foo(1)
+        Person().foo(1.23)
+        ",
+        )
+        .unwrap();
+
+        let Some(TypedExpr {
+            expr: Expr::Call { callee, .. },
+            ..
+        }) = checked.typed_expr(&checked.root_ids()[1])
+        else {
+            panic!("did not get call")
+        };
+
+        let Some(Ty::Func(_, box ret, _)) = checked.type_for(&callee) else {
+            panic!("did not get callee")
+        };
+
+        assert_eq!(ret, Ty::TypeVar(TypeVarID(78, TypeVarKind::CallReturn)));
     }
 
     #[test]
@@ -125,7 +162,7 @@ mod tests {
 #[cfg(test)]
 mod type_tests {
     use crate::{
-        SymbolID,
+        SymbolID, check_without_prelude,
         environment::TypeDef,
         expr::Expr,
         name::Name,
@@ -336,12 +373,8 @@ mod type_tests {
         // the bare `rec` at the top level should be a Func([α], α)
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(&root_id).unwrap();
-        let Ty::Closure {
-            func: box Ty::Func(params, ret, _),
-            ..
-        } = ty
-        else {
-            panic!()
+        let Ty::Func(params, ret, _) = ty else {
+            panic!("didn't get closure for ty: {ty:?}");
         };
         // exactly one parameter
         assert_eq!(params.len(), 1);
@@ -353,7 +386,7 @@ mod type_tests {
 
     #[test]
     fn checks_mutual_recursion() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
         func even(n: Int) -> Int {
             odd(n)
@@ -363,8 +396,14 @@ mod type_tests {
         }
         even
         ",
-        );
+        )
+        .unwrap();
 
+        assert!(
+            checker.diagnostics().is_empty(),
+            "{:?}",
+            checker.diagnostics()
+        );
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(&root_id).unwrap();
         match ty {
@@ -978,6 +1017,7 @@ mod type_tests {
         func add(y) {
             x + y
         }
+        add(2)
         ",
         );
 

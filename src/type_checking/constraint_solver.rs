@@ -70,6 +70,7 @@ impl<'a> ConstraintSolver<'a> {
         for (_id, typed_expr) in &mut self.env.typed_exprs.iter_mut() {
             typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
 
+            // Try to fill in the symbol ID of types of variables
             let this_symbol = match typed_expr.expr {
                 Expr::Variable(Name::Resolved(symbol_id, _), _) => symbol_id,
                 _ => continue,
@@ -216,7 +217,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                     // Future: Handle other receiver types (structs, etc.)
                     _ => {
-                        log::error!(
+                        log::warn!(
                             "For now just unify with the result type: {node_id:?}, {result_ty:?}"
                         );
                         // For now, just unify with the result type

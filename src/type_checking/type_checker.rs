@@ -45,7 +45,7 @@ pub enum TypeVarKind {
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum TypeError {
-    Unresolved,
+    Unresolved(String),
     NameResolution(NameResolverError),
     UnknownEnum(Name),
     UnknownVariant(Name),
@@ -59,7 +59,7 @@ pub enum TypeError {
 impl TypeError {
     pub fn message(&self) -> String {
         match self {
-            Self::Unresolved => "".into(),
+            Self::Unresolved(name) => format!("Unresolved name: {}", name),
             Self::NameResolution(e) => e.message(),
             Self::UnknownEnum(name) => format!("No enum named {}", name.name_str()),
             Self::UnknownVariant(name) => format!("No case named {}", name.name_str()),
@@ -338,7 +338,7 @@ impl TypeChecker {
                 self.infer_member(id, env, receiver, member_name, source_file)
             }
             Expr::Pattern(pattern) => self.infer_pattern_expr(env, pattern, expected, source_file),
-            Expr::Variable(Name::Raw(_), _) => Err(TypeError::Unresolved),
+            Expr::Variable(Name::Raw(name_str), _) => Err(TypeError::Unresolved(name_str.clone())),
             Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
@@ -419,7 +419,7 @@ impl TypeChecker {
         }
 
         let Name::Resolved(symbol_id, _) = name else {
-            return Err(TypeError::Unresolved);
+            return Err(TypeError::Unresolved(name.name_str()));
         };
 
         let Some(Expr::Block(items)) = source_file.get(body).cloned() else {
@@ -591,8 +591,8 @@ impl TypeChecker {
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
                 env.constrain_equality(
                     source_file.expr_id(*callee),
-                    expected_callee_ty,
                     callee_ty.clone(),
+                    expected_callee_ty,
                 );
             }
         };
@@ -758,8 +758,8 @@ impl TypeChecker {
             let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
             func_var = Some(type_var.clone());
             let scheme = env.generalize(&Ty::TypeVar(type_var));
+            log::debug!("Declared scheme for named func {symbol_id:?} {scheme:?}");
             env.declare(*symbol_id, scheme);
-            log::debug!("Declared scheme for named func {symbol_id:?}");
         }
 
         env.start_scope();
@@ -802,8 +802,8 @@ impl TypeChecker {
             .unwrap_or(None);
 
         let mut param_vars: Vec<Ty> = vec![];
-        for expr_opt in params.iter() {
-            let expr = source_file.get(expr_opt).cloned();
+        for param in params.iter() {
+            let expr = source_file.get(param).cloned();
             if let Some(Expr::Parameter(Name::Resolved(symbol_id, _), ty)) = expr {
                 let var_ty = if let Some(ty_id) = &ty {
                     self.infer_node(ty_id, env, expected, source_file)?
@@ -816,9 +816,9 @@ impl TypeChecker {
                 env.declare(symbol_id, scheme);
                 param_vars.push(var_ty.clone());
                 env.typed_exprs.insert(
-                    (source_file.path.clone(), *expr_opt),
+                    (source_file.path.clone(), *param),
                     TypedExpr {
-                        id: *expr_opt,
+                        id: *param,
                         expr: expr.unwrap(),
                         ty: var_ty,
                     },
@@ -1230,7 +1230,7 @@ impl TypeChecker {
             };
 
             let Name::Resolved(symbol_id, name_str) = name else {
-                return Err((*id, TypeError::Unresolved));
+                return Err((*id, TypeError::Unresolved(name.name_str())));
             };
 
             let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
@@ -1326,9 +1326,10 @@ impl TypeChecker {
                             log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
                             Err((
                                 *id,
-                                TypeError::Unknown(
-                                    format!("Unhandled property: {:?}", source_file.get(&expr_id)),
-                                ),
+                                TypeError::Unknown(format!(
+                                    "Unhandled property: {:?}",
+                                    source_file.get(&expr_id)
+                                )),
                             ))
                         };
                     }
@@ -1513,6 +1514,8 @@ impl TypeChecker {
 
                 let scheme = env.generalize(&fn_var);
                 env.declare(symbol_id, scheme);
+            } else {
+                log::warn!("not a func {:?}", expr);
             }
         }
     }

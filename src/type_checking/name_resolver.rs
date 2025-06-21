@@ -324,7 +324,7 @@ impl NameResolver {
                             }
                         } else {
                             let (symbol_id, depth) = self.lookup(&name_str);
-                            log::trace!("Replacing variable {name_str} with {symbol_id:?}");
+                            log::info!("Replacing variable {name_str} with {symbol_id:?}");
 
                             symbol_table.add_map(source_file, node_id, &symbol_id);
 
@@ -333,16 +333,23 @@ impl NameResolver {
                                 && &depth < func_depth
                                 && symbol_id.0 > 0
                             {
-                                let Func { captures, .. } = source_file.get_mut(func_id).unwrap()
+                                let Func { name, captures, .. } =
+                                    source_file.get_mut(func_id).unwrap()
                                 else {
                                     unreachable!()
                                 };
 
-                                if !captures.contains(&symbol_id) {
-                                    captures.push(symbol_id);
-                                }
+                                if let Some(Name::Resolved(_, func_name)) = name
+                                    && func_name == &name_str
+                                {
+                                    log::trace!("the same: {:?} <> {:?}", func_name, name_str);
+                                } else {
+                                    if !captures.contains(&symbol_id) {
+                                        (*captures).push(symbol_id);
+                                    }
 
-                                symbol_table.mark_as_captured(&symbol_id);
+                                    symbol_table.mark_as_captured(&symbol_id);
+                                }
                             }
 
                             Name::Resolved(symbol_id, name_str)
@@ -473,7 +480,7 @@ impl NameResolver {
             {
                 let symbol_id = self.declare(
                     name.clone(),
-                    SymbolKind::Func,
+                    SymbolKind::FuncDef,
                     id,
                     source_file,
                     symbol_table,

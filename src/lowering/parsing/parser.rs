@@ -133,8 +133,8 @@ impl<'a> Parser<'a> {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
             blocks,
-            env_ty: IRType::Struct(SymbolID(0), vec![]), //FIXME
-            env_reg: Register(0),
+            env_ty: Some(IRType::Struct(SymbolID(0), vec![])), //FIXME
+            env_reg: Some(Register(0)),
         })
     }
 
@@ -417,7 +417,7 @@ pub fn parse(code: &str) -> Result<IRModule, ParserError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        compiling::driver::Driver,
+        compiling::driver::{Driver, DriverConfig},
         lowering::{
             instr::Instr,
             ir_error::IRError,
@@ -431,7 +431,11 @@ mod tests {
     use indoc::formatdoc;
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::with_str(input);
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: false,
+        });
+        driver.update_file(&"-".into(), input.to_string());
         let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }
@@ -539,7 +543,7 @@ mod tests {
             %5 = div int %1, %2;
             %6 = eq int %3, %5;
             %7 = ref () int @my_other_func;
-            %8 = tagvar int 0 (%1);
+            %8 = tagvar int 0 (int %1);
             %9 = gettagof %8;
             %10 = enumvalue int %8 0 0;
             jump #1;
@@ -637,9 +641,8 @@ mod tests {
         .unwrap();
 
         let func = crate::lowering::ir_printer::print(&program);
-        // println!("{}", func);
         let parsed = parse(&func).unwrap();
 
-        assert_eq!(parsed.functions.len(), 5);
+        assert_eq!(parsed.functions.len(), 2);
     }
 }

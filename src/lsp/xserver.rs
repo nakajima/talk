@@ -272,12 +272,6 @@ impl LanguageServer for ServerState {
     ) -> BoxFuture<'static, Result<Option<GotoDefinitionResponse>, ResponseError>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
-        // You'll need a way to find the symbol at the given position.
-        // This might involve traversing the AST or using a more direct lookup
-        // if you store symbol locations.
-
-        // For now, let's assume you have a function to find a symbol's definition.
         let definition_location = self.find_definition_for_position(uri, position);
 
         Box::pin(async move {
