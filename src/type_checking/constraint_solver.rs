@@ -108,7 +108,7 @@ impl<'a> ConstraintSolver<'a> {
                     err
                 })?;
 
-                log::info!("defining {node_id:?} = {lhs:?}");
+                log::trace!("defining {node_id:?} = {lhs:?}");
                 self.env
                     .typed_exprs
                     .get_mut(node_id)
@@ -167,16 +167,44 @@ impl<'a> ConstraintSolver<'a> {
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
                 match &receiver_ty {
-                    Ty::Struct(struct_id, _generics) => {
-                        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id)
+                    Ty::Struct(struct_id, generics) => {
+                        let Some(TypeDef::Struct(struct_def)) =
+                            self.env.lookup_type(struct_id).cloned()
                         else {
                             log::info!("For now, just unify with the result type");
                             self.source_file.define(node_id.1, result_ty, self.env);
                             return Ok(());
                         };
 
+                        log::info!("receiver_ty: {:?}", receiver_ty);
+
                         if let Some(method) = struct_def.methods.get(member_name) {
-                            Self::unify(&method.ty, &result_ty, substitutions)?;
+                            // Create a substitution map from the struct's generic parameters to the concrete types.
+                            let mut substitution_map = HashMap::new();
+                            for (param_ty, arg_ty) in
+                                struct_def.type_parameters.iter().zip(generics.iter())
+                            {
+                                if let Ty::TypeVar(param_id) = param_ty {
+                                    substitution_map.insert(param_id.clone(), arg_ty.clone());
+                                }
+                            }
+
+                            // Specialize the method's type.
+                            let specialized_method_ty = self
+                                .env
+                                .substitute_ty_with_map(method.ty.clone(), &substitution_map);
+
+                            // IMPORTANT: Do NOT instantiate here - we want to use the same type variables
+                            // that are already in the struct instance's generics
+                            log::info!("specialized_method_ty: {:?}", specialized_method_ty);
+
+                            // Unify with the specialized type directly (no instantiation)
+                            Self::unify(&specialized_method_ty, &result_ty, substitutions)?;
+
+                            // Apply the substitutions to get the final type
+                            let final_ty = Self::apply(&specialized_method_ty, substitutions, 0);
+                            log::info!("Set type for member access {:?}: {:?}", node_id, final_ty);
+                            self.source_file.define(node_id.1, final_ty, self.env);
                         }
 
                         if let Some(property) = struct_def
@@ -184,7 +212,22 @@ impl<'a> ConstraintSolver<'a> {
                             .iter()
                             .find(|p| &p.name == member_name)
                         {
-                            Self::unify(&property.ty, &result_ty, substitutions)?;
+                            // Also specialize property types.
+                            let mut substitution_map = HashMap::new();
+                            for (param_ty, arg_ty) in
+                                struct_def.type_parameters.iter().zip(generics.iter())
+                            {
+                                if let Ty::TypeVar(param_id) = param_ty {
+                                    substitution_map.insert(param_id.clone(), arg_ty.clone());
+                                }
+                            }
+                            let specialized_property_ty = self
+                                .env
+                                .substitute_ty_with_map(property.ty.clone(), &substitution_map);
+                            Self::unify(&specialized_property_ty, &result_ty, substitutions)?;
+
+                            let final_ty = Self::apply(&specialized_property_ty, substitutions, 0);
+                            self.source_file.define(node_id.1, final_ty, self.env);
                         }
                     }
                     Ty::Enum(enum_id, generics) => {
@@ -447,6 +490,24 @@ impl<'a> ConstraintSolver<'a> {
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
                     Self::unify(lhs, &rhs, substitutions)?;
+                }
+
+                if let (Ty::TypeVar(ret_var), concrete_ret) =
+                    (lhs_returning.as_ref(), rhs_returning.as_ref())
+                {
+                    // If we're unifying a function with a TypeVar return against a function with a concrete return,
+                    // record that the TypeVar should be the concrete type
+                    if !matches!(concrete_ret, Ty::TypeVar(_)) {
+                        substitutions.insert(ret_var.clone(), concrete_ret.clone());
+                    }
+                }
+
+                if let (concrete_ret, Ty::TypeVar(ret_var)) =
+                    (lhs_returning.as_ref(), rhs_returning.as_ref())
+                {
+                    if !matches!(concrete_ret, Ty::TypeVar(_)) {
+                        substitutions.insert(ret_var.clone(), concrete_ret.clone());
+                    }
                 }
 
                 Self::unify(&lhs_returning, &rhs_returning, substitutions)?;

@@ -669,7 +669,7 @@ mod tests {
                 "
                 let a = [1, 2, 3]
                 a.push(4)
-                a.get(3)
+                a.get(4)
         "
             )
             .unwrap()

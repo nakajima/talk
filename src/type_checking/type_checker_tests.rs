@@ -69,6 +69,14 @@ mod tests {
             panic!("did not get call")
         };
 
+        let Some(TypedExpr {
+            expr: Expr::Call { callee, .. },
+            ..
+        }) = checked.typed_expr(&checked.root_ids()[2])
+        else {
+            panic!("did not get call")
+        };
+
         let Some(Ty::Func(_, box ret, _)) = checked.type_for(&callee) else {
             panic!("did not get callee")
         };

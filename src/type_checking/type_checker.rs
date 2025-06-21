@@ -550,6 +550,7 @@ impl TypeChecker {
                 let struct_def = env.lookup_struct(&symbol_id).unwrap();
 
                 // TODO: Handle multiple initializers
+                // TODO: Handle multiple initializers
                 log::info!("looking up initializer for struct: {struct_def:?}");
                 let Some(Expr::Init(_, func_id)) =
                     source_file.get(&struct_def.initializers[0].1).cloned()
@@ -559,31 +560,37 @@ impl TypeChecker {
                     ));
                 };
 
+                // Instantiate the struct type to get fresh type variables for its generics
                 let instantiated = env.instantiate_symbol(symbol_id)?;
 
-                let Ok(Ty::Func(params, _, _)) =
-                    self.infer_node(&func_id, env, expected, source_file)
-                else {
+                // Infer the init function type
+                let init_func_ty = self.infer_node(&func_id, env, expected, source_file)?;
+
+                let Ty::Func(params, _, _) = init_func_ty else {
                     return Err(TypeError::Unknown("Could not get init func".into()));
                 };
 
+                // Create the Init type with the instantiated struct's symbol and the function's params
+                let init_ty = Ty::Init(symbol_id, params.clone());
+
+                // Insert the typed expression for the callee (the struct name being called)
                 env.typed_exprs.insert(
                     (source_file.path.clone(), *callee),
                     TypedExpr {
                         id: *callee,
                         expr: source_file.get(callee).cloned().unwrap(),
-                        ty: Ty::Init(symbol_id, params.clone()),
+                        ty: init_ty.clone(),
                     },
                 );
 
-                // let expected_callee_ty =
-                // Ty::Func(arg_tys, instantiated.clone().into(), inferred_type_args);
+                // Constrain the Init type parameters to match the provided arguments
                 env.constrain_equality(
                     source_file.expr_id(*callee),
                     Ty::Init(symbol_id, arg_tys),
-                    Ty::Init(symbol_id, params).clone(),
+                    init_ty,
                 );
 
+                // The return type is the instantiated struct type
                 ret_var = instantiated;
             }
             _ => {
@@ -598,6 +605,11 @@ impl TypeChecker {
             }
         };
 
+        log::info!(
+            "infer_call returning type: {:?} for expr_id: {:?}",
+            ret_var,
+            callee
+        );
         Ok(ret_var)
     }
 
@@ -1260,6 +1272,24 @@ impl TypeChecker {
                 }
             }
 
+            // Manually create the scheme with the type parameters as unbound variables
+            let unbound_vars: Vec<TypeVarID> = type_parameters
+                .iter()
+                .filter_map(|ty| {
+                    if let Ty::TypeVar(var) = ty {
+                        Some(var.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let scheme = Scheme::new(
+                Ty::Struct(symbol_id, type_parameters.clone()),
+                unbound_vars.clone(),
+            );
+            env.declare(symbol_id, scheme.clone());
+
             // Define a placeholder for `self` references
             env.register_struct(StructDef::new(
                 symbol_id,
@@ -1273,11 +1303,6 @@ impl TypeChecker {
                     .map(|i| (source_file.path.clone(), *i))
                     .collect(),
             ));
-
-            env.declare(
-                symbol_id,
-                env.generalize(&Ty::Struct(symbol_id, type_parameters.clone())),
-            );
 
             for expr_id in expr_ids {
                 match &source_file.get(&expr_id).cloned().unwrap() {
