@@ -55,6 +55,8 @@ impl IRInterpreter {
         log::info!("Monomorphizing module");
         self.program = Monomorphizer::new().run(self.program.clone());
 
+        println!("{}", crate::lowering::ir_printer::print(&self.program));
+
         let main = self
             .program
             .functions
@@ -113,8 +115,19 @@ impl IRInterpreter {
 
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
-        log::trace!("Reg: {:?}", self.stack.last().unwrap().registers);
-        log::info!("{}", ir_printer::format_instruction(&instr));
+        log::info!(
+            "\n{} {}\n\t{}",
+            self.stack.last().unwrap().function.name,
+            ir_printer::format_instruction(&instr),
+            self.stack
+                .last()
+                .unwrap()
+                .registers
+                .iter()
+                .map(|(r, v)| format!("{}: {:?}", r.0, v))
+                .collect::<Vec<String>>()
+                .join("\n\t")
+        );
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -150,7 +163,9 @@ impl IRInterpreter {
 
                 self.set_register_value(&dest, op1.div(&op2)?);
             }
-            Instr::StoreLocal(_, _, _) => todo!(),
+            Instr::StoreLocal(dest, _, reg) => {
+                self.set_register_value(&dest, self.register_value(&reg));
+            }
             Instr::LoadLocal(_, _, _) => todo!(),
             Instr::Phi(dest, _, predecessors) => {
                 let frame = self.stack.last_mut().expect("stack underflow");
@@ -460,8 +475,6 @@ mod tests {
         let diagnostics = unit.source_file(&PathBuf::from("-")).unwrap().diagnostics();
         assert!(diagnostics.is_empty(), "{:?}", diagnostics);
         let module = unit.module();
-
-        // println!("{}", crate::lowering::ir_printer::print(&module));
 
         IRInterpreter::new(module).run()
     }

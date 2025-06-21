@@ -20,17 +20,18 @@ struct Array<T> {
 	}
 
 	func resizeIfNeeded() {
-		if self.count + 1 > self.capacity {
-			let newStorage = __alloc<T>(self.capacity * 2)
-			let i = 0
-			loop i < self.count {
-				__store<T>(newStorage, i, self.get(i))
-				i = i + 1
-			}
-			__free(self.storage)
-			self.storage = newStorage
+		if self.count + 1 < self.capacity {
+			return
 		}
 
+		let newStorage = __alloc<T>(self.capacity * 2)
+		let i = 0
+		loop i < self.count {
+			__store<T>(newStorage, i, self.get(i))
+			i = i + 1
+		}
+		__free(self.storage)
+		self.storage = newStorage
 		return
 	}
 }

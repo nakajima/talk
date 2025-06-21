@@ -935,7 +935,7 @@ pub mod lowering_tests {
 
         // The function signature for `add` only includes its explicit parameters.
         let add_func_type = IRType::Func(vec![IRType::Int], Box::new(IRType::Int));
-        let env_struct_type = IRType::Struct(SymbolID(0), vec![IRType::Int]);
+        let env_struct_type = IRType::Struct(SymbolID(0), vec![IRType::Int], vec![]);
 
         assert_lowered_function!(
             lowered,
@@ -961,7 +961,7 @@ pub mod lowering_tests {
                         Instr::Ret(IRType::Int, Some(Register(4).into())),
                     ],
                 }],
-                env_ty: Some(IRType::Struct(SymbolID::ENV, vec![IRType::Int])),
+                env_ty: Some(IRType::Struct(SymbolID::ENV, vec![IRType::Int], vec![])),
                 env_reg: Some(Register(0))
             }
         );
@@ -1082,7 +1082,7 @@ pub mod lowering_tests {
             IRFunction {
                 ty: IRType::Func(
                     vec![IRType::Int],
-                    IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into()
+                    IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]).into()
                 ),
                 name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
                 blocks: vec![BasicBlock {
@@ -1092,7 +1092,7 @@ pub mod lowering_tests {
                         Instr::GetElementPointer {
                             dest: Register(2),
                             base: Register(0), // self is in register 0
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
+                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
                             index: 0.into(),
                         },
                         Instr::Store {
@@ -1101,17 +1101,21 @@ pub mod lowering_tests {
                             location: Register(2)
                         },
                         Instr::Load {
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
+                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
                             dest: Register(3),
                             addr: Register(0)
                         },
                         Instr::Ret(
-                            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
+                            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
                             Some(Register(3).into())
                         )
                     ],
                 }],
-                env_ty: Some(IRType::Struct(SymbolID::resolved(1), vec![IRType::Int])),
+                env_ty: Some(IRType::Struct(
+                    SymbolID::resolved(1),
+                    vec![IRType::Int],
+                    vec![]
+                )),
                 env_reg: Some(Register(0))
             },
         );
@@ -1130,13 +1134,14 @@ pub mod lowering_tests {
                         // Alloc the space for the struct
                         Instr::Alloc {
                             dest: Register(1),
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
+                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
                             count: None,
                         },
                         // Call the init directly
                         Instr::Call {
                             dest_reg: Register(2),
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]).into(),
+                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![])
+                                .into(),
                             callee: Callee::Name(format!(
                                 "@_{}_Person_init",
                                 SymbolID::resolved(1).0
@@ -1147,7 +1152,7 @@ pub mod lowering_tests {
                             ]),
                         },
                         Instr::Ret(
-                            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]),
+                            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
                             Some(Register(2).into()),
                         ),
                     ],
@@ -1175,7 +1180,7 @@ pub mod lowering_tests {
         )
         .unwrap();
 
-        let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]);
+        let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]);
         let person_init_func_ty = IRType::Func(vec![IRType::Int], person_struct_ty.clone().into());
 
         assert_lowered_function!(
@@ -1282,7 +1287,7 @@ pub mod lowering_tests {
         )
         .unwrap();
 
-        let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int]);
+        let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]);
         let person_init_func_ty = IRType::Func(vec![IRType::Int], person_struct_ty.clone().into());
 
         assert_lowered_functions!(

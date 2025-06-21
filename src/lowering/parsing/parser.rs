@@ -133,7 +133,7 @@ impl<'a> Parser<'a> {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
             blocks,
-            env_ty: Some(IRType::Struct(SymbolID(0), vec![])), //FIXME
+            env_ty: Some(IRType::Struct(SymbolID(0), vec![], vec![])), //FIXME
             env_reg: Some(Register(0)),
         })
     }
@@ -358,7 +358,7 @@ impl<'a> Parser<'a> {
                         self.consume(Tokind::Comma).ok();
                     }
 
-                    IRType::Struct(SymbolID(0), types)
+                    IRType::Struct(SymbolID(0), types, vec![])
                 }
                 Tokind::Identifier(name) if name.starts_with("T") => {
                     self.advance();

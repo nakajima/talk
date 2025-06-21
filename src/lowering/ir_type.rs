@@ -15,18 +15,19 @@ pub enum IRType {
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
     Enum(Vec<IRType>),
-    Struct(SymbolID, Vec<IRType> /* properties */),
+    Struct(SymbolID, Vec<IRType> /* properties */, Vec<IRType> /* type vars */),
     Array { element: Box<IRType>, /* element */ },
     Pointer,
 }
 
 impl IRType {
-    pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![]);
+    pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![], vec![]);
 
     pub fn array() -> IRType {
         IRType::Struct(
             SymbolID::ARRAY,
             vec![IRType::Int, IRType::Int, IRType::Pointer],
+            vec![IRType::TypeVar("T".into())]
         )
     }
 
@@ -34,6 +35,7 @@ impl IRType {
         IRType::Struct(
             SymbolID::GENERATED_MAIN,
             vec![IRType::Pointer, IRType::Pointer],
+            vec![]
         )
     }
 
@@ -47,7 +49,7 @@ impl IRType {
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
             IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
-            IRType::Struct(_, irtypes) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
+            IRType::Struct(_, irtypes, _) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Pointer => 8,
             IRType::Array { .. } => IRType::Pointer.mem_size(),
         }
@@ -55,7 +57,7 @@ impl IRType {
 
     pub fn get_element_pointer(&self, from: Pointer, index: usize) -> Result<Pointer, IRError> {
         match self {
-            IRType::Struct(_, members) => {
+            IRType::Struct(_, members, _) => {
                 let mut offset = 0;
                 (0..index).for_each(|i| {
                     offset += members[i].mem_size();
@@ -109,7 +111,7 @@ impl FromStr for IRType {
             }
 
             // Recursively parse the return type
-            Ok(IRType::Struct(SymbolID(0), args))
+            Ok(IRType::Struct(SymbolID(0), args, vec![]))
         } else if s.starts_with('[') && s.ends_with(']') {
             Ok(IRType::Array {
                 element: IRType::from_str(&s[1..s.len() - 1])?.into(),
@@ -153,7 +155,7 @@ impl std::fmt::Display for IRType {
             }
             Self::TypeVar(name) => f.write_str(name),
             Self::Enum(_generics) => f.write_str("enum"),
-            Self::Struct(_, types) => write!(
+            Self::Struct(_, types, _) => write!(
                 f,
                 "{{{}}}",
                 types

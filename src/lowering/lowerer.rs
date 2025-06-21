@@ -83,7 +83,7 @@ impl Ty {
             Ty::Closure { func, .. } => func.to_ir(lowerer),
             Ty::Tuple(_items) => todo!(),
             Ty::Array(_) => todo!(),
-            Ty::Struct(symbol_id, _generics) => {
+            Ty::Struct(symbol_id, generics) => {
                 let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
                     log::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
@@ -96,6 +96,7 @@ impl Ty {
                         .iter()
                         .map(|p| p.ty.to_ir(lowerer))
                         .collect(),
+                    generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
         }
@@ -368,7 +369,7 @@ pub struct IRFunction {
 
 impl IRFunction {
     pub(crate) fn args(&self) -> &[IRType] {
-        let (IRType::Func(ref args, _) | IRType::Struct(_, ref args)) = self.ty else {
+        let (IRType::Func(ref args, _) | IRType::Struct(_, ref args, _)) = self.ty else {
             unreachable!("didn't get func for ty: {:?}", self.ty)
         };
 
@@ -380,7 +381,7 @@ impl IRFunction {
             return ret;
         };
 
-        if let IRType::Struct(_, _) = self.ty {
+        if let IRType::Struct(_, _, _) = self.ty {
             return &self.ty;
         };
 
@@ -801,6 +802,11 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .map(|p| p.ty.to_ir(self))
                 .collect(),
+            struct_def
+                .type_parameters
+                .iter()
+                .map(|t| t.to_ir(self))
+                .collect(),
         );
 
         self.current_functions
@@ -927,6 +933,7 @@ impl<'a> Lowerer<'a> {
             ref params,
             ref body,
             ref captures,
+            ref generics,
             ..
         } = typed_expr.expr
         else {
@@ -937,6 +944,14 @@ impl<'a> Lowerer<'a> {
         };
 
         let name = self.resolve_name(name.clone());
+        let generics: Vec<IRType> = generics
+            .iter()
+            .filter_map(|f| {
+                self.source_file
+                    .type_for(*f, self.env)
+                    .map(|t| t.to_ir(self))
+            })
+            .collect();
 
         // If the only capture is the func itself, we don't need to allocate a closure
 
@@ -1001,7 +1016,7 @@ impl<'a> Lowerer<'a> {
                 (vec![], vec![])
             };
 
-            let environment_type = IRType::Struct(SymbolID::ENV, capture_types.clone());
+            let environment_type = IRType::Struct(SymbolID::ENV, capture_types.clone(), vec![]);
 
             self.fill_closure(
                 closure_ptr,
@@ -1009,6 +1024,7 @@ impl<'a> Lowerer<'a> {
                 typed_expr.ty.to_ir(self),
                 capture_types.clone(),
                 capture_registers,
+                generics,
             );
 
             self.current_functions
@@ -1732,7 +1748,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.set_current_block(then_id);
-        let then_reg = self.lower_expr(&conseq).unwrap();
+        let then_reg = self.lower_expr(&conseq);
         self.current_block_mut().push_instr(Instr::Jump(merge_id));
 
         if let Some(alt) = alt {
@@ -1745,21 +1761,29 @@ impl<'a> Lowerer<'a> {
 
         let phi_dest_reg = self.allocate_register();
         let ir_type = typed_expr.ty.to_ir(self);
-        let predecessors = if let Some(else_reg) = else_reg
+        let mut predecessors = vec![];
+
+        if let Some(then_reg) = then_reg {
+            predecessors.push((then_reg, then_id));
+        }
+
+        if let Some(else_reg) = else_reg
             && let Some(else_id) = else_id
         {
-            vec![(then_reg, then_id), (else_reg, else_id)]
+            predecessors.push((else_reg, else_id));
+        }
+
+        if predecessors.is_empty() {
+            None
         } else {
-            vec![(then_reg, then_id)]
-        };
+            self.current_block_mut().push_instr(Instr::Phi(
+                phi_dest_reg,
+                ir_type,
+                PhiPredecessors(predecessors),
+            ));
 
-        self.current_block_mut().push_instr(Instr::Phi(
-            phi_dest_reg,
-            ir_type,
-            PhiPredecessors(predecessors),
-        ));
-
-        Some(phi_dest_reg)
+            Some(phi_dest_reg)
+        }
     }
 
     fn lower_call(
@@ -2084,10 +2108,11 @@ impl<'a> Lowerer<'a> {
         func_type: IRType,
         capture_types: Vec<IRType>,
         capture_registers: Vec<Register>,
+        generics: Vec<IRType>,
     ) {
         // Create the environment struct
         let environment_register = self.allocate_register();
-        let environment_type = IRType::Struct(SymbolID(0), capture_types.clone());
+        let environment_type = IRType::Struct(SymbolID(0), capture_types.clone(), generics);
         self.push_instr(Instr::MakeStruct {
             dest: environment_register,
             ty: environment_type.clone(),
@@ -2227,7 +2252,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn property_index(&self, name: &str, irtype: IRType) -> Option<usize> {
-        let IRType::Struct(symbol_id, _) = irtype else {
+        let IRType::Struct(symbol_id, _, _) = irtype else {
             unreachable!("didn't get property index for {:?}", irtype)
         };
 

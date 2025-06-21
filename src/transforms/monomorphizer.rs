@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use async_lsp::lsp_types::request::Formatting;
-
 use crate::lowering::{
     instr::{Callee, Instr},
     ir_module::IRModule,
@@ -19,6 +17,7 @@ use crate::lowering::{
 ///
 /// and it'll generate a version of identity that lowers to (Int) -> Int.
 /// It'll also update calls to the generic form to the specialized form.
+#[derive(Default)]
 pub struct Monomorphizer {
     cache: HashSet<String>,
     generic_functions: Vec<IRFunction>,
@@ -36,7 +35,10 @@ impl Monomorphizer {
         let mut module = module;
 
         let (generic_templates, concrete_funcs): (Vec<_>, Vec<_>) =
-            module.functions.into_iter().partition(is_generic);
+            module.functions.into_iter().partition(|f| {
+                log::warn!("is generic: {} {:?}", is_generic(f), f.name);
+                is_generic(f)
+            });
 
         self.generic_functions = generic_templates;
 
@@ -47,6 +49,15 @@ impl Monomorphizer {
         }
 
         let instantiated_functions = self.generic_functions;
+
+        for f in instantiated_functions.iter() {
+            println!(
+                "-> instantiated function: {:?} {:?} {:?}",
+                f.name.clone(),
+                f.env_ty,
+                is_generic(f)
+            );
+        }
         final_functions.extend(
             instantiated_functions
                 .into_iter()
@@ -76,10 +87,11 @@ impl Monomorphizer {
                         return function;
                     };
 
-                    if contains_type_var(&callee_function.ty) {
+                    if is_generic(&callee_function) {
                         let monomorphized_name = self.monomorphize_function(
                             &callee_function,
                             args.0.iter().map(|a| a.ty.clone()).collect(),
+                            &mut HashMap::new(),
                         );
 
                         *callee = monomorphized_name;
@@ -91,21 +103,25 @@ impl Monomorphizer {
         function
     }
 
-    fn monomorphize_function(&mut self, function: &IRFunction, args: Vec<IRType>) -> String {
+    fn monomorphize_function(
+        &mut self,
+        function: &IRFunction,
+        args: Vec<IRType>,
+        substitutions: &mut HashMap<IRType, IRType>,
+    ) -> String {
         let mangled_name = self.mangle_name(&function.name, &args);
 
         if self.cache.contains(&mangled_name) {
             return mangled_name;
         }
 
-        log::info!("monomorphizing {mangled_name}");
+        log::warn!("monomorphizing: {}", mangled_name);
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
         };
 
-        let mut substitutions = HashMap::new();
-        for (param, concrete_arg) in params.into_iter().zip(&args) {
+        for (param, concrete_arg) in params.iter().zip(&args) {
             if contains_type_var(param) {
                 substitutions.insert(param.clone(), concrete_arg.clone());
             }
@@ -116,32 +132,32 @@ impl Monomorphizer {
             ty: IRType::Func(
                 params
                     .iter()
-                    .map(|p| self.apply_type(p, &substitutions))
+                    .map(|p| Self::apply_type(p, &substitutions))
                     .collect(),
-                self.apply_type(ret, &substitutions).into(),
+                Self::apply_type(ret, &substitutions).into(),
             ),
             blocks: function
                 .blocks
                 .iter()
-                .map(|block| self.apply_block(block, &substitutions))
+                .map(|block| self.apply_block(block, substitutions))
                 .collect(),
             env_reg: function.env_reg,
             env_ty: function
                 .env_ty
                 .as_ref()
-                .map(|ty| self.apply_type(ty, &substitutions)),
+                .map(|ty| Self::apply_type(ty, &substitutions)),
         };
 
         self.cache.insert(mangled_name.clone());
         self.generic_functions.push(monomorphized_function);
 
-        return mangled_name;
+        mangled_name
     }
 
     fn apply_block(
         &mut self,
         block: &BasicBlock,
-        substitutions: &HashMap<IRType, IRType>,
+        substitutions: &mut HashMap<IRType, IRType>,
     ) -> BasicBlock {
         BasicBlock {
             id: block.id,
@@ -153,65 +169,77 @@ impl Monomorphizer {
         }
     }
 
-    fn apply_instruction(&mut self, instr: &Instr, substitutions: &HashMap<IRType, IRType>) -> Instr {
+    fn apply_instruction(
+        &mut self,
+        instr: &Instr,
+        substitutions: &mut HashMap<IRType, IRType>,
+    ) -> Instr {
         let mut applied_instruction = instr.clone();
         match &mut applied_instruction {
-            Instr::Add(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::Sub(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::Mul(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::Div(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::StoreLocal(_, ty, _1) => *ty = self.apply_type(ty, substitutions),
-            Instr::LoadLocal(_, ty, _1) => *ty = self.apply_type(ty, substitutions),
-            Instr::Phi(_, ty, _) => *ty = self.apply_type(ty, substitutions),
-            Instr::Ref(_, ty, _) => *ty = self.apply_type(ty, substitutions),
-            Instr::Eq(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::Ne(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::LessThan(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::LessThanEq(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::GreaterThan(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::GreaterThanEq(_, ty, _1, _2) => *ty = self.apply_type(ty, substitutions),
-            Instr::Alloc { ty, .. } => *ty = self.apply_type(ty, substitutions),
-            Instr::Store { ty, .. } => *ty = self.apply_type(ty, substitutions),
-            Instr::Load { ty, .. } => *ty = self.apply_type(ty, substitutions),
-            Instr::GetElementPointer { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::Add(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Sub(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Mul(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Div(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::StoreLocal(_, ty, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::LoadLocal(_, ty, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Phi(_, ty, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Ref(_, ty, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Eq(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Ne(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::LessThan(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::LessThanEq(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::GreaterThan(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::GreaterThanEq(_, ty, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Alloc { ty, .. } => *ty = Self::apply_type(ty, substitutions),
+            Instr::Store { ty, .. } => *ty = Self::apply_type(ty, substitutions),
+            Instr::Load { ty, .. } => *ty = Self::apply_type(ty, substitutions),
+            Instr::GetElementPointer { ty, .. } => *ty = Self::apply_type(ty, substitutions),
             Instr::MakeStruct { ty, values, .. } => {
-                *ty = self.apply_type(ty, substitutions);
+                *ty = Self::apply_type(ty, substitutions);
                 *values = RegisterList(
                     values
                         .0
                         .iter()
                         .map(|v| {
-                            TypedRegister::new(self.apply_type(&v.ty, substitutions), v.register)
+                            TypedRegister::new(Self::apply_type(&v.ty, substitutions), v.register)
                         })
                         .collect(),
                 );
             }
-            Instr::GetValueOf { ty, .. } => *ty = self.apply_type(ty, substitutions),
+            Instr::GetValueOf { ty, .. } => *ty = Self::apply_type(ty, substitutions),
             Instr::Call {
                 ty, args, callee, ..
             } => {
                 let applied_args: Vec<TypedRegister> = args
                     .0
                     .iter()
-                    .map(|a| TypedRegister::new(self.apply_type(&a.ty, substitutions), a.register))
+                    .map(|a| TypedRegister::new(Self::apply_type(&a.ty, substitutions), a.register))
                     .collect();
 
-                *ty = self.apply_type(ty, substitutions);
+                *ty = Self::apply_type(ty, substitutions);
                 *args = RegisterList(applied_args.clone());
 
                 // We want to monomorphize all the way down
                 if let Callee::Name(name) = callee
-                    && let Some(func) = self.generic_functions.iter().find(|f| f.name == *name).cloned()
+                    && let Some(func) = self
+                        .generic_functions
+                        .iter()
+                        .find(|f| f.name == *name)
+                        .cloned()
                 {
-                    self.detect_monomorphizations_in(
-                        func,
+                    let new_callee = self.monomorphize_function(
+                        &func,
+                        applied_args.iter().map(|a| a.ty.clone()).collect(),
+                        substitutions,
                     );
+
+                    *callee = Callee::Name(new_callee);
                 }
             }
-            Instr::GetEnumTag(_, _1) => todo!(),
-            Instr::GetEnumValue(_, ty, _1, _, _) => *ty = self.apply_type(ty, substitutions),
-            Instr::TagVariant(_, ty, _, __list) => *ty = self.apply_type(ty, substitutions),
-            Instr::Ret(ty, _) => *ty = self.apply_type(ty, substitutions),
+            Instr::GetEnumTag(_, _) => todo!(),
+            Instr::GetEnumValue(_, ty, _, _, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::TagVariant(_, ty, _, __list) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Ret(ty, _) => *ty = Self::apply_type(ty, substitutions),
             Instr::Jump(_) => (),
             Instr::Branch { .. } => (),
             Instr::Unreachable => (),
@@ -223,32 +251,36 @@ impl Monomorphizer {
         applied_instruction
     }
 
-    fn apply_type(&self, ty: &IRType, substitutions: &HashMap<IRType, IRType>) -> IRType {
+    fn apply_type(ty: &IRType, substitutions: &HashMap<IRType, IRType>) -> IRType {
         match ty {
-            IRType::TypeVar(_) => substitutions.get(ty).cloned().unwrap_or(ty.clone()),
+            IRType::TypeVar(_) => {
+                log::debug!("substitute: {:?} -> {:?}", ty, substitutions.get(ty));
+                substitutions.get(ty).cloned().unwrap_or(ty.clone())
+            }
             IRType::Func(params, ret) => IRType::Func(
                 params
-                    .into_iter()
-                    .map(|p| self.apply_type(p, substitutions))
+                    .iter()
+                    .map(|p| Self::apply_type(p, substitutions))
                     .collect(),
-                self.apply_type(ret, substitutions).into(),
+                Self::apply_type(ret, substitutions).into(),
             ),
 
             IRType::Enum(generics) => IRType::Enum(
                 generics
-                    .into_iter()
-                    .map(|g| self.apply_type(g, substitutions))
+                    .iter()
+                    .map(|g| Self::apply_type(g, substitutions))
                     .collect(),
             ),
-            IRType::Struct(symbol_id, generics) => IRType::Struct(
+            IRType::Struct(symbol_id, properties, generics) => IRType::Struct(
                 *symbol_id,
+                properties.clone(),
                 generics
-                    .into_iter()
-                    .map(|g| self.apply_type(g, substitutions))
+                    .iter()
+                    .map(|g| Self::apply_type(g, substitutions))
                     .collect(),
             ),
             IRType::Array { element } => IRType::Array {
-                element: self.apply_type(element, substitutions).clone().into(),
+                element: Self::apply_type(element, substitutions).clone().into(),
             },
             _ => ty.clone(),
         }
@@ -260,7 +292,7 @@ impl Monomorphizer {
         mangled.push('<');
         mangled.push_str(
             &args
-                .into_iter()
+                .iter()
                 .map(|t| format!("{t}"))
                 .collect::<Vec<String>>()
                 .join(" "),
@@ -271,14 +303,21 @@ impl Monomorphizer {
 }
 
 fn is_generic(func: &IRFunction) -> bool {
-    contains_type_var(&func.ty)
+    if let Some(env_ty) = &func.env_ty {
+        contains_type_var(env_ty) || contains_type_var(&func.ty)
+    } else {
+        contains_type_var(&func.ty)
+    }
 }
 
 fn contains_type_var(ty: &IRType) -> bool {
     match ty {
         IRType::TypeVar(_) => true,
         IRType::Func(params, ret) => params.iter().any(contains_type_var) || contains_type_var(ret),
-        IRType::Struct(_, params) | IRType::Enum(params) => params.iter().any(contains_type_var),
+        IRType::Struct(_, params, generics) => {
+            params.iter().any(contains_type_var) || generics.iter().any(contains_type_var)
+        }
+        IRType::Enum(params) => params.iter().any(contains_type_var),
         IRType::Array { element } => contains_type_var(element),
         _ => false,
     }
@@ -304,7 +343,7 @@ mod tests {
         let module = IRModule {
             functions: vec![
                 IRFunction {
-                    name: "@_123_identity".into(),
+                    name: "@_3_identity".into(),
                     ty: IRType::Func(
                         vec![IRType::TypeVar("T1".into())],
                         IRType::TypeVar("T1".into()).into(),
@@ -329,7 +368,7 @@ mod tests {
                             Instr::Call {
                                 dest_reg: Register(2),
                                 ty: IRType::Int,
-                                callee: Callee::Name("@_123_identity".into()),
+                                callee: Callee::Name("@_3_identity".into()),
                                 args: RegisterList(vec![TypedRegister::new(
                                     IRType::Int,
                                     Register(1),
@@ -347,9 +386,9 @@ mod tests {
 
         assert_lowered_function!(
             monomorphized,
-            "@_123_identity<int>",
+            "@_3_identity<int>",
             IRFunction {
-                name: "@_123_identity<int>".into(),
+                name: "@_3_identity<int>".into(),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID::ENTRY,
@@ -376,7 +415,7 @@ mod tests {
                         Instr::Call {
                             dest_reg: Register(2),
                             ty: IRType::Int,
-                            callee: Callee::Name("@_123_identity<int>".into()),
+                            callee: Callee::Name("@_3_identity<int>".into()),
                             args: RegisterList(vec![TypedRegister::new(IRType::Int, Register(1),)]),
                         },
                     ],

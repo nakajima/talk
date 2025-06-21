@@ -51,7 +51,7 @@ impl Value {
                     .collect();
                 Value::Enum { tag, values }
             }
-            IRType::Struct(_, irtypes) => {
+            IRType::Struct(_, irtypes, _) => {
                 let mut start = 0;
                 let mut members = vec![];
                 for ty in irtypes {
