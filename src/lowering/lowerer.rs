@@ -1715,7 +1715,7 @@ impl<'a> Lowerer<'a> {
         let value = self.lookup_register(symbol_id)?;
         match value.clone() {
             SymbolValue::Register(reg) => Some(reg),
-            SymbolValue::Capture(idx, ty) => {
+            SymbolValue::Capture(idx, _ty) => {
                 let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
                     dest: env_ptr,
@@ -1920,7 +1920,7 @@ impl<'a> Lowerer<'a> {
             // Now, load the environment pointer from the closure object.
             // The environment is the second element (index 1).
             let env_ptr = self.allocate_register();
-            let env_reg = self.allocate_register();
+            // let env_reg = self.allocate_register();
             self.push_instr(Instr::GetElementPointer {
                 dest: env_ptr,
                 base: callee_reg,
