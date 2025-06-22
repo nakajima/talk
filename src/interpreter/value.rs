@@ -21,9 +21,6 @@ pub enum Value {
         count: usize,
         capacity: usize,
     },
-    // This one is kind of a hack. Until we start emulating a stack and the other Pointer makes
-    // sense we're going with this.
-    GEPPointer(Register, usize),
 }
 
 impl Value {

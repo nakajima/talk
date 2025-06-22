@@ -59,8 +59,14 @@ impl NameResolver {
     ) -> SourceFile<NameResolved> {
         // Create the root scope for the file
         if !source_file.roots().is_empty() {
-            let first_root = &source_file.meta[*source_file.root_ids().first().unwrap() as usize];
-            let last_root = &source_file.meta[*source_file.root_ids().last().unwrap() as usize];
+            let first_root = &source_file
+                .meta
+                .get(source_file.root_ids().first().unwrap())
+                .unwrap();
+            let last_root = &source_file
+                .meta
+                .get(source_file.root_ids().last().unwrap())
+                .unwrap();
             let root_scope_id = source_file.scope_tree.new_scope(
                 None,
                 Span {
@@ -707,7 +713,7 @@ impl NameResolver {
             self.scopes.len() - 1
         );
 
-        let meta = &source_file.meta[*expr_id as usize];
+        let meta = &source_file.meta.get(expr_id).unwrap();
         let definition = Definition {
             path: source_file.path.clone(),
             line: meta.start.line,

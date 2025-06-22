@@ -1,7 +1,10 @@
 use std::{collections::HashMap, usize};
 
 use crate::{
-    interpreter::{memory::Memory, value::Value},
+    interpreter::{
+        memory::{Memory, Pointer},
+        value::Value,
+    },
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -31,13 +34,12 @@ struct StackFrame {
     block_idx: usize,
     pc: usize,
     sp: usize,
-    fp: usize,
-    registers: HashMap<Register, Value>,
+    stack: &'static mut [Option<Value>],
 }
 
 pub struct IRInterpreter {
     program: IRModule,
-    stack: Vec<StackFrame>,
+    call_stack: Vec<StackFrame>,
     memory: Memory,
 }
 
@@ -45,7 +47,7 @@ impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
         Self {
             program,
-            stack: vec![],
+            call_stack: vec![],
             memory: Memory::new(),
         }
     }
@@ -71,7 +73,7 @@ impl IRInterpreter {
 
     pub fn step(&mut self) -> Result<Option<Value>, InterpreterError> {
         let instr = {
-            let frame = &mut self.stack.last().expect("Stack underflow");
+            let frame = &mut self.call_stack.last().expect("Stack underflow");
             let block = &frame.function.blocks[frame.block_idx];
             block.instructions[frame.pc].clone()
         };
@@ -89,14 +91,15 @@ impl IRInterpreter {
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         // let blocks = function.blocks.clone();
-        self.stack.push(StackFrame {
+        let sp = self.call_stack.last().map(|frame| frame.sp).unwrap_or(0);
+
+        self.call_stack.push(StackFrame {
             pred: None,
             block_idx: 0,
             pc: 0,
-            sp: 0,
-            fp: 0,
-            function,
-            registers: Default::default(),
+            sp,
+            function: function.clone(),
+            stack: self.memory.range(sp + 1, function.size as usize),
         });
 
         for (i, arg) in args.iter().enumerate() {
@@ -116,20 +119,13 @@ impl IRInterpreter {
     }
 
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
-        log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
+        log::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
         log::info!(
-            "\n{}\n{:?}\n{}\n\t{}",
-            self.stack.last().unwrap().function.name,
+            "\n{}\n{:?}\n{}\n\t{:?}",
+            self.call_stack.last().unwrap().function.name,
             instr,
             ir_printer::format_instruction(&instr),
-            self.stack
-                .last()
-                .unwrap()
-                .registers
-                .iter()
-                .map(|(r, v)| format!("{}: {:?}", r.0, v))
-                .collect::<Vec<String>>()
-                .join("\n\t")
+            self.call_stack.last().unwrap().stack
         );
 
         match instr {
@@ -171,13 +167,13 @@ impl IRInterpreter {
             }
             Instr::LoadLocal(_, _, _) => todo!(),
             Instr::Phi(dest, _, predecessors) => {
-                let frame = self.stack.last_mut().expect("stack underflow");
+                let frame = self.call_stack.last_mut().expect("stack underflow");
 
                 for (reg, pred) in &predecessors.0 {
                     if frame.pred == Some(*pred) {
                         log::trace!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
                         self.set_register_value(&dest, self.register_value(reg));
-                        self.stack.last_mut().unwrap().pc += 1;
+                        self.call_stack.last_mut().unwrap().pc += 1;
                         return Ok(None);
                     }
                 }
@@ -256,7 +252,7 @@ impl IRInterpreter {
                 };
 
                 let id = self.current_basic_block().id;
-                let frame = self.stack.last_mut().expect("stack underflow");
+                let frame = self.call_stack.last_mut().expect("stack underflow");
                 frame.pred = Some(id);
                 frame.block_idx = next_block;
                 frame.pc = 0;
@@ -269,16 +265,15 @@ impl IRInterpreter {
                         IRValue::ImmediateInt(int) => Value::Int(int),
                     };
 
-                    self.stack.pop();
                     return Ok(Some(retval));
                 } else {
-                    self.stack.pop();
+                    self.call_stack.pop();
                     return Ok(Some(Value::Void));
                 }
             }
             Instr::Jump(jump_to) => {
                 let id = self.current_basic_block().id;
-                let frame = self.stack.last_mut().unwrap();
+                let frame = self.call_stack.last_mut().unwrap();
                 frame.pred = Some(id);
                 frame.pc = 0;
                 frame.block_idx = jump_to.0 as usize;
@@ -361,26 +356,16 @@ impl IRInterpreter {
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => match self.register_value(&location) {
-                Value::Pointer(ptr) => {
-                    println!(
-                        "heap pointer store {:?}: {:?}",
-                        self.register_value(&val),
-                        self.register_value(&location)
-                    );
-                    self.memory.store(ptr, self.register_value(&val), &ty)
-                }
-                _ => panic!("no pointer in {location}"),
+                Value::Pointer(ptr) => self.memory.store(ptr, self.register_value(&val), &ty),
+                _ => panic!(
+                    "no pointer in {location}: {:?}",
+                    self.register_value(&location)
+                ),
             },
             Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
                 Value::Pointer(ptr) => {
                     let val = self.memory.load(&ptr, &ty);
                     self.set_register_value(&dest, val.clone());
-                }
-                Value::GEPPointer(reg, index) => {
-                    let Value::Struct(values) = self.register_value(&reg) else {
-                        panic!("no register found for gep");
-                    };
-                    self.set_register_value(&dest, values[index].clone());
                 }
                 _ => panic!("unable to load {:?}", self.register_value(&addr)),
             },
@@ -400,7 +385,9 @@ impl IRInterpreter {
                         }
                     }
                 };
-                self.set_register_value(&dest, Value::GEPPointer(from, index as usize));
+
+                let pointer = Pointer::new(self.call_stack.last().unwrap().sp + from.0 as usize);
+                self.set_register_value(&dest, Value::Pointer(pointer + index as usize));
             }
             Instr::MakeStruct { dest, values, .. } => {
                 let structure = Value::Struct(self.register_values(&values));
@@ -409,23 +396,20 @@ impl IRInterpreter {
             Instr::GetValueOf { .. } => todo!(),
         }
 
-        self.stack.last_mut().unwrap().pc += 1;
+        self.call_stack.last_mut().unwrap().pc += 1;
 
         Ok(None)
     }
 
     fn current_basic_block(&self) -> &BasicBlock {
-        let frame = self.stack.last().unwrap();
+        let frame = self.call_stack.last().unwrap();
         &frame.function.blocks[frame.block_idx]
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
         log::trace!("set {register:?} to {value:?}");
-        self.stack
-            .last_mut()
-            .expect("Stack underflow")
-            .registers
-            .insert(*register, value);
+        self.call_stack.last_mut().expect("Stack underflow").stack[register.0 as usize] =
+            Some(value);
     }
 
     fn register_values(&self, registers: &RegisterList) -> Vec<Value> {
@@ -437,19 +421,9 @@ impl IRInterpreter {
     }
 
     fn register_value(&self, register: &Register) -> Value {
-        self.stack
-            .last()
-            .expect("Stack underflow")
-            .registers
-            .get(register)
-            .unwrap_or_else(|| {
-                panic!(
-                    "No value found for register: {:?}, {:?}",
-                    register,
-                    self.stack.last().unwrap().registers
-                )
-            })
+        self.call_stack.last().expect("Stack underflow").stack[register.0 as usize]
             .clone()
+            .expect("null pointer lol")
     }
 
     fn load_function(&self, idx: usize) -> Option<IRFunction> {

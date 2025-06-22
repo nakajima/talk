@@ -512,6 +512,7 @@ mod array_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 16
             }
         );
     }
@@ -553,6 +554,7 @@ mod stdlib_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 5,
             }],
         )
     }
@@ -593,6 +595,7 @@ mod stdlib_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 5,
             }],
         )
     }
@@ -642,6 +645,7 @@ mod stdlib_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 6,
             }
         );
     }
@@ -689,6 +693,7 @@ mod stdlib_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 5
             }],
         )
     }

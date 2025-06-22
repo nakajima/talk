@@ -55,7 +55,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }
         );
         assert_lowered_function!(
@@ -77,6 +78,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
     }
@@ -124,6 +126,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
         assert_lowered_function!(
@@ -148,6 +151,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
     }
@@ -187,6 +191,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
 
@@ -205,6 +210,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
     }
@@ -237,6 +243,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
         assert_lowered_function!(
@@ -270,6 +277,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             },
         );
     }
@@ -297,6 +305,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
         assert_lowered_function!(
@@ -321,6 +330,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             },
         )
     }
@@ -342,6 +352,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }]
         )
     }
@@ -362,7 +373,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }],
         )
     }
@@ -384,7 +396,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }]
         )
     }
@@ -408,7 +421,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }
         )
     }
@@ -432,7 +446,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             },
         )
     }
@@ -455,7 +470,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }]
         )
     }
@@ -478,7 +494,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }]
         )
     }
@@ -499,7 +516,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }]
         )
     }
@@ -570,6 +588,7 @@ pub mod lowering_tests {
             ],
             env_ty: None,
             env_reg: None,
+            size: 0,
         }];
 
         assert_lowered_functions!(lowered, expected,);
@@ -605,6 +624,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         )
     }
@@ -633,6 +653,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         )
     }
@@ -720,7 +741,8 @@ pub mod lowering_tests {
                     },
                 ],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }]
         )
     }
@@ -822,7 +844,8 @@ pub mod lowering_tests {
                     },
                 ],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }]
         )
     }
@@ -918,6 +941,7 @@ pub mod lowering_tests {
                 ],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             }
         );
     }
@@ -962,7 +986,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: Some(IRType::Struct(SymbolID::ENV, vec![IRType::Int], vec![])),
-                env_reg: Some(Register(0))
+                env_reg: Some(Register(0)),
+                size: 0
             }
         );
         assert_lowered_function!(
@@ -1054,7 +1079,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             }
         );
     }
@@ -1116,7 +1142,8 @@ pub mod lowering_tests {
                     vec![IRType::Int],
                     vec![]
                 )),
-                env_reg: Some(Register(0))
+                env_reg: Some(Register(0)),
+                size: 0
             },
         );
 
@@ -1158,7 +1185,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: None,
-                env_reg: None
+                env_reg: None,
+                size: 0
             },
         )
     }
@@ -1214,7 +1242,8 @@ pub mod lowering_tests {
                     ],
                 }],
                 env_ty: Some(person_struct_ty.clone()),
-                env_reg: Some(Register(0),)
+                env_reg: Some(Register(0),),
+                size: 0
             }
         );
         assert_lowered_function!(
@@ -1262,6 +1291,7 @@ pub mod lowering_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0
             },
         )
     }
@@ -1320,7 +1350,8 @@ pub mod lowering_tests {
                         ],
                     }],
                     env_ty: Some(person_struct_ty.clone()),
-                    env_reg: Some(Register(0),)
+                    env_reg: Some(Register(0),),
+                    size: 0
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Int.into()),
@@ -1343,7 +1374,8 @@ pub mod lowering_tests {
                         ]
                     }],
                     env_ty: Some(person_struct_ty.clone()),
-                    env_reg: Some(Register(0))
+                    env_reg: Some(Register(0)),
+                    size: 0
                 },
                 IRFunction {
                     ty: IRType::Func(vec![], IRType::Void.into()),
@@ -1387,6 +1419,7 @@ pub mod lowering_tests {
                     }],
                     env_ty: None,
                     env_reg: None,
+                    size: 0
                 },
             ]
         )
@@ -1427,6 +1460,7 @@ pub mod lowering_tests {
             ],
             env_ty: None,
             env_reg: None,
+            size: 0,
         };
 
         assert_lowered_function!(lowered, "@main", expected);
@@ -1466,6 +1500,7 @@ pub mod lowering_tests {
             ],
             env_ty: None,
             env_reg: None,
+            size: 0,
         };
 
         assert_lowered_function!(lowered, "@main", expected);
@@ -1523,6 +1558,7 @@ pub mod lowering_tests {
             ],
             env_ty: None,
             env_reg: None,
+            size: 0,
         };
 
         assert_lowered_function!(lowered, "@main", expected);

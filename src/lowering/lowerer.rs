@@ -365,6 +365,7 @@ pub struct IRFunction {
     pub blocks: Vec<BasicBlock>,
     pub env_ty: Option<IRType>,
     pub env_reg: Option<Register>,
+    pub size: i32,
 }
 
 impl IRFunction {
@@ -879,6 +880,7 @@ impl<'a> Lowerer<'a> {
             blocks: self.current_func_mut().blocks.clone(),
             env_ty: Some(struct_ty),
             env_reg: Some(env),
+            size: self.current_func().registers.next_id,
         };
 
         self.lowered_functions.push(func.clone());
@@ -918,6 +920,7 @@ impl<'a> Lowerer<'a> {
             blocks: self.current_func_mut().blocks.clone(),
             env_ty: Some(struct_ty),
             env_reg: Some(env),
+            size: self.current_func().registers.next_id,
         };
 
         self.lowered_functions.push(func.clone());
@@ -1102,6 +1105,7 @@ impl<'a> Lowerer<'a> {
             blocks: self.current_func_mut().blocks.clone(),
             env_ty: self.current_func().env_ty.clone(),
             env_reg: env_reg,
+            size: self.current_func().registers.next_id,
         };
 
         self.lowered_functions.push(func.clone());

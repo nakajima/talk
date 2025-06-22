@@ -1,5 +1,5 @@
 #![feature(box_patterns)]
-#![feature(new_range_api)]
+#![feature(assert_matches)]
 
 pub mod builtins;
 pub use builtins::*;

@@ -226,7 +226,7 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
-        let meta = &self.parse_tree.meta[lhs as usize];
+        let meta = &self.parse_tree.meta.get(&lhs).unwrap();
         let start = SourceLocationStart {
             token: meta.start.clone(),
             identifiers: vec![],
@@ -1178,7 +1178,7 @@ mod tests {
     #[test]
     fn stores_expr_meta() {
         let parsed = parse("1 + 2");
-        let meta = &parsed.meta[parsed.root_ids()[0] as usize];
+        let meta = &parsed.meta.get(&parsed.root_ids()[0]).unwrap();
 
         assert_eq!(meta.start.start, 0);
         assert_eq!(meta.start.end, 1);

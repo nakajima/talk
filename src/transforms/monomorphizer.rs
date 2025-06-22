@@ -151,6 +151,7 @@ impl Monomorphizer {
                 .env_ty
                 .as_ref()
                 .map(|ty| Self::apply_type(ty, &substitutions)),
+            size: function.size,
         };
 
         monomorphized_function.ty = Self::apply_type(&monomorphized_function.ty, substitutions);
@@ -374,6 +375,7 @@ mod tests {
                     }],
                     env_ty: None,
                     env_reg: None,
+                    size: 0,
                 },
                 IRFunction {
                     name: "@main".into(),
@@ -395,6 +397,7 @@ mod tests {
                     }],
                     env_ty: None,
                     env_reg: None,
+                    size: 0,
                 },
             ],
         };
@@ -416,6 +419,7 @@ mod tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0,
             }
         );
 
@@ -439,6 +443,7 @@ mod tests {
                 }],
                 env_ty: None,
                 env_reg: None,
+                size: 0,
             }
         )
     }
@@ -493,7 +498,8 @@ mod tests {
                     vec![IRType::Int, IRType::Int, IRType::Pointer],
                     vec![IRType::Int]
                 )),
-                env_reg: Some(Register(0))
+                env_reg: Some(Register(0)),
+                size: 0,
             }
         );
     }

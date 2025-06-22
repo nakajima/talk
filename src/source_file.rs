@@ -36,7 +36,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     pub path: PathBuf,
     roots: Vec<ExprID>,
     pub(crate) nodes: HashMap<ExprID, Expr>,
-    pub(crate) meta: Vec<ExprMeta>,
+    pub(crate) meta: HashMap<ExprID, ExprMeta>,
     pub diagnostics: HashSet<Diagnostic>,
     phase_data: P,
     pub scope_tree: ScopeTree,
@@ -48,7 +48,7 @@ impl SourceFile {
             path,
             roots: vec![],
             nodes: Default::default(),
-            meta: vec![],
+            meta: Default::default(),
             phase_data: Parsed,
             diagnostics: Default::default(),
             scope_tree: Default::default(),
@@ -171,7 +171,7 @@ impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID
     pub fn add(&mut self, id: ExprID, expr: Expr, meta: ExprMeta) -> ExprID {
         self.nodes.insert(id, expr);
-        self.meta.push(meta);
+        self.meta.insert(id, meta);
         id
     }
 
@@ -207,7 +207,7 @@ impl<P: Phase> SourceFile<P> {
     }
 
     pub fn span(&self, expr_id: &ExprID) -> Span {
-        let Some(meta) = self.meta.get(*expr_id as usize) else {
+        let Some(meta) = self.meta.get(&expr_id) else {
             panic!("didn't get a span for expr: {expr_id}");
         };
 

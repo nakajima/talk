@@ -57,7 +57,7 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn range_for(&self, expr_id: &ExprID) -> Range {
-        let range = self.source_file.meta[*expr_id as usize].source_range();
+        let range = self.source_file.meta.get(expr_id).unwrap().source_range();
 
         if let Some(start) = self.line_col_for(range.start)
             && let Some(end) = self.line_col_for(range.end)
@@ -146,7 +146,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 }
             }
             Expr::TypeRepr(_name, items, _) => {
-                if let Some(meta) = self.source_file.meta.get(*expr_id as usize) {
+                if let Some(meta) = self.source_file.meta.get(expr_id) {
                     result.extend(
                         meta.identifiers
                             .iter()
@@ -220,7 +220,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 result.extend(self.tokens_from_exprs(items))
             }
             Expr::CallArg { value, .. } => {
-                if let Some(meta) = self.source_file.meta.get(*expr_id as usize) {
+                if let Some(meta) = self.source_file.meta.get(expr_id) {
                     result.extend(
                         meta.identifiers
                             .iter()
