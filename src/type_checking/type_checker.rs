@@ -1298,7 +1298,6 @@ impl TypeChecker {
             env.register_struct(StructDef::new(
                 symbol_id,
                 name_str.clone(),
-                None,
                 type_parameters.clone(),
                 properties.clone(),
                 methods.clone(),
@@ -1374,7 +1373,6 @@ impl TypeChecker {
             let struct_def = StructDef::new(
                 symbol_id,
                 name_str,
-                None,
                 type_parameters.clone(),
                 properties,
                 methods,

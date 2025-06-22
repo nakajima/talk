@@ -1,10 +1,7 @@
 use std::{collections::HashMap, usize};
 
 use crate::{
-    interpreter::{
-        memory::{Memory, Pointer},
-        value::Value,
-    },
+    interpreter::{memory::Memory, value::Value},
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,

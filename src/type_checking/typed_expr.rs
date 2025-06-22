@@ -1,7 +1,4 @@
-use crate::{
-    expr::Expr,
-    parser::{ExprID, ExprIDWithPath},
-};
+use crate::{expr::Expr, parser::ExprIDWithPath};
 
 use super::type_checker::Ty;
 

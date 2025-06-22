@@ -35,7 +35,6 @@ pub struct EnumDef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
-    pub type_override: Option<fn(generics: &TypeParams) -> Ty>,
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
@@ -48,7 +47,6 @@ impl StructDef {
     pub fn new(
         symbol_id: SymbolID,
         name_str: String,
-        type_override: Option<fn(generics: &TypeParams) -> Ty>,
         type_parameters: TypeParams,
         properties: Vec<Property>,
         methods: HashMap<String, Method>,
@@ -57,7 +55,6 @@ impl StructDef {
         Self {
             symbol_id,
             name_str,
-            type_override,
             type_parameters,
             properties,
             methods,
@@ -78,11 +75,7 @@ impl StructDef {
     }
 
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
-        if let Some(ty) = self.type_override {
-            ty(type_parameters)
-        } else {
-            Ty::Struct(self.symbol_id, type_parameters.clone())
-        }
+        Ty::Struct(self.symbol_id, type_parameters.clone())
     }
 }
 

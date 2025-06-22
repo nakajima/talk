@@ -1,10 +1,6 @@
 use std::str::FromStr;
 
-use crate::{
-    SymbolID,
-    interpreter::heap::Pointer,
-    lowering::{ir_error::IRError, parsing::parser::ParserError},
-};
+use crate::{SymbolID, lowering::parsing::parser::ParserError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IRType {
