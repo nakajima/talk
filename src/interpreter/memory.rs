@@ -44,8 +44,12 @@ impl Memory {
         }
     }
 
-    pub fn range(&mut self, start: usize, length: usize) -> &mut [Option<Value>] {
+    pub fn range_mut(&mut self, start: usize, length: usize) -> &mut [Option<Value>] {
         &mut self.storage[start..(start + length)]
+    }
+
+    pub fn range(&self, start: usize, length: usize) -> &[Option<Value>] {
+        &self.storage[start..(start + length)]
     }
 
     pub fn set_stack_pointer(&mut self, pointer: Pointer) {

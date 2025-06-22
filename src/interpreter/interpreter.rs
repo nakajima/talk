@@ -29,28 +29,27 @@ pub enum InterpreterError {
 }
 
 #[derive(Debug)]
-struct StackFrame<'a> {
+struct StackFrame {
     pred: Option<BasicBlockID>,
     function: IRFunction,
     block_idx: usize,
     pc: usize,
     sp: usize,
-    stack: &'a mut [Option<Value>],
 }
 
-impl<'a> StackFrame<'a> {
+impl StackFrame {
     pub fn _dump(&self) -> String {
         "".into()
     }
 }
 
-pub struct IRInterpreter<'a> {
+pub struct IRInterpreter {
     program: IRModule,
-    call_stack: Vec<StackFrame<'a>>,
+    call_stack: Vec<StackFrame>,
     memory: Memory,
 }
 
-impl<'a> IRInterpreter<'a> {
+impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
         Self {
             program,
@@ -119,7 +118,6 @@ impl<'a> IRInterpreter<'a> {
             pc: 0,
             sp,
             function: function.clone(),
-            stack: self.memory.range(sp, function.size as usize),
         });
 
         for (i, arg) in args.iter().enumerate() {
@@ -153,23 +151,8 @@ impl<'a> IRInterpreter<'a> {
                 .unwrap_or("-".into()),
             instr,
             ir_printer::format_instruction(&instr),
-            frame.stack
+            self.memory.range(frame.sp, frame.function.size as usize)
         );
-
-        for i in 0..MEM_SIZE {
-            if let Some(val) = unsafe { &MEMORY[i] } {
-                println!(
-                    "{}{} = {:?}",
-                    if i >= frame.sp && i < (frame.sp + frame.function.size as usize) {
-                        "> "
-                    } else {
-                        "  "
-                    },
-                    i,
-                    val
-                );
-            }
-        }
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -470,8 +453,11 @@ impl<'a> IRInterpreter<'a> {
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
         log::trace!("set {register:?} to {value:?}");
-        self.call_stack.last_mut().expect("Stack underflow").stack[register.0 as usize] =
-            Some(value);
+        let frame = self.call_stack.last_mut().expect("Stack underflow");
+        let stack = self
+            .memory
+            .range_mut(frame.sp, frame.function.size as usize);
+        stack[register.0 as usize] = Some(value);
     }
 
     fn register_values(&self, registers: &RegisterList) -> Vec<Value> {
@@ -483,7 +469,9 @@ impl<'a> IRInterpreter<'a> {
     }
 
     fn register_value(&self, register: &Register) -> Value {
-        self.call_stack.last().expect("Stack underflow").stack[register.0 as usize]
+        let frame = self.call_stack.last().expect("Stack underflow");
+        let stack = self.memory.range(frame.sp, frame.function.size as usize);
+        stack[register.0 as usize]
             .clone()
             .expect("null pointer lol")
     }
@@ -494,11 +482,11 @@ impl<'a> IRInterpreter<'a> {
 
     fn dump(&self) {
         for (i, frame) in self.call_stack.iter().rev().enumerate() {
+            let stack = self.memory.range(frame.sp, frame.function.size as usize);
             println!(
                 "{}:\n{}",
                 i,
-                frame
-                    .stack
+                stack
                     .iter()
                     .enumerate()
                     .map(|(id, v)| {
@@ -514,13 +502,6 @@ impl<'a> IRInterpreter<'a> {
                     .collect::<Vec<String>>()
                     .join("\n")
             )
-        }
-
-        println!("HEAP:");
-        for i in 1023..MEM_SIZE {
-            if let Some(val) = unsafe { &MEMORY[i] } {
-                println!("\t{} = {:?}", i, val);
-            }
         }
     }
 }
