@@ -878,7 +878,6 @@ impl<'a> Lowerer<'a> {
         );
 
         let name_str = struct_def.name_str.clone();
-        println!("INIT LOWERED -> {:?}", init_func_ty.to_ir(self));
         let func = IRFunction {
             ty: init_func_ty.to_ir(self),
             name: Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
@@ -914,7 +913,6 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(Instr::Ret(ret_ty.to_ir(self), ret));
 
-        println!("METHOD LOWERED -> {:?}", typed_func);
         let func = IRFunction {
             ty: typed_func.ty.to_ir(self),
             name: Name::Resolved(*symbol_id, format!("{}_{name}", struct_def.name_str))
@@ -1100,9 +1098,6 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        if typed_expr.ty == Ty::Pointer {
-            println!("FUNCTION LOWERED -> {:?}", typed_expr);
-        }
         let func = IRFunction {
             ty: typed_expr.ty.to_ir(self),
             name: name.mangled(&typed_expr.ty),
@@ -1862,7 +1857,6 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle method calls
-        println!("__________ {ret_ty:?}");
         if let Expr::Member(receiver_id, name) = &callee_typed_expr.expr {
             return self.lower_method_call(
                 &callee_typed_expr,

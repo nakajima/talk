@@ -147,7 +147,6 @@ fn lower_store(
     let Some(value) = lowerer.lower_expr(&value) else {
         unreachable!("didn't get value");
     };
-    println!("ok type_params[0]: {:?}", type_params[0]);
 
     let location = lowerer.allocate_register();
     lowerer.push_instr(Instr::GetElementPointer {

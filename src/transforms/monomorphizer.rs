@@ -51,7 +51,7 @@ impl Monomorphizer {
         let instantiated_functions = self.generic_functions;
 
         for f in instantiated_functions.iter() {
-            println!(
+            log::info!(
                 "-> instantiated function: {:?} {:?} {:?}",
                 f.name.clone(),
                 f.env_ty,
@@ -118,7 +118,7 @@ impl Monomorphizer {
             return mangled_name;
         }
 
-        println!("monomorphizing: {} -> {:?}", mangled_name, expected_ret);
+        log::info!("monomorphizing: {} -> {:?}", mangled_name, expected_ret);
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
@@ -155,7 +155,7 @@ impl Monomorphizer {
 
         monomorphized_function.ty = Self::apply_type(&monomorphized_function.ty, substitutions);
 
-        println!(
+        log::info!(
             "monomorphized {} ({}): {:?}, {:#?}",
             mangled_name,
             is_generic(&monomorphized_function),

@@ -1080,6 +1080,7 @@ mod type_tests {
         func identity(a) { a }
         identity([1,2,3])
         identity([1.0, 2.0, 3.0])
+        [1,2,3]
         ",
         );
 

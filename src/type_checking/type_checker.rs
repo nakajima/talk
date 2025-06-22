@@ -355,13 +355,6 @@ impl TypeChecker {
             ))),
         };
 
-        if *id == 18 {
-            println!(
-                "TYPE CHECKER infer_node: {:?}:{:?} {:?}",
-                source_file.path, expr, ty
-            );
-        }
-
         match &ty {
             Ok(ty) => {
                 let typed_expr = TypedExpr {
@@ -612,11 +605,6 @@ impl TypeChecker {
             }
         };
 
-        log::info!(
-            "infer_call returning type: {:?} for expr_id: {:?}",
-            ret_var,
-            callee
-        );
         Ok(ret_var)
     }
 
@@ -1127,15 +1115,6 @@ impl TypeChecker {
 
                 let member_var =
                     member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
-
-                if member_var == Ty::Pointer {
-                    println!(
-                        "___________INFERMEMBER: {} {:?} {:?}",
-                        id,
-                        source_file.get(id),
-                        member_var
-                    );
-                }
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain_member(
