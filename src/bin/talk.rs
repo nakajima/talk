@@ -60,7 +60,7 @@ async fn main() {
             // let contents = std::fs::read_to_string(filename).expect("Could not read file");
             // let lowered = lower(&contents);
             for lowered in lowered {
-                let mut interpreter = IRInterpreter::new(lowered.stage.module);
+                let interpreter = IRInterpreter::new(lowered.stage.module);
                 println!("{:?}", interpreter.run());
             }
         }

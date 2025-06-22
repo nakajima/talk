@@ -33,7 +33,6 @@ use crate::lsp::completion::CompletionContext;
 use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
 use crate::parser::Parser;
-use crate::source_file;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::KEYWORD,

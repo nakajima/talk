@@ -10,4 +10,5 @@ pub mod lowerer;
 #[cfg(test)]
 mod lowerer_tests;
 pub mod parsing;
+pub mod phi_predecessors;
 pub mod register;

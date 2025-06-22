@@ -4,7 +4,8 @@ use crate::lowering::{
     ir_error::IRError,
     ir_type::IRType,
     ir_value::IRValue,
-    lowerer::{BasicBlockID, PhiPredecessors, RefKind, RegisterList},
+    lowerer::{BasicBlockID, RefKind, RegisterList},
+    phi_predecessors::PhiPredecessors,
     register::{self, Register},
 };
 

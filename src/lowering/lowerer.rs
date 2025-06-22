@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::AddAssign, str::FromStr};
+use std::{collections::HashMap, ops::AddAssign, path::PathBuf, str::FromStr};
 
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
@@ -17,6 +17,7 @@ use crate::{
         ir_type::IRType,
         ir_value::IRValue,
         parsing::parser::ParserError,
+        phi_predecessors::PhiPredecessors,
         register::Register,
     },
     name::Name,
@@ -153,55 +154,6 @@ pub struct BasicBlock {
 impl BasicBlock {
     fn push_instr(&mut self, instr: Instr) {
         self.instructions.push(instr)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PhiPredecessors(pub Vec<(Register, BasicBlockID)>);
-
-impl std::fmt::Display for PhiPredecessors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("[")?;
-        for (i, (reg, id)) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{id}: {reg}")?;
-        }
-        f.write_str("]")?;
-        Ok(())
-    }
-}
-
-impl FromStr for PhiPredecessors {
-    type Err = IRError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let inner = s
-            .trim()
-            .strip_prefix('[')
-            .and_then(|s| s.strip_suffix(']'))
-            .ok_or(IRError::ParseError)?;
-
-        if inner.trim().is_empty() {
-            return Ok(PhiPredecessors(vec![]));
-        }
-
-        inner
-            .split(',')
-            .map(|pair_str| {
-                let mut parts = pair_str.trim().splitn(2, ':');
-
-                let bb_str = parts.next().ok_or(IRError::ParseError)?.trim();
-                let reg_str = parts.next().ok_or(IRError::ParseError)?.trim();
-
-                let bb = bb_str.parse::<BasicBlockID>()?;
-                let reg = reg_str.parse::<Register>()?;
-
-                Ok((reg, bb))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(PhiPredecessors)
     }
 }
 
@@ -388,6 +340,14 @@ impl IRFunction {
 
         unreachable!()
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DebugInfo {
+    pub id: usize,
+    pub path: PathBuf,
+    pub line: i32,
+    pub col: i32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

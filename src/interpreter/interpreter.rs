@@ -1,4 +1,4 @@
-use std::{collections::HashMap, usize};
+use std::usize;
 
 use crate::{
     interpreter::{
@@ -25,6 +25,7 @@ pub enum InterpreterError {
     TypeError(Value, Value),
     UnreachableReached,
     IRError(IRError),
+    Unknown(String),
 }
 
 #[derive(Debug)]
@@ -78,8 +79,17 @@ impl IRInterpreter {
             block.instructions[frame.pc].clone()
         };
 
-        if let Some(retval) = self.execute_instr(instr)? {
-            return Ok(Some(retval));
+        match self.execute_instr(instr) {
+            Ok(retval) => {
+                if let Some(retval) = retval {
+                    return Ok(Some(retval));
+                }
+            }
+            Err(err) => {
+                println!("{:?}", err);
+                self.dump();
+                return Err(err);
+            }
         }
 
         Ok(None)
@@ -214,9 +224,11 @@ impl IRInterpreter {
                         let callee_value = self.register_value(&reg);
                         let callee_id = match callee_value {
                             Value::Func(id) => id,
-                            _ => panic!(
-                                "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
-                            ),
+                            _ => {
+                                return Err(InterpreterError::Unknown(format!(
+                                    "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
+                                )));
+                            }
                         };
 
                         let Some(function_to_call) = self.load_function(callee_id) else {
@@ -306,7 +318,9 @@ impl IRInterpreter {
             }
             Instr::GetEnumTag(dest, enum_reg) => {
                 let Value::Enum { tag, .. } = self.register_value(&enum_reg) else {
-                    panic!("did not find enum in register #{enum_reg:?}");
+                    return Err(InterpreterError::Unknown(format!(
+                        "did not find enum in register #{enum_reg:?}"
+                    )));
                 };
 
                 self.set_register_value(&dest, Value::Int(tag as i64));
@@ -315,7 +329,9 @@ impl IRInterpreter {
                 // Tag would be useful if we needed to know about memory layout but since we're
                 // just using objects who cares
                 let Value::Enum { values, .. } = self.register_value(&enum_reg) else {
-                    panic!("did not find enum in register #{enum_reg:?}");
+                    return Err(InterpreterError::Unknown(format!(
+                        "did not find enum in register #{enum_reg:?}"
+                    )));
                 };
 
                 self.set_register_value(&dest, values[value as usize].clone());
@@ -350,24 +366,31 @@ impl IRInterpreter {
                     .map(|c| self.register_value(&c))
                     .unwrap_or(Value::Int(1))
                 else {
-                    panic!("invalid alloc count")
+                    return Err(InterpreterError::Unknown("invalid alloc count".into()));
                 };
                 let ptr = self.memory.heap_alloc(&ty, count as usize);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => match self.register_value(&location) {
                 Value::Pointer(ptr) => self.memory.store(ptr, self.register_value(&val), &ty),
-                _ => panic!(
-                    "no pointer in {location}: {:?}",
-                    self.register_value(&location)
-                ),
+                _ => {
+                    return Err(InterpreterError::Unknown(format!(
+                        "no pointer in {location}: {:?}",
+                        self.register_value(&location)
+                    )));
+                }
             },
             Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
                 Value::Pointer(ptr) => {
                     let val = self.memory.load(&ptr, &ty);
                     self.set_register_value(&dest, val.clone());
                 }
-                _ => panic!("unable to load {:?}", self.register_value(&addr)),
+                _ => {
+                    return Err(InterpreterError::Unknown(format!(
+                        "unable to load {:?}",
+                        self.register_value(&addr)
+                    )));
+                }
             },
             Instr::GetElementPointer {
                 dest,
@@ -428,6 +451,12 @@ impl IRInterpreter {
 
     fn load_function(&self, idx: usize) -> Option<IRFunction> {
         self.program.functions.get(idx).cloned()
+    }
+
+    fn dump(&self) {
+        for (i, frame) in self.call_stack.iter().rev().enumerate() {
+            println!("{}{:?}", i, frame)
+        }
     }
 }
 

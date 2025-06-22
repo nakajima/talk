@@ -424,8 +424,9 @@ mod tests {
             ir_error::IRError,
             ir_module::IRModule,
             ir_type::IRType,
-            lowerer::{BasicBlockID, PhiPredecessors, RefKind, RegisterList, TypedRegister},
+            lowerer::{BasicBlockID, RefKind, RegisterList, TypedRegister},
             parsing::parser::parse,
+            phi_predecessors::PhiPredecessors,
             register::Register,
         },
     };

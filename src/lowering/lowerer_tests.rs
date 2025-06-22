@@ -11,10 +11,8 @@ pub mod lowering_tests {
             ir_module::IRModule,
             ir_type::IRType,
             ir_value::IRValue,
-            lowerer::{
-                BasicBlock, BasicBlockID, IRFunction, PhiPredecessors, RefKind, RegisterList,
-                TypedRegister,
-            },
+            lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList, TypedRegister},
+            phi_predecessors::PhiPredecessors,
             register::Register,
         },
         prelude::compile_prelude,
