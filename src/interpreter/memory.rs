@@ -92,7 +92,6 @@ impl Memory {
                 self.storage[range].clone_from_slice(&elements);
             }
             _ => {
-                println!("??????? storing {:?} at {:?}", val, pointer.addr);
                 self.storage[pointer.addr] = Some(val);
             }
         };

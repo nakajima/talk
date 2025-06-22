@@ -1,10 +1,7 @@
 use std::usize;
 
 use crate::{
-    interpreter::{
-        memory::{MEM_SIZE, Memory},
-        value::Value,
-    },
+    interpreter::{memory::Memory, value::Value},
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -62,7 +59,7 @@ impl IRInterpreter {
         log::info!("Monomorphizing module");
         self.program = Monomorphizer::new().run(self.program.clone());
 
-        println!("{}", crate::lowering::ir_printer::print(&self.program));
+        // println!("{}", crate::lowering::ir_printer::print(&self.program));
 
         let main = self
             .program
