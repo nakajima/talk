@@ -28,9 +28,9 @@ pub enum InterpreterError {
 }
 
 #[derive(Debug)]
-struct StackFrame<'a> {
+struct StackFrame {
     pred: Option<BasicBlockID>,
-    function: &'a IRFunction,
+    function: IRFunction,
     block_idx: usize,
     pc: usize,
     sp: usize,
@@ -38,13 +38,13 @@ struct StackFrame<'a> {
     registers: HashMap<Register, Value>,
 }
 
-pub struct IRInterpreter<'a> {
+pub struct IRInterpreter {
     program: IRModule,
-    stack: Vec<StackFrame<'a>>,
+    stack: Vec<StackFrame>,
     memory: Memory,
 }
 
-impl<'a> IRInterpreter<'a> {
+impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
         Self {
             program,
@@ -66,7 +66,7 @@ impl<'a> IRInterpreter<'a> {
             .find(|f| f.name == "@main")
             .cloned();
         if let Some(main) = main {
-            self.execute_function(&main, vec![])
+            self.execute_function(main, vec![])
         } else {
             Err(InterpreterError::NoMainFunc)
         }
@@ -88,7 +88,7 @@ impl<'a> IRInterpreter<'a> {
 
     fn execute_function(
         &mut self,
-        function: &'a IRFunction,
+        function: IRFunction,
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         // let blocks = function.blocks.clone();
@@ -244,7 +244,7 @@ impl<'a> IRInterpreter<'a> {
                 };
 
                 let arg_values = self.register_values(&args);
-                let result = self.execute_function(&callee, arg_values)?;
+                let result = self.execute_function(callee, arg_values)?;
                 self.set_register_value(&dest_reg, result);
             }
             Instr::Branch {
@@ -354,7 +354,13 @@ impl<'a> IRInterpreter<'a> {
                 );
             }
             Instr::Alloc { dest, ty, count } => {
-                let ptr = self.memory.heap_alloc(&ty, count);
+                let Value::Int(count) = count
+                    .map(|c| self.register_value(&c))
+                    .unwrap_or(Value::Int(1))
+                else {
+                    panic!("invalid alloc count")
+                };
+                let ptr = self.memory.heap_alloc(&ty, count as usize);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => match self.register_value(&location) {
@@ -364,7 +370,7 @@ impl<'a> IRInterpreter<'a> {
                         self.register_value(&val),
                         self.register_value(&location)
                     );
-                    self.memory.store(&ptr, self.register_value(&val), &ty)
+                    self.memory.store(ptr, self.register_value(&val), &ty)
                 }
                 _ => panic!("no pointer in {location}"),
             },
