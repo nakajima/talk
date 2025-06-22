@@ -1,5 +1,6 @@
 use crate::{
     NameResolved, SourceFile, SymbolKind, SymbolTable,
+    environment::Environment,
     expr::{Expr, ExprMeta},
     name::Name,
     parser::ExprID,
@@ -8,6 +9,7 @@ use crate::{
 pub fn synthesize_inits(
     source_file: &mut SourceFile<NameResolved>,
     symbol_table: &mut SymbolTable,
+    env: &mut Environment,
 ) {
     for (sym, table) in symbol_table.types.clone() {
         if table.initializers.is_empty() {
@@ -25,24 +27,29 @@ pub fn synthesize_inits(
                 );
 
                 let assignment_receiver = source_file.add(
+                    env.next_id(),
                     Expr::Variable(Name::_Self(sym), None),
                     ExprMeta::generated(),
                 );
                 let assignment_lhs = source_file.add(
+                    env.next_id(),
                     Expr::Member(Some(assignment_receiver), property.name.clone()),
                     ExprMeta::generated(),
                 );
                 let assignment_rhs = source_file.add(
+                    env.next_id(),
                     Expr::Variable(Name::Resolved(param_sym, property.name.clone()), None),
                     ExprMeta::generated(),
                 );
                 let assignment = source_file.add(
+                    env.next_id(),
                     Expr::Assignment(assignment_lhs, assignment_rhs),
                     ExprMeta::generated(),
                 );
                 body_exprs.push(assignment);
 
                 params.push(source_file.add(
+                    env.next_id(),
                     Expr::Parameter(
                         Name::Resolved(param_sym, property.name.to_string()),
                         property.type_id,
@@ -51,10 +58,15 @@ pub fn synthesize_inits(
                 ));
             }
 
-            let body = source_file.add(Expr::Block(body_exprs), ExprMeta::generated());
+            let body = source_file.add(
+                env.next_id(),
+                Expr::Block(body_exprs),
+                ExprMeta::generated(),
+            );
 
             let name = Some(Name::Raw("PLACEHOLD".into()));
             let init_func = source_file.add(
+                env.next_id(),
                 Expr::Func {
                     name,
                     generics: vec![],
@@ -71,8 +83,11 @@ pub fn synthesize_inits(
                 .cloned()
                 .expect("didn't get struct for struct???");
 
-            let init_expr =
-                source_file.add(Expr::Init(Some(sym), init_func), ExprMeta::generated());
+            let init_expr = source_file.add(
+                env.next_id(),
+                Expr::Init(Some(sym), init_func),
+                ExprMeta::generated(),
+            );
             let definition = struct_info.definition.clone();
             let init_sym = symbol_table.add(
                 "init",
@@ -118,8 +133,8 @@ pub fn synthesize_inits(
 #[cfg(test)]
 mod tests {
     use crate::{
-        NameResolved, SourceFile, SymbolID, SymbolTable, expr::Expr, name::Name,
-        name_resolver::NameResolver, parser::parse, synthesis::synthesize_inits,
+        NameResolved, SourceFile, SymbolID, SymbolTable, environment::Environment, expr::Expr,
+        name::Name, name_resolver::NameResolver, parser::parse, synthesis::synthesize_inits,
     };
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
@@ -140,7 +155,7 @@ mod tests {
         ",
         );
 
-        synthesize_inits(&mut resolved, &mut symbol_table);
+        synthesize_inits(&mut resolved, &mut symbol_table, &mut Environment::new());
 
         let Some(Expr::Struct(_, _, body)) = resolved.roots()[0] else {
             panic!("didn't get struct")

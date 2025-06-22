@@ -20,7 +20,7 @@ use crate::{
         register::Register,
     },
     name::Name,
-    parser::{ExprID, ExprIDWithPath},
+    parser::ExprID,
     token::Token,
     token_kind::TokenKind,
     type_checker::Ty,
@@ -453,7 +453,7 @@ impl<'a> Lowerer<'a> {
                 self.set_current_block(entry);
             }
 
-            self.lower_function(&self.source_file.expr_id(expr_id));
+            self.lower_function(&expr_id);
 
             // If we created the main function, we moved all the typed roots into its body
             // so we don't need to lower them again.
@@ -462,12 +462,7 @@ impl<'a> Lowerer<'a> {
                     .source_file
                     .root_ids()
                     .iter()
-                    .filter_map(|root| {
-                        self.env
-                            .typed_exprs
-                            .get(&(self.source_file.path.to_path_buf(), *root))
-                            .cloned()
-                    })
+                    .filter_map(|root| self.env.typed_exprs.get(root).cloned())
                     .collect();
                 for root in typed_roots {
                     if let Expr::Func { .. } = &root.expr {
@@ -512,7 +507,7 @@ impl<'a> Lowerer<'a> {
                 args,
                 typed_expr.ty,
             ),
-            Expr::Func { .. } => self.lower_function(&self.source_file.expr_id(*expr_id)),
+            Expr::Func { .. } => self.lower_function(expr_id),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
             Expr::Member(receiver, name) => {
@@ -907,7 +902,10 @@ impl<'a> Lowerer<'a> {
             ..
         }) = &typed_func.ty
         else {
-            self.push_err("Could not get return type for method", *func_id);
+            self.push_err(
+                &format!("Could not get return type for method: {:?}", typed_func),
+                *func_id,
+            );
             return None;
         };
 
@@ -928,7 +926,7 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_function(&mut self, expr_id: &ExprIDWithPath) -> Option<Register> {
+    fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
         let typed_expr = self
             .env
             .typed_exprs
@@ -947,7 +945,7 @@ impl<'a> Lowerer<'a> {
         else {
             panic!(
                 "Attempted to lower non-function: {:?}",
-                self.source_file.get(&expr_id.1)
+                self.source_file.get(&expr_id)
             );
         };
 
@@ -995,7 +993,7 @@ impl<'a> Lowerer<'a> {
             } = &typed_expr.ty
             {
                 let Name::Resolved(self_symbol, _) = &name else {
-                    self.push_err(&format!("no symbol: {name:?}"), expr_id.1);
+                    self.push_err(&format!("no symbol: {name:?}"), *expr_id);
                     return None;
                 };
 
@@ -2300,13 +2298,14 @@ fn find_or_create_main(
         } = root
             && name == "main"
         {
-            return (root.id.1, false);
+            return (root.id, false);
         }
     }
 
     // We didn't find a main, we have to generate one
     let body = Expr::Block(source_file.root_ids());
     let body_id = source_file.add(
+        env.next_id(),
         body,
         ExprMeta {
             start: Token::GENERATED,
@@ -2327,7 +2326,7 @@ fn find_or_create_main(
     source_file.set_typed_expr(
         SymbolID::GENERATED_MAIN.0,
         TypedExpr {
-            id: ("GENERATED".into(), SymbolID::GENERATED_MAIN.0),
+            id: SymbolID::GENERATED_MAIN.0,
             expr: func_expr.clone(),
             ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
         },
@@ -2335,6 +2334,7 @@ fn find_or_create_main(
     );
 
     source_file.add(
+        env.next_id(),
         func_expr.clone(),
         ExprMeta {
             start: Token::GENERATED,

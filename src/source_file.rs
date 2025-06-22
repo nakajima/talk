@@ -4,9 +4,8 @@ use std::{
 };
 
 use crate::{
-    diagnostic::Diagnostic, environment::Environment,
-    parser::ExprIDWithPath, scope_tree::ScopeTree, span::Span, type_checker::Ty,
-    typed_expr::TypedExpr,
+    diagnostic::Diagnostic, environment::Environment, scope_tree::ScopeTree, span::Span,
+    type_checker::Ty, typed_expr::TypedExpr,
 };
 
 use super::{
@@ -87,18 +86,13 @@ impl SourceFile<NameResolved> {
 
 impl SourceFile<Typed> {
     pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr, env: &mut Environment) {
-        env.typed_exprs
-            .insert((self.path.to_path_buf(), id), typed_expr);
+        env.typed_exprs.insert(id, typed_expr);
     }
 
     pub fn typed_roots(&self, env: &Environment) -> Vec<TypedExpr> {
         self.root_ids()
             .iter()
-            .filter_map(|root| {
-                env.typed_exprs
-                    .get(&(self.path.to_path_buf(), *root))
-                    .cloned()
-            })
+            .filter_map(|root| env.typed_exprs.get(root).cloned())
             .collect::<Vec<TypedExpr>>()
     }
 
@@ -111,9 +105,7 @@ impl SourceFile<Typed> {
     // }
 
     pub fn typed_expr(&self, expr_id: &ExprID, env: &Environment) -> Option<TypedExpr> {
-        env.typed_exprs
-            .get(&(self.path.to_path_buf(), *expr_id))
-            .cloned()
+        env.typed_exprs.get(expr_id).cloned()
     }
 
     // pub fn type_defs(&self) -> TypeDefs {
@@ -125,7 +117,7 @@ impl SourceFile<Typed> {
     // }
 
     pub fn define(&mut self, id: ExprID, ty: Ty, env: &mut Environment) {
-        if let Some(typed_expr) = env.typed_exprs.get_mut(&(self.path.to_path_buf(), id)) {
+        if let Some(typed_expr) = env.typed_exprs.get_mut(&id) {
             typed_expr.ty = ty;
         }
     }
@@ -139,7 +131,9 @@ impl SourceFile<Typed> {
     // }
 
     pub fn type_for(&self, id: ExprID, env: &Environment) -> Option<Ty> {
-        env.typed_exprs.get(&(self.path.to_path_buf(), id)).map(|typed_expr| typed_expr.ty.clone())
+        env.typed_exprs
+            .get(&id)
+            .map(|typed_expr| typed_expr.ty.clone())
     }
 
     // pub fn constraints(&self) -> Vec<Constraint> {
@@ -175,8 +169,7 @@ impl SourceFile<Lowered> {}
 
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID
-    pub fn add(&mut self, expr: Expr, meta: ExprMeta) -> ExprID {
-        let id = self.nodes.len() as ExprID;
+    pub fn add(&mut self, id: ExprID, expr: Expr, meta: ExprMeta) -> ExprID {
         self.nodes.insert(id, expr);
         self.meta.push(meta);
         id
@@ -201,10 +194,6 @@ impl<P: Phase> SourceFile<P> {
     // Gets the root expr of the tree
     pub fn root_ids(&self) -> Vec<ExprID> {
         self.roots.clone()
-    }
-
-    pub fn expr_id(&self, id: ExprID) -> ExprIDWithPath {
-        (self.path.to_path_buf(), id)
     }
 
     // Gets the expr at a given index

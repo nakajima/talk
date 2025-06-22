@@ -5,10 +5,10 @@ use crate::{
     compiling::driver::DriverConfig,
     constraint_solver::ConstraintSolver,
     environment::Environment,
-    lexer::LexerError,
+    lexer::{Lexer, LexerError},
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
-    parser::{ParserError, parse},
+    parser::{Parser, ParserError},
     source_file,
     type_checker::{TypeChecker, TypeError},
 };
@@ -84,15 +84,18 @@ impl CompilationUnit<Raw> {
         let mut files = vec![];
 
         for path in self.input.clone() {
-            match self.read(&path) {
-                Ok(source) => {
-                    let parsed = parse(source, path);
-                    files.push(parsed);
-                }
+            let source = match self.read(&path) {
+                Ok(source) => source.to_string(),
                 Err(e) => {
                     log::error!("read error: {e:?}");
+                    continue;
                 }
-            }
+            };
+
+            let lexer = Lexer::new(&source);
+            let mut parser = Parser::new(lexer, path, &mut self.env);
+            parser.parse();
+            files.push(parser.parse_tree);
         }
 
         CompilationUnit {

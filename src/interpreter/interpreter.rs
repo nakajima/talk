@@ -388,7 +388,7 @@ impl IRInterpreter {
                 dest,
                 base: from,
                 index,
-                ty,
+                ..
             } => {
                 let index = match index {
                     IRValue::ImmediateInt(int) => int,

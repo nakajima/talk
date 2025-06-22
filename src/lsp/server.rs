@@ -27,10 +27,13 @@ use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
 use crate::compiling::driver::Driver;
+use crate::environment::Environment;
+use crate::lexer::Lexer;
 use crate::lsp::completion::CompletionContext;
 use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
-use crate::parser::parse;
+use crate::parser::Parser;
+use crate::source_file;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::KEYWORD,
@@ -301,7 +304,11 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let source_file = parse(&code, path);
+        let mut env = Environment::new();
+        let lexer = Lexer::new(&code);
+        let mut parser = Parser::new(lexer, path, &mut env);
+        parser.parse();
+        let source_file = parser.parse_tree;
 
         Box::pin(async move {
             let formatted = format(&source_file, 80);

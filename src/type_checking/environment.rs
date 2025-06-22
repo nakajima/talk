@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     SymbolID,
-    parser::{ExprID, ExprIDWithPath},
+    parser::ExprID,
     type_checker::{Ty, TypeError},
 };
 
@@ -99,7 +99,7 @@ pub enum TypeDef {
     Struct(StructDef),
 }
 
-pub type TypedExprs = HashMap<(PathBuf, ExprID), TypedExpr>;
+pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Property {
@@ -133,6 +133,7 @@ pub struct Environment {
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
+    next_id: i32,
 }
 
 impl Default for Environment {
@@ -149,7 +150,14 @@ impl Environment {
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
+            next_id: 0,
         }
+    }
+
+    pub fn next_id(&mut self) -> ExprID {
+        let res = self.next_id;
+        self.next_id += 1;
+        res
     }
 
     pub fn constraints(&self) -> Vec<Constraint> {
@@ -157,7 +165,7 @@ impl Environment {
     }
 
     #[track_caller]
-    pub fn constrain_equality(&mut self, id: ExprIDWithPath, lhs: Ty, rhs: Ty) {
+    pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::warn!(
@@ -172,23 +180,12 @@ impl Environment {
         self.constraints.push(Constraint::Equality(id, lhs, rhs))
     }
 
-    pub fn constrain_unqualified_member(
-        &mut self,
-        id: ExprIDWithPath,
-        name: String,
-        result_ty: Ty,
-    ) {
+    pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
         self.constraints
             .push(Constraint::UnqualifiedMember(id, name, result_ty))
     }
 
-    pub fn constrain_member(
-        &mut self,
-        id: ExprIDWithPath,
-        receiver: Ty,
-        name: String,
-        result_ty: Ty,
-    ) {
+    pub fn constrain_member(&mut self, id: ExprID, receiver: Ty, name: String, result_ty: Ty) {
         self.constraints
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }

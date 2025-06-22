@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    SourceFile, diagnostic::Diagnostic, lexer::Lexer, token::Token, token_kind::TokenKind,
+    SourceFile, diagnostic::Diagnostic, environment::Environment, lexer::Lexer, token::Token,
+    token_kind::TokenKind,
 };
 
 use super::{
@@ -15,7 +16,6 @@ use super::{
 };
 
 pub type ExprID = i32;
-pub type ExprIDWithPath = (PathBuf, ExprID);
 pub type VariableID = u32;
 
 // for tracking begin/end tokens
@@ -50,6 +50,7 @@ pub struct Parser<'a> {
     pub(crate) next: Option<Token>,
     pub(crate) parse_tree: SourceFile,
     pub(crate) source_location_stack: SourceLocationStack,
+    env: &'a mut Environment,
     previous_before_newline: Option<Token>,
 }
 
@@ -98,16 +99,18 @@ impl ParserError {
     }
 }
 
+#[cfg(test)]
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer, file_path);
+    let mut env = Environment::new();
+    let mut parser = Parser::new(lexer, file_path, &mut env);
 
     parser.parse();
     parser.parse_tree
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer<'a>, file_path: PathBuf) -> Self {
+    pub fn new(lexer: Lexer<'a>, file_path: PathBuf, env: &'a mut Environment) -> Self {
         Self {
             lexer,
             previous: None,
@@ -116,6 +119,7 @@ impl<'a> Parser<'a> {
             parse_tree: SourceFile::new(file_path),
             source_location_stack: Default::default(),
             previous_before_newline: None,
+            env,
         }
     }
 
@@ -211,7 +215,7 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        Ok(self.parse_tree.add(expr, expr_meta))
+        Ok(self.parse_tree.add(self.env.next_id(), expr, expr_meta))
     }
 
     fn push_identifier(&mut self, identifier: Token) {
@@ -2056,13 +2060,14 @@ mod tests {
 
 #[cfg(test)]
 mod pattern_parsing_tests {
-    use crate::{expr::Pattern, lexer::Lexer, name::Name};
+    use crate::{environment::Environment, expr::Pattern, lexer::Lexer, name::Name};
 
     use super::Parser;
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer, "-".into());
+        let mut env = Environment::new();
+        let mut parser = Parser::new(lexer, "-".into(), &mut env);
         parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()
