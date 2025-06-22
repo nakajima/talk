@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::AddAssign, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
@@ -146,13 +146,19 @@ impl std::fmt::Display for BasicBlockID {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CurrentBasicBlock {
+    pub id: BasicBlockID,
+    pub instructions: Vec<InstructionWithExpr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct BasicBlock {
     pub id: BasicBlockID,
     pub instructions: Vec<Instr>,
 }
 
 impl BasicBlock {
-    fn push_instr(&mut self, instr: Instr) {
+    fn _push_instr(&mut self, instr: Instr) {
         self.instructions.push(instr)
     }
 }
@@ -244,11 +250,17 @@ impl From<Register> for SymbolValue {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstructionWithExpr {
+    pub instr: Instr,
+    pub expr_id: Option<ExprID>,
+}
+
 #[derive(Debug)]
 struct CurrentFunction {
     current_block_idx: usize,
     next_block_id: BasicBlockID,
-    blocks: Vec<BasicBlock>,
+    blocks: Vec<CurrentBasicBlock>,
     env_ty: Option<IRType>,
     pub registers: RegisterAllocator,
     pub symbol_registers: HashMap<SymbolID, SymbolValue>,
@@ -277,11 +289,11 @@ impl CurrentFunction {
         id
     }
 
-    fn add_block(&mut self, block: BasicBlock) {
+    fn add_block(&mut self, block: CurrentBasicBlock) {
         self.blocks.push(block);
     }
 
-    fn current_block_mut(&mut self) -> &mut BasicBlock {
+    fn current_block_mut(&mut self) -> &mut CurrentBasicBlock {
         &mut self.blocks[self.current_block_idx]
     }
 
@@ -308,6 +320,45 @@ impl CurrentFunction {
     fn _lookup_symbol(&self, symbol_id: &SymbolID) -> Option<&SymbolValue> {
         self.symbol_registers.get(symbol_id)
     }
+
+    fn export(
+        self,
+        ty: IRType,
+        name: String,
+        env_ty: Option<IRType>,
+        env_reg: Option<Register>,
+    ) -> IRFunction {
+        let mut blocks = vec![];
+        let mut debug_info = DebugInfo::default();
+
+        for block in self.blocks.into_iter() {
+            let mut instr_expr_ids = HashMap::default();
+            let mut instructions = vec![];
+            for (i, instruction) in block.instructions.into_iter().enumerate() {
+                instructions.push(instruction.instr);
+                instr_expr_ids.insert(i, instruction.expr_id);
+            }
+
+            debug_info.insert(block.id, instr_expr_ids);
+
+            blocks.push(BasicBlock {
+                id: block.id,
+                instructions,
+            });
+        }
+
+        log::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
+
+        IRFunction {
+            ty: ty,
+            name,
+            blocks,
+            env_ty,
+            env_reg,
+            size: self.registers.next_id + 1,
+            debug_info,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -318,6 +369,7 @@ pub struct IRFunction {
     pub env_ty: Option<IRType>,
     pub env_reg: Option<Register>,
     pub size: i32,
+    pub debug_info: DebugInfo,
 }
 
 impl IRFunction {
@@ -342,13 +394,7 @@ impl IRFunction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct DebugInfo {
-    pub id: usize,
-    pub path: PathBuf,
-    pub line: i32,
-    pub col: i32,
-}
+pub type DebugInfo = HashMap<BasicBlockID, HashMap<usize, Option<ExprID>>>;
 
 #[derive(Debug, Clone, PartialEq)]
 struct RegisterAllocator {
@@ -375,6 +421,7 @@ pub struct Lowerer<'a> {
     symbol_table: &'a mut SymbolTable,
     loop_exits: Vec<BasicBlockID>,
     globals: HashMap<SymbolID, SymbolValue>,
+    current_expr_ids: Vec<ExprID>,
     pub env: &'a mut Environment,
 }
 
@@ -391,6 +438,7 @@ impl<'a> Lowerer<'a> {
             symbol_table,
             globals: HashMap::new(),
             loop_exits: vec![],
+            current_expr_ids: vec![],
             env,
         }
     }
@@ -445,9 +493,10 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
+        self.current_expr_ids.push(*expr_id);
         let typed_expr = self.source_file.typed_expr(expr_id, self.env).clone()?;
 
-        match typed_expr.expr {
+        let res = match typed_expr.expr {
             Expr::LiteralInt(_)
             | Expr::LiteralFloat(_)
             | Expr::LiteralFalse
@@ -523,7 +572,11 @@ impl<'a> Lowerer<'a> {
 
                 None
             }
-        }
+        };
+
+        self.current_expr_ids.pop();
+
+        res
     }
 
     fn lower_loop(&mut self, cond: &Option<ExprID>, body: &ExprID) -> Option<Register> {
@@ -661,14 +714,14 @@ impl<'a> Lowerer<'a> {
             });
         }
 
-        let loaded = self.allocate_register();
-        self.push_instr(Instr::Load {
-            dest: loaded,
-            ty: IRType::array(),
-            addr: array_reg,
-        });
+        // let loaded = self.allocate_register();
+        // self.push_instr(Instr::Load {
+        //     dest: loaded,
+        //     ty: IRType::array(),
+        //     addr: array_reg,
+        // });
 
-        Some(loaded)
+        Some(array_reg)
     }
 
     fn lower_struct(
@@ -834,14 +887,14 @@ impl<'a> Lowerer<'a> {
         );
 
         let name_str = struct_def.name_str.clone();
-        let func = IRFunction {
-            ty: init_func_ty.to_ir(self),
-            name: Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
-            blocks: self.current_func_mut().blocks.clone(),
-            env_ty: Some(struct_ty),
-            env_reg: Some(env),
-            size: self.current_func().registers.next_id,
-        };
+        let current_function = self.current_functions.pop()?;
+
+        let func = current_function.export(
+            init_func_ty.to_ir(self),
+            Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
+            Some(struct_ty),
+            Some(env),
+        );
 
         self.lowered_functions.push(func.clone());
         self.current_functions.pop();
@@ -873,18 +926,16 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(Instr::Ret(ret_ty.to_ir(self), ret));
 
-        let func = IRFunction {
-            ty: typed_func.ty.to_ir(self),
-            name: Name::Resolved(*symbol_id, format!("{}_{name}", struct_def.name_str))
+        let current_function = self.current_functions.pop()?;
+        let func = current_function.export(
+            typed_func.ty.to_ir(self),
+            Name::Resolved(*symbol_id, format!("{}_{name}", struct_def.name_str))
                 .mangled(&typed_func.ty),
-            blocks: self.current_func_mut().blocks.clone(),
-            env_ty: Some(struct_ty),
-            env_reg: Some(env),
-            size: self.current_func().registers.next_id,
-        };
+            Some(struct_ty),
+            Some(env),
+        );
 
         self.lowered_functions.push(func.clone());
-        self.current_functions.pop();
 
         None
     }
@@ -1055,21 +1106,20 @@ impl<'a> Lowerer<'a> {
                     ret.0
                 };
 
-                self.current_block_mut().push_instr(Instr::Ret(ty, ret.1));
+                self.push_instr(Instr::Ret(ty, ret.1));
             }
         }
 
-        let func = IRFunction {
-            ty: typed_expr.ty.to_ir(self),
-            name: name.mangled(&typed_expr.ty),
-            blocks: self.current_func_mut().blocks.clone(),
-            env_ty: self.current_func().env_ty.clone(),
-            env_reg: env_reg,
-            size: self.current_func().registers.next_id,
-        };
+        let current_function = self.current_functions.pop()?;
+        let env_ty = current_function.env_ty.clone();
+        let func = current_function.export(
+            typed_expr.ty.to_ir(self),
+            name.mangled(&typed_expr.ty),
+            env_ty,
+            env_reg,
+        );
 
         self.lowered_functions.push(func.clone());
-        self.current_functions.pop();
 
         ret
     }
@@ -1082,8 +1132,7 @@ impl<'a> Lowerer<'a> {
         let arm_cond_blocks: Vec<_> = (0..arms.len()).map(|_| self.new_basic_block()).collect();
 
         // Jump to the first condition
-        self.current_block_mut()
-            .push_instr(Instr::Jump(arm_cond_blocks[0]));
+        self.push_instr(Instr::Jump(arm_cond_blocks[0]));
 
         let fail_block_id = self.new_basic_block();
         self.set_current_block(fail_block_id);
@@ -1391,12 +1440,12 @@ impl<'a> Lowerer<'a> {
                         index: IRValue::ImmediateInt(index as i64),
                     });
 
-                    let member_loaded_reg = self.allocate_register();
-                    self.push_instr(Instr::Load {
-                        dest: member_loaded_reg,
-                        addr: member_reg,
-                        ty: typed_expr.ty.to_ir(self),
-                    });
+                    // let member_loaded_reg = self.allocate_register();
+                    // self.push_instr(Instr::Load {
+                    //     dest: member_loaded_reg,
+                    //     addr: member_reg,
+                    //     ty: typed_expr.ty.to_ir(self),
+                    // });
 
                     return Some(member_reg);
                 }
@@ -1461,12 +1510,10 @@ impl<'a> Lowerer<'a> {
         if let Some(rhs) = rhs {
             let register = self.lower_expr(rhs)?;
             let ir_type = typed_expr.ty.to_ir(self);
-            self.current_block_mut()
-                .push_instr(Instr::Ret(ir_type, Some(register.into())));
+            self.push_instr(Instr::Ret(ir_type, Some(register.into())));
             Some(register)
         } else {
-            self.current_block_mut()
-                .push_instr(Instr::Ret(IRType::Void, None));
+            self.push_instr(Instr::Ret(IRType::Void, None));
             None
         }
     }
@@ -1475,23 +1522,19 @@ impl<'a> Lowerer<'a> {
         let register = self.allocate_register();
         match self.source_file.get(expr_id).unwrap().clone() {
             Expr::LiteralInt(val) => {
-                self.current_block_mut()
-                    .push_instr(Instr::ConstantInt(register, str::parse(&val).unwrap()));
+                self.push_instr(Instr::ConstantInt(register, str::parse(&val).unwrap()));
                 Some(register)
             }
             Expr::LiteralFloat(val) => {
-                self.current_block_mut()
-                    .push_instr(Instr::ConstantFloat(register, str::parse(&val).unwrap()));
+                self.push_instr(Instr::ConstantFloat(register, str::parse(&val).unwrap()));
                 Some(register)
             }
             Expr::LiteralFalse => {
-                self.current_block_mut()
-                    .push_instr(Instr::ConstantBool(register, false));
+                self.push_instr(Instr::ConstantBool(register, false));
                 Some(register)
             }
             Expr::LiteralTrue => {
-                self.current_block_mut()
-                    .push_instr(Instr::ConstantBool(register, true));
+                self.push_instr(Instr::ConstantBool(register, true));
                 Some(register)
             }
             _ => None,
@@ -1571,7 +1614,7 @@ impl<'a> Lowerer<'a> {
             _ => panic!("Cannot lower binary operation: {op:?}"),
         };
 
-        self.current_block_mut().push_instr(instr);
+        self.push_instr(instr);
 
         Some(return_reg)
     }
@@ -1681,14 +1724,14 @@ impl<'a> Lowerer<'a> {
                     index: IRValue::ImmediateInt(idx as i64),
                 });
 
-                let reg = self.allocate_register();
-                self.push_instr(Instr::Load {
-                    dest: reg,
-                    ty: ty.clone(),
-                    addr: env_ptr,
-                });
+                // let reg = self.allocate_register();
+                // self.push_instr(Instr::Load {
+                //     dest: reg,
+                //     ty: ty.clone(),
+                //     addr: env_ptr,
+                // });
 
-                Some(reg)
+                Some(env_ptr)
             }
             _ => todo!(),
         }
@@ -1714,7 +1757,7 @@ impl<'a> Lowerer<'a> {
         };
         let merge_id = self.new_basic_block(); // All paths merge here
 
-        self.current_block_mut().push_instr(Instr::Branch {
+        self.push_instr(Instr::Branch {
             cond: cond_reg,
             true_target: then_id,
             false_target: else_id.unwrap_or(merge_id),
@@ -1722,12 +1765,12 @@ impl<'a> Lowerer<'a> {
 
         self.set_current_block(then_id);
         let then_reg = self.lower_expr(&conseq);
-        self.current_block_mut().push_instr(Instr::Jump(merge_id));
+        self.push_instr(Instr::Jump(merge_id));
 
         if let Some(alt) = alt {
             self.set_current_block(else_id.unwrap());
             else_reg = self.lower_expr(&alt);
-            self.current_block_mut().push_instr(Instr::Jump(merge_id));
+            self.push_instr(Instr::Jump(merge_id));
         }
 
         self.current_func_mut().set_current_block(merge_id);
@@ -1749,7 +1792,7 @@ impl<'a> Lowerer<'a> {
         if predecessors.is_empty() {
             None
         } else {
-            self.current_block_mut().push_instr(Instr::Phi(
+            self.push_instr(Instr::Phi(
                 phi_dest_reg,
                 ir_type,
                 PhiPredecessors(predecessors),
@@ -1884,18 +1927,18 @@ impl<'a> Lowerer<'a> {
                 ty: IRType::closure(),
                 index: IRValue::ImmediateInt(1),
             });
-            self.push_instr(Instr::Load {
-                dest: env_reg,
-                ty: IRType::Pointer,
-                addr: env_ptr,
-            });
+            // self.push_instr(Instr::Load {
+            //     dest: env_reg,
+            //     ty: IRType::Pointer,
+            //     addr: env_ptr,
+            // });
 
             // Prepend the environment register to the argument list.
             arg_registers.insert(
                 0,
                 TypedRegister {
                     ty: IRType::Pointer,
-                    register: env_reg,
+                    register: env_ptr,
                 },
             );
 
@@ -1958,7 +2001,7 @@ impl<'a> Lowerer<'a> {
 
             let dest_reg = self.allocate_register();
             let ir_type = ty.to_ir(self);
-            self.current_block_mut().push_instr(Instr::Call {
+            self.push_instr(Instr::Call {
                 ty: ir_type,
                 dest_reg,
                 callee: func_reg.into(),
@@ -2156,7 +2199,10 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(super) fn push_instr(&mut self, instr: Instr) {
-        self.current_block_mut().push_instr(instr);
+        let expr_id = self.current_expr_ids.last().copied();
+        self.current_block_mut()
+            .instructions
+            .push(InstructionWithExpr { instr, expr_id });
     }
 
     pub(super) fn allocate_register(&mut self) -> Register {
@@ -2191,7 +2237,7 @@ impl<'a> Lowerer<'a> {
         self.current_functions.last().unwrap()
     }
 
-    fn current_block_mut(&mut self) -> &mut BasicBlock {
+    fn current_block_mut(&mut self) -> &mut CurrentBasicBlock {
         self.current_func_mut().current_block_mut()
     }
 
@@ -2201,7 +2247,7 @@ impl<'a> Lowerer<'a> {
 
     fn new_basic_block(&mut self) -> BasicBlockID {
         let id = self.current_func_mut().next_block_id();
-        let block = BasicBlock {
+        let block = CurrentBasicBlock {
             id,
             instructions: Vec::new(),
         };

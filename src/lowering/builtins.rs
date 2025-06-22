@@ -117,8 +117,6 @@ fn lower_store(
     typed_callee: &TypedExpr,
     args: &[ExprID],
 ) -> Result<Option<Register>, IRError> {
-    let dest = lowerer.allocate_register();
-
     let Ty::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __store func".to_string()));
     };
@@ -164,7 +162,7 @@ fn lower_store(
         location,
     });
 
-    Ok(Some(dest))
+    Ok(None)
 }
 
 fn lower_load(

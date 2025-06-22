@@ -2,7 +2,7 @@ use std::ops::Add;
 
 use crate::{interpreter::value::Value, lowering::ir_type::IRType};
 
-const MEM_SIZE: usize = 2048;
+pub const MEM_SIZE: usize = 2048;
 
 pub static mut MEMORY: [Option<Value>; MEM_SIZE] = [const { None }; MEM_SIZE];
 
@@ -74,6 +74,7 @@ impl Memory {
         match val {
             Value::Struct(vals) => {
                 let vals: Vec<Option<Value>> = vals.iter().cloned().map(Option::Some).collect();
+                println!("----- storing struct vals {:?} at {:?}", vals, range);
                 self.storage[range].clone_from_slice(&vals)
             }
             // Value::Enum { tag, values } => {
@@ -88,7 +89,8 @@ impl Memory {
                 self.storage[range].clone_from_slice(&elements);
             }
             _ => {
-                self.storage[range.start] = Some(val);
+                println!("??????? storing {:?} at {:?}", val, pointer.addr);
+                self.storage[pointer.addr] = Some(val);
             }
         };
     }

@@ -136,6 +136,7 @@ impl<'a> Parser<'a> {
             env_ty: Some(IRType::Struct(SymbolID(0), vec![], vec![])), //FIXME
             env_reg: Some(Register(0)),
             size: 0,
+            debug_info: Default::default(),
         })
     }
 

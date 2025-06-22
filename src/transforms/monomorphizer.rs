@@ -133,6 +133,7 @@ impl Monomorphizer {
         }
 
         let mut monomorphized_function = IRFunction {
+            debug_info: Default::default(),
             name: mangled_name.clone(),
             ty: IRType::Func(
                 params
@@ -361,6 +362,7 @@ mod tests {
         let module = IRModule {
             functions: vec![
                 IRFunction {
+                    debug_info: Default::default(),
                     name: "@_3_identity".into(),
                     ty: IRType::Func(
                         vec![IRType::TypeVar("T1".into())],
@@ -378,6 +380,7 @@ mod tests {
                     size: 0,
                 },
                 IRFunction {
+                    debug_info: Default::default(),
                     name: "@main".into(),
                     ty: IRType::Func(vec![], IRType::Void.into()),
                     blocks: vec![BasicBlock {
@@ -408,6 +411,7 @@ mod tests {
             monomorphized,
             "@_3_identity<int>",
             IRFunction {
+                debug_info: Default::default(),
                 name: "@_3_identity<int>".into(),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {
@@ -427,6 +431,7 @@ mod tests {
             monomorphized,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 name: "@main".into(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 blocks: vec![BasicBlock {
@@ -464,6 +469,7 @@ mod tests {
             monomorphed,
             "@_Array_3_get<int>",
             IRFunction {
+                debug_info: Default::default(),
                 name: "@_Array_get<int>".into(),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {

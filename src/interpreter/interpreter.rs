@@ -2,7 +2,7 @@ use std::usize;
 
 use crate::{
     interpreter::{
-        memory::{Memory, Pointer},
+        memory::{MEM_SIZE, MEMORY, Memory},
         value::Value,
     },
     lowering::{
@@ -38,6 +38,12 @@ struct StackFrame {
     stack: &'static mut [Option<Value>],
 }
 
+impl StackFrame {
+    pub fn _dump(&self) -> String {
+        "".into()
+    }
+}
+
 pub struct IRInterpreter {
     program: IRModule,
     call_stack: Vec<StackFrame>,
@@ -57,7 +63,7 @@ impl IRInterpreter {
         log::info!("Monomorphizing module");
         self.program = Monomorphizer::new().run(self.program.clone());
 
-        // println!("{}", crate::lowering::ir_printer::print(&self.program));
+        println!("{}", crate::lowering::ir_printer::print(&self.program));
 
         let main = self
             .program
@@ -101,7 +107,11 @@ impl IRInterpreter {
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         // let blocks = function.blocks.clone();
-        let sp = self.call_stack.last().map(|frame| frame.sp).unwrap_or(0);
+        let sp = self
+            .call_stack
+            .last()
+            .map(|frame| frame.sp + frame.function.size as usize)
+            .unwrap_or(0);
 
         self.call_stack.push(StackFrame {
             pred: None,
@@ -109,7 +119,7 @@ impl IRInterpreter {
             pc: 0,
             sp,
             function: function.clone(),
-            stack: self.memory.range(sp + 1, function.size as usize),
+            stack: self.memory.range(sp, function.size as usize),
         });
 
         for (i, arg) in args.iter().enumerate() {
@@ -130,13 +140,36 @@ impl IRInterpreter {
 
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         log::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
+        let frame = self.call_stack.last().unwrap();
         log::info!(
-            "\n{}\n{:?}\n{}\n\t{:?}",
-            self.call_stack.last().unwrap().function.name,
+            "\n{}:{}\n{:?}\n{}\n\t{:?}",
+            frame.function.name,
+            frame
+                .function
+                .debug_info
+                .get(&BasicBlockID(frame.block_idx as u32))
+                .map(|i| i.get(&frame.pc))
+                .map(|expr_id| format!("{:?}", expr_id))
+                .unwrap_or("-".into()),
             instr,
             ir_printer::format_instruction(&instr),
-            self.call_stack.last().unwrap().stack
+            frame.stack
         );
+
+        for i in 0..MEM_SIZE {
+            if let Some(val) = unsafe { &MEMORY[i] } {
+                println!(
+                    "{}{} = {:?}",
+                    if i >= frame.sp && i < (frame.sp + frame.function.size as usize) {
+                        "> "
+                    } else {
+                        "  "
+                    },
+                    i,
+                    val
+                );
+            }
+        }
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -277,6 +310,8 @@ impl IRInterpreter {
                         IRValue::ImmediateInt(int) => Value::Int(int),
                     };
 
+                    self.call_stack.pop();
+
                     return Ok(Some(retval));
                 } else {
                     self.call_stack.pop();
@@ -393,10 +428,7 @@ impl IRInterpreter {
                 }
             },
             Instr::GetElementPointer {
-                dest,
-                base: from,
-                index,
-                ..
+                dest, base, index, ..
             } => {
                 let index = match index {
                     IRValue::ImmediateInt(int) => int,
@@ -409,8 +441,15 @@ impl IRInterpreter {
                     }
                 };
 
-                let pointer = Pointer::new(self.call_stack.last().unwrap().sp + from.0 as usize);
-                self.set_register_value(&dest, Value::Pointer(pointer + index as usize));
+                let Value::Pointer(base) = self.register_value(&base) else {
+                    panic!(
+                        "did not get base pointer for GEP: {:?}",
+                        self.register_value(&base)
+                    );
+                };
+
+                let pointer = base + index as usize;
+                self.set_register_value(&dest, Value::Pointer(pointer));
             }
             Instr::MakeStruct { dest, values, .. } => {
                 let structure = Value::Struct(self.register_values(&values));
@@ -455,7 +494,33 @@ impl IRInterpreter {
 
     fn dump(&self) {
         for (i, frame) in self.call_stack.iter().rev().enumerate() {
-            println!("{}{:?}", i, frame)
+            println!(
+                "{}:\n{}",
+                i,
+                frame
+                    .stack
+                    .iter()
+                    .enumerate()
+                    .map(|(id, v)| {
+                        format!(
+                            "\t{} = {}",
+                            frame.sp + id,
+                            match v {
+                                Some(v) => format!("{:?}", v),
+                                None => "-".into(),
+                            }
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            )
+        }
+
+        println!("HEAP:");
+        for i in 1023..MEM_SIZE {
+            if let Some(val) = unsafe { &MEMORY[i] } {
+                println!("\t{} = {:?}", i, val);
+            }
         }
     }
 }
@@ -661,7 +726,6 @@ mod tests {
     #[test]
     fn interprets_array_push_get() {
         assert_eq!(
-            Value::Int(4),
             interpret(
                 "
                 let a = [1, 2, 3]
@@ -669,7 +733,8 @@ mod tests {
                 a.get(3)
         "
             )
-            .unwrap()
+            .unwrap(),
+            Value::Int(4),
         )
     }
 }

@@ -391,6 +391,7 @@ mod array_tests {
             module,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()).clone(),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -538,6 +539,7 @@ mod stdlib_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -571,6 +573,7 @@ mod stdlib_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -613,6 +616,7 @@ mod stdlib_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -662,6 +666,7 @@ mod stdlib_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {

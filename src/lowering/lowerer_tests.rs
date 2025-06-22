@@ -43,6 +43,7 @@ pub mod lowering_tests {
             lowered,
             format!("@_{}_foo", SymbolID::resolved(1).0),
             IRFunction {
+                debug_info: Default::default(),
                 ty: foo_func_type.clone(),
                 name: format!("@_{}_foo", SymbolID::resolved(1).0),
                 blocks: vec![BasicBlock {
@@ -61,6 +62,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -100,6 +102,7 @@ pub mod lowering_tests {
             lowered,
             foo_name,
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(
                     vec![IRType::TypeVar(t3.clone())],
                     Box::new(IRType::TypeVar(t4.clone()))
@@ -131,6 +134,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -173,6 +177,7 @@ pub mod lowering_tests {
             lowered,
             foo_name,
             IRFunction {
+                debug_info: Default::default(),
                 ty: foo_func_type.clone(),
                 name: foo_name.clone(),
                 blocks: vec![BasicBlock {
@@ -197,6 +202,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -230,6 +236,7 @@ pub mod lowering_tests {
             lowered,
             foo_name,
             IRFunction {
+                debug_info: Default::default(),
                 ty: foo_func_type.clone(),
                 name: foo_name.clone(),
                 blocks: vec![BasicBlock {
@@ -248,6 +255,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -289,6 +297,7 @@ pub mod lowering_tests {
             &lowered,
             foo_name,
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(
                     vec![IRType::TypeVar(type_var.clone())],
                     IRType::TypeVar(type_var.clone()).into()
@@ -310,6 +319,7 @@ pub mod lowering_tests {
             &lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -339,6 +349,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -361,6 +372,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -383,6 +395,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -407,6 +420,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -432,6 +446,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -456,6 +471,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -480,6 +496,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -504,6 +521,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -536,6 +554,7 @@ pub mod lowering_tests {
         .unwrap();
 
         let expected = vec![IRFunction {
+            debug_info: Default::default(),
             ty: IRType::Func(vec![], IRType::Void.into()),
             name: "@main".into(),
             blocks: vec![
@@ -606,6 +625,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -634,6 +654,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -671,6 +692,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![
@@ -760,6 +782,7 @@ pub mod lowering_tests {
         assert_lowered_functions!(
             lowered,
             vec![IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![
@@ -868,6 +891,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![
@@ -963,6 +987,7 @@ pub mod lowering_tests {
             lowered,
             format!("@_{}_add", SymbolID::resolved(1).0),
             IRFunction {
+                debug_info: Default::default(),
                 ty: add_func_type.clone(),
                 name: format!("@_{}_add", SymbolID::resolved(1).0),
                 blocks: vec![BasicBlock {
@@ -992,6 +1017,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -1104,6 +1130,7 @@ pub mod lowering_tests {
             lowered,
             format!("@_{}_Person_init", SymbolID::resolved(1).0),
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(
                     vec![IRType::Int],
                     IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]).into()
@@ -1149,6 +1176,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -1213,6 +1241,7 @@ pub mod lowering_tests {
             lowered,
             format!("@_{}_Person_init", SymbolID::resolved(1).0),
             IRFunction {
+                debug_info: Default::default(),
                 ty: person_init_func_ty.clone(),
                 name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
                 blocks: vec![BasicBlock {
@@ -1248,6 +1277,7 @@ pub mod lowering_tests {
             lowered,
             "@main",
             IRFunction {
+                debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![BasicBlock {
@@ -1322,6 +1352,7 @@ pub mod lowering_tests {
             lowered,
             vec![
                 IRFunction {
+                    debug_info: Default::default(),
                     ty: person_init_func_ty.clone(),
                     name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
@@ -1352,6 +1383,7 @@ pub mod lowering_tests {
                     size: 0
                 },
                 IRFunction {
+                    debug_info: Default::default(),
                     ty: IRType::Func(vec![], IRType::Int.into()),
                     name: format!("@_{}_Person_getAge", SymbolID::resolved(1).0),
                     blocks: vec![BasicBlock {
@@ -1376,6 +1408,7 @@ pub mod lowering_tests {
                     size: 0
                 },
                 IRFunction {
+                    debug_info: Default::default(),
                     ty: IRType::Func(vec![], IRType::Void.into()),
                     name: "@main".into(),
                     blocks: vec![BasicBlock {
@@ -1435,6 +1468,7 @@ pub mod lowering_tests {
         .unwrap();
 
         let expected = IRFunction {
+            debug_info: Default::default(),
             ty: IRType::Func(vec![], IRType::Void.into()),
             name: "@main".into(),
             blocks: vec![
@@ -1476,6 +1510,7 @@ pub mod lowering_tests {
         .unwrap();
 
         let expected = IRFunction {
+            debug_info: Default::default(),
             ty: IRType::Func(vec![], IRType::Void.into()),
             name: "@main".into(),
             blocks: vec![
@@ -1517,6 +1552,7 @@ pub mod lowering_tests {
         .unwrap();
 
         let expected = IRFunction {
+            debug_info: Default::default(),
             ty: IRType::Func(vec![], IRType::Void.into()),
             name: "@main".into(),
             blocks: vec![

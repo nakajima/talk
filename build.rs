@@ -353,6 +353,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                 use crate::lowering::lowerer::*;
                 use crate::lowering::register::*;
                 use crate::lowering::ir_value::IRValue;
+                use crate::lowering::phi_predecessors::*;
 
 
                 #(#parser_arms)*
