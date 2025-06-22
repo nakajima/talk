@@ -60,7 +60,7 @@ impl Precedence {
             TokenKind::LeftParen => ParseHandler {
                 prefix: Some(Parser::tuple),
                 infix: Some(Parser::call_infix),
-                precedence: Precedence::Call,
+                precedence: Precedence::Assignment,
             },
 
             TokenKind::If => ParseHandler {
@@ -90,7 +90,7 @@ impl Precedence {
             TokenKind::Break => ParseHandler {
                 prefix: Some(Parser::break_expr),
                 infix: None,
-                precedence: Precedence::Primary
+                precedence: Precedence::Primary,
             },
 
             TokenKind::True => ParseHandler {
@@ -228,7 +228,7 @@ impl Precedence {
             TokenKind::Let => ParseHandler {
                 prefix: Some(Parser::let_expr),
                 infix: None,
-                precedence: Precedence::None,
+                precedence: Precedence::Assignment,
             },
 
             TokenKind::Newline => ParseHandler::NONE,

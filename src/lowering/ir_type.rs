@@ -19,6 +19,9 @@ pub enum IRType {
     Array {
         element: Box<IRType>, /* element */
     },
+    Tuple {
+        elements: Vec<IRType>,
+    },
     Pointer,
 }
 
@@ -53,6 +56,7 @@ impl IRType {
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
             IRType::Struct(_, irtypes, _) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Pointer => 8,
+            IRType::Tuple { elements } => elements.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Array { .. } => IRType::Pointer.mem_size(),
         }
     }
@@ -127,6 +131,15 @@ impl std::fmt::Display for IRType {
             Self::Int => f.write_str("int"),
             Self::Float => f.write_str("float"),
             Self::Bool => f.write_str("bool"),
+            Self::Tuple { elements } => write!(
+                f,
+                "({})",
+                elements
+                    .iter()
+                    .map(|a| format!("{a}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
             Self::Func(args, ret) => {
                 write!(
                     f,

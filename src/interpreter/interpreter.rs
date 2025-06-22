@@ -723,11 +723,11 @@ mod tests {
                 "
                 let a = [1, 2, 3]
                 let b = a.pop()
-                b
+                (b, a.count)
         "
             )
             .unwrap(),
-            Value::Int(3),
+            Value::Struct(vec![Value::Int(3), Value::Int(2)]),
         )
     }
 }

@@ -624,7 +624,7 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::Equals)? {
             let tok = self.push_source_location();
-            let rhs = self.parse_with_precedence(Precedence::None)?;
+            let rhs = self.parse_with_precedence(Precedence::Assignment)?;
             self.add_expr(Expr::Assignment(let_expr?, rhs), tok)
         } else {
             let_expr
@@ -1370,7 +1370,10 @@ mod tests {
 
     #[test]
     fn parses_tuple() {
-        let parsed = parse("(1, 2, fizz)");
+        let parsed = parse(
+            "
+        (1, 2, fizz)",
+        );
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Tuple(vec![0, 1, 2]));

@@ -82,7 +82,11 @@ impl Ty {
             }
             Ty::EnumVariant(_symbol_id, _items) => todo!(),
             Ty::Closure { func, .. } => func.to_ir(lowerer),
-            Ty::Tuple(_items) => todo!(),
+            Ty::Tuple(items) => IRType::Struct(
+                SymbolID::TUPLE,
+                items.iter().map(|i| i.to_ir(lowerer)).collect(),
+                vec![],
+            ),
             Ty::Array(_) => todo!(),
             Ty::Struct(symbol_id, generics) => {
                 let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
@@ -564,6 +568,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instr::Jump(*current_loop_exit));
                 None
             }
+            Expr::Tuple(items) => self.lower_tuple(&expr_id, items),
             expr => {
                 self.source_file.diagnostics.insert(Diagnostic::lowering(
                     *expr_id,
@@ -577,6 +582,34 @@ impl<'a> Lowerer<'a> {
         self.current_expr_ids.pop();
 
         res
+    }
+
+    fn lower_tuple(&mut self, expr_id: &ExprID, items: Vec<ExprID>) -> Option<Register> {
+        let typed_expr = self.source_file.typed_expr(expr_id, self.env).unwrap();
+        let mut member_registers = vec![];
+        let mut member_types = vec![];
+
+        for item_id in items {
+            let item_expr = self.source_file.typed_expr(&item_id, self.env).unwrap();
+            if let Some(reg) = self.lower_expr(&item_id) {
+                let ir_type = item_expr.ty.to_ir(self);
+                member_registers.push(TypedRegister::new(ir_type.clone(), reg));
+                member_types.push(ir_type);
+            } else {
+                self.push_err("Could not lower tuple element", item_id);
+                return None;
+            }
+        }
+
+        // we represent tuples as structs for now
+        let dest = self.allocate_register();
+        self.push_instr(Instr::MakeStruct {
+            dest,
+            ty: typed_expr.ty.to_ir(self),
+            values: RegisterList(member_registers),
+        });
+
+        Some(dest)
     }
 
     fn lower_loop(&mut self, cond: &Option<ExprID>, body: &ExprID) -> Option<Register> {

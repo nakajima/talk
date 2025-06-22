@@ -177,6 +177,7 @@ fn builtins() -> Vec<Builtin> {
             unbound_vars: vec![TypeVarID(-9, TypeVarKind::Element)],
             type_def: None,
         },
+        // Reserve -10 for tuple symbol
     ]
 }
 
