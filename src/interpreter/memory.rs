@@ -4,12 +4,12 @@ use crate::{interpreter::value::Value, lowering::ir_type::IRType};
 
 pub const MEM_SIZE: usize = 2048;
 
-pub static mut MEMORY: [Option<Value>; MEM_SIZE] = [const { None }; MEM_SIZE];
+// pub static mut MEMORY: [Option<Value>; MEM_SIZE] = [const { None }; MEM_SIZE];
 
 // Simulate memory, kinda. Compound types (like structs or buffers) are laid out inline.
 // The first 1024 slots are for stack, the second 1024 slots are for heap.
 pub struct Memory {
-    storage: &'static mut [Option<Value>; MEM_SIZE],
+    storage: [Option<Value>; MEM_SIZE],
     next_stack_addr: usize,
     next_heap_addr: usize,
 }
@@ -38,15 +38,14 @@ impl Pointer {
 impl Memory {
     pub fn new() -> Self {
         Self {
-            #[allow(static_mut_refs)]
-            storage: unsafe { &mut MEMORY },
+            storage: [const { None }; MEM_SIZE],
             next_stack_addr: 0,
             next_heap_addr: 1024,
         }
     }
 
-    pub fn range(&self, start: usize, length: usize) -> &'static mut [Option<Value>] {
-        unsafe { &mut MEMORY[start..(start + length)] }
+    pub fn range(&mut self, start: usize, length: usize) -> &mut [Option<Value>] {
+        &mut self.storage[start..(start + length)]
     }
 
     pub fn set_stack_pointer(&mut self, pointer: Pointer) {
@@ -121,7 +120,7 @@ impl Memory {
                     capacity: elements.len(),
                 }
             }
-            _ => self.storage[range.start].clone().unwrap(),
+            _ => self.storage[pointer.addr].clone().unwrap(),
         }
     }
 

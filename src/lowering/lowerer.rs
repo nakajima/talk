@@ -1927,11 +1927,6 @@ impl<'a> Lowerer<'a> {
                 ty: IRType::closure(),
                 index: IRValue::ImmediateInt(1),
             });
-            // self.push_instr(Instr::Load {
-            //     dest: env_reg,
-            //     ty: IRType::Pointer,
-            //     addr: env_ptr,
-            // });
 
             // Prepend the environment register to the argument list.
             arg_registers.insert(

@@ -2,7 +2,7 @@ use std::usize;
 
 use crate::{
     interpreter::{
-        memory::{MEM_SIZE, MEMORY, Memory},
+        memory::{MEM_SIZE, Memory},
         value::Value,
     },
     lowering::{
@@ -29,28 +29,28 @@ pub enum InterpreterError {
 }
 
 #[derive(Debug)]
-struct StackFrame {
+struct StackFrame<'a> {
     pred: Option<BasicBlockID>,
     function: IRFunction,
     block_idx: usize,
     pc: usize,
     sp: usize,
-    stack: &'static mut [Option<Value>],
+    stack: &'a mut [Option<Value>],
 }
 
-impl StackFrame {
+impl<'a> StackFrame<'a> {
     pub fn _dump(&self) -> String {
         "".into()
     }
 }
 
-pub struct IRInterpreter {
+pub struct IRInterpreter<'a> {
     program: IRModule,
-    call_stack: Vec<StackFrame>,
+    call_stack: Vec<StackFrame<'a>>,
     memory: Memory,
 }
 
-impl IRInterpreter {
+impl<'a> IRInterpreter<'a> {
     pub fn new(program: IRModule) -> Self {
         Self {
             program,
@@ -735,6 +735,21 @@ mod tests {
             )
             .unwrap(),
             Value::Int(4),
+        )
+    }
+
+    #[test]
+    fn interprets_array_pop() {
+        assert_eq!(
+            interpret(
+                "
+                let a = [1, 2, 3]
+                let b = a.pop()
+                b
+        "
+            )
+            .unwrap(),
+            Value::Int(3),
         )
     }
 }

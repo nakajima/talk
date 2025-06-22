@@ -19,6 +19,12 @@ struct Array<T> {
 		__load<T>(self.storage, index)
 	}
 
+	func pop() -> T {
+		let popped = __load<T>(self.storage, self.count - 1)
+		self.count = self.count - 1
+		popped
+	}
+
 	func resizeIfNeeded() {
 		if self.count + 1 < self.capacity {
 			return
