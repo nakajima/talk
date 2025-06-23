@@ -1748,7 +1748,7 @@ impl<'a> Lowerer<'a> {
         let value = self.lookup_register(symbol_id)?;
         match value.clone() {
             SymbolValue::Register(reg) => Some(reg),
-            SymbolValue::Capture(idx, _ty) => {
+            SymbolValue::Capture(idx, ty) => {
                 let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
                     dest: env_ptr,
@@ -1757,14 +1757,14 @@ impl<'a> Lowerer<'a> {
                     index: IRValue::ImmediateInt(idx as i64),
                 });
 
-                // let reg = self.allocate_register();
-                // self.push_instr(Instr::Load {
-                //     dest: reg,
-                //     ty: ty.clone(),
-                //     addr: env_ptr,
-                // });
+                let reg = self.allocate_register();
+                self.push_instr(Instr::Load {
+                    dest: reg,
+                    ty: ty.clone(),
+                    addr: env_ptr,
+                });
 
-                Some(env_ptr)
+                Some(reg)
             }
             _ => todo!(),
         }

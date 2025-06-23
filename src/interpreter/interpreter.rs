@@ -59,7 +59,9 @@ impl IRInterpreter {
         log::info!("Monomorphizing module");
         self.program = Monomorphizer::new().run(self.program.clone());
 
-        // println!("{}", crate::lowering::ir_printer::print(&self.program));
+        if std::env::var("IR").is_ok() {
+            println!("{}", crate::lowering::ir_printer::print(&self.program));
+        }
 
         let main = self
             .program

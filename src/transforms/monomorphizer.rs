@@ -84,7 +84,7 @@ impl Monomorphizer {
                         .find(|f| f.name == *callee)
                         .cloned()
                     else {
-                        log::error!("Did not find callee function: {}", callee);
+                        log::info!("Did not find callee function: {}", callee);
                         return function;
                     };
 
