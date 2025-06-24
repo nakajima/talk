@@ -71,27 +71,6 @@ fn builtins() -> Vec<Builtin> {
             unbound_vars: vec![],
             type_def: None,
         },
-        // Builtin {
-        //     id: -4,
-        //     info: SymbolInfo {
-        //         name: "Array".into(),
-        //         kind: SymbolKind::BuiltinType,
-        //         expr_id: -4,
-        //         is_captured: false,
-        //         definition: None,
-        //     },
-        //     ty: Ty::Array(Box::new(Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element)))),
-        //     unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
-        //     type_def: Some(TypeDef::Struct(StructDef::new(
-        //         SymbolID(-4),
-        //         "Array".to_string(),
-        //         Some(array_override),
-        //         vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
-        //         Default::default(),
-        //         Default::default(),
-        //         Default::default(),
-        //     ))),
-        // },
         Builtin {
             id: -5,
             info: SymbolInfo {
@@ -178,6 +157,23 @@ fn builtins() -> Vec<Builtin> {
             type_def: None,
         },
         // Reserve -10 for tuple symbol
+        Builtin {
+            id: -11,
+            info: SymbolInfo {
+                name: "print".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -11,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Func(
+                vec![Ty::TypeVar(TypeVarID(-11, TypeVarKind::FuncParam))],
+                Ty::Void.into(),
+                vec![Ty::TypeVar(TypeVarID(-11, TypeVarKind::FuncParam))],
+            ),
+            unbound_vars: vec![TypeVarID(-11, TypeVarKind::FuncParam)],
+            type_def: None,
+        },
     ]
 }
 

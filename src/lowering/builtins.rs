@@ -123,6 +123,15 @@ fn lower_realloc(
     Ok(Some(dest))
 }
 
+#[allow(unused)]
+fn lower_print(
+    _lowerer: &mut Lowerer,
+    _typed_callee: &TypedExpr,
+    _args: &[ExprID],
+) -> Result<Option<Register>, IRError> {
+    Ok(None)
+}
+
 fn lower_store(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
