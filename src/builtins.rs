@@ -342,8 +342,9 @@ mod array_tests {
         expr::Expr,
         lowering::{
             instr::Instr,
+            ir_function::IRFunction,
             ir_type::IRType,
-            lowerer::{BasicBlock, BasicBlockID, IRFunction},
+            lowerer::{BasicBlock, BasicBlockID},
             register::Register,
         },
         parser::parse,
@@ -522,8 +523,9 @@ mod stdlib_tests {
         compiling::driver::Driver,
         lowering::{
             instr::Instr,
+            ir_function::IRFunction,
             ir_type::IRType,
-            lowerer::{BasicBlock, BasicBlockID, IRFunction},
+            lowerer::{BasicBlock, BasicBlockID},
             register::Register,
         },
     };

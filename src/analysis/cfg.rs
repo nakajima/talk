@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::lowering::lowerer::{BasicBlockID, IRFunction};
+use crate::lowering::{ir_function::IRFunction, lowerer::BasicBlockID};
 
 #[derive(Debug)]
 pub struct ControlFlowGraph<'a> {

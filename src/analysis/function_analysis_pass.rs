@@ -1,4 +1,4 @@
-use crate::{analysis::cfg::ControlFlowGraph, lowering::lowerer::IRFunction};
+use crate::{analysis::cfg::ControlFlowGraph, lowering::ir_function::IRFunction};
 
 pub trait FunctionAnalysisPass {
     type Output;

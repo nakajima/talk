@@ -4,11 +4,8 @@ use crate::{
     analysis::{cfg::ControlFlowGraph, function_analysis_pass::FunctionAnalysisPass},
     environment::{Property, StructDef},
     lowering::{
-        instr::Instr,
-        ir_error::IRError,
-        ir_value::IRValue,
-        lowerer::{BasicBlockID, IRFunction},
-        register::Register,
+        instr::Instr, ir_error::IRError, ir_function::IRFunction, ir_value::IRValue,
+        lowerer::BasicBlockID, register::Register,
     },
 };
 

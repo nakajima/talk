@@ -1,8 +1,9 @@
 use crate::lowering::{
     instr::Instr,
+    ir_function::IRFunction,
     ir_module::IRModule,
     ir_type::IRType,
-    lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind},
+    lowerer::{BasicBlock, BasicBlockID, RefKind},
     register::Register,
 };
 

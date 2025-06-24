@@ -8,10 +8,11 @@ pub mod lowering_tests {
         lowering::{
             instr::{Callee, Instr},
             ir_error::IRError,
+            ir_function::IRFunction,
             ir_module::IRModule,
             ir_type::IRType,
             ir_value::IRValue,
-            lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList, TypedRegister},
+            lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList, TypedRegister},
             phi_predecessors::PhiPredecessors,
             register::Register,
         },

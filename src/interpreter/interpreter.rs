@@ -5,10 +5,11 @@ use crate::{
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
+        ir_function::IRFunction,
         ir_module::IRModule,
         ir_printer::{self},
         ir_value::IRValue,
-        lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList},
+        lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList},
         register::Register,
     },
     transforms::monomorphizer::Monomorphizer,

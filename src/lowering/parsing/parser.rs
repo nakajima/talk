@@ -9,9 +9,10 @@ use crate::{
     SymbolID,
     lowering::{
         instr::{FuncName, Instr},
+        ir_function::IRFunction,
         ir_module::IRModule,
         ir_type::IRType,
-        lowerer::{BasicBlock, BasicBlockID, IRFunction},
+        lowerer::{BasicBlock, BasicBlockID},
         parsing::lexer::{Lexer, Token, Tokind},
         register::Register,
     },

@@ -1,4 +1,4 @@
-use crate::lowering::lowerer::IRFunction;
+use crate::lowering::ir_function::IRFunction;
 
 #[derive(Debug, Clone)]
 pub struct IRModule {

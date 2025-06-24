@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::lowering::{
     instr::{Callee, Instr},
+    ir_function::IRFunction,
     ir_module::IRModule,
     ir_type::IRType,
-    lowerer::{BasicBlock, IRFunction, RegisterList, TypedRegister},
+    lowerer::{BasicBlock, RegisterList, TypedRegister},
 };
 
 // The Monomorphizer monomorphizes. So it takes a func like this:
@@ -348,10 +349,11 @@ mod tests {
         compiling::driver::Driver,
         lowering::{
             instr::{Callee, Instr},
+            ir_function::IRFunction,
             ir_module::IRModule,
             ir_type::IRType,
             ir_value::IRValue,
-            lowerer::{BasicBlock, BasicBlockID, IRFunction, RegisterList, TypedRegister},
+            lowerer::{BasicBlock, BasicBlockID, RegisterList, TypedRegister},
             register::Register,
         },
         transforms::monomorphizer::Monomorphizer,
