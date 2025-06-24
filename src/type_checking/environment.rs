@@ -30,6 +30,52 @@ pub struct EnumDef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolDef {
+    pub symbol_id: SymbolID,
+    pub name_str: String,
+    pub associated_types: TypeParams,
+    pub properties: Vec<Property>,
+    pub methods: HashMap<String, Method>,
+    pub initializers: Vec<ExprID>,
+}
+
+impl ProtocolDef {
+    pub fn new(
+        symbol_id: SymbolID,
+        name_str: String,
+        associated_types: TypeParams,
+        properties: Vec<Property>,
+        methods: HashMap<String, Method>,
+        initializers: Vec<ExprID>,
+    ) -> Self {
+        Self {
+            symbol_id,
+            name_str,
+            associated_types,
+            properties,
+            methods,
+            initializers,
+        }
+    }
+
+    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
+        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
+            return Some(&property.ty);
+        }
+
+        if let Some(method) = self.methods.get(name) {
+            return Some(&method.ty);
+        }
+
+        None
+    }
+
+    pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
+        Ty::Struct(self.symbol_id, type_parameters.clone())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,

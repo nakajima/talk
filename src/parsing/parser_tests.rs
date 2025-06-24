@@ -1022,7 +1022,12 @@ mod structs {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Struct(Name::Raw("Person".into()), vec![], 0)
+            Expr::Struct {
+                name: Name::Raw("Person".into()),
+                generics: vec![],
+                conformances: vec![],
+                body: 0
+            }
         );
     }
 
@@ -1041,7 +1046,12 @@ mod structs {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Struct(Name::Raw("Person".into()), vec![], 7)
+            Expr::Struct {
+                name: Name::Raw("Person".into()),
+                generics: vec![],
+                conformances: vec![],
+                body: 7
+            }
         );
         assert_eq!(*parsed.get(&7).unwrap(), Expr::Block(vec![1, 4, 6]));
         assert_eq!(
@@ -1099,7 +1109,12 @@ mod structs {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Struct("Person".into(), vec![], 11)
+            Expr::Struct {
+                name: "Person".into(),
+                body: 11,
+                generics: vec![],
+                conformances: vec![]
+            }
         );
 
         let Some(Expr::Block(items)) = parsed.get(&11) else {
@@ -1260,5 +1275,25 @@ mod error_handling_tests {
             *parsed.get(&ret).unwrap(),
             Expr::TypeRepr(Name::Raw("Int".into()), vec![], false),
         );
+    }
+
+    #[test]
+    fn parses_protocol_conformance() {
+        let parsed = parse(
+            "
+        struct Person: Aged {}
+    ",
+            "-".into(),
+        );
+
+        let Some(Expr::Struct {
+            name: Name::Raw(name),
+            ..
+        }) = parsed.get(&parsed.root_ids()[0])
+        else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(name, "Person");
     }
 }

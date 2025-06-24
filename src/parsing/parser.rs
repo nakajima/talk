@@ -274,8 +274,33 @@ impl<'a> Parser<'a> {
         };
 
         let generics = self.type_reprs()?;
+        let conformances = self.conformances()?;
         let body = self.struct_body()?;
-        self.add_expr(Struct(Name::Raw(name_str), generics, body), tok)
+
+        self.add_expr(
+            Struct {
+                name: Name::Raw(name_str),
+                generics,
+                body,
+                conformances,
+            },
+            tok,
+        )
+    }
+
+    fn conformances(&mut self) -> Result<Vec<ExprID>, ParserError> {
+        let mut conformances = vec![];
+
+        if !self.did_match(TokenKind::Colon)? {
+            return Ok(conformances);
+        }
+
+        while !(self.peek_is(TokenKind::LeftBrace) || self.peek_is(TokenKind::EOF)) {
+            conformances.push(self.type_repr(false)?);
+            self.consume(TokenKind::Comma).ok();
+        }
+
+        Ok(conformances)
     }
 
     fn struct_body(&mut self) -> Result<ExprID, ParserError> {

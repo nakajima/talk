@@ -105,7 +105,12 @@ impl NameResolver {
                     self.resolve_nodes(&items, source_file, symbol_table);
                 }
                 LiteralTrue | LiteralFalse => continue,
-                Struct(name, generics, body) => {
+                Struct {
+                    name,
+                    generics,
+                    body,
+                    conformances,
+                } => {
                     match name {
                         Name::Raw(name_str) => {
                             let symbol_id = self.declare(
@@ -118,7 +123,12 @@ impl NameResolver {
                             self.type_symbol_stack.push(symbol_id);
                             source_file.nodes.insert(
                                 *node_id,
-                                Struct(Name::Resolved(symbol_id, name_str), generics.clone(), body),
+                                Struct {
+                                    name: Name::Resolved(symbol_id, name_str),
+                                    generics: generics.clone(),
+                                    body,
+                                    conformances,
+                                },
                             );
                         }
                         _ => continue,
@@ -584,8 +594,12 @@ impl NameResolver {
         symbol_table: &mut SymbolTable,
     ) {
         for id in node_ids {
-            let Some(Struct(Name::Raw(name_str), generics, body_expr)) =
-                source_file.get(id).cloned()
+            let Some(Struct {
+                name: Name::Raw(name_str),
+                generics,
+                body: body_expr,
+                conformances,
+            }) = source_file.get(id).cloned()
             else {
                 continue;
             };
@@ -604,7 +618,12 @@ impl NameResolver {
 
             source_file.nodes.insert(
                 *id,
-                Struct(Name::Resolved(struct_symbol, name_str), generics, body_expr),
+                Struct {
+                    name: Name::Resolved(struct_symbol, name_str),
+                    generics,
+                    body: body_expr,
+                    conformances,
+                },
             );
 
             // Hoist properties
@@ -1302,7 +1321,12 @@ mod tests {
     #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}\nPerson()");
-        let Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap() else {
+        let Struct {
+            name: Name::Resolved(sym, person_str),
+            body,
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
             panic!("didn't get struct");
         };
 
@@ -1327,7 +1351,12 @@ mod tests {
         }
         ",
         );
-        let Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap() else {
+        let Struct {
+            name: Name::Resolved(sym, person_str),
+            body,
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
             panic!("didn't get struct");
         };
 
@@ -1370,7 +1399,11 @@ mod tests {
         ",
         );
 
-        let Expr::Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap()
+        let Expr::Struct {
+            name: Name::Resolved(sym, person_str),
+            body,
+            ..
+        } = resolved.roots()[0].unwrap()
         else {
             panic!("didn't get struct");
         };

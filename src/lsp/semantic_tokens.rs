@@ -129,8 +129,14 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(rhs))
                 }
             }
-            Expr::Struct(_name, items, body) => {
-                result.extend(self.tokens_from_exprs(items));
+            Expr::Struct {
+                generics,
+                body,
+                conformances,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(&generics));
+                result.extend(self.tokens_from_exprs(&conformances));
                 result.extend(self.tokens_from_expr(body));
             }
             Expr::Property {

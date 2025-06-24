@@ -3,7 +3,7 @@ use std::{collections::HashMap, hash::Hash};
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
     diagnostic::Diagnostic,
-    environment::{EnumVariant, Method, Property, StructDef, free_type_vars},
+    environment::{EnumVariant, Method, Property, ProtocolDef, StructDef, free_type_vars},
     expr::{Expr, Pattern},
     match_builtin,
     name::Name,
@@ -132,6 +132,10 @@ impl TypeChecker {
             source_file.diagnostics.insert(Diagnostic::typing(id, err));
         }
 
+        if let Err((id, err)) = self.hoist_protocols(items, env, source_file, symbol_table) {
+            source_file.diagnostics.insert(Diagnostic::typing(id, err));
+        }
+
         self.hoist_functions(items, env, source_file);
     }
 
@@ -244,9 +248,12 @@ impl TypeChecker {
             Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
-            Expr::Struct(name, generics, body) => {
-                self.infer_struct(name, generics, body, env, expected, source_file)
-            }
+            Expr::Struct {
+                name,
+                generics,
+                body,
+                conformances,
+            } => self.infer_struct(name, generics, body, env, expected, source_file),
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, env, source_file)
@@ -1120,6 +1127,44 @@ impl TypeChecker {
         }
     }
 
+    fn hoist_protocols(
+        &self,
+        root_ids: &[ExprID],
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<(), (ExprID, TypeError)> {
+        for id in root_ids {
+            let Some(Expr::ProtocolDecl {
+                name,
+                associated_types,
+                body,
+            }) = source_file.get(id).cloned()
+            else {
+                continue;
+            };
+
+            let mut inferred_associated_types = vec![];
+            for associated_type_id in associated_types {
+                let ty = self
+                    .infer_node(&associated_type_id, env, &None, source_file)
+                    .map_err(|e| (associated_type_id, e))?;
+                inferred_associated_types.push(ty);
+            }
+
+            let protocol_def = ProtocolDef::new(
+                name.try_symbol_id(),
+                name.name_str(),
+                inferred_associated_types,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            );
+        }
+
+        Ok(())
+    }
+
     fn hoist_structs(
         &self,
         root_ids: &[ExprID],
@@ -1129,7 +1174,13 @@ impl TypeChecker {
     ) -> Result<(), (ExprID, TypeError)> {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
-            let Expr::Struct(name, generics, body) = expr else {
+            let Expr::Struct {
+                name,
+                generics,
+                body,
+                conformances,
+            } = expr
+            else {
                 continue;
             };
 

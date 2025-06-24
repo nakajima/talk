@@ -495,9 +495,11 @@ impl<'a> Lowerer<'a> {
             Expr::Member(receiver, name) => self.lower_member(&receiver, expr_id, &name, false),
             Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
             Expr::CallArg { value, .. } => self.lower_expr(&value),
-            Expr::Struct(Name::Resolved(struct_id, _), _, body_id) => {
-                self.lower_struct(expr_id, struct_id, &body_id)
-            } // Nothing to be done here.
+            Expr::Struct {
+                name: Name::Resolved(struct_id, _),
+                body,
+                ..
+            } => self.lower_struct(expr_id, struct_id, &body), // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
             Expr::TypeRepr(_, _, _) => None, // these are just for the type system
             Expr::LiteralArray(items) => self.lower_array(typed_expr.ty, items),

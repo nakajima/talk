@@ -39,7 +39,12 @@ pub trait ExprFolder<'a> {
             Pattern(pattern) => self._fold_pattern(expr.clone(), &pattern.clone()),
             Return(rhs) => self._fold_return(expr.clone(), rhs),
             Break => self._fold_break(expr),
-            Struct(name, items, body) => self._fold_struct(expr.clone(), name, items, body),
+            Struct {
+                name,
+                generics,
+                body,
+                conformances,
+            } => self._fold_struct(expr.clone(), name, generics, conformances, body),
             Property {
                 name,
                 type_repr,
@@ -229,6 +234,7 @@ pub trait ExprFolder<'a> {
         expr: Rc<Expr>,
         _name: &Name,
         _items: Vec<Rc<Expr>>,
+        _conformances: Vec<Rc<Expr>>,
         _body: Rc<Expr>,
     ) -> Rc<Expr> {
         expr
@@ -239,11 +245,13 @@ pub trait ExprFolder<'a> {
         expr: Rc<Expr>,
         name: &Name,
         items: &Vec<ExprID>,
+        conformances: &Vec<ExprID>,
         body: &ExprID,
     ) -> Rc<Expr> {
         let body = self.fold(body);
         let items = self.fold_mult(items);
-        self.on_struct(expr, name, items, body)
+        let conformances = self.fold_mult(conformances);
+        self.on_struct(expr, name, items, conformances, body)
     }
 
     fn on_property(

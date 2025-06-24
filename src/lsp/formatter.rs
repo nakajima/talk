@@ -147,7 +147,12 @@ impl<'a> Formatter<'a> {
             } => self.format_call(*callee, type_args, args),
             Expr::Pattern(pattern) => self.format_pattern(pattern),
             Expr::Return(value) => self.format_return(value.as_ref()),
-            Expr::Struct(name, generics, body) => self.format_struct(name, generics, *body),
+            Expr::Struct {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.format_struct(name, generics, conformances, *body),
             Expr::Property {
                 name,
                 type_repr,
@@ -424,7 +429,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_struct(&self, name: &Name, generics: &[ExprID], body: ExprID) -> Doc {
+    fn format_struct(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
         if !generics.is_empty() {

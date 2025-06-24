@@ -1313,3 +1313,32 @@ mod pending {
         );
     }
 }
+
+#[cfg(test)]
+mod protocol_tests {
+    use crate::{check, ty::Ty};
+
+    #[test]
+    fn checks_protocol_conformance() {
+        let checked = check(
+            "
+        protocol Aged {
+            func getAge() -> Int
+        }
+
+        struct Person: Aged {
+            func getAge() {
+                123
+            }
+        }
+
+        fn get(aged: Aged) {
+            aged.getAge()
+        }
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.type_for(&checked.root_ids()[2]).unwrap(), Ty::Int);
+    }
+}
