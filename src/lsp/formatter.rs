@@ -164,7 +164,7 @@ impl<'a> Formatter<'a> {
                 body,
                 ret,
                 ..
-            } => self.format_func(name, generics, params, *body, ret.as_ref(), false),
+            } => self.format_func(name, generics, params, Some(body), ret.as_ref(), false),
             Expr::Parameter(name, type_repr) => self.format_parameter(name, type_repr.as_ref()),
             Expr::Let(name, type_repr) => self.format_let(name, type_repr.as_ref()),
             Expr::Assignment(lhs, rhs) => self.format_assignment(*lhs, *rhs),
@@ -194,10 +194,26 @@ impl<'a> Formatter<'a> {
                     return Doc::Empty;
                 };
 
-                self.format_func(name, generics, params, *body, ret.as_ref(), true)
+                self.format_func(name, generics, params, Some(body), ret.as_ref(), true)
             }
-            Expr::ProtocolDecl { name, .. } => todo!(),
-            Expr::FuncSignature { name, .. } => todo!(),
+            Expr::ProtocolDecl {
+                name,
+                associated_types,
+                body,
+            } => self.format_protocol(name, associated_types, *body),
+            Expr::FuncSignature {
+                name,
+                params,
+                generics,
+                ret,
+            } => self.format_func(
+                &Some(name.clone()),
+                generics,
+                params,
+                None,
+                Some(ret),
+                false,
+            ),
         }
     }
 
@@ -426,6 +442,30 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_expr(body))
     }
 
+    fn format_protocol(&self, name: &Name, associated_types: &[ExprID], body: ExprID) -> Doc {
+        let mut result = concat_space(text("protocol"), self.format_name(name));
+
+        if !associated_types.is_empty() {
+            let associated_type_docs: Vec<_> = associated_types
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+
+            result = concat(
+                result,
+                concat(
+                    text("<"),
+                    concat(
+                        join(associated_type_docs, concat(text(","), text(" "))),
+                        text(">"),
+                    ),
+                ),
+            );
+        }
+
+        concat_space(result, self.format_expr(body))
+    }
+
     fn format_property(
         &self,
         name: &Name,
@@ -499,7 +539,7 @@ impl<'a> Formatter<'a> {
         name: &Option<Name>,
         generics: &[ExprID],
         params: &[ExprID],
-        body: ExprID,
+        body: Option<&ExprID>,
         ret: Option<&ExprID>,
         is_init: bool,
     ) -> Doc {
@@ -541,14 +581,18 @@ impl<'a> Formatter<'a> {
         }
 
         // Check if the body is a single-statement block that could be formatted inline
-        if let Some(Expr::Block(stmts)) = self.source_file.get(&body)
-            && stmts.len() == 1
-            && !self.contains_control_flow(&stmts[0])
-        {
-            return group(concat_space(result, self.format_expr(body)));
-        }
+        if let Some(body) = body {
+            if let Some(Expr::Block(stmts)) = self.source_file.get(&body)
+                && stmts.len() == 1
+                && !self.contains_control_flow(&stmts[0])
+            {
+                return group(concat_space(result, self.format_expr(*body)));
+            }
 
-        concat_space(result, self.format_expr(body))
+            concat_space(result, self.format_expr(*body))
+        } else {
+            result
+        }
     }
 
     fn format_parameter(&self, name: &Name, type_repr: Option<&ExprID>) -> Doc {

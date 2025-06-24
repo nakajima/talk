@@ -44,6 +44,7 @@ pub enum SymbolKind {
     VariantConstructor,
     SyntheticConstructor,
     Property,
+    Protocol,
 }
 
 #[derive(Debug, Clone, PartialEq)]

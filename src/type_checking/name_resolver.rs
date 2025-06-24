@@ -256,45 +256,16 @@ impl NameResolver {
                     name,
                     ..
                 } => {
-                    if !self.type_symbol_stack.is_empty() && name.is_none() {
-                        panic!("missing method name");
-                    }
-
-                    self.func_stack.push((*node_id, self.scopes.len()));
-                    self.start_scope(source_file, source_file.span(node_id));
-
-                    self.resolve_nodes(&generics, source_file, symbol_table);
-
-                    for param in &params {
-                        let Some(Parameter(Name::Raw(name), ty_id)) =
-                            source_file.get(param).cloned()
-                        else {
-                            panic!("got a non variable param")
-                        };
-
-                        self.declare(
-                            name.clone(),
-                            SymbolKind::Param,
-                            node_id,
-                            source_file,
-                            symbol_table,
-                        );
-
-                        if let Some(ty_id) = ty_id {
-                            self.resolve_nodes(&[ty_id], source_file, symbol_table);
-                        }
-                    }
-
-                    let mut to_resolve = params.clone();
-                    to_resolve.push(body);
-
-                    if let Some(ret) = ret {
-                        to_resolve.push(ret);
-                    }
-
-                    self.resolve_nodes(&to_resolve, source_file, symbol_table);
-                    self.end_scope();
-                    self.func_stack.pop();
+                    self.resolve_func(
+                        &name,
+                        &node_id,
+                        &params,
+                        &generics,
+                        Some(&body),
+                        &ret,
+                        symbol_table,
+                        source_file,
+                    );
                 }
                 CallArg { value, .. } => {
                     self.resolve_nodes(&[value], source_file, symbol_table);
@@ -469,14 +440,102 @@ impl NameResolver {
                     params,
                     generics,
                     ret,
-                } => todo!(),
+                } => self.resolve_func(
+                    &Some(name),
+                    node_id,
+                    &params,
+                    &generics,
+                    None,
+                    &Some(ret),
+                    symbol_table,
+                    source_file,
+                ),
                 ProtocolDecl {
                     name,
                     associated_types,
                     body,
-                } => todo!(),
+                } => {
+                    match name {
+                        Name::Raw(name_str) => {
+                            let symbol_id = self.declare(
+                                name_str.clone(),
+                                SymbolKind::Protocol,
+                                node_id,
+                                source_file,
+                                symbol_table,
+                            );
+                            self.type_symbol_stack.push(symbol_id);
+                            source_file.nodes.insert(
+                                *node_id,
+                                ProtocolDecl {
+                                    name: Name::Resolved(symbol_id, name_str),
+                                    associated_types: associated_types.clone(),
+                                    body: body,
+                                },
+                            );
+                        }
+                        _ => continue,
+                    }
+
+                    self.resolve_nodes(&associated_types, source_file, symbol_table);
+                    self.resolve_nodes(&[body], source_file, symbol_table);
+                    self.type_symbol_stack.pop();
+                }
             }
         }
+    }
+
+    fn resolve_func(
+        &mut self,
+        name: &Option<Name>,
+        node_id: &ExprID,
+        params: &Vec<ExprID>,
+        generics: &Vec<ExprID>,
+        body: Option<&ExprID>,
+        ret: &Option<ExprID>,
+        symbol_table: &mut SymbolTable,
+        source_file: &mut SourceFile,
+    ) {
+        if !self.type_symbol_stack.is_empty() && name.is_none() {
+            panic!("missing method name");
+        }
+
+        self.func_stack.push((*node_id, self.scopes.len()));
+        self.start_scope(source_file, source_file.span(node_id));
+
+        self.resolve_nodes(&generics, source_file, symbol_table);
+
+        for param in params {
+            let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
+                panic!("got a non variable param")
+            };
+
+            self.declare(
+                name.clone(),
+                SymbolKind::Param,
+                node_id,
+                source_file,
+                symbol_table,
+            );
+
+            if let Some(ty_id) = ty_id {
+                self.resolve_nodes(&[ty_id], source_file, symbol_table);
+            }
+        }
+
+        let mut to_resolve = params.clone();
+
+        if let Some(body) = body {
+            to_resolve.push(*body);
+        }
+
+        if let Some(ret) = ret {
+            to_resolve.push(*ret);
+        }
+
+        self.resolve_nodes(&to_resolve, source_file, symbol_table);
+        self.end_scope();
+        self.func_stack.pop();
     }
 
     fn hoist_funcs(

@@ -548,6 +548,15 @@ pub trait ExprFolder<'a> {
         self.on_pattern_variable(expr, enum_name, variant_name, items)
     }
 
+    fn on_protocol_decl(
+        &mut self,
+        expr: Rc<Expr>,
+        _name: &Name,
+        _associated_types: Vec<Rc<Expr>>,
+        _body: Rc<Expr>,
+    ) -> Rc<Expr> {
+        expr
+    }
     fn _fold_protocol_decl(
         &mut self,
         expr: Rc<Expr>,
@@ -555,9 +564,21 @@ pub trait ExprFolder<'a> {
         associated_types: &Vec<ExprID>,
         body: &ExprID,
     ) -> Rc<Expr> {
-        expr
+        let associated_types = self.fold_mult(associated_types);
+        let body = self.fold(body);
+        self.on_protocol_decl(expr, name, associated_types, body)
     }
 
+    fn on_func_signature(
+        &mut self,
+        expr: Rc<Expr>,
+        _name: &Name,
+        _params: Vec<Rc<Expr>>,
+        _generics: Vec<Rc<Expr>>,
+        _ret: Rc<Expr>,
+    ) -> Rc<Expr> {
+        expr
+    }
     fn _fold_func_signature(
         &mut self,
         expr: Rc<Expr>,
@@ -566,6 +587,9 @@ pub trait ExprFolder<'a> {
         generics: &Vec<ExprID>,
         ret: &ExprID,
     ) -> Rc<Expr> {
-        expr
+        let params = self.fold_mult(params);
+        let generics = self.fold_mult(generics);
+        let ret = self.fold(ret);
+        self.on_func_signature(expr, name, params, generics, ret)
     }
 }

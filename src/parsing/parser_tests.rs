@@ -1231,17 +1231,15 @@ mod error_handling_tests {
                 parsed.get(&associated_types[0]).unwrap()
             );
         };
+        assert_eq!(*t_name, Name::Raw("T".into()));
 
         let Expr::Block(ids) = parsed.get(body).unwrap() else {
             panic!("didn't get body")
         };
 
-        let Expr::Property {
-            name,
-            type_repr,
-            default_value,
-        } = parsed.get(&ids[0]).unwrap()
-        else {
+        // Not doing any further asserting on the property because it's the same
+        // handling as the other stuff
+        let Expr::Property { .. } = parsed.get(&ids[0]).unwrap() else {
             panic!("did not get property");
         };
 
