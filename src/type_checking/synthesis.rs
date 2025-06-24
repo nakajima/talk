@@ -132,22 +132,31 @@ pub fn synthesize_inits(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
-        NameResolved, SourceFile, SymbolID, SymbolTable, environment::Environment, expr::Expr,
-        name::Name, name_resolver::NameResolver, parser::parse, synthesis::synthesize_inits,
+        NameResolved, SourceFile, SymbolID, SymbolTable, compiling::driver::Driver,
+        environment::Environment, expr::Expr, name::Name, synthesis::synthesize_inits,
     };
 
-    pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
-        let mut symbol_table = SymbolTable::base();
-        let tree = parse(code, "-".into());
-        let resolver = NameResolver::new(&mut symbol_table);
-        let resolved = resolver.resolve(tree, &mut symbol_table);
-        (resolved, symbol_table.clone())
+    pub fn resolve_with_symbols(
+        code: &'static str,
+    ) -> (SourceFile<NameResolved>, SymbolTable, Environment) {
+        let mut driver = Driver::with_str(code);
+        let resolved = driver
+            .parse()
+            .into_iter()
+            .next()
+            .unwrap()
+            .resolved(&mut driver.symbol_table);
+        let source_file = resolved.source_file(&PathBuf::from("-")).unwrap().clone();
+
+        (source_file, driver.symbol_table, resolved.env)
     }
 
     #[test]
     fn synthesizes_init() {
-        let (mut resolved, mut symbol_table) = resolve_with_symbols(
+        let (mut resolved, mut symbol_table, mut env) = resolve_with_symbols(
             "
         struct Person {
             let age: Int
@@ -155,10 +164,10 @@ mod tests {
         ",
         );
 
-        synthesize_inits(&mut resolved, &mut symbol_table, &mut Environment::new());
+        synthesize_inits(&mut resolved, &mut symbol_table, &mut env);
 
-        let Some(Expr::Struct(_, _, body)) = resolved.roots()[0] else {
-            panic!("didn't get struct")
+        let Some(Expr::Struct(_, _, body)) = resolved.get(&resolved.root_ids()[0]) else {
+            panic!("didn't get struct: {:?}", resolved.roots()[0]);
         };
 
         let Some(Expr::Block(ids)) = resolved.get(body) else {
@@ -181,7 +190,10 @@ mod tests {
             panic!("didn't get init func")
         };
 
-        assert_eq!(name, &Some(Name::Resolved(SymbolID(4), "init".into())));
+        let Some(Name::Resolved(_, init_name)) = name else {
+            panic!("didn't get init");
+        };
+        assert_eq!(init_name, "init");
         assert!(generics.is_empty());
         assert_eq!(params.len(), 1);
         assert_eq!(ret, &None);
@@ -192,6 +204,19 @@ mod tests {
         };
 
         assert_eq!(body_ids.len(), 1);
-        assert_eq!(resolved.get(&body_ids[0]), Some(&Expr::Assignment(5, 6)));
+        let Some(&Expr::Assignment(lhs, rhs)) = resolved.get(&body_ids[0]) else {
+            panic!("didn't get assignment");
+        };
+
+        let Expr::Member(_, name) = resolved.get(&lhs).unwrap() else {
+            panic!("didn't get member");
+        };
+
+        assert_eq!(name, "age");
+
+        assert_eq!(
+            resolved.get(&rhs).unwrap(),
+            &Expr::Variable(Name::Resolved(SymbolID::resolved(3), "age".into()), None)
+        );
     }
 }

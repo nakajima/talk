@@ -553,7 +553,7 @@ impl<'a> Lowerer<'a> {
             } // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
             Expr::TypeRepr(_, _, _) => None, // these are just for the type system
-            Expr::LiteralArray(items) => self.lower_array(items),
+            Expr::LiteralArray(items) => self.lower_array(typed_expr.ty, items),
             Expr::Loop(cond, body) => self.lower_loop(&cond, &body),
             Expr::Break => {
                 let Some(current_loop_exit) = self.loop_exits.last() else {
@@ -653,12 +653,19 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_array(&mut self, items: Vec<ExprID>) -> Option<Register> {
+    fn lower_array(&mut self, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
+        let Ty::Struct(SymbolID::ARRAY, els) = ty else {
+            self.push_err("Invalid array type", *self.current_expr_ids.last().unwrap());
+            return None;
+        };
+
+        let ty = els.last()?.to_ir(self);
+
         // Allocate the array
         let array_reg = self.allocate_register();
         self.push_instr(Instr::Alloc {
             dest: array_reg,
-            ty: IRType::array(),
+            ty: IRType::array(ty.clone()),
             count: None,
         });
 
@@ -669,7 +676,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::GetElementPointer {
             dest: count_ptr_reg,
             base: array_reg,
-            ty: IRType::array(),
+            ty: IRType::array(ty.clone()),
             index: IRValue::ImmediateInt(0),
         });
         self.push_instr(Instr::Store {
@@ -685,7 +692,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::GetElementPointer {
             dest: capacity_ptr_reg,
             base: array_reg,
-            ty: IRType::array(),
+            ty: IRType::array(ty.clone()),
             index: IRValue::ImmediateInt(1),
         });
         self.push_instr(Instr::Store {
@@ -699,7 +706,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::GetElementPointer {
             dest: storage_ptr_reg,
             base: array_reg,
-            ty: IRType::array(),
+            ty: IRType::array(ty.clone()),
             index: IRValue::ImmediateInt(2),
         });
         let storage_reg = self.allocate_register();
@@ -718,7 +725,7 @@ impl<'a> Lowerer<'a> {
             let loaded = self.allocate_register();
             self.push_instr(Instr::Load {
                 dest: loaded,
-                ty: IRType::array(),
+                ty: IRType::array(ty.clone()),
                 addr: array_reg,
             });
             return Some(loaded);

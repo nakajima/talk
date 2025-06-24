@@ -7,16 +7,16 @@ use crate::lowering::{
     lowerer::{BasicBlock, IRFunction, RegisterList, TypedRegister},
 };
 
-/// The Monomorphizer monomorphizes. So it takes a func like this:
-///
-///     func identity(x) { x }
-///
-/// which lowers to (T1) -> T1. And then given a call like this:
-///
-///     identity(123)
-///
-/// and it'll generate a version of identity that lowers to (Int) -> Int.
-/// It'll also update calls to the generic form to the specialized form.
+// The Monomorphizer monomorphizes. So it takes a func like this:
+//
+//     func identity(x) { x }
+//
+// which lowers to (T1) -> T1. And then given a call like this:
+//
+//     identity(123)
+//
+// and it'll generate a version of identity that lowers to (Int) -> Int.
+// It'll also update calls to the generic form to the specialized form.
 #[derive(Default)]
 pub struct Monomorphizer {
     cache: HashSet<String>,
@@ -467,34 +467,37 @@ mod tests {
 
         assert_lowered_function!(
             monomorphed,
-            "@_Array_3_get<int>",
+            "@_3_Array_get<ptr int>",
             IRFunction {
                 debug_info: Default::default(),
-                name: "@_Array_get<int>".into(),
+                name: "@_3_Array_get<ptr int>".into(),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
-                        // First alloc (so we can get a pointer)
-                        Instr::ConstantInt(Register(1), 2),
-                        Instr::Alloc {
-                            dest: Register(0),
-                            ty: IRType::Int,
-                            count: Some(Register(1)),
-                        },
-                        Instr::ConstantInt(Register(3), 1),
                         Instr::GetElementPointer {
-                            dest: Register(4),
+                            dest: Register(3),
                             base: Register(0),
+                            ty: IRType::array(IRType::TypeVar("T91".into())),
+                            index: IRValue::ImmediateInt(2)
+                        },
+                        Instr::Load {
+                            dest: Register(4),
+                            ty: IRType::Pointer,
+                            addr: Register(3)
+                        },
+                        Instr::GetElementPointer {
+                            dest: Register(5),
+                            base: Register(4),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: Register(3).into()
+                            index: IRValue::Register(Register(1))
                         },
                         Instr::Load {
                             dest: Register(2),
                             ty: IRType::Int.into(),
-                            addr: Register(4)
+                            addr: Register(5)
                         },
                         Instr::Ret(IRType::Int, Some(Register(2).into()))
                     ]
@@ -505,7 +508,7 @@ mod tests {
                     vec![IRType::Int]
                 )),
                 env_reg: Some(Register(0)),
-                size: 0,
+                size: 6,
             }
         );
     }

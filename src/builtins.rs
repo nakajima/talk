@@ -400,7 +400,7 @@ mod array_tests {
                     instructions: vec![
                         Instr::Alloc {
                             dest: Register(0),
-                            ty: IRType::array(),
+                            ty: IRType::array(IRType::Int),
                             count: None
                         },
                         // Set the array's count
@@ -408,7 +408,7 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(2),
                             base: Register(0),
-                            ty: IRType::array(),
+                            ty: IRType::array(IRType::Int),
                             index: 0.into(),
                         },
                         Instr::Store {
@@ -421,7 +421,7 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(4),
                             base: Register(0),
-                            ty: IRType::array(),
+                            ty: IRType::array(IRType::Int),
                             index: 1.into(),
                         },
                         Instr::Store {
@@ -433,7 +433,7 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(5),
                             base: Register(0),
-                            ty: IRType::array(),
+                            ty: IRType::array(IRType::Int),
                             index: 2.into(),
                         },
                         // Alloc space for the items
@@ -492,29 +492,29 @@ mod array_tests {
                             val: Register(11),
                             location: Register(12)
                         },
-                        Instr::Load {
-                            dest: Register(13),
-                            ty: IRType::array(),
-                            addr: Register(0),
-                        },
+                        // Instr::Load {
+                        //     dest: Register(13),
+                        //     ty: IRType::array(),
+                        //     addr: Register(0),
+                        // },
                         // Get .count
                         Instr::GetElementPointer {
-                            dest: Register(14),
-                            base: Register(13),
-                            ty: IRType::array(),
+                            dest: Register(13),
+                            base: Register(0),
+                            ty: IRType::array(IRType::Int),
                             index: 0.into(),
                         },
                         Instr::Load {
-                            dest: Register(15),
+                            dest: Register(14),
                             ty: IRType::Int,
-                            addr: Register(14)
+                            addr: Register(13)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(15).into()))
+                        Instr::Ret(IRType::Int, Some(Register(14).into()))
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 16
+                size: 15
             }
         );
     }
@@ -523,7 +523,7 @@ mod array_tests {
 #[cfg(test)]
 mod stdlib_tests {
     use crate::{
-        assert_lowered_function, assert_lowered_functions,
+        assert_lowered_function,
         compiling::driver::Driver,
         lowering::{
             instr::Instr,
@@ -537,9 +537,10 @@ mod stdlib_tests {
     fn lowers_alloc() {
         let mut driver = Driver::with_str("__alloc<Int>(4)");
         let lowered = driver.lower().into_iter().next().unwrap().module();
-        assert_lowered_functions!(
+        assert_lowered_function!(
             lowered,
-            vec![IRFunction {
+            "@main",
+            IRFunction {
                 debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -557,9 +558,9 @@ mod stdlib_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 5,
-            }],
-        )
+                size: 2,
+            }
+        );
     }
 
     #[test]
@@ -571,9 +572,10 @@ mod stdlib_tests {
         ",
         );
         let lowered = driver.lower().into_iter().next().unwrap().module();
-        assert_lowered_functions!(
+        assert_lowered_function!(
             lowered,
-            vec![IRFunction {
+            "@main",
+            IRFunction {
                 debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -599,8 +601,8 @@ mod stdlib_tests {
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 5,
-            }],
+                size: 4,
+            },
         )
     }
 
@@ -630,27 +632,27 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(1)),
                         },
-                        Instr::ConstantInt(Register(3), 1),
-                        Instr::ConstantInt(Register(4), 1),
+                        Instr::ConstantInt(Register(2), 1),
+                        Instr::ConstantInt(Register(3), 123),
                         Instr::GetElementPointer {
-                            dest: Register(5),
+                            dest: Register(4),
                             base: Register(0),
                             ty: IRType::Array {
                                 element: IRType::Int.into()
                             },
-                            index: Register(3).into(),
+                            index: Register(2).into(),
                         },
                         Instr::Store {
-                            val: Register(4),
+                            val: Register(3),
                             ty: IRType::Int,
-                            location: Register(5)
+                            location: Register(4)
                         },
-                        Instr::Ret(IRType::Void, Some(Register(2).into()))
+                        Instr::Ret(IRType::Void, None)
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 6,
+                size: 5,
             }
         );
     }
@@ -664,9 +666,10 @@ mod stdlib_tests {
         ",
         );
         let lowered = driver.lower().into_iter().next().unwrap().module();
-        assert_lowered_functions!(
+        assert_lowered_function!(
             lowered,
-            vec![IRFunction {
+            "@main",
+            IRFunction {
                 debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
@@ -700,7 +703,7 @@ mod stdlib_tests {
                 env_ty: None,
                 env_reg: None,
                 size: 5
-            }],
-        )
+            },
+        );
     }
 }
