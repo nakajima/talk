@@ -203,7 +203,7 @@ impl<P: Phase> SourceFile<P> {
             }
         }
 
-        return None;
+        None
     }
 
     // Gets the expr at a given index
@@ -217,7 +217,7 @@ impl<P: Phase> SourceFile<P> {
     }
 
     pub fn span(&self, expr_id: &ExprID) -> Span {
-        let Some(meta) = self.meta.get(&expr_id) else {
+        let Some(meta) = self.meta.get(expr_id) else {
             panic!("didn't get a span for expr: {expr_id}");
         };
 

@@ -59,7 +59,7 @@ pub enum TypeError {
 impl TypeError {
     pub fn message(&self) -> String {
         match self {
-            Self::Unresolved(name) => format!("Unresolved name: {}", name),
+            Self::Unresolved(name) => format!("Unresolved name: {name}"),
             Self::NameResolution(e) => e.message(),
             Self::UnknownEnum(name) => format!("No enum named {}", name.name_str()),
             Self::UnknownVariant(name) => format!("No case named {}", name.name_str()),
@@ -231,7 +231,7 @@ impl TypeChecker {
         let mut typed_roots = vec![];
         for id in &root_ids {
             match self.infer_node(id, env, &None, &mut source_file) {
-                Ok(_ty) => typed_roots.push(env.typed_exprs.get(&id).unwrap().clone()),
+                Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
                 Err(e) => {
                     source_file.diagnostics.insert(Diagnostic::typing(*id, e));
                 }
@@ -1511,7 +1511,7 @@ impl TypeChecker {
                 let scheme = env.generalize(&fn_var);
                 env.declare(symbol_id, scheme);
             } else {
-                log::warn!("not a func {:?}", expr);
+                log::warn!("not a func {expr:?}");
             }
         }
     }

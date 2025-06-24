@@ -35,6 +35,12 @@ impl Pointer {
     }
 }
 
+impl Default for Memory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Memory {
     pub fn new() -> Self {
         Self {
@@ -77,7 +83,7 @@ impl Memory {
         match val {
             Value::Struct(vals) => {
                 let vals: Vec<Option<Value>> = vals.iter().cloned().map(Option::Some).collect();
-                println!("----- storing struct vals {:?} at {:?}", vals, range);
+                println!("----- storing struct vals {vals:?} at {range:?}");
                 self.storage[range].clone_from_slice(&vals)
             }
             // Value::Enum { tag, values } => {
@@ -129,10 +135,10 @@ impl Memory {
 
     fn mem_size(ty: &IRType) -> usize {
         match ty {
-            IRType::TypeVar(var) => panic!("cannot determine size of type variable: {:?}", var),
+            IRType::TypeVar(var) => panic!("cannot determine size of type variable: {var:?}"),
             // IRType::Enum(vars) => vars.iter().map(|t| Self::mem_size(&t)).max().unwrap_or(0),
             IRType::Struct(_, values, _) => values.len(),
-            IRType::Array { element } => Self::mem_size(&element),
+            IRType::Array { element } => Self::mem_size(element),
             _ => 1,
         }
     }

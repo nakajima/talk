@@ -25,7 +25,7 @@ macro_rules! assert_lowered_functions {
                         functions: right_val.clone(),
                     };
 
-                    use crate::lowering::ir_printer::print;
+                    use $crate::lowering::ir_printer::print;
                     use prettydiff::{diff_chars, diff_lines};
                     println!(
                         "{}",

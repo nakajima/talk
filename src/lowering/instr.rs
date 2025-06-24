@@ -56,7 +56,7 @@ impl Callee {
     pub fn try_register(&self) -> Result<Register, IRError> {
         match self {
             Self::Register(reg) => Ok(*reg),
-            _ => Err(IRError::Unknown(format!("Invalid IR Value: {:?}", self))),
+            _ => Err(IRError::Unknown(format!("Invalid IR Value: {self:?}"))),
         }
     }
 }

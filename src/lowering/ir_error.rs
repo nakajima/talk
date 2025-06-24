@@ -26,7 +26,7 @@ impl IRError {
                     .collect::<Vec::<&str>>()
                     .join(", ")
             ),
-            Self::BuiltinNotFound(symbol_id) => format!("Builtin not found: {:?}", symbol_id),
+            Self::BuiltinNotFound(symbol_id) => format!("Builtin not found: {symbol_id:?}"),
             Self::Unknown(msg) => msg.clone(),
         }
     }

@@ -84,7 +84,7 @@ impl Monomorphizer {
                         .find(|f| f.name == *callee)
                         .cloned()
                     else {
-                        log::info!("Did not find callee function: {}", callee);
+                        log::info!("Did not find callee function: {callee}");
                         return function;
                     };
 
@@ -92,7 +92,7 @@ impl Monomorphizer {
                         let monomorphized_name = self.monomorphize_function(
                             &callee_function,
                             args.0.iter().map(|a| a.ty.clone()).collect(),
-                            &ty,
+                            ty,
                             &mut HashMap::new(),
                         );
 
@@ -118,7 +118,7 @@ impl Monomorphizer {
             return mangled_name;
         }
 
-        log::info!("monomorphizing: {} -> {:?}", mangled_name, expected_ret);
+        log::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
@@ -138,9 +138,9 @@ impl Monomorphizer {
             ty: IRType::Func(
                 params
                     .iter()
-                    .map(|p| Self::apply_type(p, &substitutions))
+                    .map(|p| Self::apply_type(p, substitutions))
                     .collect(),
-                Self::apply_type(ret, &substitutions).into(),
+                Self::apply_type(ret, substitutions).into(),
             ),
             blocks: function
                 .blocks
@@ -151,7 +151,7 @@ impl Monomorphizer {
             env_ty: function
                 .env_ty
                 .as_ref()
-                .map(|ty| Self::apply_type(ty, &substitutions)),
+                .map(|ty| Self::apply_type(ty, substitutions)),
             size: function.size,
         };
 
@@ -161,7 +161,7 @@ impl Monomorphizer {
             "monomorphized {} ({}): {:?}, {:#?}",
             mangled_name,
             is_generic(&monomorphized_function),
-            Self::apply_type(monomorphized_function.ret(), &substitutions),
+            Self::apply_type(monomorphized_function.ret(), substitutions),
             substitutions
         );
 

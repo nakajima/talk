@@ -348,7 +348,7 @@ impl NameResolver {
                                 if let Some(Name::Resolved(_, func_name)) = name
                                     && func_name == &name_str
                                 {
-                                    log::trace!("the same: {:?} <> {:?}", func_name, name_str);
+                                    log::trace!("the same: {func_name:?} <> {name_str:?}");
                                 } else {
                                     if !captures.contains(&symbol_id) {
                                         (*captures).push(symbol_id);

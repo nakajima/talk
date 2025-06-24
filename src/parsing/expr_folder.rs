@@ -19,45 +19,45 @@ pub trait ExprFolder<'a> {
     }
 
     fn fold(&mut self, expr_id: &ExprID) -> Rc<Expr> {
-        let expr = self.get(&expr_id);
+        let expr = self.get(expr_id);
         use super::expr::Expr::*;
         let folded = match expr.as_ref() {
-            LiteralArray(items) => self._fold_literal_array(expr.clone(), &items),
-            LiteralInt(val) => self._fold_int(expr.clone(), &val),
-            LiteralFloat(val) => self._fold_float(expr.clone(), &val),
+            LiteralArray(items) => self._fold_literal_array(expr.clone(), items),
+            LiteralInt(val) => self._fold_int(expr.clone(), val),
+            LiteralFloat(val) => self._fold_float(expr.clone(), val),
             LiteralTrue => self._fold_true(expr),
             LiteralFalse => self._fold_false(expr),
-            Unary(token_kind, rhs) => self._fold_unary(expr.clone(), &token_kind, &rhs),
+            Unary(token_kind, rhs) => self._fold_unary(expr.clone(), token_kind, rhs),
             Binary(lhs, token_kind, rhs) => {
-                self._fold_binary(expr.clone(), &lhs, &token_kind, &rhs)
+                self._fold_binary(expr.clone(), lhs, token_kind, rhs)
             }
-            Tuple(items) => self._fold_tuple(expr.clone(), &items),
-            Block(items) => self._fold_block(expr.clone(), &items),
+            Tuple(items) => self._fold_tuple(expr.clone(), items),
+            Block(items) => self._fold_block(expr.clone(), items),
             Call {
                 callee,
                 type_args,
                 args,
-            } => self._fold_call(expr.clone(), &callee, &type_args, &args),
+            } => self._fold_call(expr.clone(), callee, type_args, args),
             Pattern(pattern) => self._fold_pattern(expr.clone(), &pattern.clone()),
-            Return(rhs) => self._fold_return(expr.clone(), &rhs),
+            Return(rhs) => self._fold_return(expr.clone(), rhs),
             Break => self._fold_break(expr),
-            Struct(name, items, body) => self._fold_struct(expr.clone(), &name, &items, &body),
+            Struct(name, items, body) => self._fold_struct(expr.clone(), name, items, body),
             Property {
                 name,
                 type_repr,
                 default_value,
-            } => self._fold_property(expr.clone(), &name.clone(), &type_repr, &default_value),
+            } => self._fold_property(expr.clone(), &name.clone(), type_repr, default_value),
             TypeRepr(name, items, introduces_type) => {
-                self._fold_type_repr(expr.clone(), &name, &items, &introduces_type)
+                self._fold_type_repr(expr.clone(), name, items, introduces_type)
             }
             FuncTypeRepr(items, ret, introduces_type) => {
-                self._fold_func_type_repr(expr.clone(), &items, &ret, &introduces_type)
+                self._fold_func_type_repr(expr.clone(), items, ret, introduces_type)
             }
             TupleTypeRepr(items, introduces_type) => {
-                self._fold_type_type_repr(expr.clone(), &items, &introduces_type)
+                self._fold_type_type_repr(expr.clone(), items, introduces_type)
             }
-            Member(receiver, name) => self._fold_member(expr.clone(), &receiver, &name),
-            Init(symbol_id, func_id) => self._fold_init(expr.clone(), &symbol_id, &func_id),
+            Member(receiver, name) => self._fold_member(expr.clone(), receiver, name),
+            Init(symbol_id, func_id) => self._fold_init(expr.clone(), symbol_id, func_id),
             Func {
                 name,
                 generics,
@@ -67,26 +67,26 @@ pub trait ExprFolder<'a> {
                 captures,
             } => self._fold_function(
                 expr.clone(),
-                &name,
-                &generics,
-                &params,
-                &body,
-                &ret,
-                &captures,
+                name,
+                generics,
+                params,
+                body,
+                ret,
+                captures,
             ),
-            Parameter(name, type_repr) => self._fold_parameter(expr.clone(), &name, &type_repr),
-            CallArg { label, value } => self._fold_call_arg(expr.clone(), &label, &value),
-            Let(name, _) => self._fold_let(expr.clone(), &name),
-            Assignment(lhs, rhs) => self._fold_assignment(expr.clone(), &lhs, &rhs),
-            Variable(name, _) => self._fold_variable(expr.clone(), &name),
-            If(cond, then, alt) => self._fold_if(expr.clone(), &cond, &then, &alt),
-            Loop(cond, body) => self._fold_loop(expr.clone(), &cond, &body),
-            EnumDecl(name, items, body) => self._fold_enum_decl(expr.clone(), &name, &items, &body),
-            EnumVariant(name, items) => self._fold_enum_variant(expr.clone(), &name, &items),
-            Match(pattern, items) => self._fold_match(expr.clone(), &pattern, &items),
-            MatchArm(pattern, body) => self._fold_match_arm(expr.clone(), &pattern, &body),
+            Parameter(name, type_repr) => self._fold_parameter(expr.clone(), name, type_repr),
+            CallArg { label, value } => self._fold_call_arg(expr.clone(), label, value),
+            Let(name, _) => self._fold_let(expr.clone(), name),
+            Assignment(lhs, rhs) => self._fold_assignment(expr.clone(), lhs, rhs),
+            Variable(name, _) => self._fold_variable(expr.clone(), name),
+            If(cond, then, alt) => self._fold_if(expr.clone(), cond, then, alt),
+            Loop(cond, body) => self._fold_loop(expr.clone(), cond, body),
+            EnumDecl(name, items, body) => self._fold_enum_decl(expr.clone(), name, items, body),
+            EnumVariant(name, items) => self._fold_enum_variant(expr.clone(), name, items),
+            Match(pattern, items) => self._fold_match(expr.clone(), pattern, items),
+            MatchArm(pattern, body) => self._fold_match_arm(expr.clone(), pattern, body),
             PatternVariant(enum_name, variant_name, items) => {
-                self._fold_pattern_variable(expr.clone(), &enum_name, &variant_name, &items)
+                self._fold_pattern_variable(expr.clone(), enum_name, variant_name, items)
             }
         };
 

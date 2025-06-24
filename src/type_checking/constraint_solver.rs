@@ -176,7 +176,7 @@ impl<'a> ConstraintSolver<'a> {
                             return Ok(());
                         };
 
-                        log::info!("receiver_ty: {:?}", receiver_ty);
+                        log::info!("receiver_ty: {receiver_ty:?}");
 
                         if let Some(method) = struct_def.methods.get(member_name) {
                             // Create a substitution map from the struct's generic parameters to the concrete types.
@@ -196,14 +196,14 @@ impl<'a> ConstraintSolver<'a> {
 
                             // IMPORTANT: Do NOT instantiate here - we want to use the same type variables
                             // that are already in the struct instance's generics
-                            log::info!("specialized_method_ty: {:?}", specialized_method_ty);
+                            log::info!("specialized_method_ty: {specialized_method_ty:?}");
 
                             // Unify with the specialized type directly (no instantiation)
                             Self::unify(&specialized_method_ty, &result_ty, substitutions)?;
 
                             // Apply the substitutions to get the final type
                             let final_ty = Self::apply(&specialized_method_ty, substitutions, 0);
-                            log::info!("Set type for member access {:?}: {:?}", node_id, final_ty);
+                            log::info!("Set type for member access {node_id:?}: {final_ty:?}");
                             self.source_file.define(*node_id, final_ty, self.env);
                         }
 
@@ -504,11 +504,9 @@ impl<'a> ConstraintSolver<'a> {
 
                 if let (concrete_ret, Ty::TypeVar(ret_var)) =
                     (lhs_returning.as_ref(), rhs_returning.as_ref())
-                {
-                    if !matches!(concrete_ret, Ty::TypeVar(_)) {
+                    && !matches!(concrete_ret, Ty::TypeVar(_)) {
                         substitutions.insert(ret_var.clone(), concrete_ret.clone());
                     }
-                }
 
                 Self::unify(&lhs_returning, &rhs_returning, substitutions)?;
                 Self::normalize_substitutions(substitutions);

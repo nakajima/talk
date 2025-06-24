@@ -90,7 +90,7 @@ impl IRInterpreter {
                 }
             }
             Err(err) => {
-                println!("{:?}", err);
+                println!("{err:?}");
                 self.dump();
                 return Err(err);
             }
@@ -146,7 +146,7 @@ impl IRInterpreter {
                 .debug_info
                 .get(&BasicBlockID(frame.block_idx as u32))
                 .map(|i| i.get(&frame.pc))
-                .map(|expr_id| format!("{:?}", expr_id))
+                .map(|expr_id| format!("{expr_id:?}"))
                 .unwrap_or("-".into()),
             instr,
             ir_printer::format_instruction(&instr),
@@ -493,7 +493,7 @@ impl IRInterpreter {
                             "\t{} = {}",
                             frame.sp + id,
                             match v {
-                                Some(v) => format!("{:?}", v),
+                                Some(v) => format!("{v:?}"),
                                 None => "-".into(),
                             }
                         )

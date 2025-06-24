@@ -354,7 +354,7 @@ impl CurrentFunction {
         log::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
 
         IRFunction {
-            ty: ty,
+            ty,
             name,
             blocks,
             env_ty,
@@ -568,7 +568,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instr::Jump(*current_loop_exit));
                 None
             }
-            Expr::Tuple(items) => self.lower_tuple(&expr_id, items),
+            Expr::Tuple(items) => self.lower_tuple(expr_id, items),
             expr => {
                 self.source_file.diagnostics.insert(Diagnostic::lowering(
                     *expr_id,
@@ -958,7 +958,7 @@ impl<'a> Lowerer<'a> {
         }) = &typed_func.ty
         else {
             self.push_err(
-                &format!("Could not get return type for method: {:?}", typed_func),
+                &format!("Could not get return type for method: {typed_func:?}"),
                 *func_id,
             );
             return None;
@@ -999,7 +999,7 @@ impl<'a> Lowerer<'a> {
         else {
             panic!(
                 "Attempted to lower non-function: {:?}",
-                self.source_file.get(&expr_id)
+                self.source_file.get(expr_id)
             );
         };
 
@@ -1905,9 +1905,9 @@ impl<'a> Lowerer<'a> {
         if let Expr::Member(receiver_id, name) = &callee_typed_expr.expr {
             return self.lower_method_call(
                 &callee_typed_expr,
-                &receiver_id,
-                &ret_ty,
-                &name,
+                receiver_id,
+                ret_ty,
+                name,
                 arg_registers,
             );
         }
@@ -1950,7 +1950,7 @@ impl<'a> Lowerer<'a> {
                 self.push_err(
                     &format!(
                         "Could not lower function variable to get its closure object: {:?}",
-                        self.source_file.typed_expr(&callee, &self.env)
+                        self.source_file.typed_expr(&callee, self.env)
                     ),
                     callee,
                 );
@@ -1985,7 +1985,7 @@ impl<'a> Lowerer<'a> {
                 callee: Callee::Name(callee_name),
                 args: RegisterList(arg_registers),
             });
-            return Some(dest_reg);
+            Some(dest_reg)
         } else {
             // Fallback for indirect calls (e.g., `(if c then f else g)()` ).
             // Here, the callee is not a static name, so we must use the original call-by-reference.
@@ -2043,7 +2043,7 @@ impl<'a> Lowerer<'a> {
                 args: RegisterList(arg_registers),
             });
 
-            return Some(dest_reg);
+            Some(dest_reg)
         }
     }
 
@@ -2093,7 +2093,7 @@ impl<'a> Lowerer<'a> {
             args: RegisterList(arg_registers),
         });
 
-        return Some(initialized_struct_reg);
+        Some(initialized_struct_reg)
     }
 
     fn lower_method_call(
@@ -2109,12 +2109,12 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        let Some(receiver_ty) = self.source_file.typed_expr(&receiver_id, self.env) else {
+        let Some(receiver_ty) = self.source_file.typed_expr(receiver_id, self.env) else {
             log::error!("could not determine type of receiver");
             return None;
         };
 
-        let Some(receiver) = self.lower_expr(&receiver_id) else {
+        let Some(receiver) = self.lower_expr(receiver_id) else {
             log::error!("could not lower member receiver: {callee_typed_expr:?}");
             return None;
         };
@@ -2141,7 +2141,7 @@ impl<'a> Lowerer<'a> {
 
         let Some(callee_name) = callee_name else {
             self.push_err(
-                &format!("Could not determine callee. Receiver: {:?}", receiver_ty),
+                &format!("Could not determine callee. Receiver: {receiver_ty:?}"),
                 *receiver_id,
             );
             return None;
@@ -2155,7 +2155,7 @@ impl<'a> Lowerer<'a> {
             args: RegisterList(arg_registers),
         });
 
-        return Some(result_reg);
+        Some(result_reg)
     }
 
     /// Fills a pre-allocated closure with the given function reference and captures.
@@ -2257,7 +2257,7 @@ impl<'a> Lowerer<'a> {
             return Some(val);
         }
 
-        return self.globals.get(symbol_id);
+        self.globals.get(symbol_id)
     }
 
     fn register_global(&mut self, symbol_id: &SymbolID, value: SymbolValue) {
