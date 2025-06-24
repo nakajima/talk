@@ -344,7 +344,7 @@ impl<'a> Parser<'a> {
                             generics: generics.clone(),
                             params: params.clone(),
                             body,
-                            ret: Some(ret.clone()),
+                            ret: Some(*ret),
                             captures: vec![],
                         };
 

@@ -582,7 +582,7 @@ impl<'a> Formatter<'a> {
 
         // Check if the body is a single-statement block that could be formatted inline
         if let Some(body) = body {
-            if let Some(Expr::Block(stmts)) = self.source_file.get(&body)
+            if let Some(Expr::Block(stmts)) = self.source_file.get(body)
                 && stmts.len() == 1
                 && !self.contains_control_flow(&stmts[0])
             {

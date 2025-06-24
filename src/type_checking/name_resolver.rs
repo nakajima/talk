@@ -258,7 +258,7 @@ impl NameResolver {
                 } => {
                     self.resolve_func(
                         &name,
-                        &node_id,
+                        node_id,
                         &params,
                         &generics,
                         Some(&body),
@@ -470,7 +470,7 @@ impl NameResolver {
                                 ProtocolDecl {
                                     name: Name::Resolved(symbol_id, name_str),
                                     associated_types: associated_types.clone(),
-                                    body: body,
+                                    body,
                                 },
                             );
                         }
@@ -503,7 +503,7 @@ impl NameResolver {
         self.func_stack.push((*node_id, self.scopes.len()));
         self.start_scope(source_file, source_file.span(node_id));
 
-        self.resolve_nodes(&generics, source_file, symbol_table);
+        self.resolve_nodes(generics, source_file, symbol_table);
 
         for param in params {
             let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
