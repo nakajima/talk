@@ -158,8 +158,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn checks_setter() {}
+    fn checks_setter() {
+        let checked = check(
+            "struct Person {
+                let age: Int
+            }
+
+            Person(age: 1).age = 1.2",
+        )
+        .unwrap();
+
+        assert_eq!(checked.diagnostics().len(), 1);
+    }
 }
 
 #[cfg(test)]
