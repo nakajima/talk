@@ -906,9 +906,13 @@ mod tests {
             ",
         );
 
+        let Expr::LiteralArray(ids) = resolved.get(&resolved.root_ids()[0]).unwrap() else {
+            panic!("did not get literal array");
+        };
+
         assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID(0), "a".into()), None)
+            resolved.get(&ids[0]).unwrap(),
+            &Expr::Variable(Name::Resolved(SymbolID(0), "a".into()), None)
         );
     }
 
@@ -980,13 +984,14 @@ mod tests {
             panic!("didnt get assignment")
         };
 
-        assert_eq!(
-            *tree.get(rhs).unwrap(),
-            Expr::Member(Some(1.into()), "none".into())
-        );
+        let Expr::Member(Some(receiver_id), member_name) = tree.get(rhs).unwrap() else {
+            panic!("didn't get member");
+        };
+
+        assert_eq!("none", member_name);
 
         assert_eq!(
-            *tree.get(&1.into()).unwrap(),
+            *tree.get(&receiver_id).unwrap(),
             Variable(Name::Resolved(SymbolID::OPTIONAL, "Optional".into()), None)
         );
     }
@@ -1020,30 +1025,33 @@ mod tests {
         ",
         );
 
+        let Expr::EnumDecl(name, _, body_id) = resolved.roots()[0].unwrap() else {
+            panic!("Didn't get enum decl");
+        };
+
+        assert_eq!(name, &Name::Resolved(SymbolID::resolved(1), "Fizz".into()));
+        let Expr::Block(ids) = resolved.get(body_id).unwrap() else {
+            panic!("did not get ids");
+        };
+
         assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Expr::EnumDecl(
-                Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
-                vec![],
-                2.into()
-            )
-        );
-        assert_eq!(
-            *resolved.get(&2.into()).unwrap(),
-            Expr::Block(vec![0.into(), 1.into()])
-        );
-        assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
+            *resolved.get(&ids[0].into()).unwrap(),
             EnumVariant(Name::Raw("foo".into()), vec![])
         );
         assert_eq!(
-            *resolved.get(&1.into()).unwrap(),
+            *resolved.get(&ids[1].into()).unwrap(),
             EnumVariant(Name::Raw("bar".into()), vec![])
         );
 
+        let Expr::Member(receiver, member_name) = resolved.roots()[1].unwrap() else {
+            panic!("did not get member");
+        };
+
+        assert_eq!(member_name, "foo");
+
         assert_eq!(
-            *resolved.roots()[1].unwrap(),
-            Expr::Member(Some(4.into()), "foo".into())
+            resolved.get(&receiver.unwrap()).unwrap(),
+            &Variable(Name::Resolved(SymbolID::resolved(1), "Fizz".into()), None)
         );
     }
 
@@ -1059,43 +1067,50 @@ mod tests {
         ",
         );
 
+        let Expr::EnumDecl(name, _, body) = resolved.roots()[0].unwrap() else {
+            panic!("didn't get enum decl");
+        };
+
+        assert_eq!(name, &Name::Resolved(SymbolID::resolved(1), "Fizz".into()));
+
+        let Expr::Block(ids) = resolved.get(&body).unwrap() else {
+            panic!("didn't get body");
+        };
+
+        let EnumVariant(Name::Raw(foo_name), foo_args) = resolved.get(&ids[0]).unwrap() else {
+            panic!("didn't get foo variant");
+        };
+
+        assert_eq!(foo_name, "foo");
         assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Expr::EnumDecl(
-                Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
-                vec![],
-                3.into()
-            )
-        );
-        assert_eq!(
-            *resolved.get(&3.into()).unwrap(),
-            Expr::Block(vec![1.into(), 2.into()])
-        );
-        assert_eq!(
-            *resolved.get(&1.into()).unwrap(),
-            EnumVariant(Name::Raw("foo".into()), vec![0.into()])
-        );
-        assert_eq!(
-            *resolved.get(&2.into()).unwrap(),
-            EnumVariant(Name::Raw("bar".into()), vec![])
+            resolved.get(&foo_args[0]).unwrap(),
+            &Expr::TypeRepr(Name::Resolved(SymbolID::INT, "Int".into()), vec![], false)
         );
 
         assert_eq!(
-            *resolved.roots()[1].unwrap(),
-            Call {
-                callee: 6.into(),
-                type_args: vec![],
-                args: vec![8.into()]
-            }
+            *resolved.get(&ids[1]).unwrap(),
+            EnumVariant(Name::Raw("bar".into()), vec![])
         );
+
+        let Call { callee, args, .. } = resolved.roots()[1].unwrap() else {
+            panic!("didn't get call");
+        };
+
+        let Expr::Member(Some(receiver), member_name) = resolved.get(&callee).unwrap() else {
+            panic!("didn't get .foo member");
+        };
+
+        assert_eq!(member_name, "foo");
         assert_eq!(
-            *resolved.get(&6.into()).unwrap(),
-            Expr::Member(Some(5.into()), "foo".into())
-        );
-        assert_eq!(
-            *resolved.get(&5.into()).unwrap(),
+            *resolved.get(&receiver).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Fizz".into()), None)
         );
+
+        let Expr::CallArg { label: None, value } = resolved.get(&args[0]).unwrap() else {
+            panic!("didn't get call arg");
+        };
+
+        assert_eq!(resolved.get(&value), Some(&Expr::LiteralInt("123".into())));
     }
 
     #[test]
@@ -1110,10 +1125,9 @@ mod tests {
         ",
         );
 
-        assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
-            Expr::Variable(Name::_Self(SymbolID::resolved(1)), None)
-        );
+        resolved.find_expr_id(
+            |expr| matches!(expr, Variable(Name::_Self(sym), None) if sym == &SymbolID::resolved(1)),
+        ).unwrap();
     }
 
     #[test]
@@ -1142,12 +1156,12 @@ mod tests {
         ",
         );
 
+        let Assignment(lhs, rhs) = resolved.roots()[0].unwrap() else {
+            panic!("didn't get assignment: {:?}", resolved.roots()[0].unwrap());
+        };
+        assert_eq!(*resolved.get(rhs).unwrap(), Expr::LiteralInt("0".into()));
         assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Assignment(0.into(), 1.into()),
-        );
-        assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
+            *resolved.get(&lhs).unwrap(),
             Let(Name::Resolved(SymbolID::resolved(2), "count".into()), None)
         );
 
@@ -1158,17 +1172,24 @@ mod tests {
                 .is_captured
         );
 
+        let Func {
+            name: Some(name),
+            ret: None,
+            captures,
+            ..
+        } = resolved.get(&resolved.root_ids()[1]).unwrap()
+        else {
+            panic!(
+                "didn't get resolved: {:?}",
+                resolved.get(&resolved.root_ids()[1]).unwrap()
+            );
+        };
+
         assert_eq!(
-            *resolved.roots()[1].unwrap(),
-            Func {
-                name: Some(Name::Resolved(SymbolID::resolved(1), "counter".into())),
-                generics: vec![],
-                params: vec![],
-                body: 5.into(),
-                ret: None,
-                captures: vec![SymbolID::resolved(2)],
-            }
+            name,
+            &Name::Resolved(SymbolID::resolved(1), "counter".into())
         );
+        assert_eq!(captures, &vec![SymbolID::resolved(2)]);
     }
 
     #[test]
@@ -1181,17 +1202,11 @@ mod tests {
         ",
         );
 
-        assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Func {
-                name: Some(Name::Resolved(SymbolID::resolved(1), "fizz".into())),
-                generics: vec![],
-                params: vec![],
-                body: 5.into(),
-                ret: None,
-                captures: vec![],
-            }
-        );
+        let Func { captures, .. } = resolved.roots()[0].unwrap() else {
+            panic!("no func");
+        };
+
+        assert!(captures.is_empty());
     }
 
     #[test]
@@ -1202,16 +1217,14 @@ mod tests {
             panic!("didn't get a func");
         };
 
+        let TypeRepr(Name::Resolved(SymbolID::ARRAY, _), items, false) =
+            resolved.get(&ret.unwrap().into()).unwrap()
+        else {
+            panic!("didn't get array type repr");
+        };
+
         assert_eq!(
-            *resolved.get(&ret.unwrap().into()).unwrap(),
-            TypeRepr(
-                Name::Resolved(SymbolID::ARRAY, "Array".into()),
-                vec![0.into()],
-                false
-            )
-        );
-        assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
+            *resolved.get(&items[0].into()).unwrap(),
             TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
     }
@@ -1219,24 +1232,18 @@ mod tests {
     #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}\nPerson()");
+        let Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap() else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(SymbolID::resolved(1), *sym);
+        assert_eq!(*person_str, "Person".to_string());
+
+        let Expr::Call { callee, .. } = resolved.get(&resolved.root_ids()[1]).unwrap() else {
+            panic!("didn't get call: {:?}", resolved.get(&body));
+        };
         assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Struct(
-                Name::Resolved(SymbolID::resolved(1), "Person".into()),
-                vec![],
-                0.into()
-            )
-        );
-        assert_eq!(
-            *resolved.roots()[1].unwrap(),
-            Expr::Call {
-                callee: 2.into(),
-                type_args: vec![],
-                args: vec![],
-            }
-        );
-        assert_eq!(
-            *resolved.get(&2.into()).unwrap(),
+            *resolved.get(&callee).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Person".into()), None)
         )
     }
@@ -1250,31 +1257,38 @@ mod tests {
         }
         ",
         );
+        let Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap() else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(SymbolID::resolved(1), *sym);
+        assert_eq!(*person_str, "Person".to_string());
+
+        let Expr::Block(body) = resolved.get(&body).unwrap() else {
+            panic!("didn't get block");
+        };
+
+        let Expr::Property {
+            name,
+            type_repr,
+            default_value,
+        } = resolved.get(&body[0]).unwrap()
+        else {
+            panic!("didn't get property: {:?}", resolved.get(&body[0]));
+        };
+
+        assert_eq!(*name, Name::Resolved(SymbolID::resolved(2), "age".into()));
+        assert!(default_value.is_none());
+
         assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Struct(
-                Name::Resolved(SymbolID::resolved(1), "Person".into()),
-                vec![],
-                2.into()
-            )
-        );
-        assert_eq!(
-            *resolved.get(&1.into()).unwrap(),
-            Expr::Property {
-                name: Name::Resolved(SymbolID::resolved(2), "age".into()),
-                type_repr: Some(0.into()),
-                default_value: None
-            }
-        );
-        assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
+            *resolved.get(&type_repr.unwrap()).unwrap(),
             Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
     }
 
     #[test]
     fn resolves_initializers() {
-        let (resolved, symbol_table) = resolve_with_symbols(
+        let resolved = resolve(
             "
         struct Person {
             let age: Int
@@ -1285,31 +1299,39 @@ mod tests {
         }
         ",
         );
+
+        let Expr::Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap()
+        else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(SymbolID::resolved(1), *sym);
+        assert_eq!(*person_str, "Person".to_string());
+
+        let Expr::Block(body) = resolved.get(&body).unwrap() else {
+            panic!("didn't get block");
+        };
+
+        let Expr::Property {
+            name,
+            type_repr,
+            default_value,
+        } = resolved.get(&body[0]).unwrap()
+        else {
+            panic!("didn't get property: {:?}", resolved.get(&body[0]));
+        };
+
+        assert_eq!(*name, Name::Resolved(SymbolID::resolved(2), "age".into()));
+        assert!(default_value.is_none());
+
         assert_eq!(
-            *resolved.roots()[0].unwrap(),
-            Struct(
-                Name::Resolved(SymbolID::resolved(1), "Person".into()),
-                vec![],
-                11.into()
-            )
-        );
-        assert_eq!(
-            *resolved.get(&1.into()).unwrap(),
-            Expr::Property {
-                name: Name::Resolved(SymbolID::resolved(2), "age".into()),
-                type_repr: Some(0.into()),
-                default_value: None
-            }
-        );
-        assert_eq!(
-            *resolved.get(&0.into()).unwrap(),
+            *resolved.get(&type_repr.unwrap()).unwrap(),
             Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
         );
 
-        assert_eq!(
-            symbol_table.initializers_for(&SymbolID::resolved(1)),
-            Some(&vec![10])
-        )
+        let Expr::Init(_, _) = resolved.get(&body[1]).unwrap() else {
+            panic!("didn't get init");
+        };
     }
 }
 

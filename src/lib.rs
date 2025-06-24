@@ -1,4 +1,5 @@
 #![feature(box_patterns)]
+#![feature(associated_type_defaults)]
 #![feature(assert_matches)]
 
 pub mod builtins;

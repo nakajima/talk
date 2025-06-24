@@ -1,4 +1,19 @@
 #[macro_export]
+macro_rules! assert_match_capture {
+    ($expr:expr, $pattern:pat, $capture_block:block) => {{
+        let value = $expr;
+        match value {
+            $pattern => $capture_block,
+            _ => panic!(
+                "assertion failed: value `{:?}` did not match pattern `{}`",
+                value,
+                stringify!($pattern)
+            ),
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! assert_lowered_functions {
     ($left:expr, $right:expr $(,)?) => {
         match (&$left, &$right) {
@@ -52,8 +67,8 @@ macro_rules! assert_lowered_function {
                     });
 
                 if function != &expected_function {
-                    use $crate::lowering::ir_printer::format_func;
                     use prettydiff::{diff_chars, diff_lines};
+                    use $crate::lowering::ir_printer::format_func;
                     println!(
                         "{}",
                         diff_chars(

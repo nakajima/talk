@@ -8,6 +8,7 @@ pub struct SymbolID(pub i32);
 impl SymbolID {
     // These are special because they have syntactic sugar that gets handled
     // by the compiler.
+    pub const INT: SymbolID = SymbolID(-1);
     pub const OPTIONAL: SymbolID = SymbolID(1);
     pub const ARRAY: SymbolID = SymbolID(3);
     pub const TUPLE: SymbolID = SymbolID(-10);

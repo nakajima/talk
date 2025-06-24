@@ -196,6 +196,16 @@ impl<P: Phase> SourceFile<P> {
         self.roots.clone()
     }
 
+    pub fn find_expr_id(&self, expr: fn(expr: &Expr) -> bool) -> Option<ExprID> {
+        for (id, node) in self.nodes.iter() {
+            if expr(node) {
+                return Some(*id);
+            }
+        }
+
+        return None;
+    }
+
     // Gets the expr at a given index
     pub fn get(&self, index: &ExprID) -> Option<&Expr> {
         self.nodes.get(index)

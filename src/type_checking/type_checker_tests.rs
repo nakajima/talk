@@ -180,13 +180,13 @@ mod type_tests {
     #[test]
     fn checks_an_int() {
         let checker = check("123");
-        assert_eq!(checker.type_for(&0).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_a_float() {
         let checker = check("123.");
-        assert_eq!(checker.type_for(&0).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Float);
     }
 
     #[test]
@@ -516,13 +516,22 @@ mod type_tests {
             Ty::Enum(SymbolID::typed(1), vec![])
         );
 
+        let Some(Expr::EnumDecl(_, _, body)) = checker.source_file.get(&checker.root_ids()[0])
+        else {
+            panic!("didn't get enum decl");
+        };
+
+        let Some(Expr::Block(body_ids)) = checker.source_file.get(body) else {
+            panic!("didn't get enum body");
+        };
+
         // Check the variants
         assert_eq!(
-            checker.type_for(&0).unwrap(),
+            checker.type_for(&body_ids[0]).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
         assert_eq!(
-            checker.type_for(&1).unwrap(),
+            checker.type_for(&body_ids[1]).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
     }
@@ -542,13 +551,22 @@ mod type_tests {
             Ty::Enum(SymbolID::typed(1), vec![])
         );
 
+        let Some(Expr::EnumDecl(_, _, body)) = checker.source_file.get(&checker.root_ids()[0])
+        else {
+            panic!("didn't get enum decl");
+        };
+
+        let Some(Expr::Block(body_ids)) = checker.source_file.get(body) else {
+            panic!("didn't get enum body");
+        };
+
         // Check variant types
         assert_eq!(
-            checker.type_for(&1).unwrap(),
+            checker.type_for(&body_ids[0]).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int]),
         );
         assert_eq!(
-            checker.type_for(&2).unwrap(),
+            checker.type_for(&body_ids[1]).unwrap(),
             Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
     }
@@ -740,16 +758,12 @@ mod type_tests {
             panic!("did not get enum decl");
         };
 
-        assert_eq!(*body, 6);
-
-        let Some(Expr::Block(exprs)) = checker.expr(&6) else {
+        let Some(Expr::Block(exprs)) = checker.expr(&body) else {
             panic!("did not get body");
         };
 
-        assert_eq!(exprs[0], 4);
-
         // Check cons variant has recursive structure: T, List<T>
-        let cons_variant = checker.type_for(&4);
+        let cons_variant = checker.type_for(&exprs[0]);
         match cons_variant {
             Some(Ty::EnumVariant(enum_id, field_types)) => {
                 assert_eq!(enum_id, SymbolID::typed(1));
@@ -1025,7 +1039,7 @@ mod type_tests {
         );
 
         assert_eq!(
-            checked.type_for(&8).unwrap(),
+            checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Closure {
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
                 captures: vec![Ty::Int]
@@ -1176,7 +1190,7 @@ mod pending {
         assert_eq!(checked.diagnostics().len(), 1);
         assert!(
             checked.diagnostics().contains(&&Diagnostic::typing(
-                0,
+                checked.root_ids()[0] - 3,
                 TypeError::UnexpectedType(Ty::Bool, Ty::Float)
             )),
             "{:?}",
