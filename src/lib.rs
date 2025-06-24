@@ -1,4 +1,6 @@
 #![feature(box_patterns)]
+#![feature(associated_type_defaults)]
+#![feature(assert_matches)]
 
 pub mod builtins;
 pub use builtins::*;
@@ -17,6 +19,7 @@ pub mod compiling;
 pub mod diagnostic;
 pub mod interpreter;
 pub mod lowering;
+pub mod transforms;
 
 #[cfg(feature = "cli")]
 pub mod lsp;

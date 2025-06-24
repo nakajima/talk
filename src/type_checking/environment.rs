@@ -1,12 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::IndexMut,
+    path::PathBuf,
 };
 
 use crate::{
     SymbolID,
     parser::ExprID,
-    prelude::{Prelude, compile_prelude},
     type_checker::{Ty, TypeError},
 };
 
@@ -35,29 +35,26 @@ pub struct EnumDef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
-    pub type_override: Option<fn(generics: &TypeParams) -> Ty>,
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub properties: Vec<Property>,
     pub methods: HashMap<String, Method>,
-    pub initializers: Vec<ExprID>,
+    pub initializers: Vec<(PathBuf, ExprID)>,
 }
 
 impl StructDef {
     pub fn new(
         symbol_id: SymbolID,
         name_str: String,
-        type_override: Option<fn(generics: &TypeParams) -> Ty>,
         type_parameters: TypeParams,
         properties: Vec<Property>,
         methods: HashMap<String, Method>,
-        initializers: Vec<ExprID>,
+        initializers: Vec<(PathBuf, ExprID)>,
     ) -> Self {
         Self {
             symbol_id,
             name_str,
-            type_override,
             type_parameters,
             properties,
             methods,
@@ -78,11 +75,7 @@ impl StructDef {
     }
 
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
-        if let Some(ty) = self.type_override {
-            ty(type_parameters)
-        } else {
-            Ty::Struct(self.symbol_id, type_parameters.clone())
-        }
+        Ty::Struct(self.symbol_id, type_parameters.clone())
     }
 }
 
@@ -137,17 +130,15 @@ impl Method {
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
-    constraints: Vec<Constraint>,
+    pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
-    pub direct_callables: HashMap<ExprID, SymbolID>,
+    next_id: i32,
 }
 
 impl Default for Environment {
     fn default() -> Self {
-        let mut env = Self::new();
-        env.import_prelude(compile_prelude());
-        env
+        Self::new()
     }
 }
 
@@ -159,8 +150,14 @@ impl Environment {
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
-            direct_callables: Default::default(),
+            next_id: 0,
         }
+    }
+
+    pub fn next_id(&mut self) -> ExprID {
+        let res = self.next_id;
+        self.next_id += 1;
+        res
     }
 
     pub fn constraints(&self) -> Vec<Constraint> {
@@ -193,17 +190,6 @@ impl Environment {
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
 
-    pub fn import_prelude(&mut self, prelude: &Prelude) {
-        // Import types
-        self.types.extend(prelude.types.clone());
-
-        self.typed_exprs.extend(prelude.typed_exprs.clone());
-
-        // Import schemes into global scope
-        log::debug!("Importing schemes: {:?}", prelude.schemes);
-        self.scopes[0].extend(prelude.schemes.clone());
-    }
-
     /// Look up the scheme for `sym`, then immediately instantiate it.
     pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
         let Some(scheme) = self
@@ -228,11 +214,11 @@ impl Environment {
     }
 
     pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        log::trace!(
+        log::info!(
             "Declaring {:?} {:?} in {:?}",
             symbol_id,
             scheme,
-            self.scopes
+            self.scopes.len()
         );
         self.scopes
             .index_mut(self.scopes.len() - 2)

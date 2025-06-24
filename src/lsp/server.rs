@@ -7,10 +7,11 @@ use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind,
     DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, Location, OneOf, Position, Range,
+    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, FullDocumentDiagnosticReport,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, Location, OneOf, Position, Range,
     RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
@@ -26,10 +27,12 @@ use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
 use crate::compiling::driver::Driver;
+use crate::environment::Environment;
+use crate::lexer::Lexer;
 use crate::lsp::completion::CompletionContext;
 use crate::lsp::formatter::format;
 use crate::lsp::semantic_tokens;
-use crate::parser::parse;
+use crate::parser::Parser;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::KEYWORD,
@@ -190,6 +193,7 @@ impl LanguageServer for ServerState {
         let completion = CompletionContext {
             source_file: &source_file,
             driver: &self.driver,
+            env: &self.driver.units[0].env,
             position,
             is_member_lookup: params
                 .context
@@ -299,7 +303,11 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let source_file = parse(&code, path);
+        let mut env = Environment::new();
+        let lexer = Lexer::new(&code);
+        let mut parser = Parser::new(lexer, path, &mut env);
+        parser.parse();
+        let source_file = parser.parse_tree;
 
         Box::pin(async move {
             let formatted = format(&source_file, 80);
@@ -366,6 +374,17 @@ impl LanguageServer for ServerState {
         &mut self,
         _: DidChangeConfigurationParams,
     ) -> ControlFlow<async_lsp::Result<()>> {
+        ControlFlow::Continue(())
+    }
+
+    fn did_change_watched_files(
+        &mut self,
+        _params: DidChangeWatchedFilesParams,
+    ) -> Self::NotifyResult {
+        ControlFlow::Continue(())
+    }
+
+    fn did_close(&mut self, _params: DidCloseTextDocumentParams) -> Self::NotifyResult {
         ControlFlow::Continue(())
     }
 }

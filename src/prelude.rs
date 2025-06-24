@@ -1,20 +1,17 @@
 use lazy_static::lazy_static;
-use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::{
-    SymbolID, SymbolTable,
-    constraint_solver::ConstraintSolver,
-    environment::{Environment, TypedExprs},
-    name_resolver::NameResolver,
-    parser::parse,
-    type_checker::{Scheme, TypeChecker, TypeDefs},
+    SymbolTable,
+    compiling::driver::{Driver, DriverConfig},
+    environment::Environment,
+    lowering::ir_module::IRModule,
 };
 
 pub struct Prelude {
     pub symbols: SymbolTable,
-    pub types: TypeDefs,
-    pub schemes: HashMap<SymbolID, Scheme>,
-    pub typed_exprs: TypedExprs,
+    pub environment: Environment,
+    pub module: IRModule,
 }
 
 lazy_static! {
@@ -44,27 +41,26 @@ pub fn compile_prelude() -> &'static Prelude {
 // }
 
 pub fn _compile_prelude() -> Prelude {
-    let source = &[
-        load_stdlib_module("Optional").unwrap(),
-        load_stdlib_module("Array").unwrap(),
-    ]
-    .join("\n");
-    let mut symbol_table = SymbolTable::base();
-    let parsed = parse(source, "prelude".into());
-    let resolved = NameResolver::new(&mut symbol_table).resolve(parsed, &mut symbol_table);
-    let checker = TypeChecker;
-    let mut env = Environment::new();
-    let mut inferred = checker.infer_without_prelude(&mut env, resolved, &mut symbol_table);
-    let mut solver = ConstraintSolver::new(&mut inferred, &mut symbol_table);
-    solver.solve();
+    let mut driver = Driver::new(DriverConfig {
+        executable: false,
+        include_prelude: false,
+    });
+    for file in [
+        PathBuf::from("./core/Optional.tlk"),
+        PathBuf::from("./core/Array.tlk"),
+    ] {
+        driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
+    }
 
-    let (types, schemes, typed_exprs) = inferred.export();
+    let unit = driver.lower().into_iter().next().unwrap();
+    let environment = unit.env.clone();
+    let module = unit.module();
+    let symbols = driver.symbol_table;
 
     Prelude {
-        symbols: symbol_table,
-        types,
-        schemes,
-        typed_exprs,
+        symbols,
+        environment,
+        module,
     }
 }
 

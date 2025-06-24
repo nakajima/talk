@@ -4,7 +4,8 @@ use crate::lowering::{
     ir_error::IRError,
     ir_type::IRType,
     ir_value::IRValue,
-    lowerer::{BasicBlockID, PhiPredecessors, RefKind, RegisterList},
+    lowerer::{BasicBlockID, RefKind, RegisterList},
+    phi_predecessors::PhiPredecessors,
     register::{self, Register},
 };
 
@@ -187,7 +188,7 @@ pub enum Instr {
 
     // Flow control
     #[doc = "ret $0 $1;"]
-    Ret(IRType, Option<Register>),
+    Ret(IRType, Option<IRValue>),
 
     #[doc = "jump $0;"]
     Jump(BasicBlockID),

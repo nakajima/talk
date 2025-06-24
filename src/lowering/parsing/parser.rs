@@ -133,8 +133,10 @@ impl<'a> Parser<'a> {
             name,
             ty: IRType::Func(params.iter().map(|p| p.1.clone()).collect(), ret.into()),
             blocks,
-            env_ty: IRType::Struct(SymbolID(0), vec![]), //FIXME
-            env_reg: Register(0),
+            env_ty: Some(IRType::Struct(SymbolID(0), vec![], vec![])), //FIXME
+            env_reg: Some(Register(0)),
+            size: 0,
+            debug_info: Default::default(),
         })
     }
 
@@ -323,8 +325,8 @@ impl<'a> Parser<'a> {
     }
 
     fn type_repr(&mut self) -> Result<IRType, ParserError> {
-        let ty = match &self.current {
-            Some(tok) => match tok.kind {
+        let ty = match self.current.clone() {
+            Some(tok) => match &tok.kind {
                 Tokind::Int => {
                     self.advance();
                     IRType::Int
@@ -358,7 +360,11 @@ impl<'a> Parser<'a> {
                         self.consume(Tokind::Comma).ok();
                     }
 
-                    IRType::Struct(SymbolID(0), types)
+                    IRType::Struct(SymbolID(0), types, vec![])
+                }
+                Tokind::Identifier(name) if name.starts_with("T") => {
+                    self.advance();
+                    IRType::TypeVar(name.clone())
                 }
                 _ => todo!("{:?}", tok.kind),
             },
@@ -413,25 +419,27 @@ pub fn parse(code: &str) -> Result<IRModule, ParserError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolTable, check,
+        compiling::driver::{Driver, DriverConfig},
         lowering::{
             instr::Instr,
             ir_error::IRError,
             ir_module::IRModule,
             ir_type::IRType,
-            lowerer::{BasicBlockID, Lowerer, PhiPredecessors, RefKind},
+            lowerer::{BasicBlockID, RefKind, RegisterList, TypedRegister},
             parsing::parser::parse,
+            phi_predecessors::PhiPredecessors,
             register::Register,
         },
     };
     use indoc::formatdoc;
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let mut module = IRModule::new();
-        let lowerer = Lowerer::new(typed, &mut symbol_table);
-        lowerer.lower(&mut module);
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: false,
+        });
+        driver.update_file(&"-".into(), input.to_string());
+        let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }
 
@@ -463,7 +471,7 @@ mod tests {
         );
         assert_eq!(
             bb.instructions[3],
-            Instr::Ret(IRType::Int, Some(Register(3)))
+            Instr::Ret(IRType::Int, Some(Register(3).into()))
         );
     }
 
@@ -506,7 +514,7 @@ mod tests {
             Instr::Call {
                 dest_reg: Register(1),
                 callee: "@foo".into(),
-                args: vec![].into(),
+                args: RegisterList::EMPTY,
                 ty: IRType::Int,
             }
         );
@@ -538,7 +546,7 @@ mod tests {
             %5 = div int %1, %2;
             %6 = eq int %3, %5;
             %7 = ref () int @my_other_func;
-            %8 = tagvar int 0 (%1);
+            %8 = tagvar int 0 (int %1);
             %9 = gettagof %8;
             %10 = enumvalue int %8 0 0;
             jump #1;
@@ -592,7 +600,12 @@ mod tests {
         // This is consistent with how other types are parsed.
         assert_eq!(
             entry_bb.instructions[8],
-            Instr::TagVariant(Register(8), IRType::Int, 0, vec![Register(1)].into())
+            Instr::TagVariant(
+                Register(8),
+                IRType::Int,
+                0,
+                RegisterList(vec![TypedRegister::new(IRType::Int, Register(1))])
+            )
         );
         assert_eq!(
             entry_bb.instructions[9],
@@ -631,7 +644,6 @@ mod tests {
         .unwrap();
 
         let func = crate::lowering::ir_printer::print(&program);
-        // println!("{}", func);
         let parsed = parse(&func).unwrap();
 
         assert_eq!(parsed.functions.len(), 2);

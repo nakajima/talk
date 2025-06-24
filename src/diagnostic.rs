@@ -93,7 +93,7 @@ impl Diagnostic {
                 },
             ),
             DiagnosticKind::Resolve(expr_id, _name_resolver_error) => {
-                let expr = source_file.meta.get(*expr_id as usize).unwrap();
+                let expr = source_file.meta.get(expr_id).unwrap();
                 (
                     Position {
                         line: expr.start.line,
@@ -106,7 +106,7 @@ impl Diagnostic {
                 )
             }
             DiagnosticKind::Typing(expr_id, _type_error) => {
-                let expr = source_file.meta.get(*expr_id as usize).unwrap();
+                let expr = source_file.meta.get(expr_id).unwrap();
 
                 (
                     Position {
@@ -120,7 +120,7 @@ impl Diagnostic {
                 )
             }
             DiagnosticKind::Lowering(expr_id, _type_error) => {
-                let expr = source_file.meta.get(*expr_id as usize).unwrap();
+                let expr = source_file.meta.get(expr_id).unwrap();
 
                 (
                     Position {

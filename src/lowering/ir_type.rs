@@ -1,12 +1,8 @@
 use std::str::FromStr;
 
-use crate::{
-    SymbolID,
-    interpreter::heap::Pointer,
-    lowering::{ir_error::IRError, parsing::parser::ParserError},
-};
+use crate::{SymbolID, lowering::parsing::parser::ParserError};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IRType {
     Void,
     Int,
@@ -15,18 +11,28 @@ pub enum IRType {
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
     Enum(Vec<IRType>),
-    Struct(SymbolID, Vec<IRType> /* properties */),
-    Array { element: Box<IRType>, /* element */ },
+    Struct(
+        SymbolID,
+        Vec<IRType>, /* properties */
+        Vec<IRType>, /* type vars */
+    ),
+    Array {
+        element: Box<IRType>, /* element */
+    },
+    Tuple {
+        elements: Vec<IRType>,
+    },
     Pointer,
 }
 
 impl IRType {
-    pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![]);
+    pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![], vec![]);
 
-    pub fn array() -> IRType {
+    pub fn array(t: IRType) -> IRType {
         IRType::Struct(
             SymbolID::ARRAY,
             vec![IRType::Int, IRType::Int, IRType::Pointer],
+            vec![t],
         )
     }
 
@@ -34,6 +40,7 @@ impl IRType {
         IRType::Struct(
             SymbolID::GENERATED_MAIN,
             vec![IRType::Pointer, IRType::Pointer],
+            vec![],
         )
     }
 
@@ -47,26 +54,10 @@ impl IRType {
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
             IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
             IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
-            IRType::Struct(_, irtypes) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
+            IRType::Struct(_, irtypes, _) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Pointer => 8,
+            IRType::Tuple { elements } => elements.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Array { .. } => IRType::Pointer.mem_size(),
-        }
-    }
-
-    pub fn get_element_pointer(&self, from: Pointer, index: usize) -> Result<Pointer, IRError> {
-        match self {
-            IRType::Struct(_, members) => {
-                let mut offset = 0;
-                (0..index).for_each(|i| {
-                    offset += members[i].mem_size();
-                });
-
-                Ok(Pointer(from.0 + offset))
-            }
-            IRType::Array { element } => Ok(Pointer(from.0 + element.mem_size() * index)),
-            _ => Err(IRError::InvalidPointer(format!(
-                "Unable to index into {self:?}"
-            ))),
         }
     }
 }
@@ -109,7 +100,11 @@ impl FromStr for IRType {
             }
 
             // Recursively parse the return type
-            Ok(IRType::Struct(SymbolID(0), args))
+            Ok(IRType::Struct(SymbolID(0), args, vec![]))
+        } else if s.starts_with('[') && s.ends_with(']') {
+            Ok(IRType::Array {
+                element: IRType::from_str(&s[1..s.len() - 1])?.into(),
+            })
         } else {
             // Handle simple, non-function types
             match s {
@@ -136,6 +131,15 @@ impl std::fmt::Display for IRType {
             Self::Int => f.write_str("int"),
             Self::Float => f.write_str("float"),
             Self::Bool => f.write_str("bool"),
+            Self::Tuple { elements } => write!(
+                f,
+                "({})",
+                elements
+                    .iter()
+                    .map(|a| format!("{a}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
             Self::Func(args, ret) => {
                 write!(
                     f,
@@ -149,7 +153,7 @@ impl std::fmt::Display for IRType {
             }
             Self::TypeVar(name) => f.write_str(name),
             Self::Enum(_generics) => f.write_str("enum"),
-            Self::Struct(_, types) => write!(
+            Self::Struct(_, types, _) => write!(
                 f,
                 "{{{}}}",
                 types

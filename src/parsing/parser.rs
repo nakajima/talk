@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    SourceFile, diagnostic::Diagnostic, lexer::Lexer, token::Token, token_kind::TokenKind,
+    SourceFile, diagnostic::Diagnostic, environment::Environment, lexer::Lexer, token::Token,
+    token_kind::TokenKind,
 };
 
 use super::{
@@ -49,6 +50,7 @@ pub struct Parser<'a> {
     pub(crate) next: Option<Token>,
     pub(crate) parse_tree: SourceFile,
     pub(crate) source_location_stack: SourceLocationStack,
+    env: &'a mut Environment,
     previous_before_newline: Option<Token>,
 }
 
@@ -97,16 +99,18 @@ impl ParserError {
     }
 }
 
+#[cfg(test)]
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer, file_path);
+    let mut env = Environment::new();
+    let mut parser = Parser::new(lexer, file_path, &mut env);
 
     parser.parse();
     parser.parse_tree
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer<'a>, file_path: PathBuf) -> Self {
+    pub fn new(lexer: Lexer<'a>, file_path: PathBuf, env: &'a mut Environment) -> Self {
         Self {
             lexer,
             previous: None,
@@ -115,6 +119,7 @@ impl<'a> Parser<'a> {
             parse_tree: SourceFile::new(file_path),
             source_location_stack: Default::default(),
             previous_before_newline: None,
+            env,
         }
     }
 
@@ -210,7 +215,7 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        Ok(self.parse_tree.add(expr, expr_meta))
+        Ok(self.parse_tree.add(self.env.next_id(), expr, expr_meta))
     }
 
     fn push_identifier(&mut self, identifier: Token) {
@@ -221,7 +226,7 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
-        let meta = &self.parse_tree.meta[lhs as usize];
+        let meta = &self.parse_tree.meta.get(&lhs).unwrap();
         let start = SourceLocationStart {
             token: meta.start.clone(),
             identifiers: vec![],
@@ -619,7 +624,7 @@ impl<'a> Parser<'a> {
 
         if self.did_match(TokenKind::Equals)? {
             let tok = self.push_source_location();
-            let rhs = self.parse_with_precedence(Precedence::None)?;
+            let rhs = self.parse_with_precedence(Precedence::Assignment)?;
             self.add_expr(Expr::Assignment(let_expr?, rhs), tok)
         } else {
             let_expr
@@ -1173,7 +1178,7 @@ mod tests {
     #[test]
     fn stores_expr_meta() {
         let parsed = parse("1 + 2");
-        let meta = &parsed.meta[parsed.root_ids()[0] as usize];
+        let meta = &parsed.meta.get(&parsed.root_ids()[0]).unwrap();
 
         assert_eq!(meta.start.start, 0);
         assert_eq!(meta.start.end, 1);
@@ -1365,7 +1370,10 @@ mod tests {
 
     #[test]
     fn parses_tuple() {
-        let parsed = parse("(1, 2, fizz)");
+        let parsed = parse(
+            "
+        (1, 2, fizz)",
+        );
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, Expr::Tuple(vec![0, 1, 2]));
@@ -2055,13 +2063,14 @@ mod tests {
 
 #[cfg(test)]
 mod pattern_parsing_tests {
-    use crate::{expr::Pattern, lexer::Lexer, name::Name};
+    use crate::{environment::Environment, expr::Pattern, lexer::Lexer, name::Name};
 
     use super::Parser;
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut parser = Parser::new(lexer, "-".into());
+        let mut env = Environment::new();
+        let mut parser = Parser::new(lexer, "-".into(), &mut env);
         parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()

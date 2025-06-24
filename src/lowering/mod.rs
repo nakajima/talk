@@ -7,5 +7,8 @@ pub mod ir_printer;
 pub mod ir_type;
 pub mod ir_value;
 pub mod lowerer;
+#[cfg(test)]
+mod lowerer_tests;
 pub mod parsing;
+pub mod phi_predecessors;
 pub mod register;

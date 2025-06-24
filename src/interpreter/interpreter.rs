@@ -1,18 +1,17 @@
-use std::collections::HashMap;
+use std::usize;
 
 use crate::{
-    interpreter::{
-        heap::{Heap, Pointer},
-        value::Value,
-    },
+    interpreter::{memory::Memory, value::Value},
     lowering::{
-        instr::Instr,
+        instr::{Callee, Instr},
         ir_error::IRError,
         ir_module::IRModule,
+        ir_printer::{self},
         ir_value::IRValue,
         lowerer::{BasicBlock, BasicBlockID, IRFunction, RefKind, RegisterList},
         register::Register,
     },
+    transforms::monomorphizer::Monomorphizer,
 };
 
 #[derive(Debug)]
@@ -23,6 +22,7 @@ pub enum InterpreterError {
     TypeError(Value, Value),
     UnreachableReached,
     IRError(IRError),
+    Unknown(String),
 }
 
 #[derive(Debug)]
@@ -31,32 +31,46 @@ struct StackFrame {
     function: IRFunction,
     block_idx: usize,
     pc: usize,
-    registers: HashMap<Register, Value>,
+    sp: usize,
+}
+
+impl StackFrame {
+    pub fn _dump(&self) -> String {
+        "".into()
+    }
 }
 
 pub struct IRInterpreter {
     program: IRModule,
-    stack: Vec<StackFrame>,
-    heap: Heap,
+    call_stack: Vec<StackFrame>,
+    memory: Memory,
 }
 
 impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
         Self {
             program,
-            stack: vec![],
-            heap: Heap::new(),
+            call_stack: vec![],
+            memory: Memory::new(),
         }
     }
 
-    pub fn run(&mut self) -> Result<Value, InterpreterError> {
+    pub fn run(mut self) -> Result<Value, InterpreterError> {
+        log::info!("Monomorphizing module");
+        self.program = Monomorphizer::new().run(self.program.clone());
+
+        if std::env::var("IR").is_ok() {
+            println!("{}", crate::lowering::ir_printer::print(&self.program));
+        }
+
         let main = self
             .program
             .functions
             .iter()
-            .position(|f| f.name == "@main");
+            .find(|f| f.name == "@main")
+            .cloned();
         if let Some(main) = main {
-            self.execute_function(self.load_function(&Pointer(main)).unwrap(), vec![])
+            self.execute_function(main, vec![])
         } else {
             Err(InterpreterError::NoMainFunc)
         }
@@ -64,13 +78,22 @@ impl IRInterpreter {
 
     pub fn step(&mut self) -> Result<Option<Value>, InterpreterError> {
         let instr = {
-            let frame = &mut self.stack.last().expect("Stack underflow");
+            let frame = &mut self.call_stack.last().expect("Stack underflow");
             let block = &frame.function.blocks[frame.block_idx];
             block.instructions[frame.pc].clone()
         };
 
-        if let Some(retval) = self.execute_instr(instr)? {
-            return Ok(Some(retval));
+        match self.execute_instr(instr) {
+            Ok(retval) => {
+                if let Some(retval) = retval {
+                    return Ok(Some(retval));
+                }
+            }
+            Err(err) => {
+                println!("{:?}", err);
+                self.dump();
+                return Err(err);
+            }
         }
 
         Ok(None)
@@ -82,12 +105,18 @@ impl IRInterpreter {
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         // let blocks = function.blocks.clone();
-        self.stack.push(StackFrame {
+        let sp = self
+            .call_stack
+            .last()
+            .map(|frame| frame.sp + frame.function.size as usize)
+            .unwrap_or(0);
+
+        self.call_stack.push(StackFrame {
             pred: None,
             block_idx: 0,
             pc: 0,
-            function,
-            registers: Default::default(),
+            sp,
+            function: function.clone(),
         });
 
         for (i, arg) in args.iter().enumerate() {
@@ -107,9 +136,22 @@ impl IRInterpreter {
     }
 
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
-        log::trace!("PC: {:?}", self.stack.last().unwrap().pc);
-        log::trace!("Reg: {:?}", self.stack.last().unwrap().registers);
-        log::info!("{instr:?}");
+        log::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
+        let frame = self.call_stack.last().unwrap();
+        log::info!(
+            "\n{}:{}\n{:?}\n{}\n\t{:?}",
+            frame.function.name,
+            frame
+                .function
+                .debug_info
+                .get(&BasicBlockID(frame.block_idx as u32))
+                .map(|i| i.get(&frame.pc))
+                .map(|expr_id| format!("{:?}", expr_id))
+                .unwrap_or("-".into()),
+            instr,
+            ir_printer::format_instruction(&instr),
+            self.memory.range(frame.sp, frame.function.size as usize)
+        );
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -145,16 +187,18 @@ impl IRInterpreter {
 
                 self.set_register_value(&dest, op1.div(&op2)?);
             }
-            Instr::StoreLocal(_, _, _) => todo!(),
+            Instr::StoreLocal(dest, _, reg) => {
+                self.set_register_value(&dest, self.register_value(&reg));
+            }
             Instr::LoadLocal(_, _, _) => todo!(),
             Instr::Phi(dest, _, predecessors) => {
-                let frame = self.stack.last_mut().expect("stack underflow");
+                let frame = self.call_stack.last_mut().expect("stack underflow");
 
                 for (reg, pred) in &predecessors.0 {
                     if frame.pred == Some(*pred) {
                         log::trace!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
                         self.set_register_value(&dest, self.register_value(reg));
-                        self.stack.last_mut().unwrap().pc += 1;
+                        self.call_stack.last_mut().unwrap().pc += 1;
                         return Ok(None);
                     }
                 }
@@ -169,8 +213,20 @@ impl IRInterpreter {
                     .functions
                     .iter()
                     .position(|f| f.name == name)
-                    .unwrap();
-                self.set_register_value(&dest, Value::Func(Pointer(idx)));
+                    .unwrap_or_else(|| {
+                        log::error!(
+                            "couldn't find ref {} in {:?}",
+                            name,
+                            self.program
+                                .functions
+                                .iter()
+                                .map(|f| f.name.clone())
+                                .collect::<Vec<String>>()
+                        );
+
+                        usize::MAX
+                    });
+                self.set_register_value(&dest, Value::Func(idx));
             }
             Instr::Call {
                 dest_reg,
@@ -178,35 +234,37 @@ impl IRInterpreter {
                 args,
                 ..
             } => {
-                // 1. The `callee` register holds a `Value::Func` variant containing the mangled name
-                //    of the function to be called. We first get this value.
-                let callee_value = self.register_value(&callee.try_register().unwrap());
-                let callee_id = match callee_value {
-                    Value::Func(id) => id,
-                    _ => panic!(
-                        "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
-                    ),
+                let callee = match callee {
+                    Callee::Register(reg) => {
+                        let callee_value = self.register_value(&reg);
+                        let callee_id = match callee_value {
+                            Value::Func(id) => id,
+                            _ => {
+                                return Err(InterpreterError::Unknown(format!(
+                                    "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
+                                )));
+                            }
+                        };
+
+                        let Some(function_to_call) = self.load_function(callee_id) else {
+                            return Err(InterpreterError::CalleeNotFound);
+                        };
+
+                        function_to_call
+                    }
+                    Callee::Name(name) => {
+                        let Some(function_to_call) =
+                            self.program.functions.iter().find(|f| f.name == name)
+                        else {
+                            return Err(InterpreterError::CalleeNotFound);
+                        };
+
+                        function_to_call.clone()
+                    }
                 };
 
-                // 2. We use the function name to look up the corresponding `IRFunction`
-                //    definition from the program's module.
-                let Some(function_to_call) = self.load_function(&callee_id) else {
-                    return Err(InterpreterError::CalleeNotFound);
-                };
-
-                // 3. The `args` list contains the registers for the arguments. The first argument
-                //    is always the environment pointer for the closure, followed by the
-                //    user-specified arguments. We resolve these registers to their current values.
                 let arg_values = self.register_values(&args);
-
-                // 4. We call `execute_function`, which handles pushing a new stack frame,
-                //    running the function's code, and returning the result. This is a synchronous
-                //    operation within the interpreter.
-                let result = self.execute_function(function_to_call, arg_values)?;
-
-                // 5. Once the function returns, `execute_function` pops the callee's stack frame.
-                //    We are now back in the caller's frame. We take the return value and
-                //    store it in the destination register specified by the `Call` instruction.
+                let result = self.execute_function(callee, arg_values)?;
                 self.set_register_value(&dest_reg, result);
             }
             Instr::Branch {
@@ -221,7 +279,7 @@ impl IRInterpreter {
                 };
 
                 let id = self.current_basic_block().id;
-                let frame = self.stack.last_mut().expect("stack underflow");
+                let frame = self.call_stack.last_mut().expect("stack underflow");
                 frame.pred = Some(id);
                 frame.block_idx = next_block;
                 frame.pc = 0;
@@ -229,17 +287,22 @@ impl IRInterpreter {
             }
             Instr::Ret(_ret, reg) => {
                 if let Some(reg) = reg {
-                    let retval = self.register_value(&reg);
-                    self.stack.pop();
+                    let retval = match reg {
+                        IRValue::Register(reg) => self.register_value(&reg),
+                        IRValue::ImmediateInt(int) => Value::Int(int),
+                    };
+
+                    self.call_stack.pop();
+
                     return Ok(Some(retval));
                 } else {
-                    self.stack.pop();
+                    self.call_stack.pop();
                     return Ok(Some(Value::Void));
                 }
             }
             Instr::Jump(jump_to) => {
                 let id = self.current_basic_block().id;
-                let frame = self.stack.last_mut().unwrap();
+                let frame = self.call_stack.last_mut().unwrap();
                 frame.pred = Some(id);
                 frame.pc = 0;
                 frame.block_idx = jump_to.0 as usize;
@@ -262,13 +325,19 @@ impl IRInterpreter {
                     &dest,
                     Value::Enum {
                         tag,
-                        values: values.0.iter().map(|r| self.register_value(r)).collect(),
+                        values: values
+                            .0
+                            .iter()
+                            .map(|r| self.register_value(&r.register))
+                            .collect(),
                     },
                 );
             }
             Instr::GetEnumTag(dest, enum_reg) => {
                 let Value::Enum { tag, .. } = self.register_value(&enum_reg) else {
-                    panic!("did not find enum in register #{enum_reg:?}");
+                    return Err(InterpreterError::Unknown(format!(
+                        "did not find enum in register #{enum_reg:?}"
+                    )));
                 };
 
                 self.set_register_value(&dest, Value::Int(tag as i64));
@@ -277,7 +346,9 @@ impl IRInterpreter {
                 // Tag would be useful if we needed to know about memory layout but since we're
                 // just using objects who cares
                 let Value::Enum { values, .. } = self.register_value(&enum_reg) else {
-                    panic!("did not find enum in register #{enum_reg:?}");
+                    return Err(InterpreterError::Unknown(format!(
+                        "did not find enum in register #{enum_reg:?}"
+                    )));
                 };
 
                 self.set_register_value(&dest, values[value as usize].clone());
@@ -307,49 +378,40 @@ impl IRInterpreter {
                     self.register_value(&a).gte(&self.register_value(&b))?,
                 );
             }
-            Instr::Alloc { dest, count, ty } => {
-                let count = if let Some(register) = count {
-                    if let Value::Int(count) = self.register_value(&register) {
-                        count
-                    } else {
-                        return Err(InterpreterError::UnreachableReached);
-                    }
-                } else {
-                    1
+            Instr::Alloc { dest, ty, count } => {
+                let Value::Int(count) = count
+                    .map(|c| self.register_value(&c))
+                    .unwrap_or(Value::Int(1))
+                else {
+                    return Err(InterpreterError::Unknown("invalid alloc count".into()));
                 };
-
-                let ptr = self.heap.alloc(ty.mem_size() * count as usize);
+                let ptr = self.memory.heap_alloc(&ty, count as usize);
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
-            Instr::Store { val, location, ty } => {
-                let Value::Pointer(ptr) = self.register_value(&location) else {
-                    panic!("no pointer at location: {location}")
-                };
-
-                self.heap.store(&ptr, &self.register_value(&val), &ty)
-            }
-            Instr::Load { dest, addr, ty } => {
-                let Value::Pointer(ptr) = self.register_value(&addr) else {
-                    panic!("no pointer at location: {addr}")
-                };
-
-                let val = self.heap.load(&ptr, &ty);
-                self.set_register_value(&dest, val.clone());
-            }
+            Instr::Store { val, location, ty } => match self.register_value(&location) {
+                Value::Pointer(ptr) => self.memory.store(ptr, self.register_value(&val), &ty),
+                _ => {
+                    return Err(InterpreterError::Unknown(format!(
+                        "no pointer in {location}: {:?}",
+                        self.register_value(&location)
+                    )));
+                }
+            },
+            Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
+                Value::Pointer(ptr) => {
+                    let val = self.memory.load(&ptr, &ty);
+                    self.set_register_value(&dest, val.clone());
+                }
+                _ => {
+                    return Err(InterpreterError::Unknown(format!(
+                        "unable to load {:?}",
+                        self.register_value(&addr)
+                    )));
+                }
+            },
             Instr::GetElementPointer {
-                dest,
-                base: from,
-                index,
-                ty,
+                dest, base, index, ..
             } => {
-                let Value::Pointer(ptr) = self.register_value(&from) else {
-                    panic!(
-                        "no pointer found in register: {} in {:?}",
-                        from,
-                        self.stack.last().unwrap().registers
-                    );
-                };
-
                 let index = match index {
                     IRValue::ImmediateInt(int) => int,
                     IRValue::Register(reg) => {
@@ -361,10 +423,14 @@ impl IRInterpreter {
                     }
                 };
 
-                let pointer = ty
-                    .get_element_pointer(ptr, index as usize)
-                    .map_err(InterpreterError::IRError)?;
+                let Value::Pointer(base) = self.register_value(&base) else {
+                    panic!(
+                        "did not get base pointer for GEP: {:?}",
+                        self.register_value(&base)
+                    );
+                };
 
+                let pointer = base + index as usize;
                 self.set_register_value(&dest, Value::Pointer(pointer));
             }
             Instr::MakeStruct { dest, values, .. } => {
@@ -374,73 +440,90 @@ impl IRInterpreter {
             Instr::GetValueOf { .. } => todo!(),
         }
 
-        self.stack.last_mut().unwrap().pc += 1;
+        self.call_stack.last_mut().unwrap().pc += 1;
 
         Ok(None)
     }
 
     fn current_basic_block(&self) -> &BasicBlock {
-        let frame = self.stack.last().unwrap();
+        let frame = self.call_stack.last().unwrap();
         &frame.function.blocks[frame.block_idx]
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
         log::trace!("set {register:?} to {value:?}");
-        self.stack
-            .last_mut()
-            .expect("Stack underflow")
-            .registers
-            .insert(*register, value);
+        let frame = self.call_stack.last_mut().expect("Stack underflow");
+        let stack = self
+            .memory
+            .range_mut(frame.sp, frame.function.size as usize);
+        stack[register.0 as usize] = Some(value);
     }
 
     fn register_values(&self, registers: &RegisterList) -> Vec<Value> {
         registers
             .0
             .iter()
-            .map(|r| self.register_value(r).clone())
+            .map(|r| self.register_value(&r.register).clone())
             .collect()
     }
 
     fn register_value(&self, register: &Register) -> Value {
-        self.stack
-            .last()
-            .expect("Stack underflow")
-            .registers
-            .get(register)
-            .unwrap_or_else(|| {
-                panic!(
-                    "No value found for register: {:?}, {:?}",
-                    register,
-                    self.stack.last().unwrap().registers
-                )
-            })
+        let frame = self.call_stack.last().expect("Stack underflow");
+        let stack = self.memory.range(frame.sp, frame.function.size as usize);
+        stack[register.0 as usize]
             .clone()
+            .expect("null pointer lol")
     }
 
-    fn load_function(&self, idx: &Pointer) -> Option<IRFunction> {
-        self.program.functions.get(idx.0).cloned()
+    fn load_function(&self, idx: usize) -> Option<IRFunction> {
+        self.program.functions.get(idx).cloned()
+    }
+
+    fn dump(&self) {
+        for (i, frame) in self.call_stack.iter().rev().enumerate() {
+            let stack = self.memory.range(frame.sp, frame.function.size as usize);
+            println!(
+                "{}:\n{}",
+                i,
+                stack
+                    .iter()
+                    .enumerate()
+                    .map(|(id, v)| {
+                        format!(
+                            "\t{} = {}",
+                            frame.sp + id,
+                            match v {
+                                Some(v) => format!("{:?}", v),
+                                None => "-".into(),
+                            }
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            )
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
-        SymbolTable, check,
+        compiling::driver::Driver,
         interpreter::{
             interpreter::{IRInterpreter, InterpreterError},
             value::Value,
         },
-        lowering::{ir_module::IRModule, lowerer::Lowerer},
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
-        let typed = check(code).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let lowerer = Lowerer::new(typed, &mut symbol_table);
-        let mut module = IRModule::new();
-        lowerer.lower(&mut module);
+        let mut driver = Driver::with_str(code);
+        let unit = driver.lower().into_iter().next().unwrap();
 
-        // println!("{}", crate::lowering::ir_printer::print(&module));
+        let diagnostics = unit.source_file(&PathBuf::from("-")).unwrap().diagnostics();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let module = unit.module();
 
         IRInterpreter::new(module).run()
     }
@@ -617,6 +700,36 @@ mod tests {
         "
             )
             .unwrap()
+        )
+    }
+
+    #[test]
+    fn interprets_array_push_get() {
+        assert_eq!(
+            interpret(
+                "
+                let a = [1, 2, 3]
+                a.push(4)
+                a.get(3)
+        "
+            )
+            .unwrap(),
+            Value::Int(4),
+        )
+    }
+
+    #[test]
+    fn interprets_array_pop() {
+        assert_eq!(
+            interpret(
+                "
+                let a = [1, 2, 3]
+                let b = a.pop()
+                (b, a.count)
+        "
+            )
+            .unwrap(),
+            Value::Struct(vec![Value::Int(3), Value::Int(2)]),
         )
     }
 }

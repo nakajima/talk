@@ -142,10 +142,11 @@ impl<'a> Lexer<'a> {
             }
             '_' => {
                 if let Some(next) = self.chars.peek()
-                    && (*next == '_' || next.is_alphanumeric()) {
-                        let ident = self.identifier(self.current - 1);
-                        return self.make(ident);
-                    }
+                    && (*next == '_' || next.is_alphanumeric())
+                {
+                    let ident = self.identifier(self.current - 1);
+                    return self.make(ident);
+                }
 
                 self.make(Tokind::Underscore)
             }
@@ -194,6 +195,7 @@ impl<'a> Lexer<'a> {
             "sub" => Tokind::Sub,
             "mul" => Tokind::Mul,
             "div" => Tokind::Div,
+            "ptr" => Tokind::Ptr,
             "struct" => Tokind::Struct,
             _ => Tokind::Identifier(self.code[start_idx..=end_idx].to_string()),
         }

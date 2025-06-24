@@ -14,6 +14,12 @@ pub fn print(program: &IRModule) -> String {
     printer.buffer
 }
 
+pub fn format_func(function: &IRFunction) -> String {
+    let mut printer = IRPrinter::default();
+    print_func(function, &mut printer);
+    printer.buffer
+}
+
 #[derive(Default)]
 pub struct IRPrinter {
     pub buffer: String,
@@ -48,21 +54,27 @@ fn print_func_def(func: &IRFunction) -> String {
     )
 }
 
-fn print_func_sig_with_args(args: &[IRType], env_ty: &IRType, ret: &IRType) -> String {
+fn print_func_sig_with_args(args: &[IRType], env_ty: &Option<IRType>, ret: &IRType) -> String {
     let mut res = String::new();
 
     res.push('(');
-    res.push_str(&format!("{env_ty} %0"));
+
+    let env_param_offset = if let Some(env_ty) = env_ty {
+        res.push_str(&format!("{env_ty} %0"));
+        1
+    } else {
+        0
+    };
 
     for (i, arg) in args.iter().enumerate() {
-        // if i > 0 {
-        res.push_str(", ");
-        // }
+        if env_param_offset > 0 {
+            res.push_str(", ");
+        }
 
         res.push_str(&format!(
             "{} {}",
             &format_ir_ty(arg),
-            &format_register(&Register(i as i32 + 1))
+            &format_register(&Register(i as i32 + env_param_offset))
         ));
     }
 
@@ -80,7 +92,7 @@ pub fn format_ir_ty(ty: &IRType) -> String {
 pub fn format_optional_register(reg: &Option<Register>) -> String {
     match reg {
         Some(reg) => format_register(reg),
-        None => "void".into(),
+        None => "Void".into(),
     }
 }
 
@@ -140,16 +152,18 @@ pub fn format_block_id(id: &BasicBlockID) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolID, SymbolTable, check,
-        lowering::{ir_error::IRError, ir_module::IRModule, ir_printer::print, lowerer::Lowerer},
+        SymbolID,
+        compiling::driver::{Driver, DriverConfig},
+        lowering::{ir_error::IRError, ir_module::IRModule, ir_printer::print},
     };
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let typed = check(input).unwrap();
-        let mut symbol_table = SymbolTable::base();
-        let lowerer = Lowerer::new(typed, &mut symbol_table);
-        let mut module = IRModule::new();
-        lowerer.lower(&mut module);
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: false,
+        });
+        driver.update_file(&"-".into(), input.into());
+        let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }
 
@@ -166,27 +180,19 @@ mod tests {
         assert_eq!(
             func.trim(),
             format!(
-                r#"func @_{}_add({{}} %0, int %1) int
+                r#"func @_{}_add(int %0) int
   entry:
-    %2 = int 1;
-    %3 = add int %2, %1;
-    ret int %3;
+    %1 = int 1;
+    %2 = add int %1, %0;
+    ret int %2;
 
-func @main({{}} %0) void
+func @main() void
   entry:
-    %1 = alloc {{ptr, ptr}} ;
-    %2 = struct {{}} ();
-    %3 = alloc {{}} ;
-    store {{}} %2 %3;
-    %4 = ref (int) int @_{}_add;
-    %5 = getelementptr {{ptr, ptr}} %1 =i1;
-    %6 = getelementptr {{ptr, ptr}} %1 =i0;
-    store ptr %3 %5;
-    store ptr %4 %6;
-    ret ptr %1;
+    %0 = ref (int) int @_{}_add;
+    ret ptr %0;
                 "#,
-                SymbolID::resolved(1).0,
-                SymbolID::resolved(1).0,
+                SymbolID(1).0,
+                SymbolID(1).0,
             )
             .trim()
         )

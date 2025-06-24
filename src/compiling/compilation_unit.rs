@@ -2,13 +2,13 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     NameResolved, SourceFile, SymbolTable,
+    compiling::driver::DriverConfig,
     constraint_solver::ConstraintSolver,
     environment::Environment,
-    lexer::LexerError,
+    lexer::{Lexer, LexerError},
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
-    parser::{ParserError, parse},
-    prelude::compile_prelude,
+    parser::{Parser, ParserError},
     source_file,
     type_checker::{TypeChecker, TypeError},
 };
@@ -44,7 +44,7 @@ impl<Stage: StageTrait> CompilationUnit<Stage> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Raw {}
 impl StageTrait for Raw {
     type SourceFilePhase = source_file::Parsed;
@@ -53,7 +53,7 @@ impl StageTrait for Raw {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompilationUnit<Stage = Raw>
 where
     Stage: StageTrait,
@@ -61,6 +61,7 @@ where
     pub src_cache: HashMap<PathBuf, String>,
     pub input: Vec<PathBuf>,
     pub stage: Stage,
+    pub env: Environment,
 }
 
 impl<S: StageTrait> CompilationUnit<S> {
@@ -70,42 +71,51 @@ impl<S: StageTrait> CompilationUnit<S> {
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(input: Vec<PathBuf>) -> Self {
+    pub fn new(input: Vec<PathBuf>, env: Environment) -> Self {
         Self {
             src_cache: Default::default(),
             input,
             stage: Raw {},
+            env,
         }
     }
 
-    pub fn parse(&mut self) -> CompilationUnit<Parsed> {
+    pub fn parse(mut self) -> CompilationUnit<Parsed> {
         let mut files = vec![];
 
         for path in self.input.clone() {
-            match self.read(&path) {
-                Ok(source) => {
-                    let parsed = parse(source, path);
-                    files.push(parsed);
-                }
+            let source = match self.read(&path) {
+                Ok(source) => source.to_string(),
                 Err(e) => {
                     log::error!("read error: {e:?}");
+                    continue;
                 }
-            }
+            };
+
+            let lexer = Lexer::new(&source);
+            let mut parser = Parser::new(lexer, path, &mut self.env);
+            parser.parse();
+            files.push(parser.parse_tree);
         }
 
         CompilationUnit {
-            src_cache: self.src_cache.clone(),
-            input: self.input.clone(),
+            src_cache: self.src_cache,
+            input: self.input,
             stage: Parsed { files },
+            env: self.env,
         }
     }
 
-    pub fn lower(&mut self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
+    pub fn lower(
+        self,
+        symbol_table: &mut SymbolTable,
+        driver_config: &DriverConfig,
+        module: IRModule,
+    ) -> CompilationUnit<Lowered> {
         let parsed = self.parse();
         let resolved = parsed.resolved(symbol_table);
-        let typed = resolved.typed(symbol_table);
-        let lowered = typed.lower(symbol_table);
-        lowered
+        let typed = resolved.typed(symbol_table, driver_config);
+        typed.lower(symbol_table, driver_config, module)
     }
 }
 
@@ -133,6 +143,7 @@ impl CompilationUnit<Parsed> {
             src_cache: self.src_cache,
             input: self.input,
             stage: Resolved { files },
+            env: self.env,
         }
     }
 }
@@ -149,16 +160,20 @@ impl StageTrait for Resolved {
 }
 
 impl CompilationUnit<Resolved> {
-    pub fn typed(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Typed> {
-        let prelude = compile_prelude();
-        let mut env = Environment::new();
-        env.import_prelude(prelude);
-
+    pub fn typed(
+        mut self,
+        symbol_table: &mut SymbolTable,
+        driver_config: &DriverConfig,
+    ) -> CompilationUnit<Typed> {
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
         for file in self.stage.files {
-            let mut typed = TypeChecker.infer(file, symbol_table, &mut env);
-            let mut solver = ConstraintSolver::new(&mut typed, symbol_table);
+            let mut typed = if driver_config.include_prelude {
+                TypeChecker.infer(file, symbol_table, &mut self.env)
+            } else {
+                TypeChecker.infer_without_prelude(&mut self.env, file, symbol_table)
+            };
+            let mut solver = ConstraintSolver::new(&mut typed, &mut self.env, symbol_table);
             solver.solve();
             files.push(typed);
         }
@@ -166,17 +181,14 @@ impl CompilationUnit<Resolved> {
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Typed {
-                environment: env,
-                files,
-            },
+            stage: Typed { files },
+            env: self.env,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Typed {
-    pub environment: Environment,
     pub files: Vec<SourceFile<source_file::Typed>>,
 }
 impl StageTrait for Typed {
@@ -187,18 +199,27 @@ impl StageTrait for Typed {
 }
 
 impl CompilationUnit<Typed> {
-    pub fn lower(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Lowered> {
-        let mut module = IRModule::new();
+    pub fn lower(
+        mut self,
+        symbol_table: &mut SymbolTable,
+        driver_config: &DriverConfig,
+        mut module: IRModule,
+    ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table).lower(&mut module);
+            let lowered =
+                Lowerer::new(file, symbol_table, &mut self.env).lower(&mut module, driver_config);
             files.push(lowered);
         }
 
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Lowered { module, files },
+            stage: Lowered {
+                module: module.clone(),
+                files,
+            },
+            env: self.env,
         }
     }
 }
@@ -217,7 +238,7 @@ impl StageTrait for Lowered {
 }
 
 impl CompilationUnit<Lowered> {
-    pub fn module(self) -> IRModule {
-        self.stage.module
+    pub fn module(&self) -> IRModule {
+        self.stage.module.clone()
     }
 }

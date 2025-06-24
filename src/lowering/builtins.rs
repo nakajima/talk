@@ -48,7 +48,7 @@ fn lower_alloc(
         )));
     };
 
-    let Some(typed_expr) = lowerer.source_file.typed_expr(&val) else {
+    let Some(typed_expr) = lowerer.source_file.typed_expr(&val, lowerer.env) else {
         return Err(IRError::Unknown(format!(
             "__alloc takes an Int, got {:?}",
             lowerer.source_file.get(&val)
@@ -117,8 +117,6 @@ fn lower_store(
     typed_callee: &TypedExpr,
     args: &[ExprID],
 ) -> Result<Option<Register>, IRError> {
-    let dest = lowerer.allocate_register();
-
     let Ty::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __store func".to_string()));
     };
@@ -140,7 +138,7 @@ fn lower_store(
         unreachable!("didn't get offset for store")
     };
 
-    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[1]).cloned() else {
+    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[2]).cloned() else {
         unreachable!("didn't get call arg for store")
     };
 
@@ -164,7 +162,7 @@ fn lower_store(
         location,
     });
 
-    Ok(Some(dest))
+    Ok(None)
 }
 
 fn lower_load(

@@ -10,26 +10,36 @@ struct Array<T> {
 	}
 
 	func push(element: T) {
-
+		self.resizeIfNeeded()
+		__store<T>(self.storage, self.count, element)
+		self.count = self.count + 1
 	}
 
 	func get(index: Int) -> T {
 		__load<T>(self.storage, index)
 	}
 
+	func pop() -> T {
+		let popped = __load<T>(self.storage, self.count - 1)
+		self.count = self.count - 1
+		popped
+	}
+
 	func resizeIfNeeded() {
-		if self.count + 1 > self.capacity {
-			let newStorage = __realloc<T>(self.storage, self.capacity * 2)
-			let i = 0
-			loop {
-				__store<T>(newStorage, i, self.get(i))
-				i = i + 1
-				if i == self.count {
-					break
-				}
-			}
-			__free(self.storage)
-			self.storage = newStorage
+		if self.count + 1 < self.capacity {
+			return
 		}
+
+		let newStorage = __alloc<T>(self.capacity * 2)
+		let i = 0
+		loop i < self.count {
+			__store<T>(newStorage, i, self.get(i))
+			i = i + 1
+		}
+		__free(self.storage)
+		self.storage = newStorage
+		self.capacity = self.capacity * 2
+
+		return
 	}
 }

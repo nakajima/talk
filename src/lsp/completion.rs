@@ -1,15 +1,16 @@
 use crate::SourceFile;
 use crate::Typed;
 use crate::compiling::driver::Driver;
+use crate::environment::Environment;
 use crate::environment::TypeDef;
 use crate::symbol_table::SymbolKind;
-use crate::type_checker::Ty;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
 use async_lsp::lsp_types::Position;
 
 pub struct CompletionContext<'a> {
     pub driver: &'a Driver,
+    pub env: &'a Environment,
     pub source_file: &'a SourceFile<Typed>,
     pub position: Position,
     pub is_member_lookup: bool,
@@ -44,23 +45,22 @@ impl<'a> CompletionContext<'a> {
             self.position.character.saturating_sub(1),
         );
 
-        if let Some(ty) = self
+        if let Some(type_def) = self
             .driver
             .symbol_from_position(position_before_dot, &self.source_file.path)
-            .map(|sym| {
-                self.source_file
-                    .type_from_symbol(sym, &self.driver.symbol_table)
-            })
-            .unwrap_or(None)
+            .and_then(|sym| self.driver.symbol_table.get(sym))
+            .and_then(|info| info.definition.clone())
+            .and_then(|definition| definition.sym)
+            .and_then(|sym| self.env.lookup_type(&sym))
         {
-            let type_def = match ty {
-                Ty::Enum(symbol_id, _) => self.source_file.type_def(&symbol_id),
-                Ty::Struct(symbol_id, _) => self.source_file.type_def(&symbol_id),
-                _ => return vec![],
-            };
+            // let type_def = match ty {
+            //     Ty::Enum(symbol_id, _) => self.env.lookup_type(&symbol_id),
+            //     Ty::Struct(symbol_id, _) => self.env.lookup_type(&symbol_id),
+            //     _ => return vec![],
+            // };
 
             match type_def {
-                Some(TypeDef::Enum(enum_def)) => {
+                TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
                     completions.extend(enum_def.methods.keys().map(|label| CompletionItem {
                         label: label.clone(),
@@ -76,7 +76,7 @@ impl<'a> CompletionContext<'a> {
 
                     completions
                 }
-                Some(TypeDef::Struct(struct_def)) => {
+                TypeDef::Struct(struct_def) => {
                     let mut completions = vec![];
                     completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
                         label: label.clone(),
@@ -90,9 +90,9 @@ impl<'a> CompletionContext<'a> {
                     }));
                     completions
                 }
-                _ => vec![],
             }
         } else {
+            log::error!("did not get struct: {:?}", self.env.types);
             vec![]
         }
     }
@@ -121,7 +121,7 @@ impl<'a> CompletionContext<'a> {
             for symbol_id in self.source_file.scope_tree.get_symbols_in_scope(scope) {
                 if let Some(symbol_info) = self.driver.symbol_table.get(&symbol_id) {
                     let kind = match symbol_info.kind {
-                        SymbolKind::Func => CompletionItemKind::FUNCTION,
+                        SymbolKind::FuncDef => CompletionItemKind::FUNCTION,
                         SymbolKind::Param => CompletionItemKind::VARIABLE,
                         SymbolKind::Local => CompletionItemKind::VARIABLE,
                         SymbolKind::Enum => CompletionItemKind::ENUM,
@@ -157,18 +157,22 @@ mod tests {
         position: Position,
         is_member_lookup: bool,
     ) -> Vec<CompletionItem> {
-        let mut driver = Driver::new();
+        let mut driver = Driver::new(Default::default());
         for (i, file) in files.iter().enumerate() {
             driver.update_file(&(&format!("./file-{}.tlk", i)).into(), file.to_string());
         }
 
-        let source_file = &driver.typed_source_file(&"./file-0.tlk".into()).unwrap();
+        let checked = driver.check();
+        let checked_unit = checked.iter().next().unwrap();
+        let source_file = checked_unit.source_file(&"./file-0.tlk".into()).unwrap();
+        let env = &checked_unit.env.clone();
 
         CompletionContext {
             driver: &driver,
             source_file,
             position,
             is_member_lookup,
+            env,
         }
         .get_completions()
     }

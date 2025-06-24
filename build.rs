@@ -185,7 +185,8 @@ fn regex_for_type(ty: &Type) -> &'static str {
         "f64" => r"(-?\d+\.\d+)",
         "bool" => r"(true|false)",
         "BasicBlockID" => r"(#\d+|entry)",
-        "RegisterList" => r"((?:%\d+(?:,\s*%\d+)*)?)",
+        "RegisterList" => r"((?:(?:[^\s]*)\s+%\d+(?:\s*%\d+)*,?)?)",
+        "Callee" => r"([@%][^\(]+)",
 
         // FIX: Use a specific regex for types that start with '@'
         "RefKind" | "FuncName" => r"(@\S+)",
@@ -352,6 +353,7 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
                 use crate::lowering::lowerer::*;
                 use crate::lowering::register::*;
                 use crate::lowering::ir_value::IRValue;
+                use crate::lowering::phi_predecessors::*;
 
 
                 #(#parser_arms)*

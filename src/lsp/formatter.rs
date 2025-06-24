@@ -92,8 +92,8 @@ pub struct Formatter<'a> {
 impl<'a> Formatter<'a> {
     pub fn new(source_file: &'a SourceFile) -> Self {
         let mut meta_cache = HashMap::new();
-        for (i, meta) in source_file.meta.iter().enumerate() {
-            meta_cache.insert(i as ExprID, meta);
+        for (i, meta) in &source_file.meta {
+            meta_cache.insert(*i, meta);
         }
         Self {
             source_file,
@@ -126,7 +126,7 @@ impl<'a> Formatter<'a> {
         output
     }
 
-    fn format_expr(&self, expr_id: ExprID) -> Doc {
+    pub(crate) fn format_expr(&self, expr_id: ExprID) -> Doc {
         let expr = self.source_file.get(&expr_id).unwrap();
 
         match expr {
@@ -739,7 +739,7 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn render_doc(doc: Doc, width: usize) -> String {
+    pub fn render_doc(doc: Doc, width: usize) -> String {
         let mut output = String::new();
         let mut queue = vec![(0u8, doc)];
         let mut column = 0;

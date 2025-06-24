@@ -1,6 +1,6 @@
 use crate::lowering::lowerer::IRFunction;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IRModule {
     pub functions: Vec<IRFunction>,
 }

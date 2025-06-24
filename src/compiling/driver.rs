@@ -5,45 +5,80 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use crate::{
     SourceFile, SymbolID, SymbolTable,
     compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+    environment::Environment,
+    lowering::ir_module::IRModule,
     prelude::compile_prelude,
     source_file,
 };
 
+#[derive(Debug)]
+pub struct DriverConfig {
+    pub executable: bool,
+    pub include_prelude: bool,
+}
+
+impl DriverConfig {
+    pub fn new_environment(&self) -> Environment {
+        if self.include_prelude {
+            compile_prelude().environment.clone()
+        } else {
+            Environment::new()
+        }
+    }
+}
+
+impl Default for DriverConfig {
+    fn default() -> Self {
+        DriverConfig {
+            executable: true,
+            include_prelude: true,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
+    pub config: DriverConfig,
 }
 
 impl Default for Driver {
     fn default() -> Self {
-        Self::new()
+        Self::new(Default::default())
     }
 }
 
 impl Driver {
-    pub fn new() -> Self {
-        let mut driver = Self {
-            units: vec![CompilationUnit::new(vec![])],
-            symbol_table: compile_prelude().symbols.clone(),
-        };
-
-        // Create a default unit
-        driver.units.push(CompilationUnit::new(vec![]));
-
-        driver
+    pub fn new(config: DriverConfig) -> Self {
+        Self {
+            units: vec![CompilationUnit::new(vec![], config.new_environment())],
+            symbol_table: if config.include_prelude {
+                compile_prelude().symbols.clone()
+            } else {
+                SymbolTable::base()
+            },
+            config,
+        }
     }
 
     pub fn with_str(string: &str) -> Self {
-        let mut driver = Driver::new();
+        let mut driver = Driver::default();
         driver.update_file(&PathBuf::from("-"), string.into());
         driver
     }
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
-        let unit = CompilationUnit::new(files);
+        let config = DriverConfig::default();
+        let unit = CompilationUnit::new(files, config.new_environment());
         Self {
             units: vec![unit],
-            symbol_table: compile_prelude().symbols.clone(),
+            symbol_table: if config.include_prelude {
+                compile_prelude().symbols.clone()
+            } else {
+                SymbolTable::base()
+            },
+            config,
         }
     }
 
@@ -63,9 +98,9 @@ impl Driver {
             .insert(path.clone(), contents.clone());
     }
 
-    pub fn parse(&mut self) -> Vec<CompilationUnit<Parsed>> {
+    pub fn parse(&self) -> Vec<CompilationUnit<Parsed>> {
         let mut result = vec![];
-        for unit in &mut self.units {
+        for unit in self.units.clone() {
             result.push(unit.parse());
         }
         result
@@ -73,20 +108,31 @@ impl Driver {
 
     pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
         let mut result = vec![];
-        for unit in &mut self.units {
-            result.push(unit.lower(&mut self.symbol_table));
+
+        for unit in self.units.clone() {
+            let parsed = unit.parse();
+            let resolved = parsed.resolved(&mut self.symbol_table);
+            let typed = resolved.typed(&mut self.symbol_table, &self.config);
+
+            let module = if self.config.include_prelude {
+                compile_prelude().module.clone()
+            } else {
+                IRModule::new()
+            };
+
+            result.push(typed.lower(&mut self.symbol_table, &self.config, module));
         }
+
         result
     }
 
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
-        for unit in &mut self.units {
-            let checked = unit
-                .parse()
-                .resolved(&mut self.symbol_table)
-                .typed(&mut self.symbol_table);
-            result.push(checked);
+        for unit in self.units.clone() {
+            let parsed = unit.parse();
+            let resolved = parsed.resolved(&mut self.symbol_table);
+            let typed = resolved.typed(&mut self.symbol_table, &self.config);
+            result.push(typed);
         }
 
         result
@@ -191,12 +237,29 @@ impl Driver {
     }
 
     pub fn typed_source_file(&mut self, path: &PathBuf) -> Option<SourceFile<source_file::Typed>> {
-        let checked = self.check();
-        for unit in checked.into_iter() {
-            for file in unit.stage.files {
+        for unit in self.units.clone() {
+            let typed = unit
+                .parse()
+                .resolved(&mut self.symbol_table)
+                .typed(&mut self.symbol_table, &self.config);
+            for file in typed.stage.files {
                 if *path == file.path {
                     return Some(file);
                 }
+            }
+        }
+
+        None
+    }
+
+    pub fn resolved_source_file(
+        &mut self,
+        path: &PathBuf,
+    ) -> Option<SourceFile<source_file::NameResolved>> {
+        for unit in self.units.clone() {
+            let typed = unit.parse().resolved(&mut self.symbol_table);
+            if let Some(file) = typed.source_file(path) {
+                return Some(file.clone());
             }
         }
 
@@ -226,7 +289,7 @@ mod tests {
 
     #[test]
     fn handle_parse_err() {
-        let mut driver = Driver::with_files(vec!["../../dev/fixtures/parse_err/fizz.tlk".into()]);
+        let driver = Driver::with_files(vec!["../../dev/fixtures/parse_err/fizz.tlk".into()]);
         driver.parse();
     }
 }
