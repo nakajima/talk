@@ -359,7 +359,7 @@ impl CurrentFunction {
             blocks,
             env_ty,
             env_reg,
-            size: self.registers.next_id + 1,
+            size: self.registers.next_id,
             debug_info,
         }
     }

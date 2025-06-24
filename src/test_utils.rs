@@ -19,6 +19,7 @@ macro_rules! assert_lowered_functions {
         match (&$left, &$right) {
             (left_val, right_val) => {
                 use $crate::lowering::ir_module::IRModule;
+
                 if !right_val.iter().all(|f| left_val.functions.contains(f)) {
                     let right_program = IRModule {
                         functions: right_val.clone(),
@@ -45,6 +46,7 @@ macro_rules! assert_lowered_functions {
     };
 }
 
+// Check that two functions are the same. Ignores debug info.
 #[macro_export]
 macro_rules! assert_lowered_function {
     ($module:expr, $function_name:expr, $expected_function:expr $(,)?) => {
@@ -66,7 +68,12 @@ macro_rules! assert_lowered_function {
                         )
                     });
 
-                if function != &expected_function {
+                let mut function = function.clone();
+                let mut expected_function = expected_function.clone();
+                function.debug_info = Default::default();
+                expected_function.debug_info = Default::default();
+
+                if function != expected_function {
                     use prettydiff::{diff_chars, diff_lines};
                     use $crate::lowering::ir_printer::format_func;
                     println!(
@@ -81,7 +88,7 @@ macro_rules! assert_lowered_function {
                         "{}\n{}",
                         diff_lines("Actual", "Expected"),
                         diff_lines(
-                            format_func(function).as_ref(),
+                            format_func(&function).as_ref(),
                             format_func(&expected_function).as_ref()
                         )
                     )
