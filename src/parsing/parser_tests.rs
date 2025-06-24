@@ -1134,7 +1134,8 @@ mod structs {
 #[cfg(test)]
 mod error_handling_tests {
     use crate::{
-        diagnostic::Diagnostic, expr::Expr, parser::parse, token::Token, token_kind::TokenKind,
+        diagnostic::Diagnostic, expr::Expr, name::Name, parser::parse, token::Token,
+        token_kind::TokenKind,
     };
 
     #[test]
@@ -1199,5 +1200,67 @@ mod error_handling_tests {
                 captures: vec![]
             }
         )
+    }
+
+    #[test]
+    fn parses_protocol() {
+        let parsed = parse(
+            "
+        protocol Aged<T> {
+          let age: Int
+          func getAge() -> Int
+        }
+        ",
+            "-".into(),
+        );
+
+        let Expr::ProtocolDecl {
+            name,
+            associated_types,
+            body,
+        } = parsed.get(&parsed.root_ids()[0]).unwrap()
+        else {
+            panic!("didn't get protocol");
+        };
+
+        assert_eq!(*name, Name::Raw("Aged".into()));
+
+        let Expr::TypeRepr(t_name, _, true) = parsed.get(&associated_types[0]).unwrap() else {
+            panic!(
+                "Didn't get type repr: {:?}",
+                parsed.get(&associated_types[0]).unwrap()
+            );
+        };
+
+        let Expr::Block(ids) = parsed.get(body).unwrap() else {
+            panic!("didn't get body")
+        };
+
+        let Expr::Property {
+            name,
+            type_repr,
+            default_value,
+        } = parsed.get(&ids[0]).unwrap()
+        else {
+            panic!("did not get property");
+        };
+
+        let Expr::FuncSignature {
+            name,
+            params,
+            generics,
+            ret,
+        } = parsed.get(&ids[1]).unwrap()
+        else {
+            panic!("didn't get func requirement");
+        };
+
+        assert_eq!(*name, Name::Raw("getAge".into()));
+        assert!(params.is_empty());
+        assert!(generics.is_empty());
+        assert_eq!(
+            *parsed.get(&ret).unwrap(),
+            Expr::TypeRepr(Name::Raw("Int".into()), vec![], false),
+        );
     }
 }

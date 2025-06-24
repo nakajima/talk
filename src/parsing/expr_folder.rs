@@ -28,9 +28,7 @@ pub trait ExprFolder<'a> {
             LiteralTrue => self._fold_true(expr),
             LiteralFalse => self._fold_false(expr),
             Unary(token_kind, rhs) => self._fold_unary(expr.clone(), token_kind, rhs),
-            Binary(lhs, token_kind, rhs) => {
-                self._fold_binary(expr.clone(), lhs, token_kind, rhs)
-            }
+            Binary(lhs, token_kind, rhs) => self._fold_binary(expr.clone(), lhs, token_kind, rhs),
             Tuple(items) => self._fold_tuple(expr.clone(), items),
             Block(items) => self._fold_block(expr.clone(), items),
             Call {
@@ -65,15 +63,7 @@ pub trait ExprFolder<'a> {
                 body,
                 ret,
                 captures,
-            } => self._fold_function(
-                expr.clone(),
-                name,
-                generics,
-                params,
-                body,
-                ret,
-                captures,
-            ),
+            } => self._fold_function(expr.clone(), name, generics, params, body, ret, captures),
             Parameter(name, type_repr) => self._fold_parameter(expr.clone(), name, type_repr),
             CallArg { label, value } => self._fold_call_arg(expr.clone(), label, value),
             Let(name, _) => self._fold_let(expr.clone(), name),
@@ -88,6 +78,17 @@ pub trait ExprFolder<'a> {
             PatternVariant(enum_name, variant_name, items) => {
                 self._fold_pattern_variable(expr.clone(), enum_name, variant_name, items)
             }
+            ProtocolDecl {
+                name,
+                associated_types,
+                body,
+            } => self._fold_protocol_decl(expr.clone(), name, associated_types, body),
+            FuncSignature {
+                name,
+                params,
+                generics,
+                ret,
+            } => self._fold_func_signature(expr.clone(), name, params, generics, ret),
         };
 
         self.on_expr(*expr_id, folded)
@@ -545,5 +546,26 @@ pub trait ExprFolder<'a> {
     ) -> Rc<Expr> {
         let items = self.fold_mult(items);
         self.on_pattern_variable(expr, enum_name, variant_name, items)
+    }
+
+    fn _fold_protocol_decl(
+        &mut self,
+        expr: Rc<Expr>,
+        name: &Name,
+        associated_types: &Vec<ExprID>,
+        body: &ExprID,
+    ) -> Rc<Expr> {
+        expr
+    }
+
+    fn _fold_func_signature(
+        &mut self,
+        expr: Rc<Expr>,
+        name: &Name,
+        params: &Vec<ExprID>,
+        generics: &Vec<ExprID>,
+        ret: &ExprID,
+    ) -> Rc<Expr> {
+        expr
     }
 }

@@ -178,6 +178,7 @@ impl<'a> Lexer<'a> {
             "struct" => Struct,
             "break" => Break,
             "init" => Init,
+            "protocol" => Protocol,
             _ => Identifier(self.code[start_idx..=end_idx].to_string()),
         }
     }

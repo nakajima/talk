@@ -196,6 +196,8 @@ impl<'a> Formatter<'a> {
 
                 self.format_func(name, generics, params, *body, ret.as_ref(), true)
             }
+            Expr::ProtocolDecl { name, .. } => todo!(),
+            Expr::FuncSignature { name, .. } => todo!(),
         }
     }
 

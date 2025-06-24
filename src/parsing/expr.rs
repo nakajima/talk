@@ -175,4 +175,17 @@ pub enum Expr {
         Name,         // variant name: "some"
         Vec<ExprID>,  // bindings: ["wrapped"]
     ),
+
+    ProtocolDecl {
+        name: Name,
+        associated_types: Vec<ExprID>, // Associated types
+        body: ExprID,                  // Body ID
+    },
+
+    FuncSignature {
+        name: Name,
+        params: Vec<ExprID>,
+        generics: Vec<ExprID>,
+        ret: ExprID,
+    },
 }

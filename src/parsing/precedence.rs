@@ -49,7 +49,7 @@ impl Precedence {
             Some(t) => t,
             None => {
                 return Err(ParserError::UnknownError(
-                    "did not get token for parser handler",
+                    "did not get token for parser handler".into(),
                 ));
             }
         };
@@ -119,6 +119,12 @@ impl Precedence {
 
             TokenKind::Struct => ParseHandler {
                 prefix: Some(Parser::struct_expr),
+                infix: None,
+                precedence: Precedence::Call,
+            },
+
+            TokenKind::Protocol => ParseHandler {
+                prefix: Some(Parser::protocol_expr),
                 infix: None,
                 precedence: Precedence::Call,
             },

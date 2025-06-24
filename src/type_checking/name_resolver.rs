@@ -464,6 +464,17 @@ impl NameResolver {
                     source_file.nodes.insert(*node_id, Pattern(pattern));
                 }
                 PatternVariant(_, _, _items) => todo!(),
+                FuncSignature {
+                    name,
+                    params,
+                    generics,
+                    ret,
+                } => todo!(),
+                ProtocolDecl {
+                    name,
+                    associated_types,
+                    body,
+                } => todo!(),
             }
         }
     }

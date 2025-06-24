@@ -17,6 +17,8 @@ pub enum TokenKind {
     Match,
     Underscore,
 
+    Protocol,
+
     // More
     QuestionMark,
     Arrow,
@@ -133,6 +135,7 @@ impl TokenKind {
             TokenKind::Generated => "(generated)",
             TokenKind::Init => "init",
             TokenKind::Break => "break",
+            TokenKind::Protocol => "protocol",
         }
         .to_string()
     }

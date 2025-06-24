@@ -230,6 +230,8 @@ impl<'a> SemanticTokenCollector<'a> {
 
                 result.extend(self.tokens_from_expr(value));
             }
+            Expr::ProtocolDecl { .. } => todo!(),
+            Expr::FuncSignature { .. } => todo!(),
         };
 
         result
@@ -312,6 +314,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::Generated => (),
                 TokenKind::Init => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Mut => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::Protocol => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
             }
         }
         self.tokens.extend(tokens);
