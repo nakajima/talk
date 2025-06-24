@@ -7,13 +7,11 @@ use crate::{
     expr::Expr,
     name::Name,
     parser::ExprID,
+    ty::Ty,
     type_checker::TypeError,
 };
 
-use super::{
-    environment::EnumVariant,
-    type_checker::{Ty, TypeVarID},
-};
+use super::{environment::EnumVariant, type_checker::TypeVarID};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
@@ -504,9 +502,10 @@ impl<'a> ConstraintSolver<'a> {
 
                 if let (concrete_ret, Ty::TypeVar(ret_var)) =
                     (lhs_returning.as_ref(), rhs_returning.as_ref())
-                    && !matches!(concrete_ret, Ty::TypeVar(_)) {
-                        substitutions.insert(ret_var.clone(), concrete_ret.clone());
-                    }
+                    && !matches!(concrete_ret, Ty::TypeVar(_))
+                {
+                    substitutions.insert(ret_var.clone(), concrete_ret.clone());
+                }
 
                 Self::unify(&lhs_returning, &rhs_returning, substitutions)?;
                 Self::normalize_substitutions(substitutions);

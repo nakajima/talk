@@ -24,7 +24,7 @@ use crate::{
     parser::ExprID,
     token::Token,
     token_kind::TokenKind,
-    type_checker::Ty,
+    ty::Ty,
     typed_expr::TypedExpr,
 };
 

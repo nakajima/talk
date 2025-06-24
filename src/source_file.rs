@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    diagnostic::Diagnostic, environment::Environment, scope_tree::ScopeTree, span::Span,
-    type_checker::Ty, typed_expr::TypedExpr,
+    diagnostic::Diagnostic, environment::Environment, scope_tree::ScopeTree, span::Span, ty::Ty,
+    typed_expr::TypedExpr,
 };
 
 use super::{

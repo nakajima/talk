@@ -4,11 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{
-    SymbolID,
-    parser::ExprID,
-    type_checker::{Ty, TypeError},
-};
+use crate::{SymbolID, parser::ExprID, ty::Ty, type_checker::TypeError};
 
 use super::{
     constraint_solver::Constraint,

@@ -153,7 +153,7 @@ mod tests {
         environment::{Environment, Property, TypeDef},
         lowering::ir_module::IRModule,
         source_file,
-        type_checker::Ty,
+        ty::Ty,
     };
 
     fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>, Environment) {

@@ -1,6 +1,4 @@
-use crate::{expr::Expr, parser::ExprID};
-
-use super::type_checker::Ty;
+use crate::{expr::Expr, parser::ExprID, ty::Ty};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedExpr {

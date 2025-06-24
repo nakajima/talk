@@ -5,7 +5,7 @@ use crate::{
         instr::Instr, ir_error::IRError, ir_type::IRType, lowerer::Lowerer, register::Register,
     },
     parser::ExprID,
-    type_checker::Ty,
+    ty::Ty,
     typed_expr::TypedExpr,
 };
 

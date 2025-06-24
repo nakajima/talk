@@ -4,10 +4,9 @@ use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
     environment::TypeDef,
     name::Name,
+    ty::Ty,
     type_checker::{Scheme, TypeVarID, TypeVarKind},
 };
-
-use super::type_checker::Ty;
 
 struct Builtin {
     id: i32,
@@ -244,7 +243,7 @@ pub fn is_builtin_func(symbol_id: &SymbolID) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::{check, type_checker::Ty};
+    use crate::{check, ty::Ty};
 
     #[test]
     fn checks_alloc() {
@@ -348,7 +347,7 @@ mod array_tests {
             register::Register,
         },
         parser::parse,
-        type_checker::Ty,
+        ty::Ty,
     };
 
     #[test]

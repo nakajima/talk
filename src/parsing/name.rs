@@ -1,4 +1,4 @@
-use crate::{SymbolID, type_checker::Ty};
+use crate::{SymbolID, ty::Ty};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Name {

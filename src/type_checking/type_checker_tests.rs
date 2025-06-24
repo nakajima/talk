@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{SymbolID, check, expr::Expr, type_checker::Ty, typed_expr::TypedExpr};
+    use crate::{SymbolID, check, expr::Expr, ty::Ty, typed_expr::TypedExpr};
 
     #[test]
     fn checks_initializer() {
@@ -169,7 +169,8 @@ mod type_tests {
         environment::TypeDef,
         expr::Expr,
         name::Name,
-        type_checker::{Ty, TypeVarID, TypeVarKind},
+        ty::Ty,
+        type_checker::{TypeVarID, TypeVarKind},
         type_checking::CheckResult,
     };
 
@@ -963,7 +964,7 @@ mod type_tests {
             type_params
         );
 
-        assert_eq!(symbol_id, &SymbolID::OPTIONAL);
+        assert_eq!(*symbol_id, SymbolID::OPTIONAL);
 
         let Ty::Func(params, ret, _) = &args[1] else {
             panic!("didn't get func");
@@ -1112,9 +1113,7 @@ mod type_tests {
 #[cfg(test)]
 mod pending {
     use crate::{
-        diagnostic::Diagnostic,
-        type_checker::{Ty, TypeError},
-        type_checking::CheckResult,
+        diagnostic::Diagnostic, ty::Ty, type_checker::TypeError, type_checking::CheckResult,
     };
 
     fn check_err(code: &'static str) -> Result<CheckResult, TypeError> {

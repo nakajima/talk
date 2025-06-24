@@ -1,12 +1,7 @@
 #[cfg(test)]
 use crate::{
-    SourceFile, SymbolTable, Typed,
-    diagnostic::Diagnostic,
-    environment::Environment,
-    expr::Expr,
-    parser::ExprID,
-    type_checker::{Ty, TypeError},
-    typed_expr::TypedExpr,
+    SourceFile, SymbolTable, Typed, diagnostic::Diagnostic, environment::Environment, expr::Expr,
+    parser::ExprID, ty::Ty, type_checker::TypeError, typed_expr::TypedExpr,
 };
 
 pub mod constraint_solver;
@@ -14,6 +9,7 @@ pub mod environment;
 pub mod name_resolver;
 pub mod scope_tree;
 pub mod synthesis;
+pub mod ty;
 pub mod type_checker;
 #[cfg(test)]
 pub mod type_checker_tests;
