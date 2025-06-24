@@ -18,10 +18,21 @@ pub fn lower_builtin(
     match symbol_id {
         SymbolID(-5) => lower_alloc(lowerer, typed_callee, args),
         SymbolID(-6) => lower_realloc(lowerer, typed_callee, args),
+        SymbolID(-7) => lower_free(lowerer, typed_callee, args),
         SymbolID(-8) => lower_store(lowerer, typed_callee, args),
         SymbolID(-9) => lower_load(lowerer, typed_callee, args),
-        _ => Err(IRError::ParseError),
+        _ => Err(IRError::BuiltinNotFound(*symbol_id)),
     }
+}
+
+fn lower_free(
+    _lowerer: &mut Lowerer,
+    _typed_callee: &TypedExpr,
+    _args: &[ExprID],
+) -> Result<Option<Register>, IRError> {
+    log::warn!("TODO: lower __free");
+
+    Ok(None)
 }
 
 fn lower_alloc(

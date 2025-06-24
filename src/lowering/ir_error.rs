@@ -1,12 +1,13 @@
 use std::fmt::Display;
 
-use crate::environment::Property;
+use crate::{SymbolID, environment::Property};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IRError {
     ParseError,
     InvalidPointer(String),
     PartialInitialization(String, Vec<Property>),
+    BuiltinNotFound(SymbolID),
     Unknown(String),
 }
 
@@ -25,6 +26,7 @@ impl IRError {
                     .collect::<Vec::<&str>>()
                     .join(", ")
             ),
+            Self::BuiltinNotFound(symbol_id) => format!("Builtin not found: {:?}", symbol_id),
             Self::Unknown(msg) => msg.clone(),
         }
     }
