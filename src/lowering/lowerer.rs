@@ -492,28 +492,7 @@ impl<'a> Lowerer<'a> {
             Expr::Func { .. } => self.lower_function(expr_id),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
             Expr::EnumDecl(_, _, _) => None,
-            Expr::Member(receiver, name) => {
-                let member_ty = self
-                    .source_file
-                    .typed_expr(expr_id, self.env)
-                    .unwrap()
-                    .ty
-                    .to_ir(self);
-
-                if !matches!(member_ty, IRType::Enum(_)) {
-                    let member_ptr_reg = self.lower_member(&receiver, expr_id, &name)?;
-                    let loaded_value_reg = self.allocate_register();
-                    self.push_instr(Instr::Load {
-                        dest: loaded_value_reg,
-                        ty: member_ty,
-                        addr: member_ptr_reg,
-                    });
-
-                    Some(loaded_value_reg)
-                } else {
-                    self.lower_member(&receiver, expr_id, &name)
-                }
-            }
+            Expr::Member(receiver, name) => self.lower_member(&receiver, expr_id, &name, false),
             Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
             Expr::CallArg { value, .. } => self.lower_expr(&value),
             Expr::Struct(Name::Resolved(struct_id, _), _, body_id) => {
@@ -1406,6 +1385,7 @@ impl<'a> Lowerer<'a> {
         receiver_id: &Option<ExprID>,
         expr_id: &ExprID,
         name: &str,
+        is_lvalue: bool,
     ) -> Option<Register> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
@@ -1416,7 +1396,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let Some(receiver_id) = receiver_id else {
-            unreachable!("we shouldn't have a receiver but it's not an enum");
+            unreachable!("we should have a receiver since it's not an enum");
         };
 
         let Some(receiver) = self.lower_expr(receiver_id) else {
@@ -1448,14 +1428,18 @@ impl<'a> Lowerer<'a> {
                         index: IRValue::ImmediateInt(index as i64),
                     });
 
-                    // let member_loaded_reg = self.allocate_register();
-                    // self.push_instr(Instr::Load {
-                    //     dest: member_loaded_reg,
-                    //     addr: member_reg,
-                    //     ty: typed_expr.ty.to_ir(self),
-                    // });
+                    if is_lvalue {
+                        return Some(member_reg);
+                    } else {
+                        let member_loaded_reg = self.allocate_register();
+                        self.push_instr(Instr::Load {
+                            dest: member_loaded_reg,
+                            addr: member_reg,
+                            ty: typed_expr.ty.to_ir(self),
+                        });
 
-                    return Some(member_reg);
+                        return Some(member_loaded_reg);
+                    }
                 }
 
                 if let Some((_, method)) = struct_def.methods.iter().find(|(n, _)| *n == name) {
@@ -1679,7 +1663,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Expr::Member(Some(receiver_id), name) => {
-                if let Some(dest) = self.lower_member(&Some(*receiver_id), lhs_id, name) {
+                if let Some(dest) = self.lower_member(&Some(*receiver_id), lhs_id, name, true) {
                     self.push_instr(Instr::Store {
                         ty: lhs.ty.to_ir(self),
                         val: rhs,
