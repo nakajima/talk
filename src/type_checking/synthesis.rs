@@ -13,7 +13,7 @@ pub fn synthesize_inits(
 ) {
     for (sym, table) in symbol_table.types.clone() {
         if table.initializers.is_empty() && table.kind == TypeKind::Struct {
-            log::trace!("Synthesizing init for {sym:?}");
+            log::debug!("Synthesizing init for {sym:?}");
             let mut body_exprs: Vec<ExprID> = vec![];
 
             // We need to generate an initializer for this struct
@@ -112,8 +112,10 @@ pub fn synthesize_inits(
             let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
             else {
                 log::error!(
-                    "didn't get struct from expr id: {:?}",
-                    source_file.get(&struct_info.expr_id)
+                    "didn't get struct from expr id: {:?} in {:?}\n{:#?}",
+                    source_file.get(&struct_info.expr_id),
+                    struct_info,
+                    source_file.nodes
                 );
                 return;
             };

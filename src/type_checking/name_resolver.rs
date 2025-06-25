@@ -113,28 +113,32 @@ impl NameResolver {
                     conformances,
                     body,
                 } => {
-                    match name {
+                    let (symbol_id, name_str) = match name {
                         Name::Raw(name_str) => {
                             let symbol_id = self.declare(
                                 name_str.clone(),
-                                SymbolKind::Struct,
+                                SymbolKind::Protocol,
                                 node_id,
                                 source_file,
                                 symbol_table,
                             );
-                            self.type_symbol_stack.push(symbol_id);
-                            source_file.nodes.insert(
-                                *node_id,
-                                Struct {
-                                    name: Name::Resolved(symbol_id, name_str),
-                                    generics: generics.clone(),
-                                    conformances,
-                                    body,
-                                },
-                            );
+
+                            (symbol_id, name_str)
                         }
+                        Name::Resolved(symbol_id, name_str) => (symbol_id, name_str),
                         _ => continue,
-                    }
+                    };
+
+                    self.type_symbol_stack.push(symbol_id);
+                    source_file.nodes.insert(
+                        *node_id,
+                        Struct {
+                            name: Name::Resolved(symbol_id, name_str),
+                            generics: generics.clone(),
+                            conformances,
+                            body,
+                        },
+                    );
 
                     self.resolve_nodes(&generics, source_file, symbol_table);
                     self.resolve_nodes(&[body], source_file, symbol_table);

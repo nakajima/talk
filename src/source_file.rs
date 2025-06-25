@@ -170,6 +170,10 @@ impl SourceFile<Lowered> {}
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID
     pub fn add(&mut self, id: ExprID, expr: Expr, meta: ExprMeta) -> ExprID {
+        if id == 163 {
+            log::warn!("defining {id} as {expr:?}");
+        }
+
         self.nodes.insert(id, expr);
         self.meta.insert(id, meta);
         id

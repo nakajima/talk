@@ -226,6 +226,7 @@ impl SymbolTable {
     }
 
     pub fn add_initializer(&mut self, to_symbol_id: SymbolID, id: ExprID) {
+        log::debug!("adding initializer {id} to {to_symbol_id:?}");
         if let Some(table) = self.types.get_mut(&to_symbol_id) {
             table.initializers.push(id);
         } else {

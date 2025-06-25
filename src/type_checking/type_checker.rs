@@ -1566,7 +1566,7 @@ impl TypeChecker {
 
                         let (symbol, name) = match name.clone() {
                             Name::Resolved(symbol, name_str) => (symbol, name_str),
-                            _ => unreachable!(),
+                            _ => unreachable!("unresolved name: {:?}", name),
                         };
 
                         log::trace!("Defining {name_str} property {name:?} {ty:?}");
