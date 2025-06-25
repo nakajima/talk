@@ -209,9 +209,12 @@ impl TypeChecker {
             Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
             Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
-            Expr::TypeRepr(name, generics, is_type_parameter) => {
-                self.infer_type_repr(env, name, generics, is_type_parameter, source_file)
-            }
+            Expr::TypeRepr {
+                name,
+                generics,
+                conformances,
+                introduces_type,
+            } => self.infer_type_repr(env, name, generics, introduces_type, source_file),
             Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
                 self.infer_func_type_repr(env, args, ret, expected, source_file)
             }
@@ -803,8 +806,11 @@ impl TypeChecker {
             generic_vars.push(ty);
 
             // If this is a type parameter declaration, we need to declare it in the environment
-            if let Expr::TypeRepr(Name::Resolved(symbol_id, _), _, true) =
-                source_file.get(generic_id).unwrap()
+            if let Expr::TypeRepr {
+                name: Name::Resolved(symbol_id, _),
+                introduces_type: true,
+                ..
+            } = source_file.get(generic_id).unwrap()
             {
                 // The type was already created by infer_node, so we just need to get it
                 if let Some(typed_expr) = env.typed_exprs.get(generic_id) {
@@ -1280,7 +1286,10 @@ impl TypeChecker {
 
             let mut conformance_symbol_ids = vec![];
             for conformance in conformances {
-                let Expr::TypeRepr(Name::Resolved(symbol_id, _name_str), _, _) = source_file
+                let Expr::TypeRepr {
+                    name: Name::Resolved(symbol_id, _name_str),
+                    ..
+                } = source_file
                     .get(&conformance)
                     .expect("did not get conformance expr")
                 else {
@@ -1469,7 +1478,10 @@ impl TypeChecker {
 
             let mut conformance_symbol_ids = vec![];
             for conformance in conformances {
-                let Expr::TypeRepr(Name::Resolved(symbol_id, _name_str), _, _) = source_file
+                let Expr::TypeRepr {
+                    name: Name::Resolved(symbol_id, _name_str),
+                    ..
+                } = source_file
                     .get(&conformance)
                     .expect("did not get conformance expr")
                 else {

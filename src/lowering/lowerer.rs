@@ -500,7 +500,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } => self.lower_struct(expr_id, struct_id, &body), // Nothing to be done here.
             Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
-            Expr::TypeRepr(_, _, _) => None, // these are just for the type system
+            Expr::TypeRepr { .. } => None, // these are just for the type system
             Expr::LiteralArray(items) => self.lower_array(typed_expr.ty, items),
             Expr::Loop(cond, body) => self.lower_loop(&cond, &body),
             Expr::Break => {

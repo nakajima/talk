@@ -1326,7 +1326,7 @@ mod pending {
 
 #[cfg(test)]
 mod protocol_tests {
-    use crate::{check, check_without_prelude, ty::Ty};
+    use crate::{check_without_prelude, ty::Ty};
 
     #[test]
     #[ignore]

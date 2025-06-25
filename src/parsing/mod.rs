@@ -1,5 +1,5 @@
 pub mod expr;
-pub mod expr_folder;
+pub mod full_ast;
 pub mod name;
 pub mod parser;
 #[cfg(test)]

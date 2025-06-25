@@ -151,7 +151,7 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(default_value));
                 }
             }
-            Expr::TypeRepr(_name, items, _) => {
+            Expr::TypeRepr { generics, .. } => {
                 if let Some(meta) = self.source_file.meta.get(expr_id) {
                     result.extend(
                         meta.identifiers
@@ -159,7 +159,7 @@ impl<'a> SemanticTokenCollector<'a> {
                             .map(|i| (self.range_from_token(i), SemanticTokenType::TYPE_PARAMETER)),
                     )
                 }
-                result.extend(self.tokens_from_exprs(items))
+                result.extend(self.tokens_from_exprs(&generics))
             }
             Expr::FuncTypeRepr(items, ret, _) => {
                 result.extend(self.tokens_from_exprs(items));

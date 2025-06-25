@@ -352,14 +352,19 @@ impl NameResolver {
                     }
                     Name::Resolved(_, _) | Name::_Self(_) => (),
                 },
-                TypeRepr(name, generics, is_type_parameter_decl) => {
+                TypeRepr {
+                    name,
+                    generics,
+                    introduces_type,
+                    conformances,
+                } => {
                     log::trace!(
-                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {is_type_parameter_decl}"
+                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {introduces_type}"
                     );
 
                     let resolved_name_for_node = match name.clone() {
                         Name::Raw(raw_name_str) => {
-                            if is_type_parameter_decl {
+                            if introduces_type {
                                 // Declaration site of a type parameter (e.g., T in `enum Option<T>`)
                                 // Ensure it's declared in the current scope.
                                 let symbol_id = self.declare(
@@ -384,11 +389,12 @@ impl NameResolver {
                     // The node type remains TypeRepr.
                     source_file.nodes.insert(
                         *node_id,
-                        TypeRepr(
-                            resolved_name_for_node,
-                            generics.clone(), // Keep original generics ExprIDs
-                            is_type_parameter_decl,
-                        ),
+                        TypeRepr {
+                            name: resolved_name_for_node,
+                            generics: generics.clone(), // Keep original generics ExprIDs
+                            introduces_type,
+                            conformances: vec![],
+                        },
                     );
 
                     // Recursively resolve any type arguments within this TypeRepr.
@@ -1274,7 +1280,12 @@ mod tests {
         assert_eq!(foo_name, "foo");
         assert_eq!(
             resolved.get(&foo_args[0]).unwrap(),
-            &Expr::TypeRepr(Name::Resolved(SymbolID::INT, "Int".into()), vec![], false)
+            &Expr::TypeRepr {
+                name: Name::Resolved(SymbolID::INT, "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
@@ -1407,15 +1418,24 @@ mod tests {
             panic!("didn't get a func");
         };
 
-        let TypeRepr(Name::Resolved(SymbolID::ARRAY, _), items, false) =
-            resolved.get(&ret.unwrap().into()).unwrap()
+        let TypeRepr {
+            name: Name::Resolved(SymbolID::ARRAY, _),
+            generics: items,
+            introduces_type: false,
+            ..
+        } = resolved.get(&ret.unwrap().into()).unwrap()
         else {
             panic!("didn't get array type repr");
         };
 
         assert_eq!(
             *resolved.get(&items[0].into()).unwrap(),
-            TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+            TypeRepr {
+                name: Name::Resolved(SymbolID(-1), "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -1482,7 +1502,12 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&type_repr.unwrap()).unwrap(),
-            Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+            Expr::TypeRepr {
+                name: Name::Resolved(SymbolID(-1), "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -1530,7 +1555,12 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&type_repr.unwrap()).unwrap(),
-            Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+            Expr::TypeRepr {
+                name: Name::Resolved(SymbolID(-1), "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         let Expr::Init(_, _) = resolved.get(&body[1]).unwrap() else {
@@ -1555,11 +1585,12 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&associated_types[0]).unwrap(),
-            Expr::TypeRepr(
-                Name::Resolved(SymbolID::resolved(2), "T".into()),
-                vec![],
-                true
-            )
+            Expr::TypeRepr {
+                name: Name::Resolved(SymbolID::resolved(2), "T".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: true
+            }
         );
     }
 
@@ -1570,8 +1601,10 @@ mod tests {
             panic!("didn't get protocol");
         };
 
-        let Expr::TypeRepr(Name::Resolved(aged_sym, aged_name), _, false) =
-            resolved.get(&conformances[0]).unwrap()
+        let Expr::TypeRepr {
+            name: Name::Resolved(aged_sym, aged_name),
+            ..
+        } = resolved.get(&conformances[0]).unwrap()
         else {
             panic!(
                 "did not get type repr: {:?}",

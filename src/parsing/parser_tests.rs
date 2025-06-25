@@ -338,7 +338,12 @@ mod tests {
         assert_eq!(*parsed.get(&4).unwrap(), Expr::Block(vec![3]));
         assert_eq!(
             *parsed.get(&2).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -355,7 +360,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -430,7 +440,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -498,7 +513,12 @@ mod tests {
         assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(0)));
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -513,11 +533,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Bool".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Bool".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -657,11 +687,21 @@ mod tests {
         // Check the enum generics
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], true)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: true
+            }
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], true)
+            Expr::TypeRepr {
+                name: "Y".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: true
+            }
         );
 
         // Check the body
@@ -672,11 +712,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&2).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&3).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Y".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -735,11 +785,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Float".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Float".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
@@ -748,11 +808,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&3).unwrap(),
-            Expr::TypeRepr("Float".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Float".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&4).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -827,12 +897,22 @@ mod tests {
 
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Y".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -858,11 +938,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            TypeRepr("Optional".into(), vec![0], false)
+            Expr::TypeRepr {
+                name: "Optional".into(),
+                generics: vec![0],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -1064,7 +1154,12 @@ mod structs {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
@@ -1077,7 +1172,12 @@ mod structs {
         );
         assert_eq!(
             *parsed.get(&2).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(*parsed.get(&3).unwrap(), Expr::LiteralInt("123".into()));
 
@@ -1148,8 +1248,15 @@ mod structs {
 
 #[cfg(test)]
 mod error_handling_tests {
+    use typed_arena::Arena;
+
     use crate::{
-        diagnostic::Diagnostic, expr::Expr, name::Name, parser::parse, token::Token,
+        diagnostic::Diagnostic,
+        expr::Expr,
+        full_ast::{Filler, FullExpr},
+        name::Name,
+        parser::parse,
+        token::Token,
         token_kind::TokenKind,
     };
 
@@ -1241,7 +1348,10 @@ mod error_handling_tests {
 
         assert_eq!(*name, Name::Raw("Aged".into()));
 
-        let Expr::TypeRepr(Name::Raw(x_name), _, false) = parsed.get(&conformances[0]).unwrap()
+        let Expr::TypeRepr {
+            name: Name::Raw(x_name),
+            ..
+        } = parsed.get(&conformances[0]).unwrap()
         else {
             panic!(
                 "didn't get conformance: {:?}",
@@ -1250,7 +1360,12 @@ mod error_handling_tests {
         };
         assert_eq!(x_name, "X");
 
-        let Expr::TypeRepr(t_name, _, true) = parsed.get(&associated_types[0]).unwrap() else {
+        let Expr::TypeRepr {
+            name: t_name,
+            introduces_type: true,
+            ..
+        } = parsed.get(&associated_types[0]).unwrap()
+        else {
             panic!(
                 "Didn't get type repr: {:?}",
                 parsed.get(&associated_types[0]).unwrap()
@@ -1283,7 +1398,12 @@ mod error_handling_tests {
         assert!(generics.is_empty());
         assert_eq!(
             *parsed.get(&ret).unwrap(),
-            Expr::TypeRepr(Name::Raw("Int".into()), vec![], false),
+            Expr::TypeRepr {
+                name: Name::Raw("Int".into()),
+                introduces_type: false,
+                generics: vec![],
+                conformances: vec![]
+            },
         );
     }
 
@@ -1305,5 +1425,47 @@ mod error_handling_tests {
         };
 
         assert_eq!(name, "Person");
+    }
+
+    #[test]
+    fn parses_type_repr_conformance() {
+        let parsed = parse(
+            "
+        func foo<T: Fizz>(x) -> T { x }
+    ",
+            "-".into(),
+        );
+
+        let arena = Arena::new();
+        let filler = Filler::new(&parsed, &arena);
+        let filled = filler.fill_root();
+
+        use FullExpr::*;
+        assert_eq!(
+            filled[0],
+            &Func {
+                name: &Some(Name::Raw("foo".into())),
+                generics: vec![&TypeRepr {
+                    name: &Name::Raw("T".into()),
+                    conformances: vec![&TypeRepr {
+                        name: &Name::Raw("Fizz".into()),
+                        generics: vec![],
+                        conformances: vec![],
+                        introduces_type: false
+                    }],
+                    generics: vec![],
+                    introduces_type: true
+                }],
+                params: vec![&Parameter(&Name::Raw("x".into()), None)],
+                body: &Block(vec![&Variable(&Name::Raw("x".into()), None)]),
+                ret: Some(&TypeRepr {
+                    name: &Name::Raw("T".into()),
+                    conformances: vec![],
+                    generics: vec![],
+                    introduces_type: false
+                }),
+                captures: &vec![]
+            }
+        );
     }
 }

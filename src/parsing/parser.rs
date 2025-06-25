@@ -889,17 +889,36 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let type_repr = TypeRepr(name.into(), generics, is_type_parameter);
+        let mut conformances = vec![];
+        if is_type_parameter {
+            if self.did_match(TokenKind::Colon)? {
+                while !self.peek_is(TokenKind::LeftBrace)
+                    && !self.peek_is(TokenKind::EOF)
+                    && !self.peek_is(TokenKind::Greater)
+                {
+                    conformances.push(self.type_repr(false)?);
+                    self.consume(TokenKind::Comma).ok();
+                }
+            }
+        }
+
+        let type_repr = TypeRepr {
+            name: name.into(),
+            generics,
+            conformances,
+            introduces_type: is_type_parameter,
+        };
         let type_repr_id = self.add_expr(type_repr, tok)?;
 
         if self.did_match(TokenKind::QuestionMark)? {
             let tok = self.push_source_location();
             self.add_expr(
-                TypeRepr(
-                    Name::Raw("Optional".to_string()),
-                    vec![type_repr_id],
-                    is_type_parameter,
-                ),
+                TypeRepr {
+                    name: Name::Raw("Optional".to_string()),
+                    generics: vec![type_repr_id],
+                    conformances: vec![],
+                    introduces_type: is_type_parameter,
+                },
                 tok,
             )
         } else {
