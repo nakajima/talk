@@ -7,8 +7,8 @@ use std::{
 use crate::{
     SymbolID,
     parser::ExprID,
-    ty::{self, Ty},
-    type_checker::TypeError,
+    ty::Ty,
+    type_checker::{TypeConstraint, TypeError},
 };
 
 use super::{
@@ -40,6 +40,7 @@ pub struct ProtocolDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub associated_types: TypeParams,
+    pub conformances: Vec<SymbolID>,
     pub properties: Vec<Property>,
     pub methods: Vec<Method>,
     pub initializers: Vec<ExprID>,
@@ -59,6 +60,7 @@ impl ProtocolDef {
             symbol_id,
             name_str,
             associated_types,
+            conformances,
             properties,
             methods,
             initializers,
@@ -217,7 +219,7 @@ impl Environment {
     pub fn new() -> Self {
         Self {
             typed_exprs: HashMap::new(),
-            type_var_id: TypeVarID(0, TypeVarKind::Blank),
+            type_var_id: TypeVarID(0, vec![], TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
@@ -341,7 +343,7 @@ impl Environment {
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
         for old in scheme.unbound_vars {
             // preserve the original kind when making a fresh one
-            let fresh = self.new_type_variable(old.1.clone());
+            let fresh = self.new_type_variable(old.1.clone(), old.2.clone());
             var_map.insert(old, fresh);
         }
         // 2) walk the type, replacing each old with its fresh
@@ -402,8 +404,12 @@ impl Environment {
     }
 
     #[track_caller]
-    pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
-        self.type_var_id = TypeVarID(self.type_var_id.0 + 1, kind);
+    pub fn new_type_variable(
+        &mut self,
+        conformances: Vec<TypeConstraint>,
+        kind: TypeVarKind,
+    ) -> TypeVarID {
+        self.type_var_id = TypeVarID(self.type_var_id.0 + 1, conformances.clone(), kind);
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();

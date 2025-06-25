@@ -158,8 +158,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn checks_setter() {}
+    fn checks_setter() {
+        let checked = check(
+            "struct Person {
+                let age: Int
+            }
+
+            Person(age: 1).age = 1.2",
+        )
+        .unwrap();
+
+        assert_eq!(checked.diagnostics().len(), 1);
+    }
 }
 
 #[cfg(test)]
@@ -206,7 +216,7 @@ mod type_tests {
 
         assert_eq!(return_type, param_type.into());
 
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::FuncParam)) = *return_type else {
+        let Ty::TypeVar(TypeVarID(_, _, TypeVarKind::FuncParam)) = *return_type else {
             panic!("did not get func param type var");
         };
 
@@ -383,7 +393,7 @@ mod type_tests {
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::CallReturn)) = *ret else {
+        let Ty::TypeVar(TypeVarID(_, _, TypeVarKind::CallReturn)) = *ret else {
             panic!("didn't get call return");
         };
     }
@@ -958,7 +968,7 @@ mod type_tests {
         assert!(
             matches!(
                 type_params[0],
-                Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(Name::Resolved(_, _)),),),
+                Ty::TypeVar(TypeVarID(_, _, TypeVarKind::TypeRepr(Name::Resolved(_, _)),),),
             ),
             "{:?}",
             type_params
@@ -971,12 +981,12 @@ mod type_tests {
         };
 
         assert_eq!(1, params.len());
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(t))) = &params[0] else {
+        let Ty::TypeVar(TypeVarID(_, _, TypeVarKind::TypeRepr(t))) = &params[0] else {
             panic!("didn't get T");
         };
         assert_eq!(*t, Name::Resolved(SymbolID::resolved(3), "T".into()));
 
-        let box Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(u))) = ret else {
+        let box Ty::TypeVar(TypeVarID(_, _, TypeVarKind::TypeRepr(u))) = ret else {
             panic!("didn't get U");
         };
         assert_eq!(*u, Name::Resolved(SymbolID::resolved(2), "U".into()));
@@ -1329,7 +1339,6 @@ mod protocol_tests {
     use crate::{check_without_prelude, ty::Ty};
 
     #[test]
-    #[ignore]
     fn infers_protocol_conformance() {
         let checked = check_without_prelude(
             "
@@ -1351,6 +1360,12 @@ mod protocol_tests {
         ",
         )
         .unwrap();
+
+        assert!(
+            checked.diagnostics().is_empty(),
+            "{:?}",
+            checked.diagnostics()
+        );
 
         assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
     }

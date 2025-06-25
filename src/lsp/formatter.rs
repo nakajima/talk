@@ -163,7 +163,7 @@ impl<'a> Formatter<'a> {
                 generics,
                 conformances,
                 ..
-            } => self.format_type_repr(name, generics),
+            } => self.format_type_repr(name, generics, conformances),
             Expr::FuncTypeRepr(args, ret, _) => self.format_func_type_repr(args, *ret),
             Expr::TupleTypeRepr(types, _) => self.format_tuple_type_repr(types),
             Expr::Member(receiver, property) => self.format_member(receiver.as_ref(), property),
@@ -456,6 +456,18 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if !conformances.is_empty() {
+            let generic_docs: Vec<_> = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+
+            result = concat(
+                result,
+                concat(text(": "), join(generic_docs, concat(text(","), text(" ")))),
+            );
+        }
+
         concat_space(result, self.format_expr(body))
     }
 
@@ -486,6 +498,18 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if !conformances.is_empty() {
+            let generic_docs: Vec<_> = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+
+            result = concat(
+                result,
+                concat(text(": "), join(generic_docs, concat(text(","), text(" ")))),
+            );
+        }
+
         concat_space(result, self.format_expr(body))
     }
 
@@ -508,7 +532,7 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_type_repr(&self, name: &Name, generics: &[ExprID]) -> Doc {
+    fn format_type_repr(&self, name: &Name, generics: &[ExprID], conformances: &[ExprID]) -> Doc {
         let mut result = self.format_name(name);
 
         if !generics.is_empty() {
@@ -520,6 +544,15 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let generic_docs: Vec<_> = generics.iter().map(|&id| self.format_expr(id)).collect();
+
+            result = concat(
+                result,
+                concat(text(": "), join(generic_docs, concat(text(","), text(" ")))),
             );
         }
 

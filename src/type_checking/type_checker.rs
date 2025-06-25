@@ -26,7 +26,13 @@ pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
-pub struct TypeVarID(pub i32, pub TypeVarKind);
+pub struct TypeConstraint {
+    protocol: ProtocolDef,
+    associated_types: Vec<Ty>,
+}
+
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
+pub struct TypeVarID(pub i32, pub Vec<TypeConstraint>, pub TypeVarKind);
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum TypeVarKind {
@@ -214,7 +220,14 @@ impl TypeChecker {
                 generics,
                 conformances,
                 introduces_type,
-            } => self.infer_type_repr(env, name, generics, introduces_type, source_file),
+            } => self.infer_type_repr(
+                env,
+                name,
+                generics,
+                conformances,
+                introduces_type,
+                source_file,
+            ),
             Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
                 self.infer_func_type_repr(env, args, ret, expected, source_file)
             }
@@ -483,7 +496,7 @@ impl TypeChecker {
         let ty = tys
             .into_iter()
             .last()
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(vec![], TypeVarKind::Element)));
 
         Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
@@ -552,7 +565,7 @@ impl TypeChecker {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn);
+            let call_return_var = env.new_type_variable(vec![], TypeVarKind::CallReturn);
             Ty::TypeVar(call_return_var)
         };
 
@@ -647,10 +660,49 @@ impl TypeChecker {
         env: &mut Environment,
         name: &Name,
         generics: &[ExprID],
+        conformances: &[ExprID],
         is_type_parameter: &bool,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let name = name.clone();
+
+        let conformances: Vec<TypeConstraint> = conformances
+            .iter()
+            .filter_map(|c| {
+                let inferred = self.infer_node(c, env, &None, source_file);
+                match &inferred {
+                    Ok(Ty::Protocol(symbol_id, associated_types)) => {
+                        let Some(protocol_def) = env.lookup_protocol(&symbol_id) else {
+                            source_file.diagnostics.insert(Diagnostic::typing(
+                                *c,
+                                TypeError::Unknown(format!("No protocol named: {:?}", inferred)),
+                            ));
+
+                            return None;
+                        };
+
+                        Some(TypeConstraint {
+                            protocol: protocol_def.clone(),
+                            associated_types: associated_types.clone(),
+                        })
+                    }
+                    Ok(ty) => {
+                        source_file.diagnostics.insert(Diagnostic::typing(
+                            *c,
+                            TypeError::Unknown(format!("{:?} is not a protocol", ty)),
+                        ));
+
+                        None
+                    }
+                    Err(e) => {
+                        source_file
+                            .diagnostics
+                            .insert(Diagnostic::typing(*c, e.clone()));
+                        None
+                    }
+                }
+            })
+            .collect();
 
         let ty = match &name {
             Name::Raw(raw_name) => {
@@ -661,15 +713,20 @@ impl TypeChecker {
                     // If it's a type parameter declaration, create a new type variable.
                     // Otherwise, it's an unresolved type name (error) or needs other handling.
                     // For now, to allow forward enum declarations, we might make it a TypeVar.
-                    // This part might need more robust error handling for unknown types.
                     if *is_type_parameter {
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
+                        Ty::TypeVar(env.new_type_variable(
+                            conformances.clone(),
+                            TypeVarKind::TypeRepr(name.clone()),
+                        ))
                     } else {
                         // Attempting to use an unresolved raw name as a type.
                         // This should ideally be an error or a placeholder needing resolution.
                         // For now, create a type variable, similar to previous behavior.
                         log::warn!("Encountered unresolved raw type name in usage: {raw_name:?}");
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
+                        Ty::TypeVar(env.new_type_variable(
+                            conformances.clone(),
+                            TypeVarKind::TypeRepr(name.clone()),
+                        ))
                     }
                 }
             }
@@ -681,7 +738,10 @@ impl TypeChecker {
                 } else if *is_type_parameter {
                     // Declaration site of a type parameter (e.g., T in `enum Option<T>`).
                     // Create a new type variable for it.
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
+                    Ty::TypeVar(env.new_type_variable(
+                        conformances.clone(),
+                        TypeVarKind::TypeRepr(name.clone()),
+                    ))
                 } else {
                     // Usage of a resolved type name (e.g., T in `case some(T)` or `Int`).
                     // Instantiate its scheme from the environment.
@@ -723,7 +783,9 @@ impl TypeChecker {
             let Name::Resolved(symbol_id, _) = name else {
                 panic!("Type parameter name {name:?} was not resolved during its declaration")
             };
-            log::debug!("Declaring type parameter {symbol_id:?} ({name:?}) with ty {ty:?}");
+            log::debug!(
+                "Declaring type parameter {symbol_id:?} ({name:?}) with ty {ty:?}: {conformances:?}"
+            );
             // Type parameters are monomorphic within their defining generic scope.
             // So, references to this type parameter within this scope refer to this 'ty'.
             env.declare(symbol_id, Scheme::new(ty.clone(), vec![]));
@@ -782,7 +844,7 @@ impl TypeChecker {
         let mut func_var = None;
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
-            let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
+            let type_var = env.new_type_variable(vec![], TypeVarKind::FuncNameVar(*symbol_id));
             func_var = Some(type_var.clone());
             let scheme = Scheme::new(Ty::TypeVar(type_var), vec![]); // Monomorphic!
             log::debug!("Declared scheme for named func {symbol_id:?} {scheme:?}");
@@ -838,7 +900,7 @@ impl TypeChecker {
                 let var_ty = if let Some(ty_id) = &ty {
                     self.infer_node(ty_id, env, expected, source_file)?
                 } else {
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam))
+                    Ty::TypeVar(env.new_type_variable(vec![], TypeVarKind::FuncParam))
                 };
 
                 // Parameters are monomorphic inside the function body
@@ -909,7 +971,7 @@ impl TypeChecker {
         } else if let Some(expected) = expected {
             expected.clone()
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
+            Ty::TypeVar(env.new_type_variable(vec![], TypeVarKind::Let))
         };
 
         let scheme = if rhs.is_some() {
@@ -1106,7 +1168,7 @@ impl TypeChecker {
             None => {
                 // Unqualified: .some
                 // Create a type variable that will be constrained later
-                let member_var = env.new_type_variable(TypeVarKind::Member);
+                let member_var = env.new_type_variable(vec![], TypeVarKind::Member);
 
                 env.constrain_unqualified_member(
                     *id,
@@ -1133,8 +1195,9 @@ impl TypeChecker {
                 }
                 .clone();
 
-                let member_var =
-                    member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
+                let member_var = member_var.unwrap_or(Ty::TypeVar(
+                    env.new_type_variable(vec![], TypeVarKind::Member),
+                ));
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain_member(
@@ -1245,6 +1308,7 @@ impl TypeChecker {
                         // Just bind any field patterns to fresh type variables
                         for field_pattern in fields {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
+                                vec![],
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
                             ));
 
@@ -1766,7 +1830,7 @@ impl TypeChecker {
             } = expr
             {
                 let fn_var =
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
+                    Ty::TypeVar(env.new_type_variable(vec![], TypeVarKind::FuncNameVar(symbol_id)));
 
                 let typed_expr = TypedExpr::new(*id, expr, fn_var.clone());
                 env.typed_exprs.insert(*id, typed_expr);
