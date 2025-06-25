@@ -2,6 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
+    conformance_checker::ConformanceError,
     diagnostic::Diagnostic,
     environment::{EnumVariant, Method, Property, ProtocolDef, StructDef, free_type_vars},
     expr::{Expr, Pattern},
@@ -55,6 +56,8 @@ pub enum TypeError {
     Mismatch(Ty, Ty),
     Handled, // If we've already reported it
     OccursConflict,
+    ConformanceError(Vec<ConformanceError>),
+    Nonconformance(String, String),
 }
 
 impl TypeError {
@@ -73,6 +76,10 @@ impl TypeError {
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),
+            Self::Nonconformance(protocol, structname) => {
+                format!("{structname} does not conform to the {protocol} protocol")
+            }
+            Self::ConformanceError(_err) => todo!(),
         }
     }
 }
@@ -124,15 +131,15 @@ impl TypeChecker {
         source_file: &mut SourceFile<NameResolved>,
         symbol_table: &mut SymbolTable,
     ) {
+        if let Err((id, err)) = self.hoist_protocols(items, env, source_file, symbol_table) {
+            source_file.diagnostics.insert(Diagnostic::typing(id, err));
+        }
+
         if let Err((id, err)) = self.hoist_structs(items, env, source_file, symbol_table) {
             source_file.diagnostics.insert(Diagnostic::typing(id, err));
         }
 
         if let Err((id, err)) = self.hoist_enums(items, env, source_file, symbol_table) {
-            source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        }
-
-        if let Err((id, err)) = self.hoist_protocols(items, env, source_file, symbol_table) {
             source_file.diagnostics.insert(Diagnostic::typing(id, err));
         }
 
@@ -160,6 +167,19 @@ impl TypeChecker {
         }
 
         source_file.to_typed()
+    }
+
+    fn infer_nodes(
+        &self,
+        ids: &[ExprID],
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Vec<Ty>, TypeError> {
+        let mut result = vec![];
+        for id in ids {
+            result.push(self.infer_node(id, env, &None, source_file)?)
+        }
+        Ok(result)
     }
 
     pub fn infer_node(
@@ -267,7 +287,30 @@ impl TypeChecker {
                 self.infer_init(struct_id, func_id, env, source_file)
             }
             Expr::Break => Ok(Ty::Void),
-            Expr::ProtocolDecl { .. } => Ok(Ty::Void), // Handled by hoisting
+            Expr::ProtocolDecl {
+                name,
+                associated_types,
+                body,
+                conformances,
+            } => self.infer_protocol_def(
+                name,
+                associated_types,
+                body,
+                conformances,
+                env,
+                source_file,
+            ),
+            Expr::FuncSignature {
+                params,
+                generics,
+                ret,
+                ..
+            } => {
+                let params = self.infer_nodes(params, env, source_file)?;
+                let generics = self.infer_nodes(generics, env, source_file)?;
+                let ret = self.infer_node(ret, env, &None, source_file)?;
+                Ok(Ty::Func(params, ret.into(), generics))
+            }
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -284,6 +327,7 @@ impl TypeChecker {
                 env.typed_exprs.insert(*id, typed_expr);
             }
             Err(e) => {
+                log::error!("Error inferring node: {:?}", e);
                 source_file
                     .diagnostics
                     .insert(Diagnostic::typing(*id, e.clone()));
@@ -292,6 +336,41 @@ impl TypeChecker {
         }
 
         ty
+    }
+
+    fn infer_protocol_def(
+        &self,
+        name: &Name,
+        associated_types: &Vec<ExprID>,
+        body: &ExprID,
+        _conformances: &Vec<ExprID>,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let mut inferred_associated_types: Vec<Ty> = vec![];
+        for generic in associated_types {
+            inferred_associated_types
+                .push(self.infer_node(generic, env, &None, source_file)?.clone());
+        }
+
+        let Name::Resolved(symbol_id, _) = name else {
+            return Err(TypeError::Unresolved(name.name_str()));
+        };
+
+        let Some(Expr::Block(items)) = source_file.get(body).cloned() else {
+            unreachable!()
+        };
+
+        for item in items {
+            match source_file.get(&item) {
+                Some(Expr::Property { .. }) => continue, // Properties are handled by the hoisting
+                _ => {
+                    self.infer_node(&item, env, &None, source_file)?;
+                }
+            }
+        }
+
+        Ok(Ty::Protocol(*symbol_id, inferred_associated_types))
     }
 
     fn infer_init(
@@ -339,6 +418,35 @@ impl TypeChecker {
         let Name::Resolved(symbol_id, _) = name else {
             return Err(TypeError::Unresolved(name.name_str()));
         };
+
+        let struct_def = env
+            .lookup_struct(symbol_id)
+            .expect("did not get struct type def")
+            .clone();
+
+        let mut inferred_conformances = vec![];
+        for conformance in conformances {
+            let ty = self.infer_node(conformance, env, expected, source_file)?;
+            match ty.clone() {
+                Ty::Protocol(id, _) => {
+                    let protocol_def = env
+                        .lookup_protocol(&id)
+                        .expect("did not get protocol type def")
+                        .clone();
+                    inferred_conformances.push((conformance, protocol_def));
+                }
+                ty => {
+                    source_file.diagnostics.insert(Diagnostic::typing(
+                        *conformance,
+                        TypeError::Unknown(format!("{:?} is not a protocol", ty)),
+                    ));
+                }
+            }
+        }
+
+        for (id, conformance) in inferred_conformances {
+            env.constrain_conformance(*id, conformance, TypeDef::Struct(struct_def.clone()));
+        }
 
         let Some(Expr::Block(items)) = source_file.get(body).cloned() else {
             unreachable!()
@@ -1008,9 +1116,21 @@ impl TypeChecker {
                         .lookup_struct(&struct_id)
                         .and_then(|s| s.member_ty(member_name))
                         .cloned(),
+                    Ty::Protocol(protocol_id, _) => env
+                        .lookup_protocol(&protocol_id)
+                        .and_then(|s| {
+                            println!("protocol def: {:?}", s);
+                            s.member_ty(member_name)
+                        })
+                        .cloned(),
                     _ => None,
                 }
                 .clone();
+
+                println!(
+                    "--------- member var is {:?} in {:?}",
+                    member_var, receiver_ty
+                );
 
                 let member_var =
                     member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
@@ -1142,7 +1262,7 @@ impl TypeChecker {
         root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-        symbol_table: &mut SymbolTable,
+        _symbol_table: &mut SymbolTable,
     ) -> Result<(), (ExprID, TypeError)> {
         for id in root_ids {
             let Some(Expr::ProtocolDecl {
@@ -1155,6 +1275,8 @@ impl TypeChecker {
                 continue;
             };
 
+            println!("---------------------- hoisting protocol: {:?}", name);
+
             let mut inferred_associated_types = vec![];
             for associated_type_id in associated_types {
                 let ty = self
@@ -1165,7 +1287,7 @@ impl TypeChecker {
 
             let mut conformance_symbol_ids = vec![];
             for conformance in conformances {
-                let Expr::TypeRepr(Name::Resolved(symbol_id, name_str), _, _) = source_file
+                let Expr::TypeRepr(Name::Resolved(symbol_id, _name_str), _, _) = source_file
                     .get(&conformance)
                     .expect("did not get conformance expr")
                 else {
@@ -1183,6 +1305,7 @@ impl TypeChecker {
                 conformance_symbol_ids.push(*symbol_id);
             }
 
+            let name_str = name.name_str();
             let symbol_id = name.try_symbol_id();
 
             // Define a placeholder for `self` references
@@ -1190,7 +1313,7 @@ impl TypeChecker {
                 symbol_id,
                 name.name_str(),
                 inferred_associated_types.clone(),
-                conformance_symbol_ids,
+                conformance_symbol_ids.clone(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1213,6 +1336,109 @@ impl TypeChecker {
             );
             env.register_protocol(protocol_def);
             env.declare(symbol_id, scheme.clone());
+
+            let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
+                unreachable!("protocol without a body shouldn't get past parsing");
+            };
+
+            println!("protocol expr ids: {:?}", expr_ids);
+
+            let mut properties = vec![];
+            let mut methods = vec![];
+
+            for expr_id in expr_ids {
+                log::error!(
+                    "protocol expr: {name_str} {:?}",
+                    &source_file.get(&expr_id).cloned().unwrap()
+                );
+
+                match &source_file.get(&expr_id).cloned().unwrap() {
+                    Expr::Property {
+                        name,
+                        type_repr,
+                        default_value,
+                    } => {
+                        let mut ty = None;
+                        if let Some(type_repr) = type_repr {
+                            ty = Some(
+                                self.infer_node(type_repr, env, &None, source_file)
+                                    .map_err(|e| (expr_id, e))?,
+                            )
+                        }
+                        if let Some(default_value) = default_value {
+                            ty = Some(
+                                self.infer_node(default_value, env, &None, source_file)
+                                    .map_err(|e| (expr_id, e))?,
+                            );
+                        }
+                        if ty.is_none() {
+                            return Err((expr_id, TypeError::Unknown("No type for method".into())));
+                        }
+
+                        let (symbol, name) = match name.clone() {
+                            Name::Resolved(symbol, name_str) => (symbol, name_str),
+                            _ => unreachable!(),
+                        };
+
+                        log::trace!(
+                            "Defining {name_str} property {name:?} {ty:?} {:?}",
+                            &source_file.get(&expr_id).cloned().unwrap()
+                        );
+                        properties.push(Property::new(name.to_string(), ty.unwrap(), symbol));
+                    }
+                    Expr::Init(_, func_id) => {
+                        self.infer_node(func_id, env, &None, source_file).ok();
+                    }
+                    Expr::Func {
+                        name: Some(name), ..
+                    }
+                    | Expr::FuncSignature { name, .. } => {
+                        let name = match name.clone() {
+                            Name::Raw(name_str) => name_str,
+                            Name::Resolved(_, name_str) => name_str,
+                            _ => unreachable!(),
+                        };
+
+                        log::error!("got a funcish: {:?}", name);
+
+                        let ty = self
+                            .infer_node(&expr_id, env, &None, source_file)
+                            .map_err(|e| (expr_id, e))
+                            .unwrap();
+                        log::debug!("Defining {name_str} method {name:?} {ty:?}");
+
+                        methods.push(Method::new(name.to_string(), ty));
+                    }
+                    _ => {
+                        log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
+                        return Err((
+                            *id,
+                            TypeError::Unknown(format!(
+                                "Unhandled property: {:?}",
+                                source_file.get(&expr_id)
+                            )),
+                        ));
+                    }
+                }
+            }
+
+            // Re-register filled in protocol
+            let protocol_def = ProtocolDef::new(
+                symbol_id,
+                name.name_str(),
+                inferred_associated_types.clone(),
+                conformance_symbol_ids,
+                properties,
+                methods,
+                Default::default(),
+            );
+
+            println!(
+                "--------------------------- protocol def registered -----------------------------\n{:?}",
+                protocol_def
+            );
+
+            env.register_protocol(protocol_def);
         }
 
         Ok(())
@@ -1245,7 +1471,7 @@ impl TypeChecker {
                 unreachable!()
             };
 
-            let mut methods: HashMap<String, Method> = Default::default();
+            let mut methods: Vec<Method> = Default::default();
             let mut properties: Vec<Property> = Default::default();
             let mut type_parameters = vec![];
             let default_initializers = vec![];
@@ -1264,7 +1490,7 @@ impl TypeChecker {
 
             let mut conformance_symbol_ids = vec![];
             for conformance in conformances {
-                let Expr::TypeRepr(Name::Resolved(symbol_id, name_str), _, _) = source_file
+                let Expr::TypeRepr(Name::Resolved(symbol_id, _name_str), _, _) = source_file
                     .get(&conformance)
                     .expect("did not get conformance expr")
                 else {
@@ -1343,7 +1569,7 @@ impl TypeChecker {
                             _ => unreachable!(),
                         };
 
-                        log::trace!("Defining property {name:?} {ty:?}");
+                        log::trace!("Defining {name_str} property {name:?} {ty:?}");
                         properties.push(Property::new(name.to_string(), ty.unwrap(), symbol));
                     }
                     Expr::Init(_, func_id) => {
@@ -1359,8 +1585,8 @@ impl TypeChecker {
                         let ty = self
                             .infer_node(&expr_id, env, &None, source_file)
                             .map_err(|e| (expr_id, e))?;
-                        log::trace!("Defining property {name:?} {ty:?}");
-                        methods.insert(name.to_string(), Method::new(name.to_string(), ty));
+                        log::trace!("Defining {name_str} property {name:?} {ty:?}");
+                        methods.push(Method::new(name.to_string(), ty));
                     }
                     _ => {
                         return {
@@ -1407,7 +1633,8 @@ impl TypeChecker {
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
 
-            if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
+            if let Expr::EnumDecl(Name::Resolved(enum_id, name_str), generics, body) = expr.clone()
+            {
                 let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
                     unreachable!()
                 };
@@ -1426,13 +1653,14 @@ impl TypeChecker {
                 log::trace!("enum scheme: {scheme:?}");
                 env.declare_in_parent(enum_id, scheme);
 
-                let mut methods: HashMap<String, Method> = Default::default();
+                let mut methods: Vec<Method> = Default::default();
                 let mut variants: Vec<Ty> = vec![];
                 let mut variant_defs: Vec<EnumVariant> = vec![];
 
                 // Register a placeholder
                 env.register_enum(EnumDef {
                     name: Some(enum_id),
+                    name_str: Some(name_str.clone()),
                     variants: variant_defs.clone(),
                     type_parameters: generic_vars.clone(),
                     methods: methods.clone(),
@@ -1447,7 +1675,7 @@ impl TypeChecker {
                             .infer_node(&expr_id, env, &None, source_file)
                             .map_err(|e| (expr_id, e))?;
                         let name_str = name.clone().unwrap().name_str();
-                        methods.insert(name_str.clone(), Method::new(name_str, ty));
+                        methods.push(Method::new(name_str, ty));
                     }
 
                     if let Expr::EnumVariant(Name::Raw(name_str), values) =
@@ -1518,6 +1746,7 @@ impl TypeChecker {
                 log::debug!("Registering enum {enum_id:?}, variants: {variant_defs:?}");
                 env.register_enum(EnumDef {
                     name: Some(enum_id),
+                    name_str: Some(name_str),
                     variants: variant_defs,
                     type_parameters: generic_vars,
                     methods,
@@ -1553,8 +1782,6 @@ impl TypeChecker {
 
                 let scheme = env.generalize(&fn_var);
                 env.declare(symbol_id, scheme);
-            } else {
-                log::warn!("not a func {expr:?}");
             }
         }
     }

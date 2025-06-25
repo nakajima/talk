@@ -1014,7 +1014,12 @@ mod type_tests {
         };
         assert_eq!(enum_def.methods.len(), 2);
         assert_eq!(
-            enum_def.methods.get("buzz").unwrap().ty,
+            enum_def
+                .methods
+                .iter()
+                .find(|m| m.name == "buzz")
+                .unwrap()
+                .ty,
             Ty::Func(
                 vec![],
                 Box::new(Ty::Enum(SymbolID::typed(1), vec![])),
@@ -1022,7 +1027,12 @@ mod type_tests {
             )
         );
         assert_eq!(
-            enum_def.methods.get("foo").unwrap().ty,
+            enum_def
+                .methods
+                .iter()
+                .find(|m| m.name == "foo")
+                .unwrap()
+                .ty,
             Ty::Func(vec![], Box::new(Ty::Int), vec![])
         );
     }
@@ -1316,11 +1326,11 @@ mod pending {
 
 #[cfg(test)]
 mod protocol_tests {
-    use crate::{check, ty::Ty};
+    use crate::{check, check_without_prelude, ty::Ty};
 
     #[test]
     fn infers_protocol_conformance() {
-        let checked = check(
+        let checked = check_without_prelude(
             "
         protocol Aged {
             func getAge() -> Int
@@ -1336,7 +1346,7 @@ mod protocol_tests {
             aged.getAge()
         }
 
-        get(Person())
+        get(aged: Person())
         ",
         )
         .unwrap();

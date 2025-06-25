@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use crate::{
     SourceFile, SymbolID, SymbolTable, Typed,
+    conformance_checker::ConformanceChecker,
     diagnostic::Diagnostic,
-    environment::{Environment, TypeDef},
+    environment::{Environment, ProtocolDef, TypeDef},
     expr::Expr,
     name::Name,
     parser::ExprID,
@@ -13,11 +14,18 @@ use crate::{
 
 use super::{environment::EnumVariant, type_checker::TypeVarID};
 
+pub type Substitutions = HashMap<TypeVarID, Ty>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
     UnqualifiedMember(ExprID, String, Ty), // member name, expected type
+    ConformsTo {
+        expr_id: ExprID,
+        type_def: TypeDef,
+        protocol: ProtocolDef,
+    },
 }
 
 impl Constraint {
@@ -26,6 +34,7 @@ impl Constraint {
             Self::Equality(id, _, _) => id,
             Self::MemberAccess(id, _, _, _) => id,
             Self::UnqualifiedMember(id, _, _) => id,
+            Self::ConformsTo { expr_id, .. } => expr_id,
         }
     }
 }
@@ -53,6 +62,8 @@ impl<'a> ConstraintSolver<'a> {
 
     pub fn solve(&mut self) {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
+
+        log::trace!("Constraints:\n{:#?}", self.constraints);
 
         while let Some(constraint) = self.constraints.pop() {
             match self.solve_constraint(&constraint, &mut substitutions) {
@@ -97,11 +108,28 @@ impl<'a> ConstraintSolver<'a> {
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
         match &constraint {
+            Constraint::ConformsTo {
+                expr_id,
+                type_def,
+                protocol,
+            } => {
+                let conformance_checker =
+                    ConformanceChecker::new(&mut self.env, type_def, protocol, substitutions);
+                match conformance_checker.check() {
+                    Ok(()) => (),
+                    Err(err) => {
+                        self.source_file
+                            .diagnostics
+                            .insert(Diagnostic::typing(*expr_id, err));
+                    }
+                }
+                Self::normalize_substitutions(substitutions);
+            }
             Constraint::Equality(node_id, lhs, rhs) => {
                 let lhs = Self::apply(lhs, substitutions, 0);
                 let rhs = Self::apply(rhs, substitutions, 0);
 
-                Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
+                Self::unify(&lhs, &rhs, substitutions, self.env).map_err(|err| {
                     log::error!("{err:?}");
                     err
                 })?;
@@ -133,7 +161,7 @@ impl<'a> ConstraintSolver<'a> {
                                 );
 
                                 // Unify the constructor type with result_ty
-                                Self::unify(&constructor_ty, &result_ty, substitutions)?;
+                                Self::unify(&constructor_ty, &result_ty, substitutions, self.env)?;
                                 Self::normalize_substitutions(substitutions);
 
                                 // self.source_file.register_direct_callable(
@@ -176,7 +204,9 @@ impl<'a> ConstraintSolver<'a> {
 
                         log::info!("receiver_ty: {receiver_ty:?}");
 
-                        if let Some(method) = struct_def.methods.get(member_name) {
+                        if let Some(method) =
+                            struct_def.methods.iter().find(|m| m.name == *member_name)
+                        {
                             // Create a substitution map from the struct's generic parameters to the concrete types.
                             let mut substitution_map = HashMap::new();
                             for (param_ty, arg_ty) in
@@ -197,7 +227,12 @@ impl<'a> ConstraintSolver<'a> {
                             log::info!("specialized_method_ty: {specialized_method_ty:?}");
 
                             // Unify with the specialized type directly (no instantiation)
-                            Self::unify(&specialized_method_ty, &result_ty, substitutions)?;
+                            Self::unify(
+                                &specialized_method_ty,
+                                &result_ty,
+                                substitutions,
+                                self.env,
+                            )?;
 
                             // Apply the substitutions to get the final type
                             let final_ty = Self::apply(&specialized_method_ty, substitutions, 0);
@@ -222,7 +257,89 @@ impl<'a> ConstraintSolver<'a> {
                             let specialized_property_ty = self
                                 .env
                                 .substitute_ty_with_map(property.ty.clone(), &substitution_map);
-                            Self::unify(&specialized_property_ty, &result_ty, substitutions)?;
+                            Self::unify(
+                                &specialized_property_ty,
+                                &result_ty,
+                                substitutions,
+                                self.env,
+                            )?;
+
+                            let final_ty = Self::apply(&specialized_property_ty, substitutions, 0);
+                            self.source_file.define(*node_id, final_ty, self.env);
+                        }
+                    }
+                    Ty::Protocol(protocol_id, associated_types) => {
+                        let Some(TypeDef::Protocol(protocol_def)) =
+                            self.env.lookup_type(protocol_id).cloned()
+                        else {
+                            log::info!("For now, just unify with the result type");
+                            self.source_file.define(*node_id, result_ty, self.env);
+                            return Ok(());
+                        };
+
+                        if let Some(method) = protocol_def.member_ty(member_name)
+                            && matches!(method, Ty::Func(_, _, _))
+                        {
+                            // Create a substitution map from the struct's generic parameters to the concrete types.
+                            let mut substitution_map = HashMap::new();
+                            for (param_ty, arg_ty) in protocol_def
+                                .associated_types
+                                .iter()
+                                .zip(associated_types.iter())
+                            {
+                                if let Ty::TypeVar(param_id) = param_ty {
+                                    substitution_map.insert(param_id.clone(), arg_ty.clone());
+                                }
+                            }
+
+                            // Specialize the method's type.
+                            let specialized_method_ty = self
+                                .env
+                                .substitute_ty_with_map(method.clone(), &substitution_map);
+
+                            // IMPORTANT: Do NOT instantiate here - we want to use the same type variables
+                            // that are already in the struct instance's generics
+                            log::info!("specialized_method_ty: {specialized_method_ty:?}");
+
+                            // Unify with the specialized type directly (no instantiation)
+                            Self::unify(
+                                &specialized_method_ty,
+                                &result_ty,
+                                substitutions,
+                                self.env,
+                            )?;
+
+                            // Apply the substitutions to get the final type
+                            let final_ty = Self::apply(&specialized_method_ty, substitutions, 0);
+                            log::info!("Set type for member access {node_id:?}: {final_ty:?}");
+                            self.source_file.define(*node_id, final_ty, self.env);
+                        }
+
+                        if let Some(property) = protocol_def
+                            .properties
+                            .iter()
+                            .find(|p| &p.name == member_name)
+                        {
+                            // Also specialize property types.
+                            let mut substitution_map = HashMap::new();
+                            for (param_ty, arg_ty) in protocol_def
+                                .associated_types
+                                .iter()
+                                .zip(associated_types.iter())
+                            {
+                                if let Ty::TypeVar(param_id) = param_ty {
+                                    substitution_map.insert(param_id.clone(), arg_ty.clone());
+                                }
+                            }
+                            let specialized_property_ty = self
+                                .env
+                                .substitute_ty_with_map(property.ty.clone(), &substitution_map);
+                            Self::unify(
+                                &specialized_property_ty,
+                                &result_ty,
+                                substitutions,
+                                self.env,
+                            )?;
 
                             let final_ty = Self::apply(&specialized_property_ty, substitutions, 0);
                             self.source_file.define(*node_id, final_ty, self.env);
@@ -245,7 +362,7 @@ impl<'a> ConstraintSolver<'a> {
                                 );
 
                                 // Unify with the result type
-                                Self::unify(&variant_ty, &result_ty, substitutions)?;
+                                Self::unify(&variant_ty, &result_ty, substitutions, self.env)?;
                                 Self::normalize_substitutions(substitutions);
                                 self.source_file.define(*node_id, variant_ty, self.env);
                             } else {
@@ -351,14 +468,14 @@ impl<'a> ConstraintSolver<'a> {
         None
     }
 
-    fn apply_multiple(types: &[Ty], substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Vec<Ty> {
+    pub fn apply_multiple(types: &[Ty], substitutions: &Substitutions, depth: u32) -> Vec<Ty> {
         types
             .iter()
             .map(|ty| Self::apply(ty, substitutions, depth))
             .collect()
     }
 
-    fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
+    pub fn apply(ty: &Ty, substitutions: &Substitutions, depth: u32) -> Ty {
         if depth > 100 {
             return ty.clone();
         }
@@ -448,10 +565,11 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    fn unify(
+    pub fn unify(
         lhs: &Ty,
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
+        env: &mut Environment,
     ) -> Result<(), TypeError> {
         log::trace!("Unifying: {lhs:?} and {rhs:?}");
 
@@ -487,11 +605,11 @@ impl<'a> ConstraintSolver<'a> {
                 Ty::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    Self::unify(lhs, &rhs, substitutions, env)?;
                 }
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    Self::unify(lhs, &rhs, substitutions, env)?;
                 }
 
                 if let (Ty::TypeVar(ret_var), concrete_ret) =
@@ -511,13 +629,13 @@ impl<'a> ConstraintSolver<'a> {
                     substitutions.insert(ret_var.clone(), concrete_ret.clone());
                 }
 
-                Self::unify(&lhs_returning, &rhs_returning, substitutions)?;
+                Self::unify(&lhs_returning, &rhs_returning, substitutions, env)?;
                 Self::normalize_substitutions(substitutions);
 
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                Self::unify(&lhs_func, &rhs_func, substitutions)?;
+                Self::unify(&lhs_func, &rhs_func, substitutions, env)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -525,7 +643,7 @@ impl<'a> ConstraintSolver<'a> {
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
-                Self::unify(&func, &closure, substitutions)?;
+                Self::unify(&func, &closure, substitutions, env)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -533,15 +651,39 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    Self::unify(lhs, &rhs, substitutions, env)?;
                     Self::normalize_substitutions(substitutions);
                 }
 
                 Ok(())
             }
+            (Ty::Struct(struct_id, struct_types), Ty::Protocol(protocol_id, protocol_types))
+            | (Ty::Protocol(protocol_id, protocol_types), Ty::Struct(struct_id, struct_types)) => {
+                let Some(struct_def) = env.lookup_struct(&struct_id) else {
+                    return Err(TypeError::Unresolved(format!("{struct_id:?}")));
+                };
+                let Some(protocol_def) = env.lookup_protocol(&protocol_id) else {
+                    return Err(TypeError::Unresolved(format!("{protocol_id:?}")));
+                };
+
+                if !struct_def.conformances.contains(&protocol_def.symbol_id) {
+                    return Err(TypeError::Nonconformance(
+                        protocol_def.name_str.clone(),
+                        struct_def.name_str.clone(),
+                    ));
+                }
+
+                for (s, p) in struct_types.iter().zip(protocol_types) {
+                    Self::unify(s, &p, substitutions, env)?;
+                }
+
+                Self::normalize_substitutions(substitutions);
+
+                Ok(())
+            }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
                 for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    Self::unify(lhs, &rhs, substitutions, env)?;
                     Self::normalize_substitutions(substitutions);
                 }
 
@@ -555,7 +697,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Returns true if `v` occurs inside `ty`
-    fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> bool {
+    fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &Substitutions) -> bool {
         let ty = Self::apply(ty, substitutions, 0);
         match &ty {
             Ty::TypeVar(tv) => tv == v,

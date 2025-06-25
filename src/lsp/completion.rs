@@ -62,8 +62,8 @@ impl<'a> CompletionContext<'a> {
             match type_def {
                 TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
-                    completions.extend(enum_def.methods.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(enum_def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));
@@ -78,8 +78,8 @@ impl<'a> CompletionContext<'a> {
                 }
                 TypeDef::Struct(struct_def) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(struct_def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));
@@ -92,8 +92,8 @@ impl<'a> CompletionContext<'a> {
                 }
                 TypeDef::Protocol(struct_def) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(struct_def.methods.iter().map(|method| CompletionItem {
+                        label: method.name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));

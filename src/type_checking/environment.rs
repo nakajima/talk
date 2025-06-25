@@ -4,7 +4,12 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{SymbolID, parser::ExprID, ty::Ty, type_checker::TypeError};
+use crate::{
+    SymbolID,
+    parser::ExprID,
+    ty::{self, Ty},
+    type_checker::TypeError,
+};
 
 use super::{
     constraint_solver::Constraint,
@@ -14,28 +19,29 @@ use super::{
 
 pub type Scope = HashMap<SymbolID, Scheme>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumVariant {
     pub name: String,
     pub values: Vec<Ty>,
     pub constructor_symbol: SymbolID,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumDef {
     pub name: Option<SymbolID>,
+    pub name_str: Option<String>,
     pub type_parameters: TypeParams,
     pub variants: Vec<EnumVariant>,
-    pub methods: HashMap<String, Method>,
+    pub methods: Vec<Method>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProtocolDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub associated_types: TypeParams,
     pub properties: Vec<Property>,
-    pub methods: HashMap<String, Method>,
+    pub methods: Vec<Method>,
     pub initializers: Vec<ExprID>,
 }
 
@@ -46,7 +52,7 @@ impl ProtocolDef {
         associated_types: TypeParams,
         conformances: Vec<SymbolID>,
         properties: Vec<Property>,
-        methods: HashMap<String, Method>,
+        methods: Vec<Method>,
         initializers: Vec<ExprID>,
     ) -> Self {
         Self {
@@ -64,7 +70,7 @@ impl ProtocolDef {
             return Some(&property.ty);
         }
 
-        if let Some(method) = self.methods.get(name) {
+        if let Some(method) = self.methods.iter().find(|p| p.name == name) {
             return Some(&method.ty);
         }
 
@@ -76,14 +82,14 @@ impl ProtocolDef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub conformances: Vec<SymbolID>,
     pub properties: Vec<Property>,
-    pub methods: HashMap<String, Method>,
+    pub methods: Vec<Method>,
     pub initializers: Vec<(PathBuf, ExprID)>,
 }
 
@@ -94,7 +100,7 @@ impl StructDef {
         type_parameters: TypeParams,
         conformances: Vec<SymbolID>,
         properties: Vec<Property>,
-        methods: HashMap<String, Method>,
+        methods: Vec<Method>,
         initializers: Vec<(PathBuf, ExprID)>,
     ) -> Self {
         Self {
@@ -113,7 +119,7 @@ impl StructDef {
             return Some(&property.ty);
         }
 
-        if let Some(method) = self.methods.get(name) {
+        if let Some(method) = self.methods.iter().find(|m| m.name == name) {
             return Some(&method.ty);
         }
 
@@ -139,11 +145,29 @@ impl EnumDef {
 
 pub type TypeParams = Vec<Ty>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDef {
     Enum(EnumDef),
     Struct(StructDef),
     Protocol(ProtocolDef),
+}
+
+impl TypeDef {
+    pub fn name(&self) -> String {
+        match self {
+            Self::Enum(def) => def.name_str.clone().unwrap_or("anonymous enum".to_string()),
+            Self::Struct(def) => def.name_str.clone(),
+            Self::Protocol(def) => def.name_str.clone(),
+        }
+    }
+
+    pub fn find_method(&self, name: &str) -> Option<&Method> {
+        match self {
+            Self::Enum(def) => def.methods.iter().find(|m| m.name == name),
+            Self::Struct(def) => def.methods.iter().find(|m| m.name == name),
+            Self::Protocol(def) => def.methods.iter().find(|m| m.name == name),
+        }
+    }
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
@@ -215,7 +239,7 @@ impl Environment {
     pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::warn!(
+            log::trace!(
                 "constrain_equality {:?} {:?} {:?} from {}:{}",
                 id,
                 lhs,
@@ -225,6 +249,14 @@ impl Environment {
             );
         }
         self.constraints.push(Constraint::Equality(id, lhs, rhs))
+    }
+
+    pub fn constrain_conformance(&mut self, id: ExprID, protocol: ProtocolDef, type_def: TypeDef) {
+        self.constraints.push(Constraint::ConformsTo {
+            expr_id: id,
+            type_def,
+            protocol,
+        })
     }
 
     pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
@@ -376,7 +408,7 @@ impl Environment {
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::warn!(
+            log::trace!(
                 "new_type_variable {:?} from {}:{}",
                 Ty::TypeVar(self.type_var_id.clone()),
                 loc.file(),
@@ -422,6 +454,14 @@ impl Environment {
 
     pub fn lookup_struct(&self, name: &SymbolID) -> Option<&StructDef> {
         if let Some(TypeDef::Struct(def)) = self.types.get(name) {
+            Some(def)
+        } else {
+            None
+        }
+    }
+
+    pub fn lookup_protocol(&self, name: &SymbolID) -> Option<&ProtocolDef> {
+        if let Some(TypeDef::Protocol(def)) = self.types.get(name) {
             Some(def)
         } else {
             None

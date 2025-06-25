@@ -105,7 +105,7 @@ impl Ty {
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
-            Ty::Protocol(symbol_id, associated_types) => todo!(),
+            Ty::Protocol(_symbol_id, _associated_types) => todo!(),
         }
     }
 }
@@ -352,8 +352,6 @@ impl CurrentFunction {
                 instructions,
             });
         }
-
-        log::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
 
         IRFunction {
             ty,
@@ -1445,7 +1443,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if let Some((_, method)) = struct_def.methods.iter().find(|(n, _)| *n == name) {
+                if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
                     let name = Name::Resolved(struct_id, format!("{}_{name}", struct_def.name_str))
                         .mangled(&method.ty);
@@ -2085,7 +2083,7 @@ impl<'a> Lowerer<'a> {
         let callee_name = match receiver_ty.ty {
             Ty::Struct(struct_id, _) => {
                 let struct_def = self.env.lookup_struct(&struct_id)?;
-                let method = struct_def.methods.get(name)?;
+                let method = struct_def.methods.iter().find(|m| m.name == name)?;
                 Some(format!(
                     "@_{}_{}_{}",
                     struct_id.0, struct_def.name_str, method.name

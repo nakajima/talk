@@ -15,7 +15,7 @@ impl Name {
                 if name_str == "main" {
                     "@main".into()
                 } else {
-                    format!("@_{:?}_{}", symbol_id.0, name_str)
+                    format!("@_{}_{}", symbol_id.0, name_str)
                 }
             }
             Name::_Self(_) => {

@@ -448,27 +448,48 @@ impl NameResolver {
                 }
                 PatternVariant(_, _, _items) => todo!(),
                 FuncSignature {
-                    name,
+                    name: Name::Raw(name_str),
                     params,
                     generics,
                     ret,
-                } => self.resolve_func(
-                    &Some(name),
-                    node_id,
-                    &params,
-                    &generics,
-                    None,
-                    &Some(ret),
-                    symbol_table,
-                    source_file,
-                ),
+                } => {
+                    let symbol_id = self.declare(
+                        name_str.to_string(),
+                        SymbolKind::FuncDef,
+                        node_id,
+                        source_file,
+                        symbol_table,
+                    );
+
+                    self.resolve_nodes(&generics, source_file, symbol_table);
+                    self.resolve_nodes(&params, source_file, symbol_table);
+                    self.resolve_nodes(&[ret], source_file, symbol_table);
+
+                    source_file.nodes.insert(
+                        *node_id,
+                        FuncSignature {
+                            name: Name::Resolved(symbol_id, name_str.to_string()),
+                            params,
+                            generics,
+                            ret,
+                        },
+                    );
+                }
+                FuncSignature {
+                    name: Name::Resolved(_, _),
+                    ..
+                }
+                | FuncSignature {
+                    name: Name::_Self(_),
+                    ..
+                } => (),
                 ProtocolDecl {
                     name,
                     associated_types,
                     body,
                     conformances,
                 } => {
-                    match name {
+                    let (symbol_id, name_str) = match name {
                         Name::Raw(name_str) => {
                             let symbol_id = self.declare(
                                 name_str.clone(),
@@ -477,22 +498,26 @@ impl NameResolver {
                                 source_file,
                                 symbol_table,
                             );
-                            self.type_symbol_stack.push(symbol_id);
-                            self.resolve_nodes(&associated_types, source_file, symbol_table);
-                            self.resolve_nodes(&conformances, source_file, symbol_table);
-                            source_file.nodes.insert(
-                                *node_id,
-                                ProtocolDecl {
-                                    name: Name::Resolved(symbol_id, name_str),
-                                    associated_types: associated_types.clone(),
-                                    conformances,
-                                    body,
-                                },
-                            );
-                        }
-                        _ => continue,
-                    }
 
+                            (symbol_id, name_str)
+                        }
+                        Name::Resolved(symbol_id, name_str) => (symbol_id, name_str),
+                        _ => continue,
+                    };
+
+                    self.type_symbol_stack.push(symbol_id);
+                    self.resolve_nodes(&associated_types, source_file, symbol_table);
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
+                    self.resolve_nodes(&vec![body], source_file, symbol_table);
+                    source_file.nodes.insert(
+                        *node_id,
+                        ProtocolDecl {
+                            name: Name::Resolved(symbol_id, name_str),
+                            associated_types: associated_types.clone(),
+                            conformances,
+                            body,
+                        },
+                    );
                     self.resolve_nodes(&associated_types, source_file, symbol_table);
                     self.resolve_nodes(&[body], source_file, symbol_table);
                     self.type_symbol_stack.pop();
@@ -721,7 +746,6 @@ impl NameResolver {
 
                 symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
             }
-            self.hoist_enum_members(&body, source_file, symbol_table);
             self.type_symbol_stack.pop();
         }
     }

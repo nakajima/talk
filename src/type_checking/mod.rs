@@ -4,6 +4,7 @@ use crate::{
     parser::ExprID, ty::Ty, type_checker::TypeError, typed_expr::TypedExpr,
 };
 
+pub mod conformance_checker;
 pub mod constraint_solver;
 pub mod environment;
 pub mod name_resolver;
