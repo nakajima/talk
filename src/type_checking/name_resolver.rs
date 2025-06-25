@@ -1436,6 +1436,56 @@ mod tests {
             panic!("didn't get init");
         };
     }
+
+    #[test]
+    fn resolves_protocol() {
+        let resolved = resolve("protocol Age<T> {}");
+        let ProtocolDecl {
+            name: Name::Resolved(sym, name_str),
+            associated_types,
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
+            panic!("didn't get protocol");
+        };
+
+        assert_eq!(SymbolID::resolved(1), *sym);
+        assert_eq!(*name_str, "Age".to_string());
+
+        assert_eq!(
+            *resolved.get(&associated_types[0]).unwrap(),
+            Expr::TypeRepr(
+                Name::Resolved(SymbolID::resolved(2), "T".into()),
+                vec![],
+                true
+            )
+        );
+    }
+
+    #[test]
+    fn resolves_protocol_conformance() {
+        let resolved = resolve("protocol Aged {}\nstruct Person: Aged {}");
+        let ProtocolDecl {
+            name: Name::Resolved(sym, name_str),
+            associated_types,
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
+            panic!("didn't get protocol");
+        };
+
+        assert_eq!(SymbolID::resolved(1), *sym);
+        assert_eq!(*name_str, "Age".to_string());
+
+        assert_eq!(
+            *resolved.get(&associated_types[0]).unwrap(),
+            Expr::TypeRepr(
+                Name::Resolved(SymbolID::resolved(2), "T".into()),
+                vec![],
+                true
+            )
+        );
+    }
 }
 
 // TODO:
