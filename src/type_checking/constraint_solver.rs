@@ -373,12 +373,15 @@ impl<'a> ConstraintSolver<'a> {
                             panic!("Could not find type from symbol: {enum_id:?}");
                         }
                     }
+                    Ty::TypeVar(TypeVarID(_, type_constraints, type_var)) => {
+                        // TODO: I don't think this is right
+                    }
                     // Future: Handle other receiver types (structs, etc.)
                     _ => {
                         log::warn!(
-                            "For now just unify with the result type: {node_id:?}, {result_ty:?}"
+                            "Could not determine member access receiver:\n{node_id}\n{:?}\n{member_name}\n{result_ty:?}",
+                            Self::apply(&receiver_ty, substitutions, 1)
                         );
-                        // For now, just unify with the result type
                         self.source_file.define(*node_id, result_ty, self.env);
                     }
                 }
@@ -582,7 +585,7 @@ impl<'a> ConstraintSolver<'a> {
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
                 // When unifying two type variables, pick one consistently
-                if v1.0 < v2.0 {
+                if v1.0 > v2.0 {
                     substitutions.insert(v2.clone(), Ty::TypeVar(v1.clone()));
                 } else {
                     substitutions.insert(v1.clone(), Ty::TypeVar(v2.clone()));

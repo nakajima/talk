@@ -1,11 +1,15 @@
 use std::{collections::HashMap, hash::Hash};
 
+use typed_arena::Arena;
+
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
     conformance_checker::ConformanceError,
     diagnostic::Diagnostic,
     environment::{EnumVariant, Method, Property, ProtocolDef, StructDef, free_type_vars},
     expr::{Expr, Pattern},
+    full_ast::Filler,
+    lsp::formatter::{self, Formatter},
     match_builtin,
     name::Name,
     name_resolver::NameResolverError,
@@ -396,7 +400,13 @@ impl TypeChecker {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let inferred = self.infer_node(func_id, env, &None, source_file)?;
+        let struct_def = env.lookup_struct(struct_id).unwrap();
+        let inferred = self.infer_node(
+            func_id,
+            env,
+            &Some(Ty::Struct(*struct_id, struct_def.type_parameters.clone())),
+            source_file,
+        )?;
         let params = match inferred {
             Ty::Func(params, _, _) => params,
             Ty::Closure {
@@ -858,7 +868,7 @@ impl TypeChecker {
 
         let mut inferred_generics = vec![];
         for generic in generics {
-            inferred_generics.push(self.infer_node(generic, env, expected, source_file)?);
+            inferred_generics.push(self.infer_node(generic, env, &None, source_file)?);
         }
 
         // Infer generic type parameters
@@ -881,10 +891,14 @@ impl TypeChecker {
             }
         }
 
-        let expected_body_ty = if let Some(ret) = ret {
-            Some(self.infer_node(ret, env, &None, source_file)?)
-        } else {
-            None
+        let expected_body_ty = match (expected, ret) {
+            (Some(expected_ty), Some(ret)) => {
+                self.infer_node(ret, env, expected, source_file)?;
+                Some(expected_ty)
+            }
+            (Some(expected_ty), None) => Some(expected_ty),
+            (None, Some(ret)) => Some(&self.infer_node(ret, env, expected, source_file)?),
+            _ => None,
         };
 
         let ret_ty: Option<Ty> = ret
@@ -898,7 +912,7 @@ impl TypeChecker {
             let expr = source_file.get(param).cloned();
             if let Some(Expr::Parameter(Name::Resolved(symbol_id, _), ty)) = expr {
                 let var_ty = if let Some(ty_id) = &ty {
-                    self.infer_node(ty_id, env, expected, source_file)?
+                    self.infer_node(ty_id, env, &None, source_file)?
                 } else {
                     Ty::TypeVar(env.new_type_variable(vec![], TypeVarKind::FuncParam))
                 };
@@ -918,7 +932,7 @@ impl TypeChecker {
             }
         }
 
-        let body_ty = self.infer_node(body, env, &expected_body_ty, source_file)?;
+        let body_ty = self.infer_node(body, env, &expected_body_ty.cloned(), source_file)?;
 
         if let Some(ret_type) = ret_ty {
             env.constrain_equality(ret.unwrap(), body_ty.clone(), ret_type);
@@ -1099,6 +1113,11 @@ impl TypeChecker {
         };
 
         let return_ty = if let Some(expected) = expected {
+            println!("{}", formatter::format(source_file, 80));
+            let arena = &Arena::new();
+            let filler = Filler::new(source_file, arena);
+            println!("\n\n{:?}\n\n", filler.fill(*id));
+
             if return_ty != *expected {
                 env.constrain_equality(*id, return_ty, expected.clone());
             }

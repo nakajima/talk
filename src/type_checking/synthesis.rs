@@ -58,6 +58,13 @@ pub fn synthesize_inits(
                 ));
             }
 
+            let self_return = source_file.add(
+                env.next_id(),
+                Expr::Variable(Name::_Self(sym), None),
+                ExprMeta::generated(),
+            );
+            body_exprs.push(self_return);
+
             let body = source_file.add(
                 env.next_id(),
                 Expr::Block(body_exprs),

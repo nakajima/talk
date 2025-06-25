@@ -341,6 +341,7 @@ impl Environment {
     pub fn instantiate(&mut self, scheme: Scheme) -> Ty {
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
+        log::error!("Instantiating scheme: {:?}", scheme);
         for old in scheme.unbound_vars {
             // preserve the original kind when making a fresh one
             let fresh = self.new_type_variable(old.1.clone(), old.2.clone());

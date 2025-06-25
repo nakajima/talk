@@ -1,4 +1,5 @@
 use crate::{
+    Phase,
     expr::{Expr, ExprMeta, Pattern},
     name::Name,
     parser::ExprID,
@@ -83,14 +84,14 @@ fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
     })
 }
 
-pub struct Formatter<'a> {
-    source_file: &'a SourceFile,
+pub struct Formatter<'a, P: Phase> {
+    source_file: &'a SourceFile<P>,
     // Track expression metadata for source location info
     meta_cache: HashMap<ExprID, &'a ExprMeta>,
 }
 
-impl<'a> Formatter<'a> {
-    pub fn new(source_file: &'a SourceFile) -> Self {
+impl<'a, P: Phase> Formatter<'a, P> {
+    pub fn new(source_file: &'a SourceFile<P>) -> Self {
         let mut meta_cache = HashMap::new();
         for (i, meta) in &source_file.meta {
             meta_cache.insert(*i, meta);
@@ -924,7 +925,7 @@ impl<'a> Formatter<'a> {
 }
 
 // Public API
-pub fn format(source_file: &SourceFile, width: usize) -> String {
+pub fn format<P: Phase>(source_file: &SourceFile<P>, width: usize) -> String {
     let formatter = Formatter::new(source_file);
     formatter.format(width)
 }

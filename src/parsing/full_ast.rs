@@ -1,7 +1,7 @@
 use typed_arena::Arena;
 
 use crate::{
-    SourceFile, SymbolID,
+    Phase, SourceFile, SymbolID,
     expr::{Expr, Pattern},
     name::Name,
     parser::ExprID,
@@ -156,13 +156,13 @@ pub enum FullExpr<'a> {
     },
 }
 
-pub struct Filler<'a> {
-    source: &'a SourceFile,
+pub struct Filler<'a, P: Phase> {
+    source: &'a SourceFile<P>,
     arena: &'a Arena<FullExpr<'a>>,
 }
 
-impl<'a> Filler<'a> {
-    pub fn new(source: &'a SourceFile, arena: &'a Arena<FullExpr<'a>>) -> Self {
+impl<'a, P: Phase> Filler<'a, P> {
+    pub fn new(source: &'a SourceFile<P>, arena: &'a Arena<FullExpr<'a>>) -> Self {
         Self { source, arena }
     }
 
@@ -182,7 +182,7 @@ impl<'a> Filler<'a> {
         result
     }
 
-    fn fill(&self, expr_id: ExprID) -> &'a FullExpr<'a> {
+    pub fn fill(&self, expr_id: ExprID) -> &'a FullExpr<'a> {
         let expr = self.source.get(&expr_id).unwrap();
 
         let full_expr = match expr {
