@@ -326,14 +326,7 @@ impl Environment {
     pub fn generalize(&self, t: &Ty) -> Scheme {
         let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes);
-        // let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
-
-        let unbound_vars: Vec<TypeVarID> = ftv_t
-            .difference(&ftv_env)
-            .filter(|tv| matches!(tv.1, TypeVarKind::FuncParam | TypeVarKind::TypeRepr(_)))
-            .cloned()
-            .collect();
-
+        let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
         Scheme {
             unbound_vars,
             ty: t.clone(),

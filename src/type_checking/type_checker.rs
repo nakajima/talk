@@ -781,9 +781,12 @@ impl TypeChecker {
         if let Some(Name::Resolved(symbol_id, _)) = name {
             let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
             func_var = Some(type_var.clone());
-            let scheme = env.generalize(&Ty::TypeVar(type_var));
+            let scheme = Scheme::new(Ty::TypeVar(type_var), vec![]); // Monomorphic!
             log::debug!("Declared scheme for named func {symbol_id:?} {scheme:?}");
+
             env.declare(*symbol_id, scheme);
+            //  let scheme = env.generalize(&Ty::TypeVar(type_var));
+            // env.declare(*symbol_id, scheme);
         }
 
         env.start_scope();
@@ -1118,19 +1121,11 @@ impl TypeChecker {
                         .cloned(),
                     Ty::Protocol(protocol_id, _) => env
                         .lookup_protocol(&protocol_id)
-                        .and_then(|s| {
-                            println!("protocol def: {:?}", s);
-                            s.member_ty(member_name)
-                        })
+                        .and_then(|s| s.member_ty(member_name))
                         .cloned(),
                     _ => None,
                 }
                 .clone();
-
-                println!(
-                    "--------- member var is {:?} in {:?}",
-                    member_var, receiver_ty
-                );
 
                 let member_var =
                     member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
@@ -1275,8 +1270,6 @@ impl TypeChecker {
                 continue;
             };
 
-            println!("---------------------- hoisting protocol: {:?}", name);
-
             let mut inferred_associated_types = vec![];
             for associated_type_id in associated_types {
                 let ty = self
@@ -1341,17 +1334,10 @@ impl TypeChecker {
                 unreachable!("protocol without a body shouldn't get past parsing");
             };
 
-            println!("protocol expr ids: {:?}", expr_ids);
-
             let mut properties = vec![];
             let mut methods = vec![];
 
             for expr_id in expr_ids {
-                log::error!(
-                    "protocol expr: {name_str} {:?}",
-                    &source_file.get(&expr_id).cloned().unwrap()
-                );
-
                 match &source_file.get(&expr_id).cloned().unwrap() {
                     Expr::Property {
                         name,
@@ -1399,8 +1385,6 @@ impl TypeChecker {
                             _ => unreachable!(),
                         };
 
-                        log::error!("got a funcish: {:?}", name);
-
                         let ty = self
                             .infer_node(&expr_id, env, &None, source_file)
                             .map_err(|e| (expr_id, e))
@@ -1431,11 +1415,6 @@ impl TypeChecker {
                 properties,
                 methods,
                 Default::default(),
-            );
-
-            println!(
-                "--------------------------- protocol def registered -----------------------------\n{:?}",
-                protocol_def
             );
 
             env.register_protocol(protocol_def);
