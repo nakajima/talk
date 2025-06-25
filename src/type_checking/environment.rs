@@ -44,6 +44,7 @@ impl ProtocolDef {
         symbol_id: SymbolID,
         name_str: String,
         associated_types: TypeParams,
+        conformances: Vec<SymbolID>,
         properties: Vec<Property>,
         methods: HashMap<String, Method>,
         initializers: Vec<ExprID>,
@@ -80,6 +81,7 @@ pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
+    pub conformances: Vec<SymbolID>,
     pub properties: Vec<Property>,
     pub methods: HashMap<String, Method>,
     pub initializers: Vec<(PathBuf, ExprID)>,
@@ -90,6 +92,7 @@ impl StructDef {
         symbol_id: SymbolID,
         name_str: String,
         type_parameters: TypeParams,
+        conformances: Vec<SymbolID>,
         properties: Vec<Property>,
         methods: HashMap<String, Method>,
         initializers: Vec<(PathBuf, ExprID)>,
@@ -98,6 +101,7 @@ impl StructDef {
             symbol_id,
             name_str,
             type_parameters,
+            conformances,
             properties,
             methods,
             initializers,
@@ -139,6 +143,7 @@ pub type TypeParams = Vec<Ty>;
 pub enum TypeDef {
     Enum(EnumDef),
     Struct(StructDef),
+    Protocol(ProtocolDef),
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
@@ -233,7 +238,11 @@ impl Environment {
     }
 
     /// Look up the scheme for `sym`, then immediately instantiate it.
-    pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
+    pub fn instantiate_symbol(
+        &mut self,
+        symbol_id: SymbolID,
+        name_str: &String,
+    ) -> Result<Ty, TypeError> {
         let Some(scheme) = self
             .scopes
             .iter()
@@ -241,7 +250,8 @@ impl Environment {
             .find_map(|frame| frame.get(&symbol_id).cloned())
         else {
             log::error!(
-                "Trying to instantiate unknown symbol: {:?} in {:?}",
+                "Trying to instantiate unknown symbol: {} ({:?}) in {:?}",
+                name_str,
                 symbol_id,
                 self.scopes
             );
@@ -340,6 +350,13 @@ impl Environment {
                     let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
                     Ty::Struct(sym, new_generics)
                 }
+                Ty::Protocol(sym, associated_types) => {
+                    let new_associated_types = associated_types
+                        .iter()
+                        .map(|g| walk(g.clone(), map))
+                        .collect();
+                    Ty::Protocol(sym, new_associated_types)
+                }
                 Ty::Array(ty) => Ty::Array(Box::new(walk(*ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p.clone(), map)).collect()),
                 Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
@@ -374,6 +391,10 @@ impl Environment {
     pub fn register_enum(&mut self, def: EnumDef) {
         self.types
             .insert(def.clone().name.unwrap(), TypeDef::Enum(def));
+    }
+
+    pub fn register_protocol(&mut self, def: ProtocolDef) {
+        self.types.insert(def.symbol_id, TypeDef::Protocol(def));
     }
 
     pub fn register_struct(&mut self, def: StructDef) {
@@ -473,6 +494,13 @@ impl Environment {
             ),
             Ty::Array(ty) => Ty::Array(self.substitute_ty_with_map(*ty, substitutions).into()),
             Ty::Struct(sym, generics) => Ty::Struct(
+                sym,
+                generics
+                    .iter()
+                    .map(|t| self.substitute_ty_with_map(t.clone(), substitutions))
+                    .collect(),
+            ),
+            Ty::Protocol(sym, generics) => Ty::Protocol(
                 sym,
                 generics
                     .iter()

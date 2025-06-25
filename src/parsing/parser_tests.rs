@@ -1221,7 +1221,7 @@ mod error_handling_tests {
     fn parses_protocol() {
         let parsed = parse(
             "
-        protocol Aged<T> {
+        protocol Aged<T>: X {
           let age: Int
           func getAge() -> Int
         }
@@ -1232,6 +1232,7 @@ mod error_handling_tests {
         let Expr::ProtocolDecl {
             name,
             associated_types,
+            conformances,
             body,
         } = parsed.get(&parsed.root_ids()[0]).unwrap()
         else {
@@ -1239,6 +1240,15 @@ mod error_handling_tests {
         };
 
         assert_eq!(*name, Name::Raw("Aged".into()));
+
+        let Expr::TypeRepr(Name::Raw(x_name), _, false) = parsed.get(&conformances[0]).unwrap()
+        else {
+            panic!(
+                "didn't get conformance: {:?}",
+                parsed.get(&conformances[0]).unwrap()
+            );
+        };
+        assert_eq!(x_name, "X");
 
         let Expr::TypeRepr(t_name, _, true) = parsed.get(&associated_types[0]).unwrap() else {
             panic!(

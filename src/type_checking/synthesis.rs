@@ -1,5 +1,5 @@
 use crate::{
-    NameResolved, SourceFile, SymbolKind, SymbolTable,
+    NameResolved, SourceFile, SymbolKind, SymbolTable, TypeKind,
     environment::Environment,
     expr::{Expr, ExprMeta},
     name::Name,
@@ -12,7 +12,7 @@ pub fn synthesize_inits(
     env: &mut Environment,
 ) {
     for (sym, table) in symbol_table.types.clone() {
-        if table.initializers.is_empty() {
+        if table.initializers.is_empty() && table.kind == TypeKind::Struct {
             log::trace!("Synthesizing init for {sym:?}");
             let mut body_exprs: Vec<ExprID> = vec![];
 

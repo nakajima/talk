@@ -204,8 +204,9 @@ impl<'a> Formatter<'a> {
             Expr::ProtocolDecl {
                 name,
                 associated_types,
+                conformances,
                 body,
-            } => self.format_protocol(name, associated_types, *body),
+            } => self.format_protocol(name, associated_types, conformances, *body),
             Expr::FuncSignature {
                 name,
                 params,
@@ -453,7 +454,13 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_expr(body))
     }
 
-    fn format_protocol(&self, name: &Name, associated_types: &[ExprID], body: ExprID) -> Doc {
+    fn format_protocol(
+        &self,
+        name: &Name,
+        associated_types: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("protocol"), self.format_name(name));
 
         if !associated_types.is_empty() {

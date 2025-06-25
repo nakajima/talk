@@ -181,6 +181,7 @@ pub enum Expr {
         name: Name,
         associated_types: Vec<ExprID>, // Associated types
         body: ExprID,                  // Body ID
+        conformances: Vec<ExprID>,
     },
 
     FuncSignature {

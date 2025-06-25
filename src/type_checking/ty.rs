@@ -27,6 +27,7 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
+    Protocol(SymbolID, Vec<Ty> /* generics */),
     Pointer,
 }
 
@@ -70,6 +71,7 @@ impl Display for Ty {
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
             Ty::Struct(_, _) => write!(f, "struct"),
+            Ty::Protocol(sym, _) => write!(f, "protocol#{}", sym.0),
             Ty::Pointer => write!(f, "pointer"),
         }
     }

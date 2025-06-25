@@ -5,6 +5,7 @@ use crate::NameResolved;
 use crate::SymbolID;
 use crate::SymbolKind;
 use crate::SymbolTable;
+use crate::TypeKind;
 use crate::diagnostic::Diagnostic;
 use crate::expr::Expr;
 use crate::expr::Expr::*;
@@ -91,6 +92,7 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {
+        self.hoist_protocols(node_ids, source_file, symbol_table);
         self.hoist_enums(node_ids, source_file, symbol_table);
         self.hoist_funcs(node_ids, source_file, symbol_table);
         self.hoise_structs(node_ids, source_file, symbol_table);
@@ -108,8 +110,8 @@ impl NameResolver {
                 Struct {
                     name,
                     generics,
-                    body,
                     conformances,
+                    body,
                 } => {
                     match name {
                         Name::Raw(name_str) => {
@@ -126,8 +128,8 @@ impl NameResolver {
                                 Struct {
                                     name: Name::Resolved(symbol_id, name_str),
                                     generics: generics.clone(),
-                                    body,
                                     conformances,
+                                    body,
                                 },
                             );
                         }
@@ -268,7 +270,7 @@ impl NameResolver {
                 } => {
                     self.resolve_func(
                         &name,
-                        &node_id,
+                        node_id,
                         &params,
                         &generics,
                         Some(&body),
@@ -464,6 +466,7 @@ impl NameResolver {
                     name,
                     associated_types,
                     body,
+                    conformances,
                 } => {
                     match name {
                         Name::Raw(name_str) => {
@@ -475,12 +478,15 @@ impl NameResolver {
                                 symbol_table,
                             );
                             self.type_symbol_stack.push(symbol_id);
+                            self.resolve_nodes(&associated_types, source_file, symbol_table);
+                            self.resolve_nodes(&conformances, source_file, symbol_table);
                             source_file.nodes.insert(
                                 *node_id,
                                 ProtocolDecl {
                                     name: Name::Resolved(symbol_id, name_str),
                                     associated_types: associated_types.clone(),
-                                    body: body,
+                                    conformances,
+                                    body,
                                 },
                             );
                         }
@@ -513,7 +519,7 @@ impl NameResolver {
         self.func_stack.push((*node_id, self.scopes.len()));
         self.start_scope(source_file, source_file.span(node_id));
 
-        self.resolve_nodes(&generics, source_file, symbol_table);
+        self.resolve_nodes(generics, source_file, symbol_table);
 
         for param in params {
             let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
@@ -587,6 +593,72 @@ impl NameResolver {
         }
     }
 
+    fn hoist_protocols(
+        &mut self,
+        node_ids: &[ExprID],
+        source_file: &mut SourceFile,
+        symbol_table: &mut SymbolTable,
+    ) {
+        for id in node_ids {
+            let Some(ProtocolDecl {
+                name: Name::Raw(name_str),
+                associated_types,
+                body,
+                conformances,
+            }) = source_file.get(id).cloned()
+            else {
+                continue;
+            };
+
+            let protocol_symbol = self.declare(
+                name_str.clone(),
+                SymbolKind::Struct,
+                id,
+                source_file,
+                symbol_table,
+            );
+
+            symbol_table.initialize_type_table(TypeKind::Protocol, protocol_symbol);
+
+            self.resolve_nodes(&associated_types, source_file, symbol_table);
+
+            source_file.nodes.insert(
+                *id,
+                ProtocolDecl {
+                    name: Name::Resolved(protocol_symbol, name_str),
+                    associated_types,
+                    body,
+                    conformances,
+                },
+            );
+
+            // Hoist properties
+            let Some(Block(ids)) = source_file.get(&body) else {
+                log::error!("Didn't get protocol body");
+                return;
+            };
+
+            self.type_symbol_stack.push(protocol_symbol);
+
+            // Get properties for the protocol so we can synthesize stuff before
+            // type checking
+            for id in ids {
+                let Some(Property {
+                    name: Name::Raw(name_str),
+                    type_repr: ty,
+                    default_value: val,
+                }) = source_file.get(id)
+                else {
+                    continue;
+                };
+
+                symbol_table.add_property(protocol_symbol, name_str.clone(), *ty, *val);
+            }
+
+            self.type_symbol_stack.pop();
+        }
+    }
+
     fn hoise_structs(
         &mut self,
         node_ids: &[ExprID],
@@ -597,7 +669,7 @@ impl NameResolver {
             let Some(Struct {
                 name: Name::Raw(name_str),
                 generics,
-                body: body_expr,
+                body,
                 conformances,
             }) = source_file.get(id).cloned()
             else {
@@ -612,22 +684,23 @@ impl NameResolver {
                 symbol_table,
             );
 
-            symbol_table.initialize_type_table(struct_symbol);
+            symbol_table.initialize_type_table(TypeKind::Struct, struct_symbol);
 
             self.resolve_nodes(&generics, source_file, symbol_table);
+            self.resolve_nodes(&conformances, source_file, symbol_table);
 
             source_file.nodes.insert(
                 *id,
                 Struct {
                     name: Name::Resolved(struct_symbol, name_str),
                     generics,
-                    body: body_expr,
+                    body,
                     conformances,
                 },
             );
 
             // Hoist properties
-            let Some(Block(ids)) = source_file.get(&body_expr) else {
+            let Some(Block(ids)) = source_file.get(&body) else {
                 log::error!("Didn't get struct body");
                 return;
             };
@@ -648,7 +721,7 @@ impl NameResolver {
 
                 symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
             }
-            self.hoist_enum_members(&body_expr, source_file, symbol_table);
+            self.hoist_enum_members(&body, source_file, symbol_table);
             self.type_symbol_stack.pop();
         }
     }
@@ -1465,26 +1538,21 @@ mod tests {
     #[test]
     fn resolves_protocol_conformance() {
         let resolved = resolve("protocol Aged {}\nstruct Person: Aged {}");
-        let ProtocolDecl {
-            name: Name::Resolved(sym, name_str),
-            associated_types,
-            ..
-        } = resolved.roots()[0].unwrap()
-        else {
+        let Expr::Struct { conformances, .. } = resolved.roots()[1].unwrap() else {
             panic!("didn't get protocol");
         };
 
-        assert_eq!(SymbolID::resolved(1), *sym);
-        assert_eq!(*name_str, "Age".to_string());
+        let Expr::TypeRepr(Name::Resolved(aged_sym, aged_name), _, false) =
+            resolved.get(&conformances[0]).unwrap()
+        else {
+            panic!(
+                "did not get type repr: {:?}",
+                resolved.get(&conformances[0]).unwrap()
+            );
+        };
 
-        assert_eq!(
-            *resolved.get(&associated_types[0]).unwrap(),
-            Expr::TypeRepr(
-                Name::Resolved(SymbolID::resolved(2), "T".into()),
-                vec![],
-                true
-            )
-        );
+        assert_eq!(SymbolID::resolved(1), *aged_sym);
+        assert_eq!(*aged_name, "Aged".to_string());
     }
 }
 

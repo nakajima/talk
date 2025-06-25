@@ -90,6 +90,20 @@ impl<'a> CompletionContext<'a> {
                     }));
                     completions
                 }
+                TypeDef::Protocol(struct_def) => {
+                    let mut completions = vec![];
+                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        ..Default::default()
+                    }));
+                    completions.extend(struct_def.properties.iter().map(|prop| CompletionItem {
+                        label: prop.name.clone(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        ..Default::default()
+                    }));
+                    completions
+                }
             }
         } else {
             log::error!("did not get struct: {:?}", self.env.types);

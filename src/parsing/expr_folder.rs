@@ -87,7 +87,8 @@ pub trait ExprFolder<'a> {
                 name,
                 associated_types,
                 body,
-            } => self._fold_protocol_decl(expr.clone(), name, associated_types, body),
+                conformances,
+            } => self._fold_protocol_decl(expr.clone(), name, associated_types, conformances, body),
             FuncSignature {
                 name,
                 params,
@@ -561,6 +562,7 @@ pub trait ExprFolder<'a> {
         expr: Rc<Expr>,
         _name: &Name,
         _associated_types: Vec<Rc<Expr>>,
+        _conformances: Vec<Rc<Expr>>,
         _body: Rc<Expr>,
     ) -> Rc<Expr> {
         expr
@@ -570,11 +572,13 @@ pub trait ExprFolder<'a> {
         expr: Rc<Expr>,
         name: &Name,
         associated_types: &Vec<ExprID>,
+        conformances: &Vec<ExprID>,
         body: &ExprID,
     ) -> Rc<Expr> {
         let associated_types = self.fold_mult(associated_types);
+        let conformances = self.fold_mult(conformances);
         let body = self.fold(body);
-        self.on_protocol_decl(expr, name, associated_types, body)
+        self.on_protocol_decl(expr, name, associated_types, conformances, body)
     }
 
     fn on_func_signature(

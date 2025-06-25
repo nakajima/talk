@@ -105,6 +105,7 @@ impl Ty {
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
+            Ty::Protocol(symbol_id, associated_types) => todo!(),
         }
     }
 }

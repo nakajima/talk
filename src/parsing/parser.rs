@@ -253,12 +253,14 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Protocol)?;
         let name = Name::Raw(self.identifier()?);
         let associated_types = self.type_reprs()?;
+        let conformances = self.conformances()?;
         let body = self.protocol_body()?;
 
         self.add_expr(
             Expr::ProtocolDecl {
                 name,
                 associated_types,
+                conformances,
                 body,
             },
             tok,

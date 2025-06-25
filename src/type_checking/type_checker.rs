@@ -245,7 +245,7 @@ impl TypeChecker {
             }
             Expr::Pattern(pattern) => self.infer_pattern_expr(env, pattern, expected, source_file),
             Expr::Variable(Name::Raw(name_str), _) => Err(TypeError::Unresolved(name_str.clone())),
-            Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym),
+            Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym, &"self".into()),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
             Expr::Struct {
@@ -253,12 +253,21 @@ impl TypeChecker {
                 generics,
                 body,
                 conformances,
-            } => self.infer_struct(name, generics, body, env, expected, source_file),
+            } => self.infer_struct(
+                name,
+                generics,
+                conformances,
+                body,
+                env,
+                expected,
+                source_file,
+            ),
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, env, source_file)
             }
             Expr::Break => Ok(Ty::Void),
+            Expr::ProtocolDecl { .. } => Ok(Ty::Void), // Handled by hoisting
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -313,6 +322,7 @@ impl TypeChecker {
         &self,
         name: &Name,
         generics: &[ExprID],
+        conformances: &[ExprID],
         body: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -448,7 +458,7 @@ impl TypeChecker {
 
         match source_file.get(callee).cloned() {
             // Handle struct initialization
-            Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
+            Some(Expr::Variable(Name::Resolved(symbol_id, name_str), _))
                 if env.is_struct_symbol(&symbol_id) =>
             {
                 let struct_def = env.lookup_struct(&symbol_id).unwrap();
@@ -465,7 +475,7 @@ impl TypeChecker {
                 };
 
                 // Instantiate the struct type to get fresh type variables for its generics
-                let instantiated = env.instantiate_symbol(symbol_id)?;
+                let instantiated = env.instantiate_symbol(symbol_id, &name_str)?;
 
                 // Infer the init function type
                 let init_func_ty = self.infer_node(&func_id, env, expected, source_file)?;
@@ -564,10 +574,10 @@ impl TypeChecker {
                 } else {
                     // Usage of a resolved type name (e.g., T in `case some(T)` or `Int`).
                     // Instantiate its scheme from the environment.
-                    env.instantiate_symbol(*symbol_id)?
+                    env.instantiate_symbol(*symbol_id, &name_str)?
                 }
             }
-            Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id)?,
+            Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id, &"self".into())?,
         };
 
         // For explicit lists of generic types like <Int> in Option<Int>, we need to handle the generics
@@ -743,7 +753,7 @@ impl TypeChecker {
         } else {
             let capture_tys = captures
                 .iter()
-                .map(|c| env.instantiate_symbol(*c))
+                .map(|c| env.instantiate_symbol(*c, &format!("capture: {:?}", c)))
                 .filter_map(|c| c.ok())
                 .collect();
 
@@ -809,7 +819,7 @@ impl TypeChecker {
         symbol_id: SymbolID,
         name: &str,
     ) -> Result<Ty, TypeError> {
-        let ty = env.instantiate_symbol(symbol_id);
+        let ty = env.instantiate_symbol(symbol_id, &name.to_string());
         log::trace!("instantiated {symbol_id:?} ({name:?}) with {ty:?}");
         ty
     }
@@ -1139,6 +1149,7 @@ impl TypeChecker {
                 name,
                 associated_types,
                 body,
+                conformances,
             }) = source_file.get(id).cloned()
             else {
                 continue;
@@ -1152,14 +1163,56 @@ impl TypeChecker {
                 inferred_associated_types.push(ty);
             }
 
+            let mut conformance_symbol_ids = vec![];
+            for conformance in conformances {
+                let Expr::TypeRepr(Name::Resolved(symbol_id, name_str), _, _) = source_file
+                    .get(&conformance)
+                    .expect("did not get conformance expr")
+                else {
+                    return Err((
+                        conformance,
+                        TypeError::Unresolved(format!(
+                            "Unresolved name in {:?}",
+                            source_file
+                                .get(&conformance)
+                                .expect("did not get conformance expr")
+                        )),
+                    ));
+                };
+
+                conformance_symbol_ids.push(*symbol_id);
+            }
+
+            let symbol_id = name.try_symbol_id();
+
+            // Define a placeholder for `self` references
             let protocol_def = ProtocolDef::new(
-                name.try_symbol_id(),
+                symbol_id,
                 name.name_str(),
-                inferred_associated_types,
+                inferred_associated_types.clone(),
+                conformance_symbol_ids,
                 Default::default(),
                 Default::default(),
                 Default::default(),
             );
+
+            let unbound_vars: Vec<TypeVarID> = inferred_associated_types
+                .iter()
+                .filter_map(|ty| {
+                    if let Ty::TypeVar(var) = ty {
+                        Some(var.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let scheme = Scheme::new(
+                Ty::Protocol(symbol_id, inferred_associated_types.clone()),
+                unbound_vars.clone(),
+            );
+            env.register_protocol(protocol_def);
+            env.declare(symbol_id, scheme.clone());
         }
 
         Ok(())
@@ -1209,6 +1262,26 @@ impl TypeChecker {
                 }
             }
 
+            let mut conformance_symbol_ids = vec![];
+            for conformance in conformances {
+                let Expr::TypeRepr(Name::Resolved(symbol_id, name_str), _, _) = source_file
+                    .get(&conformance)
+                    .expect("did not get conformance expr")
+                else {
+                    return Err((
+                        conformance,
+                        TypeError::Unresolved(format!(
+                            "Unresolved name in {:?}",
+                            source_file
+                                .get(&conformance)
+                                .expect("did not get conformance expr")
+                        )),
+                    ));
+                };
+
+                conformance_symbol_ids.push(*symbol_id);
+            }
+
             // Manually create the scheme with the type parameters as unbound variables
             let unbound_vars: Vec<TypeVarID> = type_parameters
                 .iter()
@@ -1232,6 +1305,7 @@ impl TypeChecker {
                 symbol_id,
                 name_str.clone(),
                 type_parameters.clone(),
+                conformance_symbol_ids.clone(),
                 properties.clone(),
                 methods.clone(),
                 initializers
@@ -1307,6 +1381,7 @@ impl TypeChecker {
                 symbol_id,
                 name_str,
                 type_parameters.clone(),
+                conformance_symbol_ids,
                 properties,
                 methods,
                 initializers

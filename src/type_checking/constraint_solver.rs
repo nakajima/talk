@@ -420,6 +420,10 @@ impl<'a> ConstraintSolver<'a> {
                     .map(|p| Self::apply(p, substitutions, depth + 1))
                     .collect(),
             ),
+            Ty::Protocol(protocol_id, associated_types) => Ty::Protocol(
+                *protocol_id,
+                Self::apply_multiple(&associated_types, substitutions, depth + 1),
+            ),
             Ty::Void => ty.clone(),
         }
     }

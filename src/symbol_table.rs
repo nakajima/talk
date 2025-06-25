@@ -71,8 +71,16 @@ pub struct SymbolInfo {
     pub definition: Option<Definition>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypeKind {
+    Enum,
+    Struct,
+    Protocol,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeTable {
+    pub kind: TypeKind,
     pub properties: Vec<PropertyInfo>,
     pub initializers: Vec<ExprID>,
 }
@@ -187,8 +195,9 @@ impl SymbolTable {
         symbol_id
     }
 
-    pub fn initialize_type_table(&mut self, to_symbol_id: SymbolID) {
+    pub fn initialize_type_table(&mut self, kind: TypeKind, to_symbol_id: SymbolID) {
         let table = TypeTable {
+            kind,
             initializers: vec![],
             properties: vec![],
         };
@@ -221,6 +230,7 @@ impl SymbolTable {
             table.initializers.push(id);
         } else {
             let table = TypeTable {
+                kind: TypeKind::Struct,
                 initializers: vec![id],
                 properties: vec![],
             };

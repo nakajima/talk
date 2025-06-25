@@ -1319,7 +1319,7 @@ mod protocol_tests {
     use crate::{check, ty::Ty};
 
     #[test]
-    fn checks_protocol_conformance() {
+    fn infers_protocol_conformance() {
         let checked = check(
             "
         protocol Aged {
@@ -1332,13 +1332,15 @@ mod protocol_tests {
             }
         }
 
-        fn get(aged: Aged) {
+        func get(aged: Aged) {
             aged.getAge()
         }
+
+        get(Person())
         ",
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(&checked.root_ids()[2]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
     }
 }
