@@ -227,7 +227,7 @@ mod tests {
                 format!("@_{}_Person_init", person_id.0),
                 vec![Property {
                     name: "age".into(),
-                    ty: Ty::Int,
+                    expr_id: 123,
                     symbol: SymbolID::resolved(2)
                 }]
             )),
@@ -269,7 +269,7 @@ mod tests {
                 format!("@_{}_Person_init", person_id.0),
                 vec![Property {
                     name: "age".into(),
-                    ty: Ty::Int,
+                    expr_id: 123,
                     symbol: SymbolID::resolved(2)
                 }]
             )),

@@ -97,11 +97,12 @@ impl Ty {
 
                 IRType::Struct(
                     *symbol_id,
-                    struct_def
-                        .properties
-                        .iter()
-                        .map(|p| p.ty.to_ir(lowerer))
-                        .collect(),
+                    vec![],
+                    // struct_def
+                    //     .properties
+                    //     .iter()
+                    //     .map(|p| p.ty.to_ir(lowerer))
+                    //     .collect(),
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
@@ -799,11 +800,12 @@ impl<'a> Lowerer<'a> {
 
         let struct_ty = IRType::Struct(
             *symbol_id,
-            struct_def
-                .properties
-                .iter()
-                .map(|p| p.ty.to_ir(self))
-                .collect(),
+            vec![],
+            // struct_def
+            //     .properties
+            //     .iter()
+            //     .map(|p| p.ty.to_ir(self))
+            //     .collect(),
             struct_def
                 .type_parameters
                 .iter()
@@ -865,11 +867,12 @@ impl<'a> Lowerer<'a> {
         // Override func type for init to always return the struct
         let init_func_ty = Ty::Func(
             params,
-            Ty::Struct(
-                *symbol_id,
-                struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
-            )
-            .into(),
+            Ty::Void.into(),
+            // Ty::Struct(
+            //     *symbol_id,
+            //     struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
+            // )
+            // .into(),
             generics,
         );
 
@@ -1243,35 +1246,35 @@ impl<'a> Lowerer<'a> {
 
                         // We need to figure out the type of the value. This feels clumsy.
                         let ty = match variant_def.values[i].clone() {
-                            Ty::TypeVar(var) => {
-                                let Some(generic_pos) = type_def
-                                    .type_parameters
-                                    .iter()
-                                    .filter_map(|t| {
-                                        if let Ty::TypeVar(var_id) = t {
-                                            Some(var_id)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .position(|t| t == &var)
-                                // t == var.0)
-                                else {
-                                    panic!("unable to determine enum generic: {var:?}")
-                                };
+                            // Ty::TypeVar(var) => {
+                            //     let Some(generic_pos) = type_def
+                            //         .type_parameters
+                            //         .iter()
+                            //         .filter_map(|t| {
+                            //             if let Ty::TypeVar(var_id) = t {
+                            //                 Some(var_id)
+                            //             } else {
+                            //                 None
+                            //             }
+                            //         })
+                            //         .position(|t| t == &var)
+                            //     // t == var.0)
+                            //     else {
+                            //         panic!("unable to determine enum generic: {var:?}")
+                            //     };
 
-                                enum_generics[generic_pos].clone()
-                            }
+                            //     enum_generics[generic_pos].clone()
+                            // }
                             other => other,
                         };
 
-                        self.push_instr(Instr::GetEnumValue(
-                            value_reg,
-                            ty.to_ir(self),
-                            *scrutinee_reg,
-                            tag,
-                            i as u16,
-                        ));
+                        // self.push_instr(Instr::GetEnumValue(
+                        //     value_reg,
+                        //     ty.to_ir(self),
+                        //     *scrutinee_reg,
+                        //     tag,
+                        //     i as u16,
+                        // ));
                         self.current_func_mut()
                             .register_symbol(symbol_id, SymbolValue::Register(value_reg));
                     }
@@ -1359,14 +1362,15 @@ impl<'a> Lowerer<'a> {
 
                 let dest = self.allocate_register();
                 let args = RegisterList(
-                    fields
-                        .iter()
-                        .zip(&variant.values)
-                        .map(|(f, ty)| TypedRegister {
-                            ty: ty.to_ir(self),
-                            register: self._lower_pattern(f),
-                        })
-                        .collect(),
+                    // fields
+                    //     .iter()
+                    //     .zip(&variant.values)
+                    //     .map(|(f, ty)| TypedRegister {
+                    //         ty: ty.to_ir(self),
+                    //         register: self._lower_pattern(f),
+                    //     })
+                    //     .collect(),
+                    vec![],
                 );
                 self.push_instr(Instr::TagVariant(
                     dest,
@@ -1445,7 +1449,7 @@ impl<'a> Lowerer<'a> {
                 if let Some((_, method)) = struct_def.methods.iter().find(|(n, _)| *n == name) {
                     let func = self.allocate_register();
                     let name = Name::Resolved(struct_id, format!("{}_{name}", struct_def.name_str))
-                        .mangled(&method.ty);
+                        .mangled(&&Ty::Void);
                     self.push_instr(Instr::Ref(
                         func,
                         typed_expr.ty.to_ir(self),

@@ -189,3 +189,39 @@ pub enum Expr {
         ret: ExprID,
     },
 }
+
+impl Expr {
+    pub fn symbol_id(&self) -> Option<SymbolID> {
+        match self {
+            Expr::Struct(Name::Resolved(symbol_id, _), _, _) => Some(*symbol_id),
+            Expr::Property {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::TypeRepr(Name::Resolved(symbol_id, _), _, _) => Some(*symbol_id),
+            Expr::Init(symbol_id, _) => *symbol_id,
+            Expr::Func {
+                name: Some(Name::Resolved(symbol_id, _)),
+                ..
+            } => Some(*symbol_id),
+            Expr::Parameter(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::CallArg {
+                label: Some(Name::Resolved(symbol_id, _)),
+                ..
+            } => Some(*symbol_id),
+            Expr::Let(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::Variable(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::EnumDecl(Name::Resolved(symbol_id, _), _, _) => Some(*symbol_id),
+            Expr::EnumVariant(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::ProtocolDecl {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::FuncSignature {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            _ => None,
+        }
+    }
+}

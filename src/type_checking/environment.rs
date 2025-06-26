@@ -4,7 +4,10 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{SymbolID, parser::ExprID, ty::Ty, type_checker::TypeError};
+use crate::{
+    Phase, SourceFile, SymbolID, SymbolTable, constraint_solver::ConstraintSolver, parser::ExprID,
+    source_file, ty::Ty, type_checker::TypeError,
+};
 
 use super::{
     constraint_solver::Constraint,
@@ -17,8 +20,7 @@ pub type Scope = HashMap<SymbolID, Scheme>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumVariant {
     pub name: String,
-    pub values: Vec<Ty>,
-    pub constructor_symbol: SymbolID,
+    pub values: Vec<ExprID>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub struct EnumDef {
     pub name: Option<SymbolID>,
     pub type_parameters: TypeParams,
     pub variants: Vec<EnumVariant>,
+    pub raw_methods: HashMap<String, RawMethod>,
     pub methods: HashMap<String, Method>,
 }
 
@@ -35,7 +38,7 @@ pub struct StructDef {
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub properties: Vec<Property>,
-    pub methods: HashMap<String, Method>,
+    pub methods: HashMap<String, RawMethod>,
     pub initializers: Vec<(PathBuf, ExprID)>,
 }
 
@@ -45,7 +48,7 @@ impl StructDef {
         name_str: String,
         type_parameters: TypeParams,
         properties: Vec<Property>,
-        methods: HashMap<String, Method>,
+        methods: HashMap<String, RawMethod>,
         initializers: Vec<(PathBuf, ExprID)>,
     ) -> Self {
         Self {
@@ -59,13 +62,13 @@ impl StructDef {
     }
 
     pub fn member_ty(&self, name: &str) -> Option<&Ty> {
-        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
-            return Some(&property.ty);
-        }
+        // if let Some(property) = self.properties.iter().find(|p| p.name == name) {
+        //     return Some(&property.ty);
+        // }
 
-        if let Some(method) = self.methods.get(name) {
-            return Some(&method.ty);
-        }
+        // if let Some(method) = self.methods.get(name) {
+        //     return Some(&method.ty);
+        // }
 
         None
     }
@@ -101,12 +104,16 @@ pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 pub struct Property {
     pub name: String,
     pub symbol: SymbolID,
-    pub ty: Ty,
+    pub expr_id: ExprID,
 }
 
 impl Property {
-    pub fn new(name: String, ty: Ty, symbol: SymbolID) -> Self {
-        Self { name, ty, symbol }
+    pub fn new(name: String, symbol: SymbolID, expr_id: ExprID) -> Self {
+        Self {
+            name,
+            symbol,
+            expr_id,
+        }
     }
 }
 
@@ -119,6 +126,18 @@ pub struct Method {
 impl Method {
     pub fn new(name: String, ty: Ty) -> Self {
         Self { name, ty }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RawMethod {
+    pub name: String,
+    pub expr_id: ExprID,
+}
+
+impl RawMethod {
+    pub fn new(name: String, expr_id: ExprID) -> Self {
+        Self { name, expr_id }
     }
 }
 
@@ -156,6 +175,21 @@ impl Environment {
         res
     }
 
+    pub fn placeholder(&mut self, expr_id: &ExprID, symbol_id: &SymbolID) -> Ty {
+        // 1. Create a fresh placeholder for this usage of the type name.
+        let usage_placeholder = Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder));
+
+        // 2. Generate the InstanceOf constraint.
+        self.constraints.push(Constraint::InstanceOf {
+            expr_id: *expr_id,
+            ty: usage_placeholder.clone(),
+            symbol_id: *symbol_id,
+        });
+
+        // 3. Return the placeholder.
+        usage_placeholder
+    }
+
     pub fn constraints(&self) -> Vec<Constraint> {
         self.constraints.clone()
     }
@@ -176,6 +210,32 @@ impl Environment {
         self.constraints.push(Constraint::Equality(id, lhs, rhs))
     }
 
+    pub fn flush_constraints<P: Phase>(
+        &mut self,
+        source_file: &mut SourceFile<P>,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<HashMap<TypeVarID, Ty>, TypeError> {
+        let mut solver = ConstraintSolver::new(source_file, self, symbol_table);
+        let substitutions = solver.solve();
+        self.constraints.clear();
+        Ok(substitutions)
+    }
+
+    pub fn constraint_construction(
+        &mut self,
+        id: ExprID,
+        initializes_id: SymbolID,
+        args: Vec<Ty>,
+        ret: TypeVarID,
+    ) {
+        self.constraints.push(Constraint::InitializerCall {
+            expr_id: id,
+            initializes_id,
+            args,
+            ret,
+        })
+    }
+
     pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
         self.constraints
             .push(Constraint::UnqualifiedMember(id, name, result_ty))
@@ -187,13 +247,8 @@ impl Environment {
     }
 
     /// Look up the scheme for `sym`, then immediately instantiate it.
-    pub fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
-        let Some(scheme) = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|frame| frame.get(&symbol_id).cloned())
-        else {
+    fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
+        let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() else {
             log::error!(
                 "Trying to instantiate unknown symbol: {:?} in {:?}",
                 symbol_id,
@@ -202,7 +257,7 @@ impl Environment {
             return Err(TypeError::Unknown("Unknown symbol".into()));
         };
 
-        Ok(self.instantiate(scheme))
+        Ok(self.instantiate(&scheme))
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
@@ -225,13 +280,13 @@ impl Environment {
         self.scopes.push(Default::default());
     }
 
-    pub fn specialize(&mut self, scheme: Scheme, type_args: &[Ty]) -> Ty {
-        let mut substitutions = HashMap::new();
-        for (unbound_var, type_arg) in scheme.unbound_vars.iter().zip(type_args.iter()) {
-            substitutions.insert(unbound_var.clone(), type_arg.clone());
-        }
-        self.substitute_ty_with_map(scheme.ty, &substitutions)
-    }
+    // fn specialize(&mut self, scheme: Scheme, type_args: &[Ty]) -> Ty {
+    //     let mut substitutions = HashMap::new();
+    //     for (unbound_var, type_arg) in scheme.unbound_vars.iter().zip(type_args.iter()) {
+    //         substitutions.insert(unbound_var.clone(), type_arg.clone());
+    //     }
+    //     self.substitute_ty_with_map(scheme.ty, &substitutions)
+    // }
 
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
@@ -249,58 +304,58 @@ impl Environment {
     /// Instantiate a polymorphic scheme into a fresh monotype:
     /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
     /// and substitute α ↦ β throughout scheme.ty.
-    pub fn instantiate(&mut self, scheme: Scheme) -> Ty {
+    fn instantiate(&mut self, scheme: &Scheme) -> Ty {
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
-        for old in scheme.unbound_vars {
+        for old in &scheme.unbound_vars {
             // preserve the original kind when making a fresh one
             let fresh = self.new_type_variable(old.1.clone());
-            var_map.insert(old, fresh);
+            var_map.insert(old.clone(), fresh);
         }
         // 2) walk the type, replacing each old with its fresh
-        fn walk<'a>(ty: Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
+        fn walk<'a>(ty: &Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
                     if let Some(new_tv) = map.get(&tv).cloned() {
                         Ty::TypeVar(new_tv)
                     } else {
-                        Ty::TypeVar(tv)
+                        Ty::TypeVar(tv.clone())
                     }
                 }
                 Ty::Func(params, ret, generics) => {
-                    let new_params = params.iter().map(|p| walk(p.clone(), map)).collect();
-                    let new_ret = Box::new(walk(*ret, map));
-                    let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
+                    let new_params = params.iter().map(|p| walk(p, map)).collect();
+                    let new_ret = Box::new(walk(ret, map));
+                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
                     Ty::Func(new_params, new_ret, new_generics)
                 }
                 Ty::Init(struct_id, params) => {
-                    let new_params = params.iter().map(|p| walk(p.clone(), map)).collect();
-                    Ty::Init(struct_id, new_params)
+                    let new_params = params.iter().map(|p| walk(p, map)).collect();
+                    Ty::Init(*struct_id, new_params)
                 }
                 Ty::Closure { func, captures } => {
-                    let func = Box::new(walk(*func, map));
-                    let captures = captures.iter().map(|p| walk(p.clone(), map)).collect();
+                    let func = Box::new(walk(func, map));
+                    let captures = captures.iter().map(|p| walk(p, map)).collect();
                     Ty::Closure { func, captures }
                 }
                 Ty::Enum(name, generics) => {
-                    let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
-                    Ty::Enum(name, new_generics)
+                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+                    Ty::Enum(*name, new_generics)
                 }
                 Ty::EnumVariant(name, values) => {
-                    let new_values = values.iter().map(|g| walk(g.clone(), map)).collect();
-                    Ty::EnumVariant(name, new_values)
+                    let new_values = values.iter().map(|g| walk(g, map)).collect();
+                    Ty::EnumVariant(*name, new_values)
                 }
                 Ty::Struct(sym, generics) => {
-                    let new_generics = generics.iter().map(|g| walk(g.clone(), map)).collect();
-                    Ty::Struct(sym, new_generics)
+                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+                    Ty::Struct(*sym, new_generics)
                 }
-                Ty::Array(ty) => Ty::Array(Box::new(walk(*ty, map))),
-                Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p.clone(), map)).collect()),
+                Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
+                Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
                 Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
             }
         }
 
-        walk(scheme.ty, &var_map)
+        walk(&scheme.ty, &var_map)
     }
 
     pub fn end_scope(&mut self) {
@@ -334,6 +389,22 @@ impl Environment {
         self.types.insert(def.symbol_id, TypeDef::Struct(def));
     }
 
+    pub fn lookup_symbol(&self, symbol_id: &SymbolID) -> Result<&Scheme, TypeError> {
+        if let Some(scheme) = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(symbol_id))
+        {
+            Ok(scheme)
+        } else {
+            Err(TypeError::Unresolved(format!(
+                "Did not find symbol {:?} in scope",
+                symbol_id
+            )))
+        }
+    }
+
     pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {
         self.types.get(name)
     }
@@ -353,87 +424,19 @@ impl Environment {
         }
     }
 
-    pub fn lookup_struct(&self, name: &SymbolID) -> Option<&StructDef> {
-        if let Some(TypeDef::Struct(def)) = self.types.get(name) {
+    pub fn lookup_enum_mut(&mut self, name: &SymbolID) -> Option<&mut EnumDef> {
+        if let Some(TypeDef::Enum(def)) = self.types.get_mut(name) {
             Some(def)
         } else {
             None
         }
     }
 
-    /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
-    pub fn substitute_ty_with_map(&self, ty: Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
-        match ty {
-            Ty::TypeVar(ref type_var_id) => {
-                if let Some(substituted_ty) = substitutions.get(type_var_id) {
-                    // Important: Clone the substituted type. If it's also a TypeVar that needs further substitution,
-                    // the caller (or a broader substitution application like `apply_substitutions_to_ty`) must handle it.
-                    // This function only applies one layer from the provided map.
-                    substituted_ty.clone()
-                } else {
-                    ty // Not in this substitution map, return as is.
-                }
-            }
-            Ty::Init(struct_id, params) => {
-                let applied_params = params
-                    .iter()
-                    .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
-                    .collect();
-                Ty::Init(struct_id, applied_params)
-            }
-            Ty::Func(params, returning, generics) => {
-                let applied_params = params
-                    .iter()
-                    .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
-                    .collect();
-                let applied_return = self.substitute_ty_with_map(*returning, substitutions);
-                let applied_generics = generics
-                    .iter()
-                    .map(|g| self.substitute_ty_with_map(g.clone(), substitutions))
-                    .collect();
-                Ty::Func(applied_params, Box::new(applied_return), applied_generics)
-            }
-            Ty::Closure { func, captures } => {
-                let func = self
-                    .substitute_ty_with_map(*func, substitutions)
-                    .clone()
-                    .into();
-                let captures = captures
-                    .iter()
-                    .map(|capture| self.substitute_ty_with_map(capture.clone(), substitutions))
-                    .collect();
-
-                Ty::Closure { func, captures }
-            }
-            Ty::Enum(name, generics) => {
-                let applied_generics = generics
-                    .iter()
-                    .map(|g| self.substitute_ty_with_map(g.clone(), substitutions))
-                    .collect();
-                Ty::Enum(name, applied_generics)
-            }
-            Ty::EnumVariant(enum_id, values) => {
-                let applied_values = values
-                    .iter()
-                    .map(|v| self.substitute_ty_with_map(v.clone(), substitutions))
-                    .collect();
-                Ty::EnumVariant(enum_id, applied_values)
-            }
-            Ty::Tuple(types) => Ty::Tuple(
-                types
-                    .iter()
-                    .map(|param| self.substitute_ty_with_map(param.clone(), substitutions))
-                    .collect(),
-            ),
-            Ty::Array(ty) => Ty::Array(self.substitute_ty_with_map(*ty, substitutions).into()),
-            Ty::Struct(sym, generics) => Ty::Struct(
-                sym,
-                generics
-                    .iter()
-                    .map(|t| self.substitute_ty_with_map(t.clone(), substitutions))
-                    .collect(),
-            ),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty,
+    pub fn lookup_struct(&self, name: &SymbolID) -> Option<&StructDef> {
+        if let Some(TypeDef::Struct(def)) = self.types.get(name) {
+            Some(def)
+        } else {
+            None
         }
     }
 

@@ -62,7 +62,7 @@ impl<'a> CompletionContext<'a> {
             match type_def {
                 TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
-                    completions.extend(enum_def.methods.keys().map(|label| CompletionItem {
+                    completions.extend(enum_def.raw_methods.keys().map(|label| CompletionItem {
                         label: label.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()

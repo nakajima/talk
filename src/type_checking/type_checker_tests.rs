@@ -455,13 +455,14 @@ mod type_tests {
 
     #[test]
     fn infers_identity() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
             func identity(arg) { arg }
             identity(1)
             identity(2.0)
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
         assert_eq!(checker.type_for(&checker.root_ids()[2]).unwrap(), Ty::Float);
@@ -1022,9 +1023,11 @@ mod type_tests {
         let Some(TypeDef::Enum(enum_def)) = checked.env.lookup_type(&SymbolID::typed(1)) else {
             panic!();
         };
-        assert_eq!(enum_def.methods.len(), 2);
+        assert_eq!(enum_def.raw_methods.len(), 2);
         assert_eq!(
-            enum_def.methods.get("buzz").unwrap().ty,
+            checked
+                .type_for(&enum_def.raw_methods.get("buzz").unwrap().expr_id)
+                .unwrap(),
             Ty::Func(
                 vec![],
                 Box::new(Ty::Enum(SymbolID::typed(1), vec![])),
@@ -1032,7 +1035,9 @@ mod type_tests {
             )
         );
         assert_eq!(
-            enum_def.methods.get("foo").unwrap().ty,
+            checked
+                .type_for(&enum_def.raw_methods.get("foo").unwrap().expr_id)
+                .unwrap(),
             Ty::Func(vec![], Box::new(Ty::Int), vec![])
         );
     }
@@ -1123,39 +1128,41 @@ mod type_tests {
 #[cfg(test)]
 mod pending {
     use crate::{
-        diagnostic::Diagnostic, ty::Ty, type_checker::TypeError, type_checking::CheckResult,
+        check_without_prelude, diagnostic::Diagnostic, ty::Ty, type_checker::TypeError,
+        type_checking::CheckResult,
     };
 
     fn check_err(code: &'static str) -> Result<CheckResult, TypeError> {
-        crate::check(code)
+        check_without_prelude(code)
     }
 
     fn check(code: &'static str) -> Ty {
-        let typed = check_err(code).unwrap();
+        let typed = check_without_prelude(code).unwrap();
         typed.type_for(&typed.root_ids()[0]).unwrap()
     }
 
-    // #[test]
-    // fn checks_match_exhaustiveness_error() {
-    //     // This should fail type checking due to non-exhaustive match
-    //     let result = std::panic::catch_unwind(|| {
-    //         check(
-    //             "
-    //             enum Bool {
-    //                 case yes, no
-    //             }
-    //             func test(b: Bool) -> Int {
-    //                 match b {
-    //                     .yes -> 1
-    //                 }
-    //             }
-    //             ",
-    //         )
-    //     });
+    #[test]
+    #[ignore = "wip"]
+    fn checks_match_exhaustiveness_error() {
+        // This should fail type checking due to non-exhaustive match
+        let result = std::panic::catch_unwind(|| {
+            check(
+                "
+                enum Bool {
+                    case yes, no
+                }
+                func test(b: Bool) -> Int {
+                    match b {
+                        .yes -> 1
+                    }
+                }
+                ",
+            )
+        });
 
-    //     // Should panic or return error - depends on your error handling
-    //     assert!(result.is_err());
-    // }
+        // Should panic or return error - depends on your error handling
+        assert!(result.is_err());
+    }
 
     #[test]
     fn checks_literal_true() {
@@ -1236,12 +1243,13 @@ mod pending {
 
     #[test]
     fn checks_unary_expression() {
-        check("-1"); // Assuming '-' is a unary op
+        assert_eq!(check("-1"), Ty::Int);
     }
 
     #[test]
     fn checks_binary_expression() {
-        check("1 + 2");
+        assert_eq!(check("1 + 2"), Ty::Int);
+        assert_eq!(check("1.1 + 2.1"), Ty::Float);
     }
 
     #[test]
@@ -1294,7 +1302,7 @@ mod pending {
 
     #[test]
     fn checks_pattern_literal_int_in_match() {
-        check(
+        let checked = check_without_prelude(
             "
             enum MyEnum {
                 case val(Int)
@@ -1302,10 +1310,15 @@ mod pending {
             func test(e: MyEnum) {
                 match e {
                     .val(1) -> 0
+                    .val(2) -> 1
                 }
             }
+            test(.val(1))
         ",
-        );
+        )
+        .unwrap();
+
+        assert_eq!(checked.type_for(&checked.root_ids()[2]).unwrap(), Ty::Int);
     }
 
     #[test]
