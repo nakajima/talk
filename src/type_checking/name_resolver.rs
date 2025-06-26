@@ -278,6 +278,7 @@ impl NameResolver {
                     match name {
                         Name::Raw(name_str) => {
                             let (symbol_id, _) = self.lookup(&name_str);
+                            log::info!("Replacing parameter {name_str} with {symbol_id:?}");
                             symbol_table.add_map(source_file, node_id, &symbol_id);
                             source_file.nodes.insert(
                                 *node_id,

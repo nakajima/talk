@@ -1017,7 +1017,13 @@ impl<'a> Lowerer<'a> {
                     if capture == self_symbol {
                         captured_ir_types.push(IRType::Pointer);
                     } else {
-                        captured_ir_types.push(capture_types[i].to_ir(self));
+                        let capture_ty = self
+                            .env
+                            .lookup_symbol(&capture_types[i])
+                            .unwrap()
+                            .ty
+                            .clone();
+                        captured_ir_types.push(capture_ty.to_ir(self));
                     }
                 }
 

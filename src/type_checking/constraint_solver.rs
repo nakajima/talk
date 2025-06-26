@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Phase, SourceFile, SymbolID, SymbolTable, Typed,
+    NameResolved, Phase, SourceFile, SymbolID, SymbolTable, Typed,
     diagnostic::Diagnostic,
     environment::{Environment, TypeDef},
     expr::Expr,
@@ -11,7 +11,7 @@ use crate::{
     type_checker::{TypeError, TypeVarKind},
 };
 
-use super::{environment::EnumVariant, type_checker::TypeVarID};
+use super::{environment::RawEnumVariant, type_checker::TypeVarID};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
@@ -35,15 +35,9 @@ pub enum Constraint {
         ty: Ty,
         symbol_id: SymbolID,
     },
-    GenericApplication {
-        // A placeholder for the generic type being applied (e.g., Array)
-        generic_ty: Ty,
-        // A list of placeholders for the arguments (e.g., [Int])
-        arg_tys: Vec<Ty>,
-        // A new placeholder for the final, specialized type (e.g., Array<Int>)
-        result_ty: Ty,
-    },
 }
+
+pub type Substitutions = HashMap<TypeVarID, Ty>;
 
 impl Constraint {
     fn expr_id(&self) -> &ExprID {
@@ -54,12 +48,71 @@ impl Constraint {
             Self::InitializerCall { .. } => todo!(),
             Self::VariantMatch { .. } => todo!(),
             Self::InstanceOf { expr_id, .. } => expr_id,
-            Self::GenericApplication { .. } => todo!(),
+        }
+    }
+
+    pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
+        match self {
+            Constraint::Equality(id, ty, ty1) => Constraint::Equality(
+                *id,
+                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
+            ),
+            Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
+                *id,
+                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                name.clone(),
+                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
+            ),
+            Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
+                *id,
+                name.clone(),
+                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+            ),
+            Constraint::InitializerCall {
+                expr_id,
+                initializes_id,
+                args,
+                ret,
+            } => Constraint::InitializerCall {
+                expr_id: *expr_id,
+                initializes_id: *initializes_id,
+                args: args
+                    .iter()
+                    .map(|a| ConstraintSolver::<NameResolved>::apply(a, substitutions, 0))
+                    .collect(),
+                ret: ret.clone(),
+            },
+            Constraint::VariantMatch {
+                scrutinee_ty,
+                variant_name,
+                field_tys,
+            } => Constraint::VariantMatch {
+                scrutinee_ty: ConstraintSolver::<NameResolved>::apply(
+                    scrutinee_ty,
+                    substitutions,
+                    0,
+                ),
+                variant_name: variant_name.clone(),
+                field_tys: field_tys
+                    .iter()
+                    .map(|ty| ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0))
+                    .collect(),
+            },
+            Constraint::InstanceOf {
+                expr_id,
+                ty,
+                symbol_id,
+            } => Constraint::InstanceOf {
+                expr_id: *expr_id,
+                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                symbol_id: *symbol_id,
+            },
         }
     }
 }
 
-pub struct ConstraintSolver<'a, P: Phase> {
+pub struct ConstraintSolver<'a, P: Phase = NameResolved> {
     source_file: &'a mut SourceFile<P>,
     env: &'a mut Environment,
     symbol_table: &'a mut SymbolTable,
@@ -140,7 +193,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 Self::normalize_substitutions(substitutions);
             }
-            Constraint::GenericApplication { .. } => todo!(),
             Constraint::InstanceOf { ty, symbol_id, .. } => {
                 let scheme = self.env.lookup_symbol(symbol_id)?.clone();
                 let ty = scheme.ty;
@@ -314,7 +366,27 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 // }
             }
             Constraint::InitializerCall { .. } => todo!(),
-            Constraint::VariantMatch { .. } => todo!(),
+            Constraint::VariantMatch {
+                scrutinee_ty,
+                variant_name,
+                field_tys,
+            } => {
+                let Ty::Enum(enum_id, _) = Self::apply(scrutinee_ty, &substitutions, 0) else {
+                    panic!()
+                };
+
+                let Some(enum_def) = self.env.lookup_enum(&enum_id) else {
+                    panic!()
+                };
+
+                let Some(variant) = enum_def.variants.iter().find(|v| v.name == *variant_name)
+                else {
+                    panic!()
+                };
+
+                Self::unify_mult(&variant.values, field_tys, substitutions)?;
+                Self::normalize_substitutions(substitutions);
+            }
         };
 
         Ok(())
@@ -451,11 +523,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             ),
             Ty::Closure { func, captures } => {
                 let func = Self::apply(func, substitutions, depth + 1).into();
-                let captures = captures
-                    .iter()
-                    .map(|c| Self::apply(c, substitutions, depth + 1))
-                    .collect();
-                Ty::Closure { func, captures }
+                Ty::Closure {
+                    func,
+                    captures: captures.clone(),
+                }
             }
             Ty::Array(ty) => Ty::Array(Self::apply(ty, substitutions, depth + 1).into()),
             Ty::Struct(sym, generics) => Ty::Struct(
@@ -491,6 +562,18 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 substitutions.insert(var_id, new_ty);
             }
         }
+    }
+
+    fn unify_mult(
+        lhs: &Vec<Ty>,
+        rhs: &Vec<Ty>,
+        substitutions: &mut HashMap<TypeVarID, Ty>,
+    ) -> Result<(), TypeError> {
+        for (lhs, rhs) in lhs.iter().zip(rhs) {
+            Self::unify(lhs, rhs, substitutions)?;
+        }
+
+        Ok(())
     }
 
     fn unify(
@@ -665,12 +748,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let func = Self::substitute_ty_with_map(func, substitutions)
                     .clone()
                     .into();
-                let captures = captures
-                    .iter()
-                    .map(|capture| Self::substitute_ty_with_map(capture, substitutions))
-                    .collect();
 
-                Ty::Closure { func, captures }
+                Ty::Closure {
+                    func,
+                    captures: captures.clone(),
+                }
             }
             Ty::Enum(name, generics) => {
                 let applied_generics = generics

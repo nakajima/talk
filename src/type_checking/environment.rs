@@ -5,8 +5,12 @@ use std::{
 };
 
 use crate::{
-    Phase, SourceFile, SymbolID, SymbolTable, constraint_solver::ConstraintSolver, parser::ExprID,
-    source_file, ty::Ty, type_checker::TypeError,
+    Phase, SourceFile, SymbolID, SymbolTable,
+    constraint_solver::{ConstraintSolver, Substitutions},
+    parser::ExprID,
+    source_file,
+    ty::Ty,
+    type_checker::TypeError,
 };
 
 use super::{
@@ -18,15 +22,22 @@ use super::{
 pub type Scope = HashMap<SymbolID, Scheme>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumVariant {
+pub struct RawEnumVariant {
     pub name: String,
     pub values: Vec<ExprID>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub values: Vec<Ty>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumDef {
     pub name: Option<SymbolID>,
     pub type_parameters: TypeParams,
+    pub raw_variants: Vec<RawEnumVariant>,
     pub variants: Vec<EnumVariant>,
     pub raw_methods: HashMap<String, RawMethod>,
     pub methods: HashMap<String, Method>,
@@ -175,9 +186,15 @@ impl Environment {
         res
     }
 
-    pub fn placeholder(&mut self, expr_id: &ExprID, symbol_id: &SymbolID) -> Ty {
+    #[track_caller]
+    pub fn placeholder(&mut self, expr_id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::warn!("placeholder created: {}:{}", loc.file(), loc.line());
+        }
+
         // 1. Create a fresh placeholder for this usage of the type name.
-        let usage_placeholder = Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder));
+        let usage_placeholder = Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name)));
 
         // 2. Generate the InstanceOf constraint.
         self.constraints.push(Constraint::InstanceOf {
@@ -260,6 +277,16 @@ impl Environment {
         Ok(self.instantiate(&scheme))
     }
 
+    pub fn replace_constraint_values(&mut self, substitutions: Substitutions) {
+        let mut new_constraints = vec![];
+        let mut new_constraint;
+        for constraint in self.constraints.iter() {
+            new_constraint = constraint.replacing(&substitutions);
+            new_constraints.push(new_constraint);
+        }
+        self.constraints = new_constraints;
+    }
+
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
         self.scopes.last_mut().unwrap().insert(symbol_id, scheme);
     }
@@ -304,7 +331,7 @@ impl Environment {
     /// Instantiate a polymorphic scheme into a fresh monotype:
     /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
     /// and substitute α ↦ β throughout scheme.ty.
-    fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
         for old in &scheme.unbound_vars {
@@ -334,8 +361,10 @@ impl Environment {
                 }
                 Ty::Closure { func, captures } => {
                     let func = Box::new(walk(func, map));
-                    let captures = captures.iter().map(|p| walk(p, map)).collect();
-                    Ty::Closure { func, captures }
+                    Ty::Closure {
+                        func,
+                        captures: captures.clone(),
+                    }
                 }
                 Ty::Enum(name, generics) => {
                     let new_generics = generics.iter().map(|g| walk(g, map)).collect();
@@ -360,6 +389,14 @@ impl Environment {
 
     pub fn end_scope(&mut self) {
         self.scopes.pop();
+    }
+
+    pub fn ty_for_symbol(&mut self, id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
+        if let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() {
+            self.instantiate(&scheme)
+        } else {
+            self.placeholder(id, name, &symbol_id)
+        }
     }
 
     #[track_caller]
@@ -399,8 +436,8 @@ impl Environment {
             Ok(scheme)
         } else {
             Err(TypeError::Unresolved(format!(
-                "Did not find symbol {:?} in scope",
-                symbol_id
+                "Did not find symbol {:?} in scope: {:?}",
+                symbol_id, self.scopes
             )))
         }
     }

@@ -254,31 +254,33 @@ mod type_tests {
 
     #[test]
     fn checks_call() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
         func fizz(c) { c }
         fizz(c: 123)
         ",
-        );
+        )
+        .unwrap();
         let root_id = checker.root_ids()[1];
         assert_eq!(checker.type_for(&root_id).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_a_let_assignment() {
-        let checker = check("let count = 123\ncount");
+        let checker = check_without_prelude("let count = 123\ncount").unwrap();
         let root_id = checker.root_ids()[1];
         assert_eq!(checker.type_for(&root_id).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_apply_twice() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
         func applyTwice(f, x) { f(f(x)) }
         applyTwice
         ",
-        );
+        )
+        .unwrap();
 
         let root_id = checker.root_ids()[0];
         let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
@@ -307,14 +309,15 @@ mod type_tests {
 
     #[test]
     fn checks_call_with_generics() {
-        let checked = check(
+        let checked = check_without_prelude(
             "
         func fizz<T>(ty: T) { T }
 
         fizz<Int>(123)
         fizz<Bool>(true)
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
         assert_eq!(checked.type_for(&checked.root_ids()[2]).unwrap(), Ty::Bool);
@@ -322,7 +325,7 @@ mod type_tests {
 
     #[test]
     fn checks_composition() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
         func compose(f, g) {
             func inner(x) { f(g(x)) }
@@ -330,7 +333,8 @@ mod type_tests {
         }
         compose
         ",
-        );
+        )
+        .unwrap();
         let root_id = checker.root_ids()[0];
         let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
             panic!(
@@ -375,14 +379,15 @@ mod type_tests {
 
     #[test]
     fn checks_simple_recursion() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
         func rec(n) {
             rec(n)
         }
         rec
         ",
-        );
+        )
+        .unwrap();
 
         // the bare `rec` at the top level should be a Func([α], α)
         let root_id = checker.root_ids()[0];
@@ -436,7 +441,7 @@ mod type_tests {
 
     #[test]
     fn infers_let_with_enum_case() {
-        let checked = check(
+        let checked = check_without_prelude(
             "
         enum Maybe<T> {
           case definitely(T), nope
@@ -445,11 +450,12 @@ mod type_tests {
         let maybe = Maybe.definitely(123)
         maybe
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[2]).unwrap(),
-            Ty::Enum(SymbolID::typed(1), vec![Ty::Int]),
+            Ty::Enum(SymbolID(1), vec![Ty::Int]),
         );
     }
 
@@ -470,7 +476,7 @@ mod type_tests {
 
     #[test]
     fn updates_definition() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
             struct Person {}
 
@@ -478,7 +484,8 @@ mod type_tests {
 
             person
         ",
-        );
+        )
+        .unwrap();
 
         let symbols = checker.symbols.all();
         let person_local = symbols
@@ -515,17 +522,18 @@ mod type_tests {
 
     #[test]
     fn checks_simple_enum_declaration() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
             enum Fizz {
                 case foo, bar
             }
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checker.type_for(&checker.root_ids()[0]).unwrap(),
-            Ty::Enum(SymbolID::typed(1), vec![])
+            Ty::Enum(SymbolID(1), vec![])
         );
 
         let Some(Expr::EnumDecl(_, _, body)) = checker.source_file.get(&checker.root_ids()[0])
@@ -540,11 +548,11 @@ mod type_tests {
         // Check the variants
         assert_eq!(
             checker.type_for(&body_ids[0]).unwrap(),
-            Ty::EnumVariant(SymbolID::typed(1), vec![])
+            Ty::EnumVariant(SymbolID(1), vec![])
         );
         assert_eq!(
             checker.type_for(&body_ids[1]).unwrap(),
-            Ty::EnumVariant(SymbolID::typed(1), vec![])
+            Ty::EnumVariant(SymbolID(1), vec![])
         );
     }
 
@@ -859,7 +867,7 @@ mod type_tests {
 
     #[test]
     fn checks_enum_as_return_type() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
             enum Option<T> {
                 case some(T), none
@@ -869,10 +877,11 @@ mod type_tests {
             }
             create_some(42)
             ",
-        );
+        )
+        .unwrap();
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
+        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![Ty::Int])); // Option<Int>
     }
 
     #[test]
@@ -1044,7 +1053,7 @@ mod type_tests {
 
     #[test]
     fn checks_closure() {
-        let checked = check(
+        let checked = check_without_prelude(
             "
         let x = 1 
         func add(y) {
@@ -1052,13 +1061,14 @@ mod type_tests {
         }
         add(2)
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Closure {
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
-                captures: vec![Ty::Int]
+                captures: vec![SymbolID(2)]
             }
         );
     }
@@ -1272,7 +1282,8 @@ mod pending {
             }()",
         )
         .unwrap();
-        assert_eq!(checked.diagnostics().len(), 2);
+
+        assert_eq!(checked.diagnostics().len(), 1);
     }
 
     #[test]

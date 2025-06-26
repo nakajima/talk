@@ -58,6 +58,14 @@ pub fn synthesize_inits(
                 ));
             }
 
+            // Make sure the func always returns self
+            let self_ret = source_file.add(
+                env.next_id(),
+                Expr::Variable(Name::_Self(sym), None),
+                ExprMeta::generated(),
+            );
+            body_exprs.push(self_ret);
+
             let body = source_file.add(
                 env.next_id(),
                 Expr::Block(body_exprs),
