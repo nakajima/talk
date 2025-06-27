@@ -24,18 +24,41 @@ pub type Scope = HashMap<SymbolID, Scheme>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawEnumVariant {
     pub name: String,
+    pub expr_id: ExprID,
     pub values: Vec<ExprID>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumVariant {
     pub name: String,
-    pub values: Vec<Ty>,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawInitializer {
+    pub name: String,
+    pub expr_id: ExprID,
+    pub func_id: ExprID,
+    pub params: Vec<ExprID>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Initializer {
+    pub name: String,
+    pub expr_id: ExprID,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawProperty {
+    pub name: String,
+    pub expr_id: ExprID,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumDef {
     pub name: Option<SymbolID>,
+    pub name_str: String,
     pub type_parameters: TypeParams,
     pub raw_variants: Vec<RawEnumVariant>,
     pub variants: Vec<EnumVariant>,
@@ -43,14 +66,36 @@ pub struct EnumDef {
     pub methods: HashMap<String, Method>,
 }
 
+impl EnumDef {
+    pub fn member_ty(&self, member_name: &str) -> Option<Ty> {
+        if let Some((_, method)) = self.methods.iter().find(|(name, _)| name == &member_name) {
+            return Some(method.ty.clone());
+        }
+
+        for variant in self.variants.iter() {
+            if variant.name == member_name {
+                let Ty::EnumVariant(_, values) = variant.ty.clone() else {
+                    unreachable!();
+                };
+                return Some(Ty::EnumVariant(self.name.unwrap(), values));
+            }
+        }
+
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
+    pub raw_properties: Vec<RawProperty>,
     pub properties: Vec<Property>,
-    pub methods: HashMap<String, RawMethod>,
-    pub initializers: Vec<(PathBuf, ExprID)>,
+    pub raw_methods: Vec<RawMethod>,
+    pub methods: Vec<Method>,
+    pub raw_initializers: Vec<RawInitializer>,
+    pub initializers: Vec<Initializer>,
 }
 
 impl StructDef {
@@ -58,28 +103,31 @@ impl StructDef {
         symbol_id: SymbolID,
         name_str: String,
         type_parameters: TypeParams,
-        properties: Vec<Property>,
-        methods: HashMap<String, RawMethod>,
-        initializers: Vec<(PathBuf, ExprID)>,
+        raw_properties: Vec<RawProperty>,
+        raw_methods: Vec<RawMethod>,
+        raw_initializers: Vec<RawInitializer>,
     ) -> Self {
         Self {
             symbol_id,
             name_str,
             type_parameters,
-            properties,
-            methods,
-            initializers,
+            raw_properties,
+            raw_methods,
+            raw_initializers,
+            methods: Default::default(),
+            properties: Default::default(),
+            initializers: Default::default(),
         }
     }
 
     pub fn member_ty(&self, name: &str) -> Option<&Ty> {
-        // if let Some(property) = self.properties.iter().find(|p| p.name == name) {
-        //     return Some(&property.ty);
-        // }
+        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
+            return Some(&property.ty);
+        }
 
-        // if let Some(method) = self.methods.get(name) {
-        //     return Some(&method.ty);
-        // }
+        if let Some(method) = self.methods.iter().find(|p| p.name == name) {
+            return Some(&method.ty);
+        }
 
         None
     }
@@ -114,29 +162,26 @@ pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Property {
     pub name: String,
-    pub symbol: SymbolID,
     pub expr_id: ExprID,
+    pub ty: Ty,
 }
 
 impl Property {
-    pub fn new(name: String, symbol: SymbolID, expr_id: ExprID) -> Self {
-        Self {
-            name,
-            symbol,
-            expr_id,
-        }
+    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
+        Self { name, expr_id, ty }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Method {
     pub name: String,
+    pub expr_id: ExprID,
     pub ty: Ty,
 }
 
 impl Method {
-    pub fn new(name: String, ty: Ty) -> Self {
-        Self { name, ty }
+    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
+        Self { name, expr_id, ty }
     }
 }
 
@@ -188,20 +233,29 @@ impl Environment {
 
     #[track_caller]
     pub fn placeholder(&mut self, expr_id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            log::warn!("placeholder created: {}:{}", loc.file(), loc.line());
-        }
-
         // 1. Create a fresh placeholder for this usage of the type name.
-        let usage_placeholder = Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name)));
+        let usage_placeholder =
+            Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name.clone())));
 
         // 2. Generate the InstanceOf constraint.
         self.constraints.push(Constraint::InstanceOf {
+            scheme: Scheme {
+                ty: usage_placeholder.clone(),
+                unbound_vars: vec![],
+            },
             expr_id: *expr_id,
             ty: usage_placeholder.clone(),
             symbol_id: *symbol_id,
         });
+
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "Placeholder {usage_placeholder:?} created for {name}: {}:{}",
+                loc.file(),
+                loc.line()
+            );
+        }
 
         // 3. Return the placeholder.
         usage_placeholder
@@ -211,17 +265,17 @@ impl Environment {
         self.constraints.clone()
     }
 
-    #[track_caller]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::warn!(
-                "constrain_equality {:?} {:?} {:?} from {}:{}",
+            log::trace!(
+                "constrain_equality {:?} from {}:{}\n{:?}\n{:?} ",
                 id,
+                loc.file(),
+                loc.line(),
                 lhs,
                 rhs,
-                loc.file(),
-                loc.line()
             );
         }
         self.constraints.push(Constraint::Equality(id, lhs, rhs))
@@ -238,27 +292,25 @@ impl Environment {
         Ok(substitutions)
     }
 
-    pub fn constraint_construction(
-        &mut self,
-        id: ExprID,
-        initializes_id: SymbolID,
-        args: Vec<Ty>,
-        ret: TypeVarID,
-    ) {
-        self.constraints.push(Constraint::InitializerCall {
-            expr_id: id,
-            initializes_id,
-            args,
-            ret,
-        })
-    }
-
     pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
         self.constraints
             .push(Constraint::UnqualifiedMember(id, name, result_ty))
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain_member(&mut self, id: ExprID, receiver: Ty, name: String, result_ty: Ty) {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "[.] Member {:?} {} from {}:{}\n{:?}\n{:?} ",
+                id,
+                name,
+                loc.file(),
+                loc.line(),
+                receiver,
+                result_ty
+            );
+        }
         self.constraints
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
@@ -331,12 +383,22 @@ impl Environment {
     /// Instantiate a polymorphic scheme into a fresh monotype:
     /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
     /// and substitute α ↦ β throughout scheme.ty.
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "Instantiate {:?} from {}:{}",
+                scheme,
+                loc.file(),
+                loc.line()
+            );
+        }
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
         for old in &scheme.unbound_vars {
             // preserve the original kind when making a fresh one
-            let fresh = self.new_type_variable(old.1.clone());
+            let fresh = self.new_type_variable(TypeVarKind::Instantiated(old.0));
             var_map.insert(old.clone(), fresh);
         }
         // 2) walk the type, replacing each old with its fresh
@@ -355,9 +417,10 @@ impl Environment {
                     let new_generics = generics.iter().map(|g| walk(g, map)).collect();
                     Ty::Func(new_params, new_ret, new_generics)
                 }
-                Ty::Init(struct_id, params) => {
+                Ty::Init(struct_id, params, generics) => {
                     let new_params = params.iter().map(|p| walk(p, map)).collect();
-                    Ty::Init(*struct_id, new_params)
+                    let new_generics = generics.iter().map(|p| walk(p, map)).collect();
+                    Ty::Init(*struct_id, new_params, new_generics)
                 }
                 Ty::Closure { func, captures } => {
                     let func = Box::new(walk(func, map));
@@ -391,21 +454,36 @@ impl Environment {
         self.scopes.pop();
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn ty_for_symbol(&mut self, id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
-        if let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() {
+        let ret = if let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() {
             self.instantiate(&scheme)
         } else {
-            self.placeholder(id, name, &symbol_id)
+            self.placeholder(id, name.to_string(), &symbol_id)
+        };
+
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "ty_for_symbol {} ({:?}) = {:?} from {}:{}",
+                name,
+                symbol_id,
+                ret,
+                loc.file(),
+                loc.line()
+            );
         }
+
+        ret
     }
 
-    #[track_caller]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
         self.type_var_id = TypeVarID(self.type_var_id.0 + 1, kind);
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::warn!(
+            log::trace!(
                 "new_type_variable {:?} from {}:{}",
                 Ty::TypeVar(self.type_var_id.clone()),
                 loc.file(),
@@ -426,6 +504,7 @@ impl Environment {
         self.types.insert(def.symbol_id, TypeDef::Struct(def));
     }
 
+    #[cfg_attr(test, track_caller)]
     pub fn lookup_symbol(&self, symbol_id: &SymbolID) -> Result<&Scheme, TypeError> {
         if let Some(scheme) = self
             .scopes
@@ -435,6 +514,17 @@ impl Environment {
         {
             Ok(scheme)
         } else {
+            if cfg!(debug_assertions) {
+                let loc = std::panic::Location::caller();
+
+                log::error!(
+                    "Did not find symbol {:?} in scope: {:?} ({}:{})",
+                    symbol_id,
+                    self.scopes,
+                    loc.file(),
+                    loc.line()
+                );
+            }
             Err(TypeError::Unresolved(format!(
                 "Did not find symbol {:?} in scope: {:?}",
                 symbol_id, self.scopes
@@ -509,27 +599,53 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::TypeVar(v) => {
             s.insert(v.clone());
         }
-        Ty::Func(params, ret, generics) => {
+        Ty::Init(_, params, generics) => {
             for param in params {
                 s.extend(free_type_vars(param));
             }
 
             for generic in generics {
+                s.extend(free_type_vars(generic))
+            }
+        }
+        Ty::Func(params, ret, generics) => {
+            for param in params {
+                s.extend(free_type_vars(param));
+            }
+            for generic in generics {
                 s.extend(free_type_vars(generic));
             }
-
             s.extend(free_type_vars(ret));
         }
-        Ty::Closure { func, .. } => s.extend(free_type_vars(func)),
+        Ty::Closure { func, .. } => {
+            s.extend(free_type_vars(func));
+        }
         Ty::Enum(_, generics) => {
             for generic in generics {
                 s.extend(free_type_vars(generic));
             }
         }
-        // add more Ty variants here as you grow them:
-        // Ty::Tuple(elems)  => for e in elems { s.extend(free_type_vars(e)); }
-        // Ty::ADT(name, args) => for a in args { s.extend(free_type_vars(a)); }
-        _ => {}
+        Ty::EnumVariant(_, values) => {
+            for value in values {
+                s.extend(free_type_vars(value));
+            }
+        }
+        Ty::Tuple(items) => {
+            for item in items {
+                s.extend(free_type_vars(item));
+            }
+        }
+        Ty::Array(ty) => {
+            s.extend(free_type_vars(ty));
+        }
+        Ty::Struct(_, generics) => {
+            for generic in generics {
+                s.extend(free_type_vars(generic));
+            }
+        }
+        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer => {
+            // These types contain no nested types, so there's nothing to do.
+        }
     }
     s
 }
@@ -556,4 +672,215 @@ pub fn free_type_vars_in_env(scopes: &[HashMap<SymbolID, Scheme>]) -> HashSet<Ty
     }
 
     s
+}
+
+#[cfg(test)]
+mod generalize_tests {
+    use crate::{
+        SymbolID,
+        environment::{Environment, Scope},
+        ty::Ty,
+        type_checker::{Scheme, TypeVarID, TypeVarKind},
+    };
+    use std::collections::HashSet;
+
+    // Helper to create a blank type variable.
+    fn new_tv(id: i32) -> TypeVarID {
+        TypeVarID(id, TypeVarKind::Blank)
+    }
+
+    // Helper to create a Ty::TypeVar.
+    fn ty_var(id: i32) -> Ty {
+        Ty::TypeVar(new_tv(id))
+    }
+
+    #[test]
+    fn test_generalize_in_empty_env() {
+        // In an empty environment, generalize(a -> b) should produce `forall a, b. a -> b`.
+        // All type variables in the type are free and should be bound.
+        let env = Environment::new();
+        let ty_to_generalize = Ty::Func(vec![ty_var(1)], Box::new(ty_var(2)), vec![]);
+
+        let scheme = env.generalize(&ty_to_generalize);
+
+        // The scheme's unbound_vars should contain both tv1 and tv2.
+        assert_eq!(scheme.ty, ty_to_generalize);
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
+
+    #[test]
+    fn test_generalize_with_free_var_in_env() {
+        // If the environment already contains a free `a`, then generalize(a -> b)
+        // should produce `forall b. a -> b`. `a` should not be bound again.
+        let mut env = Environment::new();
+        let tv_a = new_tv(1);
+
+        // Add a variable to the environment's scope that has `a` as a free variable.
+        // For example, a variable `x: a`. The scheme for this is `Scheme { unbound_vars: [], ty: a }`.
+        let mut initial_scope = Scope::new();
+        initial_scope.insert(
+            SymbolID(0),
+            Scheme {
+                unbound_vars: vec![],
+                ty: Ty::TypeVar(tv_a.clone()),
+            },
+        );
+        env.scopes = vec![initial_scope];
+
+        let ty_to_generalize =
+            Ty::Func(vec![Ty::TypeVar(tv_a.clone())], Box::new(ty_var(2)), vec![]);
+        let scheme = env.generalize(&ty_to_generalize);
+
+        // The scheme should only bind `b` (tv2). `a` remains free.
+        assert_eq!(scheme.ty, ty_to_generalize);
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(2)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
+
+    #[test]
+    fn test_generalize_with_bound_var_in_env() {
+        // If the environment contains `id: forall a. a -> a`, and we generalize `b -> c`,
+        // the `a` from the `id` function is not free in the environment and should have no effect.
+        // The result should be `forall b, c. b -> c`.
+        let mut env = Environment::new();
+        let tv_a = new_tv(1);
+
+        // Create a scheme for `id: forall a. a -> a`.
+        let id_scheme = Scheme {
+            unbound_vars: vec![tv_a.clone()],
+            ty: Ty::Func(
+                vec![Ty::TypeVar(tv_a.clone())],
+                Box::new(Ty::TypeVar(tv_a.clone())),
+                vec![],
+            ),
+        };
+
+        let mut initial_scope = Scope::new();
+        initial_scope.insert(SymbolID(0), id_scheme);
+        env.scopes = vec![initial_scope];
+
+        let ty_to_generalize = Ty::Func(vec![ty_var(2)], Box::new(ty_var(3)), vec![]);
+        let scheme = env.generalize(&ty_to_generalize);
+
+        // The scheme should bind `b` (tv2) and `c` (tv3).
+        assert_eq!(scheme.ty, ty_to_generalize);
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(2), new_tv(3)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
+
+    #[test]
+    fn test_generalize_no_new_variables() {
+        // If we generalize a type `a` where `a` is already free in the environment,
+        // the resulting scheme should bind no variables.
+        let mut env = Environment::new();
+        let tv_a = new_tv(1);
+
+        let mut initial_scope = Scope::new();
+        initial_scope.insert(
+            SymbolID(0),
+            Scheme {
+                unbound_vars: vec![],
+                ty: Ty::TypeVar(tv_a.clone()),
+            },
+        );
+        env.scopes = vec![initial_scope];
+
+        let ty_to_generalize = Ty::TypeVar(tv_a.clone());
+        let scheme = env.generalize(&ty_to_generalize);
+
+        // The scheme should bind nothing new.
+        assert!(scheme.unbound_vars.is_empty());
+        assert_eq!(scheme.ty, ty_to_generalize);
+    }
+
+    #[test]
+    fn test_generalize_tuple_type() {
+        // generalize((a, b)) -> forall a, b. (a, b)
+        let env = Environment::new();
+        let ty_to_generalize = Ty::Tuple(vec![ty_var(1), ty_var(2)]);
+
+        let scheme = env.generalize(&ty_to_generalize);
+
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
+
+    #[test]
+    fn test_generalize_array_type() {
+        // generalize(Array<a>) -> forall a. Array<a>
+        let env = Environment::new();
+        let ty_to_generalize = Ty::Array(Box::new(ty_var(1)));
+
+        let scheme = env.generalize(&ty_to_generalize);
+
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(1)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
+
+    #[test]
+    fn test_generalize_struct_type() {
+        // generalize(Struct<a, b>) -> forall a, b. Struct<a, b>
+        let env = Environment::new();
+        let ty_to_generalize = Ty::Struct(SymbolID(100), vec![ty_var(1), ty_var(2)]);
+
+        let scheme = env.generalize(&ty_to_generalize);
+
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
+
+    // #[test]
+    // fn test_generalize_closure_captures() {
+    //     // Generalize a closure type that captures a free variable.
+    //     // The captured variable `b` should be generalized.
+    //     let env = Environment::new();
+    //     let func_ty = Box::new(Ty::Func(vec![], Box::new(Ty::Int), vec![])); // func() -> Int
+    //     let ty_to_generalize = Ty::Closure {
+    //         func: func_ty,
+    //         captures: vec![ty_var(1)], // captures `b`
+    //     };
+
+    //     let scheme = env.generalize(&ty_to_generalize);
+
+    //     let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+    //     let expected_vars: HashSet<TypeVarID> = [new_tv(1)].into_iter().collect();
+    //     assert_eq!(bound_vars, expected_vars);
+    // }
+
+    #[test]
+    fn test_generalize_deeply_nested_type() {
+        // If env contains `a`, generalize `func() -> (Array<b>, c)`
+        // should result in `forall b, c. func() -> (Array<b>, c)`
+        let mut env = Environment::new();
+        let tv_a = new_tv(1);
+
+        // Put `a` into the environment as a free variable
+        let mut initial_scope = Scope::new();
+        initial_scope.insert(
+            SymbolID(0),
+            Scheme {
+                unbound_vars: vec![],
+                ty: Ty::TypeVar(tv_a.clone()),
+            },
+        );
+        env.scopes = vec![initial_scope];
+
+        let array_b = Ty::Array(Box::new(ty_var(2))); // b
+        let tuple = Ty::Tuple(vec![array_b, ty_var(3)]); // c
+        let ty_to_generalize = Ty::Func(vec![], Box::new(tuple), vec![]);
+
+        let scheme = env.generalize(&ty_to_generalize);
+
+        // Should bind `b` and `c`, but not `a`.
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let expected_vars: HashSet<TypeVarID> = [new_tv(2), new_tv(3)].into_iter().collect();
+        assert_eq!(bound_vars, expected_vars);
+    }
 }

@@ -78,8 +78,8 @@ impl<'a> CompletionContext<'a> {
                 }
                 TypeDef::Struct(struct_def) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(struct_def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));

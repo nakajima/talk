@@ -2,15 +2,21 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
+
+impl std::fmt::Debug for SymbolID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{}", self.0)
+    }
+}
 
 impl SymbolID {
     // These are special because they have syntactic sugar that gets handled
     // by the compiler.
     pub const INT: SymbolID = SymbolID(-1);
     pub const OPTIONAL: SymbolID = SymbolID(1);
-    pub const ARRAY: SymbolID = SymbolID(3);
+    pub const ARRAY: SymbolID = SymbolID(5);
     pub const TUPLE: SymbolID = SymbolID(-10);
 
     // These are special for the lowering phase

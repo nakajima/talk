@@ -166,11 +166,17 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::TypeVar(TypeVarID(-11, TypeVarKind::FuncParam))],
+                vec![Ty::TypeVar(TypeVarID(
+                    -11,
+                    TypeVarKind::FuncParam("printable".into()),
+                ))],
                 Ty::Void.into(),
-                vec![Ty::TypeVar(TypeVarID(-11, TypeVarKind::FuncParam))],
+                vec![Ty::TypeVar(TypeVarID(
+                    -11,
+                    TypeVarKind::FuncParam("printable".into()),
+                ))],
             ),
-            unbound_vars: vec![TypeVarID(-11, TypeVarKind::FuncParam)],
+            unbound_vars: vec![TypeVarID(-11, TypeVarKind::FuncParam("printable".into()))],
             type_def: None,
         },
     ]

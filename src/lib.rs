@@ -31,6 +31,7 @@ fn init_logger() {
     // .is_test(true) silences the “already initialized” panic
     let _ = env_logger::builder()
         .format_timestamp(None)
+        .format_target(false)
         .is_test(true)
         .try_init();
 }

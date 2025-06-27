@@ -278,7 +278,6 @@ impl NameResolver {
                     match name {
                         Name::Raw(name_str) => {
                             let (symbol_id, _) = self.lookup(&name_str);
-                            log::info!("Replacing parameter {name_str} with {symbol_id:?}");
                             symbol_table.add_map(source_file, node_id, &symbol_id);
                             source_file.nodes.insert(
                                 *node_id,
@@ -397,6 +396,8 @@ impl NameResolver {
                                 symbol_table,
                             );
                             self.type_symbol_stack.push(symbol_id);
+                            self.resolve_nodes(&generics, source_file, symbol_table);
+                            self.resolve_nodes(&vec![body], source_file, symbol_table);
                             source_file.nodes.insert(
                                 *node_id,
                                 EnumDecl(
@@ -413,8 +414,23 @@ impl NameResolver {
                     self.resolve_nodes(&[body], source_file, symbol_table);
                     self.type_symbol_stack.pop();
                 }
-                EnumVariant(_, values) => {
-                    self.resolve_nodes(&values, source_file, symbol_table);
+                EnumVariant(name, values) => {
+                    if let Name::Raw(name_str) = name {
+                        self.resolve_nodes(&values, source_file, symbol_table);
+                        let sym = self.declare(
+                            name_str.clone(),
+                            SymbolKind::EnumVariant(SymbolID(
+                                self.type_symbol_stack.last().unwrap().0,
+                            )),
+                            node_id,
+                            source_file,
+                            symbol_table,
+                        );
+
+                        source_file
+                            .nodes
+                            .insert(*node_id, EnumVariant(Name::Resolved(sym, name_str), values));
+                    }
                 }
                 Match(scrutinee, arms) => {
                     // Resolve the scrutinee expression
@@ -777,13 +793,6 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) -> SymbolID {
-        log::trace!(
-            "declaring {} in {:?} at depth {}",
-            name,
-            self.scopes,
-            self.scopes.len() - 1
-        );
-
         let meta = &source_file.meta.get(expr_id).unwrap();
         let definition = Definition {
             path: source_file.path.clone(),
@@ -792,7 +801,9 @@ impl NameResolver {
             sym: None,
         };
 
-        let symbol_id = symbol_table.add(&name, kind, *expr_id, Some(definition));
+        let symbol_id = symbol_table.add(&name, kind.clone(), *expr_id, Some(definition));
+
+        log::info!("Replacing {kind:?} {name} with {symbol_id:?}");
 
         if let Some(scope_id) = self.scope_tree_ids.last() {
             source_file
@@ -1107,11 +1118,11 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&ids[0].into()).unwrap(),
-            EnumVariant(Name::Raw("foo".into()), vec![])
+            EnumVariant(Name::Resolved(SymbolID::resolved(2), "foo".into()), vec![])
         );
         assert_eq!(
             *resolved.get(&ids[1].into()).unwrap(),
-            EnumVariant(Name::Raw("bar".into()), vec![])
+            EnumVariant(Name::Resolved(SymbolID::resolved(3), "bar".into()), vec![])
         );
 
         let Expr::Member(receiver, member_name) = resolved.roots()[1].unwrap() else {
@@ -1148,7 +1159,8 @@ mod tests {
             panic!("didn't get body");
         };
 
-        let EnumVariant(Name::Raw(foo_name), foo_args) = resolved.get(&ids[0]).unwrap() else {
+        let EnumVariant(Name::Resolved(_, foo_name), foo_args) = resolved.get(&ids[0]).unwrap()
+        else {
             panic!("didn't get foo variant");
         };
 
@@ -1160,7 +1172,7 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&ids[1]).unwrap(),
-            EnumVariant(Name::Raw("bar".into()), vec![])
+            EnumVariant(Name::Resolved(SymbolID::resolved(3), "bar".into()), vec![])
         );
 
         let Call { callee, args, .. } = resolved.roots()[1].unwrap() else {
@@ -1291,7 +1303,10 @@ mod tests {
         let TypeRepr(Name::Resolved(SymbolID::ARRAY, _), items, false) =
             resolved.get(&ret.unwrap().into()).unwrap()
         else {
-            panic!("didn't get array type repr");
+            panic!(
+                "didn't get array type repr: {:?}",
+                resolved.get(&ret.unwrap().into()).unwrap()
+            );
         };
 
         assert_eq!(

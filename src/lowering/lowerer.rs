@@ -65,7 +65,7 @@ impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
             Ty::Pointer => IRType::Pointer,
-            Ty::Init(_, params) => IRType::Func(
+            Ty::Init(_sym, params, _generics) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
             ),
@@ -729,7 +729,7 @@ impl<'a> Lowerer<'a> {
         };
 
         for initializer in &struct_def.initializers {
-            self.lower_expr(&initializer.1);
+            self.lower_expr(&initializer.expr_id);
 
             // TODO this is awkward
             if let Some(init_func) = self.lowered_functions.last() {
@@ -740,7 +740,7 @@ impl<'a> Lowerer<'a> {
                     Err(e) => {
                         self.source_file
                             .diagnostics
-                            .insert(Diagnostic::lowering(initializer.1, e));
+                            .insert(Diagnostic::lowering(initializer.expr_id, e));
                     }
                 }
             }
@@ -1251,7 +1251,10 @@ impl<'a> Lowerer<'a> {
                         let value_reg = self.allocate_register();
 
                         // We need to figure out the type of the value. This feels clumsy.
-                        let ty = match variant_def.values[i].clone() {
+                        let Ty::EnumVariant(_, values) = variant_def.ty.clone() else {
+                            unreachable!();
+                        };
+                        let ty = match values[i].clone() {
                             // Ty::TypeVar(var) => {
                             //     let Some(generic_pos) = type_def
                             //         .type_parameters
@@ -1452,7 +1455,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if let Some((_, method)) = struct_def.methods.iter().find(|(n, _)| *n == name) {
+                if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
                     let name = Name::Resolved(struct_id, format!("{}_{name}", struct_def.name_str))
                         .mangled(&&Ty::Void);
@@ -1819,7 +1822,7 @@ impl<'a> Lowerer<'a> {
             func: box Ty::Func(params, _, _),
             ..
         }
-        | Ty::Init(_, params)) = &callee_typed_expr.ty
+        | Ty::Init(_, params, _)) = &callee_typed_expr.ty
         else {
             return None;
         };
@@ -1859,7 +1862,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        if let Ty::Init(struct_id, params) = &callee_typed_expr.ty {
+        if let Ty::Init(struct_id, params, _) = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &ty, arg_registers, params);
         }
 
@@ -2092,7 +2095,7 @@ impl<'a> Lowerer<'a> {
         let callee_name = match receiver_ty.ty {
             Ty::Struct(struct_id, _) => {
                 let struct_def = self.env.lookup_struct(&struct_id)?;
-                let method = struct_def.methods.get(name)?;
+                let method = struct_def.methods.iter().find(|m| m.name == name)?;
                 Some(format!(
                     "@_{}_{}_{}",
                     struct_id.0, struct_def.name_str, method.name

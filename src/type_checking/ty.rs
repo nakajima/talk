@@ -11,7 +11,11 @@ pub enum Ty {
     Int,
     Bool,
     Float,
-    Init(SymbolID, FuncParams),
+    Init(
+        SymbolID,
+        Vec<Ty>, /* params */
+        Vec<Ty>, /* generics */
+    ),
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
@@ -37,7 +41,7 @@ impl Display for Ty {
             Ty::Int => write!(f, "Int"),
             Ty::Bool => write!(f, "Bool"),
             Ty::Float => write!(f, "Float"),
-            Ty::Init(_, params) => write!(
+            Ty::Init(_, params, _) => write!(
                 f,
                 "init({})",
                 params

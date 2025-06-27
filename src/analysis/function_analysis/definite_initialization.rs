@@ -228,7 +228,7 @@ mod tests {
                 vec![Property {
                     name: "age".into(),
                     expr_id: 123,
-                    symbol: SymbolID::resolved(2)
+                    ty: Ty::Init(SymbolID::resolved(2), vec![Ty::Int], vec![])
                 }]
             )),
             DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)
@@ -270,7 +270,7 @@ mod tests {
                 vec![Property {
                     name: "age".into(),
                     expr_id: 123,
-                    symbol: SymbolID::resolved(2)
+                    ty: Ty::Init(SymbolID::resolved(2), vec![Ty::Int], vec![])
                 }]
             )),
             DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)

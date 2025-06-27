@@ -7,6 +7,7 @@ use crate::{
 pub mod constraint_solver;
 pub mod environment;
 pub mod name_resolver;
+pub mod predecls;
 pub mod scope_tree;
 pub mod synthesis;
 pub mod ty;
