@@ -359,9 +359,12 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
     }
 
     pub fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
-        if depth > 100 {
+        if depth > 20 {
+            log::error!("Hit 100 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
         }
+
+        log::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
 
         match ty {
             Ty::Pointer => ty.clone(),
@@ -369,9 +372,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
             Ty::Func(params, returning, generics) => {
-                let applied_params = Self::apply_multiple(params, substitutions, depth);
+                let applied_params = Self::apply_multiple(params, substitutions, depth + 1);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
-                let applied_generics = Self::apply_multiple(generics, substitutions, depth);
+                let applied_generics = Self::apply_multiple(generics, substitutions, depth + 1);
 
                 Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }

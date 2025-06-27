@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    Phase, SourceFile, SymbolID, SymbolTable,
+    NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
     constraint_solver::{ConstraintSolver, Substitutions},
     parser::ExprID,
     ty::Ty,
@@ -369,11 +369,15 @@ impl Environment {
         }
     }
 
+    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+        self.instantiate_with_args(scheme, Default::default())
+    }
+
     /// Instantiate a polymorphic scheme into a fresh monotype:
     /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
     /// and substitute α ↦ β throughout scheme.ty.
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+    pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!(
@@ -384,18 +388,23 @@ impl Environment {
             );
         }
         // 1) build a map old_var → fresh_var
-        let mut var_map: HashMap<TypeVarID, TypeVarID> = HashMap::new();
+        let mut var_map: HashMap<TypeVarID, Ty> = HashMap::new();
         for old in &scheme.unbound_vars {
-            // preserve the original kind when making a fresh one
-            let fresh = self.new_type_variable(TypeVarKind::Instantiated(old.0));
-            var_map.insert(old.clone(), fresh);
+            if let Some(arg_ty) = args.get(&old) {
+                var_map.insert(old.clone(), arg_ty.clone());
+                // self.constrain_equality(-1, Ty::TypeVar(fresh.clone()), arg_ty.clone());
+            } else {
+                let type_var = TypeVarKind::Instantiated(old.0);
+                let fresh = self.new_type_variable(type_var);
+                var_map.insert(old.clone(), Ty::TypeVar(fresh));
+            }
         }
         // 2) walk the type, replacing each old with its fresh
-        fn walk<'a>(ty: &Ty, map: &HashMap<TypeVarID, TypeVarID>) -> Ty {
+        fn walk<'a>(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
                     if let Some(new_tv) = map.get(&tv).cloned() {
-                        Ty::TypeVar(new_tv)
+                        new_tv
                     } else {
                         Ty::TypeVar(tv.clone())
                     }

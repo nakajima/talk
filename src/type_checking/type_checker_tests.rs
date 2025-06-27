@@ -850,7 +850,7 @@ mod type_tests {
 
     #[test]
     fn checks_multiple_enum_parameters() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
             enum Boolean {
                 case yes, no
@@ -863,10 +863,11 @@ mod type_tests {
             }
             and(.yes, .no)
             ",
-        );
+        )
+        .unwrap();
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![])); // Bool
+        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![])); // Bool
     }
 
     #[test]
@@ -890,7 +891,7 @@ mod type_tests {
 
     #[test]
     fn checks_complex_generic_constraints() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
             enum Either<L, R> {
                 case left(L), right(R)
@@ -902,18 +903,16 @@ mod type_tests {
                 }
             }
             ",
-        );
+        )
+        .unwrap();
 
         let func_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
         match func_ty {
             Ty::Func(params, ret, _) => {
                 // Input: Either<Int, Float>
-                assert_eq!(
-                    params[0],
-                    Ty::Enum(SymbolID::typed(1), vec![Ty::Int, Ty::Float])
-                );
+                assert_eq!(params[0], Ty::Enum(SymbolID(1), vec![Ty::Int, Ty::Float]));
                 // Output: Either<Float, Int>
-                assert_eq!(*ret, Ty::Enum(SymbolID::typed(1), vec![Ty::Float, Ty::Int]));
+                assert_eq!(*ret, Ty::Enum(SymbolID(1), vec![Ty::Float, Ty::Int]));
             }
             _ => panic!("Expected function type"),
         }

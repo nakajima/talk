@@ -2,7 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
-    constraint_solver::Constraint,
+    constraint_solver::{Constraint, ConstraintSolver, Substitutions},
     diagnostic::Diagnostic,
     environment::{EnumVariant, Method, RawEnumVariant, RawMethod},
     expr::{Expr, Pattern},
@@ -124,7 +124,29 @@ impl Scheme {
 #[derive(Debug)]
 pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
-    depth: u8,
+}
+
+macro_rules! indented_println {
+    // Matcher:
+    // - $env: An expression that evaluates to your environment struct.
+    // - $fmt: The literal format string.
+    // - $($args:expr)*: A repeating sequence of zero or more comma-separated expressions
+    //   for the arguments.
+    ($env:expr, $fmt:literal $(, $args:expr)*) => {
+        // Expander:
+        // This is the code that will be generated.
+        println!(
+            // `concat!` joins the initial indent placeholder "{}" with your format string.
+            // e.g., concat!("{}", "Infer node {}: {:?}") -> "{}Infer node {}: {:?}"
+            concat!("{}", $fmt),
+
+            // The first argument is always the calculated whitespace string.
+            (0..$env.scopes.len()).map(|_| "  ").collect::<String>(),
+
+            // The subsequent, user-provided arguments are passed along.
+            $($args),*
+        );
+    };
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -144,10 +166,7 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
 
 impl<'a> TypeChecker<'a> {
     pub fn new(symbol_table: &'a mut SymbolTable) -> Self {
-        Self {
-            symbol_table,
-            depth: 0,
-        }
+        Self { symbol_table }
     }
 
     pub fn infer(
@@ -222,11 +241,7 @@ impl<'a> TypeChecker<'a> {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let expr = source_file.get(id).unwrap().clone();
-        println!(
-            "{}Infer node: {:?}",
-            (0..env.scopes.len()).map(|_| "  ").collect::<String>(),
-            expr
-        );
+        indented_println!(env, "Infer node {}: {:?}", id, expr);
         log::trace!("Infer node: {:?}", expr);
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
@@ -680,16 +695,14 @@ impl<'a> TypeChecker<'a> {
         let symbol_id = name.try_symbol_id();
 
         if *is_type_parameter {
-            let scheme = if let Ok(scheme) = env.lookup_symbol(&symbol_id).cloned() {
-                scheme
-            } else {
-                Scheme {
-                    ty: env.placeholder(id, name.name_str(), &symbol_id),
-                    unbound_vars: vec![],
-                }
+            let scheme = Scheme {
+                ty: env.placeholder(id, name.name_str(), &symbol_id),
+                unbound_vars: vec![],
             };
 
             env.declare(symbol_id, scheme.clone());
+
+            indented_println!(env, "Type Parameter: {:?}, {:?}", name, scheme);
 
             return Ok(scheme.ty.clone());
         }
@@ -703,22 +716,24 @@ impl<'a> TypeChecker<'a> {
 
         let ty_scheme = env.lookup_symbol(&symbol_id).unwrap().clone();
 
+        let mut substitutions = Substitutions::default();
         for (var, generic_id) in ty_scheme.unbound_vars.iter().zip(generics) {
             // Recursively get arg_ty
             let arg_ty = self.infer_node(generic_id, env, &None, source_file)?;
-            env.constrain_equality(*generic_id, Ty::TypeVar(var.clone()), arg_ty);
+            substitutions.insert(var.clone(), arg_ty);
         }
 
-        // 3. Create a new placeholder for the final, specialized type (Array<Int>).
+        let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
 
-        // env.constraints.push(Constraint::GenericApplication {
-        //     generic_ty: base_ty_placeholder,
-        //     arg_tys: arg_ty_placeholders,
-        //     result_ty: result_placeholder.clone(),
-        // });
+        indented_println!(
+            env,
+            "type repr {:?} -> {:?} {:?}",
+            name,
+            instantiated,
+            substitutions
+        );
 
-        //TODO: do we need to instantiate here???
-        Ok(ty_scheme.ty)
+        Ok(instantiated)
     }
 
     fn infer_func_type_repr(
@@ -757,7 +772,7 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &self,
-        _id: &ExprID,
+        id: &ExprID,
         env: &mut Environment,
         name: &Option<Name>,
         generics: &[ExprID],
@@ -773,11 +788,8 @@ impl<'a> TypeChecker<'a> {
         if let Some(Name::Resolved(symbol_id, _)) = name
             && let Ok(scheme) = env.lookup_symbol(symbol_id).cloned()
         {
-            let ty = env.instantiate(&scheme);
-            env.declare(*symbol_id, scheme);
-            Some(ty)
-        } else {
-            None
+            env.declare(*symbol_id, scheme.clone());
+            // Some(env.instantiate(&scheme))
         };
 
         let mut inferred_generics = vec![];
@@ -1136,7 +1148,7 @@ impl<'a> TypeChecker<'a> {
 
                         env.constraints.push(Constraint::VariantMatch {
                             expr_id: *id,
-                            scrutinee_ty: expected.clone(), // The type of the value being matched (the `expected` type)
+                            scrutinee_ty: expected.clone(),
                             variant_name: variant_name.clone(),
                             field_tys,
                         });
