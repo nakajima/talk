@@ -956,9 +956,13 @@ mod type_tests {
 
     #[test]
     fn checks_polymorphic_match() {
-        let checker = check(
+        let checker = check_without_prelude(
             "
-            func map<U, T>(opt: T?, f: (T) -> U) -> U? {
+            enum O<I> {
+                case some(I), none
+            }
+
+            func map<U, T>(opt: O<T>, f: (T) -> U) -> O<U> {
                 match opt {
                     .some(value) -> .some(f(value))
                     .none -> .none
@@ -967,11 +971,15 @@ mod type_tests {
 
             map(.some(123), func(foo) { foo })
             ",
-        );
+        )
+        .unwrap();
 
         // Should type check without errors - polymorphic function
-        let Ty::Func(args, _ret, _) = checker.type_for(&checker.root_ids()[0]).unwrap() else {
-            panic!("did not get func")
+        let Ty::Func(args, _ret, _) = checker.type_for(&checker.root_ids()[1]).unwrap() else {
+            panic!(
+                "did not get func: {:?}",
+                checker.type_for(&checker.root_ids()[1]).unwrap()
+            )
         };
 
         let Ty::Enum(symbol_id, type_params) = &args[0] else {
@@ -997,14 +1005,14 @@ mod type_tests {
         let Ty::TypeVar(TypeVarID(_, TypeVarKind::CanonicalTypeParameter(t))) = &params[0] else {
             panic!("didn't get T: {:?}", params[0]);
         };
-        assert_eq!(*t, "T2".to_string());
+        assert_eq!(*t, "I2".to_string());
 
         let box Ty::TypeVar(TypeVarID(_, TypeVarKind::CanonicalTypeParameter(u))) = ret else {
             panic!("didn't get U: {:?}", ret);
         };
         assert_eq!(*u, "U2".to_string());
 
-        let call_result = checker.type_for(&checker.root_ids()[1]).unwrap();
+        let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         match call_result {
             Ty::Enum(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
