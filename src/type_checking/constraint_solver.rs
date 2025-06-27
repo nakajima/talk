@@ -54,7 +54,6 @@ impl Constraint {
     }
 
     pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
-        println!("replacing constraint {:?} with {:?}", self, substitutions);
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
                 *id,
@@ -219,7 +218,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
-                println!("result_ty: {:?} = .{member_name}", result_ty);
+                log::warn!("Unqualified member constraint: {:?}", constraint)
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
                 let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
@@ -365,7 +364,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             return ty.clone();
         }
 
-        log::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
+        // log::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
 
         match ty {
             Ty::Pointer => ty.clone(),

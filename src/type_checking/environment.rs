@@ -328,7 +328,6 @@ impl Environment {
     }
 
     pub fn replace_constraint_values(&mut self, substitutions: &Substitutions) {
-        println!("replace_constraint_values");
         let mut new_constraints = vec![];
         let mut new_constraint;
         for constraint in self.constraints.iter() {
@@ -336,7 +335,6 @@ impl Environment {
             new_constraints.push(new_constraint);
         }
         self.constraints = new_constraints;
-        println!("done");
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {

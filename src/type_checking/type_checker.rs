@@ -709,10 +709,10 @@ impl<'a> TypeChecker<'a> {
         let symbol_id = name.try_symbol_id();
 
         if *is_type_parameter {
-            let scheme = Scheme {
+            let scheme = env.lookup_symbol(&symbol_id).cloned().unwrap_or(Scheme {
                 ty: env.placeholder(id, name.name_str(), &symbol_id),
                 unbound_vars: vec![],
-            };
+            });
 
             env.declare(symbol_id, scheme.clone());
 
@@ -723,11 +723,6 @@ impl<'a> TypeChecker<'a> {
 
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
-            log::error!(
-                "no generics, base_ty_placeholder: {:?}\n{:?}",
-                base_ty_placeholder,
-                source_file.get(id)
-            );
             return Ok(base_ty_placeholder);
         }
 
@@ -1315,7 +1310,6 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            println!("hoisting: {}", name_str);
             let placeholder = env.placeholder(id, format!("predecl[{}]", name_str), &symbol_id);
 
             // Stash this func ID so we can fully infer it in the next loop
@@ -1335,23 +1329,15 @@ impl<'a> TypeChecker<'a> {
                 unreachable!()
             };
 
-            println!("revisiting {:?}", placeholder);
-
-            let fn_var = match self.infer_node(expr_id, env, &Some(placeholder), source_file) {
-                Ok(ty) => ty,
-                Err(e) => panic!("infer_node failed: {:?}", e),
-            };
+            let fn_var = self.infer_node(expr_id, env, &Some(placeholder), source_file)?;
             let scheme = env.generalize(&fn_var);
             env.declare(symbol_id, scheme);
 
             placeholder_substitutions.insert(type_var_id.clone(), fn_var);
-            println!("inserted placeholder: {:?}", placeholder_substitutions);
         }
 
         env.replace_typed_exprs_values(&placeholder_substitutions);
         env.replace_constraint_values(&placeholder_substitutions);
-
-        println!("-> Finished function hoisting: {placeholder_substitutions:?}");
 
         Ok(())
     }
