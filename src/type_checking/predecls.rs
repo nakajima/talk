@@ -258,7 +258,7 @@ impl<'a> TypeChecker<'a> {
             env.register_struct(struct_def.clone());
         }
 
-        env.replace_constraint_values(substitutions);
+        env.replace_constraint_values(&substitutions);
 
         Ok(())
     }

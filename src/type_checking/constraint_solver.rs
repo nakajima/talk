@@ -54,6 +54,7 @@ impl Constraint {
     }
 
     pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
+        println!("replacing constraint {:?} with {:?}", self, substitutions);
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
                 *id,
@@ -621,7 +622,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
     }
 
     /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
-    fn substitute_ty_with_map(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
+    pub fn substitute_ty_with_map(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
         match ty {
             Ty::TypeVar(type_var_id) => {
                 if let Some(substituted_ty) = substitutions.get(type_var_id) {

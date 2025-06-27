@@ -38,13 +38,13 @@ impl std::fmt::Debug for TypeVarID {
             TypeVarKind::FuncNameVar(symbol_id) => write!(f, "T{}[${}]", self.0, symbol_id.0),
             TypeVarKind::FuncBody => write!(f, "T{}[body]", self.0),
             TypeVarKind::Let => write!(f, "T{}[let]", self.0),
-            TypeVarKind::TypeRepr(name) => write!(f, "T{}[<{}>]", self.0, name.name_str()),
+            TypeVarKind::TypeRepr(name) => write!(f, "T{}[<{:?}>]", self.0, name),
             TypeVarKind::Member(name) => write!(f, "T{}[.{}]", self.0, name),
             TypeVarKind::Element => write!(f, "T{}[E]", self.0),
             TypeVarKind::VariantValue => write!(f, "T{}[variant]", self.0),
             TypeVarKind::PatternBind(name) => write!(f, "T{}[->{}]", self.0, name.name_str()),
             TypeVarKind::CanonicalTypeParameter(name) => {
-                write!(f, "T{}[<{}>]", self.0, name)
+                write!(f, "T{}[C<{}>]", self.0, name)
             }
             TypeVarKind::Placeholder(name) => write!(f, "T{}[...{}]", self.0, name),
             TypeVarKind::Instantiated(from) => write!(f, "T{}[Inst.({})]", self.0, from),
@@ -233,6 +233,7 @@ impl<'a> TypeChecker<'a> {
         Ok(result)
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn infer_node(
         &self,
         id: &ExprID,
@@ -240,8 +241,20 @@ impl<'a> TypeChecker<'a> {
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
+        if let Some(typed_expr) = env.typed_exprs.get(id) {
+            log::trace!("Already inferred {:?}, returning from cache", typed_expr);
+            return Ok(typed_expr.ty.clone());
+        }
+
         let expr = source_file.get(id).unwrap().clone();
-        indented_println!(env, "Infer node {}: {:?}", id, expr);
+        // indented_println!(
+        //     env,
+        //     "Infer node {}: {:?} {}:{}",
+        //     id,
+        //     expr,
+        //     std::panic::Location::caller().file(),
+        //     std::panic::Location::caller().line()
+        // );
         log::trace!("Infer node: {:?}", expr);
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
@@ -654,6 +667,7 @@ impl<'a> TypeChecker<'a> {
                 ret_var = Ty::Struct(symbol_id, vec![]);
             }
             _ => {
+                log::error!("infer_call callee: {:?}", source_file.get(callee));
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 log::warn!("infer_call callee: {:?}", callee_ty);
                 // let callee_ty = env.instantiate(&env.generalize(&callee_ty));
@@ -702,8 +716,6 @@ impl<'a> TypeChecker<'a> {
 
             env.declare(symbol_id, scheme.clone());
 
-            indented_println!(env, "Type Parameter: {:?}, {:?}", name, scheme);
-
             return Ok(scheme.ty.clone());
         }
 
@@ -711,6 +723,11 @@ impl<'a> TypeChecker<'a> {
 
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
+            log::error!(
+                "no generics, base_ty_placeholder: {:?}\n{:?}",
+                base_ty_placeholder,
+                source_file.get(id)
+            );
             return Ok(base_ty_placeholder);
         }
 
@@ -725,13 +742,13 @@ impl<'a> TypeChecker<'a> {
 
         let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
 
-        indented_println!(
-            env,
-            "type repr {:?} -> {:?} {:?}",
-            name,
-            instantiated,
-            substitutions
-        );
+        // indented_println!(
+        //     env,
+        //     "type repr {:?} -> {:?} {:?}",
+        //     name,
+        //     instantiated,
+        //     substitutions
+        // );
 
         Ok(instantiated)
     }
@@ -750,6 +767,13 @@ impl<'a> TypeChecker<'a> {
         }
 
         let inferred_ret = self.infer_node(ret, env, expected, source_file)?;
+
+        // indented_println!(
+        //     env,
+        //     "&& infer_func_type_repr: ({:?}) -> {:?}",
+        //     inferred_args,
+        //     inferred_ret
+        // );
 
         let ty = Ty::Func(inferred_args, Box::new(inferred_ret), vec![]);
         Ok(ty)
@@ -810,8 +834,6 @@ impl<'a> TypeChecker<'a> {
 
         let expected_body_ty = if let Some(ret) = ret {
             Some(self.infer_node(ret, env, &None, source_file)?)
-        } else if let Some(expected) = expected {
-            Some(expected.clone())
         } else {
             None
         };
@@ -823,16 +845,18 @@ impl<'a> TypeChecker<'a> {
         }
 
         let body_ty = self.infer_node(body, env, &expected_body_ty, source_file)?;
+        let mut ret_ty = body_ty.clone();
 
         if let Some(ret_type) = expected_body_ty
             && let Some(ret_id) = ret
         {
-            env.constrain_equality(*ret_id, body_ty.clone(), ret_type);
+            ret_ty = ret_type.clone();
+            env.constrain_equality(*ret_id, body_ty.clone(), ret_type.clone());
         }
 
         env.end_scope();
 
-        let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty), inferred_generics);
+        let func_ty = Ty::Func(param_vars.clone(), Box::new(ret_ty), inferred_generics);
         let inferred_ty = if captures.is_empty() {
             func_ty
         } else {
@@ -1291,7 +1315,8 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let placeholder = env.placeholder(id, name_str.clone(), &symbol_id);
+            println!("hoisting: {}", name_str);
+            let placeholder = env.placeholder(id, format!("predecl[{}]", name_str), &symbol_id);
 
             // Stash this func ID so we can fully infer it in the next loop
             func_ids.push((id, symbol_id, placeholder.clone()));
@@ -1310,14 +1335,23 @@ impl<'a> TypeChecker<'a> {
                 unreachable!()
             };
 
-            let fn_var = self.infer_node(expr_id, env, &Some(placeholder), source_file)?;
+            println!("revisiting {:?}", placeholder);
+
+            let fn_var = match self.infer_node(expr_id, env, &Some(placeholder), source_file) {
+                Ok(ty) => ty,
+                Err(e) => panic!("infer_node failed: {:?}", e),
+            };
             let scheme = env.generalize(&fn_var);
             env.declare(symbol_id, scheme);
 
             placeholder_substitutions.insert(type_var_id.clone(), fn_var);
+            println!("inserted placeholder: {:?}", placeholder_substitutions);
         }
 
-        env.replace_constraint_values(placeholder_substitutions);
+        env.replace_typed_exprs_values(&placeholder_substitutions);
+        env.replace_constraint_values(&placeholder_substitutions);
+
+        println!("-> Finished function hoisting: {placeholder_substitutions:?}");
 
         Ok(())
     }

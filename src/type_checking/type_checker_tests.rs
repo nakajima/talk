@@ -981,7 +981,7 @@ mod type_tests {
         assert!(
             matches!(
                 type_params[0],
-                Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(Name::Resolved(_, _)),),),
+                Ty::TypeVar(TypeVarID(_, TypeVarKind::CanonicalTypeParameter(_),),),
             ),
             "{:?}",
             type_params
@@ -994,15 +994,15 @@ mod type_tests {
         };
 
         assert_eq!(1, params.len());
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(t))) = &params[0] else {
-            panic!("didn't get T");
+        let Ty::TypeVar(TypeVarID(_, TypeVarKind::CanonicalTypeParameter(t))) = &params[0] else {
+            panic!("didn't get T: {:?}", params[0]);
         };
-        assert_eq!(*t, Name::Resolved(SymbolID::resolved(3), "T".into()));
+        assert_eq!(*t, "T2".to_string());
 
-        let box Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(u))) = ret else {
-            panic!("didn't get U");
+        let box Ty::TypeVar(TypeVarID(_, TypeVarKind::CanonicalTypeParameter(u))) = ret else {
+            panic!("didn't get U: {:?}", ret);
         };
-        assert_eq!(*u, Name::Resolved(SymbolID::resolved(2), "U".into()));
+        assert_eq!(*u, "U2".to_string());
 
         let call_result = checker.type_for(&checker.root_ids()[1]).unwrap();
         match call_result {

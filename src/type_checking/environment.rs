@@ -318,7 +318,17 @@ impl Environment {
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
 
-    pub fn replace_constraint_values(&mut self, substitutions: Substitutions) {
+    pub fn replace_typed_exprs_values(&mut self, substitutions: &Substitutions) {
+        for (_, typed_expr) in &mut self.typed_exprs {
+            typed_expr.ty = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                &typed_expr.ty,
+                substitutions,
+            );
+        }
+    }
+
+    pub fn replace_constraint_values(&mut self, substitutions: &Substitutions) {
+        println!("replace_constraint_values");
         let mut new_constraints = vec![];
         let mut new_constraint;
         for constraint in self.constraints.iter() {
@@ -326,6 +336,7 @@ impl Environment {
             new_constraints.push(new_constraint);
         }
         self.constraints = new_constraints;
+        println!("done");
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {

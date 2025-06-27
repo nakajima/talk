@@ -211,7 +211,7 @@ mod tests {
             panic!("didn't get body")
         };
 
-        assert_eq!(body_ids.len(), 1);
+        assert_eq!(body_ids.len(), 2);
         let Some(&Expr::Assignment(lhs, rhs)) = resolved.get(&body_ids[0]) else {
             panic!("didn't get assignment");
         };
