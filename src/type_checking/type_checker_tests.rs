@@ -587,11 +587,11 @@ mod type_tests {
         // Check variant types
         assert_eq!(
             checker.type_for(&body_ids[0]).unwrap(),
-            Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int]),
+            Ty::EnumVariant(SymbolID::typed(2), vec![Ty::Int]),
         );
         assert_eq!(
             checker.type_for(&body_ids[1]).unwrap(),
-            Ty::EnumVariant(SymbolID::typed(1), vec![])
+            Ty::EnumVariant(SymbolID::typed(3), vec![])
         );
     }
 
@@ -631,7 +631,7 @@ mod type_tests {
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(&checker.root_ids()[1]).unwrap();
-        assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![]));
+        assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![Ty::Int]));
     }
 
     #[test]
@@ -790,7 +790,7 @@ mod type_tests {
         let cons_variant = checker.type_for(&exprs[0]);
         match cons_variant {
             Some(Ty::EnumVariant(enum_id, field_types)) => {
-                assert_eq!(enum_id, SymbolID::typed(1));
+                assert_eq!(enum_id, SymbolID::typed(3));
                 assert_eq!(field_types.len(), 2);
                 // Second field should be List<T> (recursive reference)
                 match &field_types[1] {
@@ -852,10 +852,10 @@ mod type_tests {
     fn checks_multiple_enum_parameters() {
         let checker = check(
             "
-            enum Bool {
+            enum Boolean {
                 case yes, no
             }
-            func and(a: Bool, b: Bool) -> Bool {
+            func and(a: Boolean, b: Boolean) -> Boolean {
                 match a {
                     .yes -> b
                     .no -> .no

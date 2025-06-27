@@ -124,6 +124,7 @@ impl Scheme {
 #[derive(Debug)]
 pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
+    depth: u8,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -142,6 +143,13 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
 }
 
 impl<'a> TypeChecker<'a> {
+    pub fn new(symbol_table: &'a mut SymbolTable) -> Self {
+        Self {
+            symbol_table,
+            depth: 0,
+        }
+    }
+
     pub fn infer(
         &mut self,
         source_file: SourceFile<NameResolved>,
@@ -214,6 +222,11 @@ impl<'a> TypeChecker<'a> {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let expr = source_file.get(id).unwrap().clone();
+        println!(
+            "{}Infer node: {:?}",
+            (0..env.scopes.len()).map(|_| "  ").collect::<String>(),
+            expr
+        );
         log::trace!("Infer node: {:?}", expr);
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),

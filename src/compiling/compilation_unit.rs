@@ -169,9 +169,9 @@ impl CompilationUnit<Resolved> {
 
         for file in self.stage.files {
             let mut typed = if driver_config.include_prelude {
-                TypeChecker { symbol_table }.infer(file, &mut self.env)
+                TypeChecker::new(symbol_table).infer(file, &mut self.env)
             } else {
-                TypeChecker { symbol_table }.infer_without_prelude(&mut self.env, file)
+                TypeChecker::new(symbol_table).infer_without_prelude(&mut self.env, file)
             };
             let mut solver = ConstraintSolver::new(&mut typed, &mut self.env, symbol_table);
             solver.solve();
