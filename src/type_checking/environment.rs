@@ -267,6 +267,11 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
+        if lhs == rhs {
+            // No need to constrain equality of equal things
+            return;
+        }
+
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!(
@@ -565,30 +570,6 @@ impl Environment {
         } else {
             None
         }
-    }
-
-    /// Applies all current global substitutions from the constraint solver (if they were accessible here)
-    /// For now, this is a placeholder or needs to be called from ConstraintSolver context.
-    /// TypeChecker currently uses it to resolve concrete enum types before looking up variants.
-    pub fn apply_substitutions_to_ty(&self, ty: Ty) -> Ty {
-        // TODO: This ideally needs access to the main substitution map from ConstraintSolver.
-        // For now, it's a simplified pass-through or might apply very local/temporary substitutions
-        // if the `Environment` ever held such a thing (which it currently doesn't for global solving).
-        // During type inference phase (before solving), this effectively does nothing to global TypeVars.
-        // It's more useful if `ty` contains TypeVars that were just locally instantiated (e.g. from a scheme)
-        // and `self` contains some temporary substitutions for those.
-        // Given the current structure, this might be best as a simple clone or a shallow substitution
-        // if `Environment` were to manage any local substitutions not yet part of global constraints.
-
-        // For the purpose of `infer_pattern` trying to see a concrete `Ty::Enum`,
-        // if `expected_ty` is a `TypeVar` that *will be* an Enum, this won't resolve it here.
-        // The constraints must handle that.
-        // However, if `expected_ty` *is* already `Ty::Enum(..., [TypeVar(...)])`, this function
-        // won't change it much without global substitutions.
-
-        // Let's assume for now it's just a pass-through during raw inference.
-        // The `ConstraintSolver::apply` is the main substitution workhorse.
-        ty
     }
 }
 

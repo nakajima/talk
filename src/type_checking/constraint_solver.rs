@@ -197,7 +197,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let lhs = Self::apply(lhs, substitutions, 0);
                 let rhs = Self::apply(rhs, substitutions, 0);
 
-                Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
+                self.unify(&lhs, &rhs, substitutions).map_err(|err| {
                     log::error!("{err:?}");
                     err
                 })?;
@@ -210,10 +210,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 symbol_id,
                 ..
             } => {
-                // let scheme = self.env.lookup_symbol(symbol_id)?.clone();
-                // let ty = scheme.ty;
-
-                // 1. Instantiate the scheme
                 let mut mapping = HashMap::new();
                 for unbound_var in &scheme.unbound_vars {
                     mapping.insert(
@@ -223,28 +219,33 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 }
                 let instantiated_ty = Self::substitute_ty_with_map(&ty, &mapping);
 
-                // 2. Unify with the placeholder
-                Self::unify(&ty, &instantiated_ty, substitutions)?;
+                self.unify(&ty, &instantiated_ty, substitutions)?;
                 Self::normalize_substitutions(substitutions);
             }
-            Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {}
-            Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
+            Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
+                println!("result_ty: {:?} = .{member_name}", result_ty);
+            }
+            Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
                 let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
-                match &receiver_ty {
+                let (member_ty, type_params, type_args) = match &receiver_ty {
                     Ty::Struct(struct_id, generics) => {
                         let struct_def = self.env.lookup_struct(&struct_id).unwrap();
                         let member_ty = struct_def.member_ty(&member_name).unwrap();
 
                         log::warn!(
-                            "MemberAccess {receiver_ty:?}.{member_name:?} {:?} -> {:?}",
+                            "MemberAccess {receiver_ty:?}.{member_name:?} {:?} -> {:?} {:?}",
                             member_ty,
-                            result_ty
+                            result_ty,
+                            generics
                         );
 
-                        Self::unify(&result_ty, member_ty, substitutions)?;
-                        Self::normalize_substitutions(substitutions);
+                        (
+                            member_ty.clone(),
+                            struct_def.type_parameters.clone(),
+                            generics,
+                        )
                     }
                     Ty::Enum(enum_id, generics) => {
                         let enum_def = self.env.lookup_enum(&enum_id).unwrap();
@@ -257,19 +258,36 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         };
 
                         log::warn!(
-                            "MemberAccess {receiver_ty:?}.{member_name:?} {:?} -> {:?}",
+                            "MemberAccess {receiver_ty:?}.{member_name:?} {:?} -> {:?} {:?}",
                             member_ty,
-                            result_ty
+                            result_ty,
+                            generics
                         );
 
-                        Self::unify(&result_ty, &member_ty, substitutions)?;
-                        Self::normalize_substitutions(substitutions);
+                        (
+                            member_ty.clone(),
+                            enum_def.type_parameters.clone(),
+                            generics,
+                        )
                     }
                     _ => {
                         todo!("{:?} {:?}", receiver_ty, result_ty);
                         // self.constraints.push(constraint.clone());
                     }
+                };
+
+                let mut member_substitutions = substitutions.clone();
+                for (type_param, type_arg) in type_params.iter().zip(type_args) {
+                    if let Ty::TypeVar(type_var) = type_param {
+                        log::trace!("Member substitution: {:?} -> {:?}", type_var, type_arg);
+                        member_substitutions.insert(type_var.clone(), type_arg.clone());
+                    }
                 }
+
+                let specialized_ty =
+                    Self::substitute_ty_with_map(&member_ty, &member_substitutions);
+                self.unify(&result_ty, &specialized_ty, substitutions)?;
+                Self::normalize_substitutions(substitutions);
             }
             Constraint::InitializerCall {
                 initializes_id,
@@ -298,10 +316,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 }
 
                 for (param, arg) in params.iter().zip(args) {
-                    Self::unify(param, arg, substitutions)?;
+                    self.unify(param, arg, substitutions)?;
                 }
 
-                Self::unify(&Ty::Struct(*initializes_id, vec![]), ret, substitutions)?;
+                self.unify(&Ty::Struct(*initializes_id, vec![]), ret, substitutions)?;
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::VariantMatch {
@@ -328,7 +346,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 };
 
                 for (value, field) in values.iter().zip(field_tys) {
-                    Self::unify(value, field, substitutions)?;
+                    self.unify(value, field, substitutions)?;
                 }
 
                 Self::normalize_substitutions(substitutions);
@@ -429,6 +447,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
     }
 
     fn unify(
+        &self,
         lhs: &Ty,
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
@@ -467,11 +486,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 Ty::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                 }
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                 }
 
                 if let (Ty::TypeVar(ret_var), concrete_ret) =
@@ -491,13 +510,13 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     substitutions.insert(ret_var.clone(), concrete_ret.clone());
                 }
 
-                Self::unify(&lhs_returning, &rhs_returning, substitutions)?;
+                self.unify(&lhs_returning, &rhs_returning, substitutions)?;
                 Self::normalize_substitutions(substitutions);
 
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                Self::unify(&lhs_func, &rhs_func, substitutions)?;
+                self.unify(&lhs_func, &rhs_func, substitutions)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -505,7 +524,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
-                Self::unify(&func, &closure, substitutions)?;
+                self.unify(&func, &closure, substitutions)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -513,7 +532,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
                 }
 
@@ -521,9 +540,41 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
                 for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
                 }
+
+                Ok(())
+            }
+            (Ty::Func(func_args, ret, generics), Ty::EnumVariant(enum_id, variant_args))
+            | (Ty::EnumVariant(enum_id, variant_args), Ty::Func(func_args, ret, generics))
+                if func_args.len() == variant_args.len() =>
+            {
+                // We always want the return value to be the enum
+                let Some(enum_def) = self.env.lookup_enum(&enum_id) else {
+                    return Err(TypeError::Unknown(
+                        "Didn't find enum def for {enum_id:?}".into(),
+                    ));
+                };
+
+                let mut member_substitutions = substitutions.clone();
+                for (type_param, type_arg) in enum_def.type_parameters.iter().zip(generics) {
+                    if let Ty::TypeVar(type_var) = type_param {
+                        log::trace!("Member substitution: {:?} -> {:?}", type_var, type_arg);
+                        member_substitutions.insert(type_var.clone(), type_arg.clone());
+                    }
+                }
+                let specialized_ty =
+                    Self::substitute_ty_with_map(&Ty::Enum(enum_id, func_args), substitutions);
+
+                self.unify(&ret, &specialized_ty, substitutions);
+
+                // Inference treats all callees as funcs, even if it's an enum constructor.
+                // for (func_arg, variant_arg) in func_args.iter().zip(variant_args) {
+                //     self.unify(func_arg, &variant_arg, substitutions)?;
+                // }
+
+                Self::normalize_substitutions(substitutions);
 
                 Ok(())
             }

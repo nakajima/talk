@@ -630,6 +630,7 @@ impl<'a> TypeChecker<'a> {
             _ => {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 log::warn!("infer_call callee: {:?}", callee_ty);
+                println!("ohhey whats up: {:?}", callee_ty);
                 // let callee_ty = env.instantiate(&env.generalize(&callee_ty));
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
