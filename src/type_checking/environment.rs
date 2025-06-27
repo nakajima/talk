@@ -1,14 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::IndexMut,
-    path::PathBuf,
 };
 
 use crate::{
     Phase, SourceFile, SymbolID, SymbolTable,
     constraint_solver::{ConstraintSolver, Substitutions},
     parser::ExprID,
-    source_file,
     ty::Ty,
     type_checker::TypeError,
 };
@@ -318,20 +316,6 @@ impl Environment {
         }
         self.constraints
             .push(Constraint::MemberAccess(id, receiver, name, result_ty))
-    }
-
-    /// Look up the scheme for `sym`, then immediately instantiate it.
-    fn instantiate_symbol(&mut self, symbol_id: SymbolID) -> Result<Ty, TypeError> {
-        let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() else {
-            log::error!(
-                "Trying to instantiate unknown symbol: {:?} in {:?}",
-                symbol_id,
-                self.scopes
-            );
-            return Err(TypeError::Unknown("Unknown symbol".into()));
-        };
-
-        Ok(self.instantiate(&scheme))
     }
 
     pub fn replace_constraint_values(&mut self, substitutions: Substitutions) {

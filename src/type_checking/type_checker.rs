@@ -2,11 +2,9 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
-    constraint_solver::{Constraint, ConstraintSolver},
+    constraint_solver::Constraint,
     diagnostic::Diagnostic,
-    environment::{
-        EnumVariant, Method, Property, RawEnumVariant, RawInitializer, RawMethod, StructDef,
-    },
+    environment::{EnumVariant, Method, RawEnumVariant, RawMethod},
     expr::{Expr, Pattern},
     name::Name,
     name_resolver::NameResolverError,
@@ -372,7 +370,7 @@ impl<'a> TypeChecker<'a> {
     fn infer_enum_decl(
         &self,
         enum_id: &SymbolID,
-        body: &ExprID,
+        _body: &ExprID,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
@@ -583,7 +581,7 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_call(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
@@ -630,7 +628,6 @@ impl<'a> TypeChecker<'a> {
             _ => {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 log::warn!("infer_call callee: {:?}", callee_ty);
-                println!("ohhey whats up: {:?}", callee_ty);
                 // let callee_ty = env.instantiate(&env.generalize(&callee_ty));
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
@@ -747,7 +744,7 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         env: &mut Environment,
         name: &Option<Name>,
         generics: &[ExprID],
@@ -859,10 +856,10 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_variable(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         env: &mut Environment,
         symbol_id: SymbolID,
-        name: &str,
+        _name: &str,
     ) -> Result<Ty, TypeError> {
         let scheme = env.lookup_symbol(&symbol_id)?.clone();
         let ty = env.instantiate(&scheme);

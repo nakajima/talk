@@ -83,7 +83,6 @@ impl Memory {
         match val {
             Value::Struct(vals) => {
                 let vals: Vec<Option<Value>> = vals.iter().cloned().map(Option::Some).collect();
-                println!("----- storing struct vals {vals:?} at {range:?}");
                 self.storage[range].clone_from_slice(&vals)
             }
             // Value::Enum { tag, values } => {

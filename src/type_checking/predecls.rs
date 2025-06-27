@@ -1,5 +1,5 @@
 use crate::{
-    NameResolved, SourceFile, SymbolTable,
+    NameResolved, SourceFile,
     constraint_solver::Substitutions,
     environment::{
         Environment, Initializer, Method, Property, RawInitializer, RawMethod, RawProperty,
@@ -243,7 +243,6 @@ impl<'a> TypeChecker<'a> {
                     expr_id: method.expr_id,
                     ty: ty.clone(),
                 });
-                println!("-> predecl method ty: {} {ty:?}", method.name);
                 // env.constrain_equality(method.expr_id, method_placeholders[i][j].clone(), ty);
                 let Ty::TypeVar(placeholder) = &method_placeholders[i][j] else {
                     unreachable!();

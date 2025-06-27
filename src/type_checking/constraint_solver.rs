@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, Phase, SourceFile, SymbolID, SymbolTable, Typed,
+    NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
     diagnostic::Diagnostic,
-    environment::{Environment, TypeDef},
+    environment::Environment,
     expr::Expr,
     name::Name,
     parser::ExprID,
@@ -11,7 +11,7 @@ use crate::{
     type_checker::{Scheme, TypeError, TypeVarKind},
 };
 
-use super::{environment::RawEnumVariant, type_checker::TypeVarID};
+use super::type_checker::TypeVarID;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
@@ -204,12 +204,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 Self::normalize_substitutions(substitutions);
             }
-            Constraint::InstanceOf {
-                scheme,
-                ty,
-                symbol_id,
-                ..
-            } => {
+            Constraint::InstanceOf { scheme, ty, .. } => {
                 let mut mapping = HashMap::new();
                 for unbound_var in &scheme.unbound_vars {
                     mapping.insert(
@@ -567,7 +562,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let specialized_ty =
                     Self::substitute_ty_with_map(&Ty::Enum(enum_id, func_args), substitutions);
 
-                self.unify(&ret, &specialized_ty, substitutions);
+                self.unify(&ret, &specialized_ty, substitutions)?;
 
                 // Inference treats all callees as funcs, even if it's an enum constructor.
                 // for (func_arg, variant_arg) in func_args.iter().zip(variant_args) {

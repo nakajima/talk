@@ -402,11 +402,9 @@ mod type_tests {
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
-        let Ty::TypeVar(TypeVarID(_, call_ret)) = *ret else {
+        let Ty::TypeVar(TypeVarID(_, _call_ret)) = *ret else {
             panic!("didn't get call return");
         };
-
-        println!("call ret: {:?}", call_ret);
     }
 
     #[test]

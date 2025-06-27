@@ -90,7 +90,7 @@ impl Ty {
             ),
             Ty::Array(_) => todo!(),
             Ty::Struct(symbol_id, generics) => {
-                let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
+                let Some(TypeDef::Struct(_struct_def)) = lowerer.env.lookup_type(symbol_id) else {
                     log::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
                 };
@@ -1209,7 +1209,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 // 1. Get the tag for this variant from the enum definition.
-                let Ty::Enum(enum_id, enum_generics) = &pattern_typed_expr.ty else {
+                let Ty::Enum(enum_id, _enum_generics) = &pattern_typed_expr.ty else {
                     panic!("did not get enum")
                 };
 
@@ -1254,7 +1254,7 @@ impl<'a> Lowerer<'a> {
                         let Ty::EnumVariant(_, values) = variant_def.ty.clone() else {
                             unreachable!();
                         };
-                        let ty = match values[i].clone() {
+                        let _ty = match values[i].clone() {
                             // Ty::TypeVar(var) => {
                             //     let Some(generic_pos) = type_def
                             //         .type_parameters
@@ -1344,11 +1344,7 @@ impl<'a> Lowerer<'a> {
                 reg
             }
             Pattern::Wildcard => todo!(),
-            Pattern::Variant {
-                variant_name,
-                fields,
-                ..
-            } => {
+            Pattern::Variant { variant_name, .. } => {
                 let Ty::Enum(enum_id, _) = pattern_typed_expr.ty else {
                     panic!("didn't get pattern type: {:?}", pattern_typed_expr.ty)
                 };
@@ -1356,7 +1352,7 @@ impl<'a> Lowerer<'a> {
                     panic!("didn't get type def for {enum_id:?}");
                 };
 
-                let (tag, variant) = type_def
+                let (tag, _variant) = type_def
                     .variants
                     .iter()
                     .enumerate()
@@ -1455,7 +1451,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
+                if let Some(_method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
                     let name = Name::Resolved(struct_id, format!("{}_{name}", struct_def.name_str))
                         .mangled(&&Ty::Void);
