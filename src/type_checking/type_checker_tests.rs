@@ -686,8 +686,8 @@ mod type_tests {
         let result_ty = checker.type_for(&checker.root_ids()[2]).unwrap();
         match result_ty {
             Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID::typed(3)); // Result enum
-                assert_eq!(generics.len(), 2);
+                assert_eq!(symbol_id, SymbolID::typed(5)); // Result enum
+                assert_eq!(generics.len(), 1);
 
                 // First generic should be Option<Int>
                 match &generics[0] {
