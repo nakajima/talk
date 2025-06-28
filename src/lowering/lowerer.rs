@@ -93,19 +93,18 @@ impl Ty {
             ),
             Ty::Array(_) => todo!(),
             Ty::Struct(symbol_id, generics) => {
-                let Some(TypeDef::Struct(_struct_def)) = lowerer.env.lookup_type(symbol_id) else {
+                let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
                     log::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
                 };
 
                 IRType::Struct(
                     *symbol_id,
-                    vec![],
-                    // struct_def
-                    //     .properties
-                    //     .iter()
-                    //     .map(|p| p.ty.to_ir(lowerer))
-                    //     .collect(),
+                    struct_def
+                        .properties
+                        .iter()
+                        .map(|p| p.ty.to_ir(lowerer))
+                        .collect(),
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
@@ -1453,6 +1452,8 @@ impl<'a> Lowerer<'a> {
                 else {
                     unreachable!("didn't get struct def");
                 };
+
+                println!("Lowering struct member: {name} {receiver_typed:?}");
 
                 if let Some(index) = struct_def.properties.iter().position(|p| p.name == name) {
                     let member_reg = self.allocate_register();
