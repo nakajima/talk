@@ -2,7 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
-    constraint_solver::{Constraint, ConstraintSolver, Substitutions},
+    constraint_solver::{Constraint, Substitutions},
     diagnostic::Diagnostic,
     environment::{EnumVariant, Method, RawEnumVariant, RawMethod},
     expr::{Expr, Pattern},
@@ -24,8 +24,32 @@ pub type TypeDefs = HashMap<SymbolID, TypeDef>;
 pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct TypeVarID(pub i32, pub TypeVarKind);
+
+impl PartialEq for TypeVarID {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for TypeVarID {}
+
+impl Hash for TypeVarID {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_i32(self.0);
+    }
+}
+
+impl TypeVarID {
+    pub fn canonicalized(&self) -> Option<TypeVarID> {
+        if let TypeVarKind::Instantiated(parent_id) = self.1 {
+            return Some(TypeVarID(parent_id, TypeVarKind::Unbound));
+        }
+
+        None
+    }
+}
 
 impl std::fmt::Debug for TypeVarID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -126,6 +150,7 @@ pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
 }
 
+#[allow(unused)]
 macro_rules! indented_println {
     // Matcher:
     // - $env: An expression that evaluates to your environment struct.
@@ -183,6 +208,9 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
+        // Predeclare lets
+        self.predeclare_lets(items, env, source_file);
+
         if let Err((id, err)) = self.predeclare_structs(items, env, source_file) {
             source_file.diagnostics.insert(Diagnostic::typing(id, err));
         }
@@ -323,7 +351,7 @@ impl<'a> TypeChecker<'a> {
                 self.infer_enum_decl(symbol_id, body, env, source_file)
             }
             Expr::EnumVariant(name, values) => {
-                self.infer_enum_variant(name, values, env, source_file)
+                self.infer_enum_variant(name, values, expected, env, source_file)
             }
             Expr::Match(pattern, items) => self.infer_match(env, pattern, items, source_file),
             Expr::MatchArm(pattern, body) => {
@@ -452,13 +480,17 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_enum_variant(
         &self,
-        name: &Name,
+        _name: &Name,
         values: &[ExprID],
+        expected: &Option<Ty>,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
+        let Some(Ty::Enum(enum_id, _)) = expected else {
+            unreachable!("should always be called with expected = Enum");
+        };
         let values = self.infer_nodes(values, env, source_file)?;
-        Ok(Ty::EnumVariant(name.try_symbol_id(), values))
+        Ok(Ty::EnumVariant(*enum_id, values))
     }
 
     fn infer_parameter(
@@ -667,10 +699,7 @@ impl<'a> TypeChecker<'a> {
                 ret_var = Ty::Struct(symbol_id, vec![]);
             }
             _ => {
-                log::error!("infer_call callee: {:?}", source_file.get(callee));
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
-                log::warn!("infer_call callee: {:?}", callee_ty);
-                // let callee_ty = env.instantiate(&env.generalize(&callee_ty));
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
                 env.constrain_equality(*callee, callee_ty.clone(), expected_callee_ty);
@@ -791,7 +820,7 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         env: &mut Environment,
         name: &Option<Name>,
         generics: &[ExprID],
@@ -799,7 +828,7 @@ impl<'a> TypeChecker<'a> {
         captures: &[SymbolID],
         body: &ExprID,
         ret: &Option<ExprID>,
-        expected: &Option<Ty>,
+        _expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         env.start_scope();
@@ -982,6 +1011,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         env.start_scope();
+        self.predeclare_lets(&items, env, source_file);
         self.predeclare_functions(&items, env, source_file)?;
 
         let mut block_return_ty = expected.clone();
@@ -1198,6 +1228,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), (ExprID, TypeError)> {
+        let mut enum_defs = vec![];
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
 
@@ -1277,7 +1308,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            env.register_enum(EnumDef {
+            let enum_def = EnumDef {
                 name: Some(enum_id),
                 name_str: enum_name_str,
                 raw_variants: variant_defs,
@@ -1285,7 +1316,46 @@ impl<'a> TypeChecker<'a> {
                 type_parameters: generic_vars,
                 raw_methods,
                 methods: Default::default(),
-            });
+            };
+
+            enum_defs.push(enum_def.clone());
+            env.register_enum(enum_def);
+        }
+
+        for enum_def in &mut enum_defs {
+            let mut methods = HashMap::new();
+            let mut variants = vec![];
+
+            for (_, raw_method) in enum_def.raw_methods.iter() {
+                let ty = self
+                    .infer_node(&raw_method.expr_id, env, &None, source_file)
+                    .map_err(|e| (raw_method.expr_id, e))?;
+                methods.insert(
+                    raw_method.name.clone(),
+                    Method::new(raw_method.name.clone(), raw_method.expr_id, ty),
+                );
+            }
+
+            for raw_variant in enum_def.raw_variants.iter() {
+                let ty = self
+                    .infer_node(
+                        &raw_variant.expr_id,
+                        env,
+                        &Some(Ty::Enum(
+                            enum_def.name.unwrap(),
+                            enum_def.type_parameters.clone(),
+                        )),
+                        source_file,
+                    )
+                    .map_err(|e| (raw_variant.expr_id, e))?;
+                variants.push(EnumVariant {
+                    name: raw_variant.name.clone(),
+                    ty: ty,
+                });
+            }
+
+            enum_def.methods = methods;
+            enum_def.variants = variants;
         }
 
         Ok(())
@@ -1340,5 +1410,24 @@ impl<'a> TypeChecker<'a> {
         env.replace_constraint_values(&placeholder_substitutions);
 
         Ok(())
+    }
+
+    fn predeclare_lets(
+        &self,
+        items: &[ExprID],
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) {
+        for id in items {
+            let Some(Expr::Assignment(lhs, _)) = source_file.get(&id).cloned() else {
+                continue;
+            };
+
+            let Some(Expr::Let(Name::Resolved(_, _), _)) = source_file.get(&lhs) else {
+                continue;
+            };
+
+            self.infer_node(&id, env, &None, source_file).ok();
+        }
     }
 }

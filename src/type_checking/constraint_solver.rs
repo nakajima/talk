@@ -218,7 +218,48 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
-                log::warn!("Unqualified member constraint: {:?}", constraint)
+                let result_ty = Self::apply(result_ty, substitutions, 0);
+
+                match &result_ty {
+                    Ty::Enum(enum_id, _generics) => {
+                        let variant = self
+                            .env
+                            .lookup_enum(&enum_id)
+                            .unwrap()
+                            .tag_with_variant_for(&member_name)
+                            .1;
+                        self.unify(&result_ty, &variant.ty, substitutions)?;
+                    }
+                    Ty::Func(args, ret, _generics) => {
+                        log::error!("Unqualified member constraint: {:?}", result_ty);
+                        // let variant = self
+                        //     .env
+                        //     .lookup_enum(&enum_id)
+                        //     .unwrap()
+                        //     .tag_with_variant_for(&member_name)
+                        //     .1;
+                        // self.unify(&result_ty, &variant.ty, substitutions)?;
+                        let Ty::Enum(enum_id, _generics) = Self::apply(&ret, substitutions, 0)
+                        else {
+                            println!(
+                                "did not get enum type: {:?}",
+                                Self::apply(&ret, substitutions, 0)
+                            );
+                            return Ok(());
+                        };
+
+                        let variant = Ty::EnumVariant(enum_id, args.clone());
+
+                        self.unify(&result_ty, &variant, substitutions)?;
+                        // println!(
+                        //     "unqualified member: {:?} {:?} {:?}",
+                        //     Self::apply_multiple(args, substitutions, 0),
+                        //     Self::apply(ret, substitutions, 0),
+                        //     Self::apply_multiple(generics, substitutions, 0)
+                        // );
+                    }
+                    _ => (),
+                }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
                 let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
@@ -323,25 +364,82 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 field_tys,
                 ..
             } => {
-                let Ty::Enum(enum_id, _) = Self::apply(scrutinee_ty, &substitutions, 0) else {
-                    panic!()
+                // let Ty::Enum(enum_id, generics) = Self::apply(scrutinee_ty, &substitutions, 0)
+                // else {
+                //     unreachable!()
+                // };
+
+                // let Some(enum_def) = self.env.lookup_enum(&enum_id) else {
+                //     unreachable!()
+                // };
+
+                // let Some(variant) = enum_def.variants.iter().find(|v| v.name == *variant_name)
+                // else {
+                //     unreachable!()
+                // };
+
+                // let Ty::EnumVariant(_, values) = &variant.ty else {
+                //     unreachable!();
+                // };
+
+                // for (value, field) in values.iter().zip(field_tys) {
+                //     self.unify(value, field, substitutions)?;
+                // }
+
+                // for (param, arg) in enum_def.type_parameters.iter().zip(generics) {
+                //     self.unify(param, &arg, substitutions)?
+                // }
+
+                // Self::normalize_substitutions(substitutions);
+                // Apply existing substitutions to get the most up-to-date type of the value being matched.
+                let scrutinee_ty = Self::apply(scrutinee_ty, substitutions, 0);
+                let Ty::Enum(enum_id, generics) = &scrutinee_ty else {
+                    // This should not happen if the type checker is working correctly up to this point.
+                    return Err(TypeError::Unknown(format!(
+                        "VariantMatch expected an enum, but got {:?}",
+                        scrutinee_ty
+                    )));
                 };
 
-                let Some(enum_def) = self.env.lookup_enum(&enum_id) else {
-                    panic!()
+                let Some(enum_def) = self.env.lookup_enum(enum_id) else {
+                    unreachable!("Enum definition not found for a typed enum.");
                 };
 
                 let Some(variant) = enum_def.variants.iter().find(|v| v.name == *variant_name)
                 else {
-                    panic!()
+                    unreachable!("Variant not found in its own enum definition.");
                 };
 
-                let Ty::EnumVariant(_, values) = &variant.ty else {
-                    unreachable!();
+                // Extract the generic field types from the variant's definition (e.g., `[I]` for `some(I)`).
+                let Ty::EnumVariant(_, generic_field_tys) = &variant.ty else {
+                    unreachable!("Variant's type is not an EnumVariant.");
                 };
 
-                for (value, field) in values.iter().zip(field_tys) {
-                    self.unify(value, field, substitutions)?;
+                // Create a local substitution map to specialize the variant's types.
+                // This maps the enum's generic parameters (e.g., I) to the scrutinee's concrete types (e.g., Int).
+                let mut local_substitutions = HashMap::new();
+                for (type_param, type_arg) in enum_def.type_parameters.iter().zip(generics) {
+                    if let Ty::TypeVar(type_var_id) = type_param {
+                        local_substitutions.insert(type_var_id.clone(), type_arg.clone());
+                    }
+                }
+
+                // Specialize the variant's generic field types using the local map.
+                // This turns `[I]` into `[Int]`.
+                let specialized_field_tys = generic_field_tys
+                    .iter()
+                    .map(|ty| Self::substitute_ty_with_map(ty, &local_substitutions))
+                    .collect::<Vec<_>>();
+
+                // Now, unify the specialized, concrete field types with the types from the pattern.
+                if specialized_field_tys.len() != field_tys.len() {
+                    return Err(TypeError::Unknown(
+                        "Variant pattern has incorrect number of fields.".into(),
+                    ));
+                }
+
+                for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
+                    self.unify(specialized_ty, pattern_ty, substitutions)?;
                 }
 
                 Self::normalize_substitutions(substitutions);

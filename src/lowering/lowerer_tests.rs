@@ -96,8 +96,8 @@ pub mod lowering_tests {
         .unwrap();
 
         let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
-        let t3 = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
-        let t4 = format!("T{}", compile_prelude().environment.type_var_id.0 + 4);
+        let t3 = format!("T{}", compile_prelude().environment.type_var_id.0 + 2);
+        let t4 = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
 
         assert_lowered_function!(
             lowered,
@@ -224,7 +224,7 @@ pub mod lowering_tests {
     fn lowers_calls() {
         let lowered = lower("func foo(x) { x }\nfoo(123)").unwrap();
 
-        let type_var = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
+        let type_var = format!("T{}", compile_prelude().environment.type_var_id.0 + 2);
 
         let foo_func_type = IRType::Func(
             vec![IRType::TypeVar(type_var.clone().into())],
@@ -291,7 +291,7 @@ pub mod lowering_tests {
 
     #[test]
     fn lowers_func_with_params() {
-        let type_var = format!("T{}", compile_prelude().environment.type_var_id.0 + 3);
+        let type_var = format!("T{}", compile_prelude().environment.type_var_id.0 + 2);
         let lowered = lower("func foo(x) { x }").unwrap();
         let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
         assert_lowered_function!(

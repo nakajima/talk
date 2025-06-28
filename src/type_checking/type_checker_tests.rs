@@ -180,7 +180,6 @@ mod type_tests {
         SymbolID, check_without_prelude,
         environment::TypeDef,
         expr::Expr,
-        name::Name,
         ty::Ty,
         type_checker::{TypeVarID, TypeVarKind},
         type_checking::CheckResult,
@@ -377,8 +376,26 @@ mod type_tests {
             panic!("expected `compose` to return a closure, got {return_type:?}",);
         };
         assert_eq!(inner_params.len(), 1);
-        assert_eq!(inner_params[0], g_args[0].clone()); // inner's x : A
-        assert_eq!(*inner_ret, *f_ret.clone()); // inner returns C
+
+        let Ty::TypeVar(TypeVarID(_, TypeVarKind::Instantiated(inner_id))) = inner_params[0] else {
+            panic!("didn't get innerid");
+        };
+
+        let Ty::TypeVar(TypeVarID(g_arg, _)) = g_args[0] else {
+            panic!("didn't get arg: {:?}", g_args[0]);
+        };
+
+        assert_eq!(inner_id, g_arg);
+
+        let Ty::TypeVar(TypeVarID(_, TypeVarKind::Instantiated(inner_ret))) = *inner_ret else {
+            panic!("didn't get inner_ret");
+        };
+
+        let Ty::TypeVar(TypeVarID(f_ret, _)) = *f_ret else {
+            panic!("didn't get f_ret: {:?}", f_ret);
+        };
+
+        assert_eq!(inner_ret, f_ret); // inner returns C
     }
 
     #[test]
@@ -552,11 +569,11 @@ mod type_tests {
         // Check the variants
         assert_eq!(
             checker.type_for(&body_ids[0]).unwrap(),
-            Ty::EnumVariant(SymbolID(2), vec![])
+            Ty::EnumVariant(SymbolID(1), vec![])
         );
         assert_eq!(
             checker.type_for(&body_ids[1]).unwrap(),
-            Ty::EnumVariant(SymbolID(3), vec![])
+            Ty::EnumVariant(SymbolID(1), vec![])
         );
     }
 
@@ -790,11 +807,11 @@ mod type_tests {
         let cons_variant = checker.type_for(&exprs[0]);
         match cons_variant {
             Some(Ty::EnumVariant(enum_id, field_types)) => {
-                assert_eq!(enum_id, SymbolID::typed(3));
+                assert_eq!(enum_id, SymbolID::typed(1));
                 assert_eq!(field_types.len(), 2);
                 // Second field should be List<T> (recursive reference)
                 match &field_types[1] {
-                    Ty::Enum(list_id, _) => assert_eq!(*list_id, SymbolID::typed(1)),
+                    Ty::Enum(list_id, _) => assert_eq!(*list_id, enum_id),
                     _ => panic!("Expected recursive List type"),
                 }
             }
@@ -1010,7 +1027,7 @@ mod type_tests {
         let box Ty::TypeVar(TypeVarID(_, TypeVarKind::CanonicalTypeParameter(u))) = ret else {
             panic!("didn't get U: {:?}", ret);
         };
-        assert_eq!(*u, "U2".to_string());
+        assert_eq!(*u, "I2".to_string());
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         match call_result {
@@ -1082,6 +1099,20 @@ mod type_tests {
                 captures: vec![SymbolID(2)]
             }
         );
+
+        let Some(Expr::Func { body, .. }) = checked.source_file.get(&checked.root_ids()[1]) else {
+            panic!("no body");
+        };
+
+        let Some(Expr::Block(ids)) = checked.source_file.get(&body) else {
+            panic!("didn't get body");
+        };
+
+        let Some(Expr::Binary(lhs, _, _)) = checked.source_file.get(&ids[0]) else {
+            panic!("didn't get binary expr");
+        };
+
+        assert_eq!(checked.type_for(&lhs).unwrap(), Ty::Int);
     }
 
     #[test]

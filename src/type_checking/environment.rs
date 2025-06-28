@@ -521,6 +521,11 @@ impl Environment {
         {
             Ok(scheme)
         } else {
+            log::error!(
+                "Did not find symbol {:?} in scope: {:?}",
+                symbol_id,
+                self.scopes
+            );
             Err(TypeError::Unresolved(format!(
                 "Did not find symbol {:?} in scope: {:?}",
                 symbol_id, self.scopes
