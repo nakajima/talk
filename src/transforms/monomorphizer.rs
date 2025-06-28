@@ -469,10 +469,10 @@ mod tests {
 
         assert_lowered_function!(
             monomorphed,
-            "@_3_Array_get<ptr int>",
+            format!("@_{}_Array_get<ptr int>", SymbolID::ARRAY.0),
             IRFunction {
                 debug_info: Default::default(),
-                name: "@_3_Array_get<ptr int>".into(),
+                name: format!("@_{}_Array_get<ptr int>", SymbolID::ARRAY.0),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
@@ -480,7 +480,7 @@ mod tests {
                         Instr::GetElementPointer {
                             dest: Register(3),
                             base: Register(0),
-                            ty: IRType::array(IRType::TypeVar("T91".into())),
+                            ty: IRType::array(IRType::TypeVar("T32".into())),
                             index: IRValue::ImmediateInt(2)
                         },
                         Instr::Load {
