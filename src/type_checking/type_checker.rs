@@ -686,14 +686,23 @@ impl<'a> TypeChecker<'a> {
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
                 if env.is_struct_symbol(&symbol_id) =>
             {
-                // Make sure we actually have a callee inferred
-                self.infer_node(callee, env, expected, source_file)?;
+                let placeholder =
+                    env.placeholder(callee, format!("init({:?})", symbol_id), &symbol_id);
+
+                env.typed_exprs.insert(
+                    *callee,
+                    TypedExpr {
+                        id: *callee,
+                        expr: source_file.get(callee).cloned().unwrap(),
+                        ty: placeholder.clone(),
+                    },
+                );
 
                 env.constraints.push(Constraint::InitializerCall {
                     expr_id: *callee,
                     initializes_id: symbol_id,
-                    args: arg_tys,
-                    ret: ret_var,
+                    args: arg_tys.clone(),
+                    ret: placeholder.clone(),
                 });
 
                 ret_var = Ty::Struct(symbol_id, vec![]);

@@ -775,6 +775,10 @@ impl<'a> Lowerer<'a> {
                 } => {
                     self.lower_method(&struct_id, &member_id, &name.name_str());
                 }
+                Expr::Init(..) | Expr::Property { .. } => {
+                    // These are handled by the StructDef or the first loop; ignore them here.
+                    continue;
+                }
                 _ => {
                     log::warn!("unhandled struct member: {:?}", typed_member.expr);
                     continue;
@@ -887,7 +891,6 @@ impl<'a> Lowerer<'a> {
         );
 
         self.lowered_functions.push(func.clone());
-        self.current_functions.pop();
 
         Some(loaded_reg)
     }
@@ -1454,8 +1457,6 @@ impl<'a> Lowerer<'a> {
                     unreachable!("didn't get struct def");
                 };
 
-                println!("Lowering struct member: {name} {receiver_typed:?}");
-
                 if let Some(index) = struct_def.properties.iter().position(|p| p.name == name) {
                     let member_reg = self.allocate_register();
 
@@ -1763,7 +1764,7 @@ impl<'a> Lowerer<'a> {
 
                 Some(reg)
             }
-            _ => todo!(),
+            _ => todo!("unable to lower: {:?}", value),
         }
     }
 
@@ -1849,6 +1850,7 @@ impl<'a> Lowerer<'a> {
         }
         | Ty::Init(_, params, _)) = &callee_typed_expr.ty
         else {
+            log::error!("didn't get callable: {callee_typed_expr:?}");
             return None;
         };
 
@@ -1896,7 +1898,6 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        println!("lower_call: {:?}", callee_typed_expr.ty);
         if let Ty::Init(struct_id, params, _) = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &ty, arg_registers, params);
         }

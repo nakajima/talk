@@ -425,10 +425,10 @@ impl IRInterpreter {
                 };
 
                 let Value::Pointer(base) = self.register_value(&base) else {
-                    panic!(
+                    return Err(InterpreterError::Unknown(format!(
                         "did not get base pointer for GEP: {:?}",
                         self.register_value(&base)
-                    );
+                    )));
                 };
 
                 let pointer = base + index as usize;
@@ -731,6 +731,27 @@ mod tests {
             )
             .unwrap(),
             Value::Struct(vec![Value::Int(3), Value::Int(2)]),
+        )
+    }
+
+    #[test]
+    fn interprets_struct_init() {
+        assert_eq!(
+            interpret(
+                "
+            struct Person {
+                let age: Int
+
+                init(age: Int) {
+                    self.age = age
+                }
+            }
+
+            Person(age: 123).age
+        "
+            )
+            .unwrap(),
+            Value::Int(123),
         )
     }
 }

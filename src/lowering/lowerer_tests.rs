@@ -10,6 +10,7 @@ pub mod lowering_tests {
             ir_error::IRError,
             ir_function::IRFunction,
             ir_module::IRModule,
+            ir_printer::print,
             ir_type::IRType,
             ir_value::IRValue,
             lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList, TypedRegister},
@@ -23,6 +24,20 @@ pub mod lowering_tests {
         let mut driver = Driver::new(DriverConfig {
             executable: true,
             include_prelude: true,
+        });
+        driver.update_file(&PathBuf::from("-"), input.into());
+        let lowered = driver.lower().into_iter().next().unwrap();
+        let diagnostics = lowered.source_file(&"-".into()).unwrap().diagnostics();
+        let module = lowered.module().clone();
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        Ok(module)
+    }
+
+    fn lower_without_prelude(input: &'static str) -> Result<IRModule, IRError> {
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: false,
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
@@ -1120,7 +1135,7 @@ pub mod lowering_tests {
 
     #[test]
     fn lowers_struct_initializer() {
-        let lowered = lower(
+        let lowered = lower_without_prelude(
             "
             struct Person {
                 let age: Int
@@ -1135,17 +1150,18 @@ pub mod lowering_tests {
         )
         .unwrap();
 
+        println!("{}", print(&lowered));
+
         assert_lowered_function!(
             lowered,
-            format!("@_{}_Person_init", SymbolID::resolved(1).0),
+            format!("@_1_Person_init"),
             IRFunction {
                 debug_info: Default::default(),
                 ty: IRType::Func(
                     vec![IRType::Int],
-                    IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![IRType::Int])
-                        .into()
+                    IRType::Struct(SymbolID(1), vec![IRType::Int], vec![IRType::Int]).into()
                 ),
-                name: format!("@_{}_Person_init", SymbolID::resolved(1).0),
+                name: format!("@_1_Person_init"),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1153,7 +1169,7 @@ pub mod lowering_tests {
                         Instr::GetElementPointer {
                             dest: Register(2),
                             base: Register(0), // self is in register 0
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
+                            ty: IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
                             index: 0.into(),
                         },
                         Instr::Store {
@@ -1162,21 +1178,17 @@ pub mod lowering_tests {
                             location: Register(2)
                         },
                         Instr::Load {
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
+                            ty: IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
                             dest: Register(3),
                             addr: Register(0)
                         },
                         Instr::Ret(
-                            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
+                            IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
                             Some(Register(3).into())
                         )
                     ],
                 }],
-                env_ty: Some(IRType::Struct(
-                    SymbolID::resolved(1),
-                    vec![IRType::Int],
-                    vec![]
-                )),
+                env_ty: Some(IRType::Struct(SymbolID(1), vec![IRType::Int], vec![])),
                 env_reg: Some(Register(0)),
                 size: 4
             },
@@ -1192,42 +1204,33 @@ pub mod lowering_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
-                        Instr::Ref(
-                            Register(0),
-                            IRType::Func(vec![], IRType::Void.into()),
-                            RefKind::Func("@main".into())
-                        ),
                         // Alloc the arg
-                        Instr::ConstantInt(Register(1), 123),
+                        Instr::ConstantInt(Register(0), 123),
                         // Alloc the space for the struct
                         Instr::Alloc {
-                            dest: Register(2),
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
+                            dest: Register(1),
+                            ty: IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
                             count: None,
                         },
                         // Call the init directly
                         Instr::Call {
-                            dest_reg: Register(3),
-                            ty: IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![])
-                                .into(),
-                            callee: Callee::Name(format!(
-                                "@_{}_Person_init",
-                                SymbolID::resolved(1).0
-                            ),),
+                            dest_reg: Register(2),
+                            ty: IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]).into(),
+                            callee: Callee::Name(format!("@_{}_Person_init", SymbolID(1).0),),
                             args: RegisterList(vec![
-                                TypedRegister::new(IRType::Pointer, Register(2)),
-                                TypedRegister::new(IRType::Int, Register(1)),
+                                TypedRegister::new(IRType::Pointer, Register(1)),
+                                TypedRegister::new(IRType::Int, Register(0)),
                             ]),
                         },
                         Instr::Ret(
-                            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]),
-                            Some(Register(3).into()),
+                            IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
+                            Some(Register(2).into()),
                         ),
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 4
+                size: 3
             },
         )
     }
@@ -1301,48 +1304,42 @@ pub mod lowering_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
-                        Instr::Ref(
-                            Register(0),
-                            IRType::Func(vec![], IRType::Void.into()),
-                            RefKind::Func("@main".into())
-                        ),
-                        // Person(age: 123)
-                        Instr::ConstantInt(Register(1), 123),
+                        Instr::ConstantInt(Register(0), 123),
                         Instr::Alloc {
-                            dest: Register(2),
+                            dest: Register(1),
                             count: None,
                             ty: person_struct_ty.clone(),
                         },
                         Instr::Call {
-                            dest_reg: Register(3),
+                            dest_reg: Register(2),
                             ty: person_struct_ty.clone(),
                             callee: Callee::Name(format!(
                                 "@_{}_Person_init",
                                 SymbolID::resolved(1).0
                             )),
                             args: RegisterList(vec![
-                                TypedRegister::new(IRType::Pointer, Register(2)),
-                                TypedRegister::new(IRType::Int, Register(1))
+                                TypedRegister::new(IRType::Pointer, Register(1)),
+                                TypedRegister::new(IRType::Int, Register(0))
                             ])
                         },
                         // .age
                         Instr::GetElementPointer {
-                            dest: Register(4),
-                            base: Register(3),
+                            dest: Register(3),
+                            base: Register(2),
                             ty: person_struct_ty,
                             index: 0.into(),
                         },
                         Instr::Load {
-                            dest: Register(5),
+                            dest: Register(4),
                             ty: IRType::Int,
-                            addr: Register(4)
+                            addr: Register(3)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(5).into()))
+                        Instr::Ret(IRType::Int, Some(Register(4).into()))
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 6
+                size: 5
             },
         )
     }
@@ -1449,32 +1446,26 @@ pub mod lowering_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
-                        // Person(age: 123)
-                        Instr::Ref(
-                            Register(0),
-                            IRType::Func(vec![], IRType::Void.into()),
-                            RefKind::Func("@main".into()),
-                        ),
-                        Instr::ConstantInt(Register(1), 123),
+                        Instr::ConstantInt(Register(0), 123),
                         Instr::Alloc {
-                            dest: Register(2),
+                            dest: Register(1),
                             count: None,
                             ty: person_struct_ty.clone(),
                         },
                         Instr::Call {
-                            dest_reg: Register(3),
+                            dest_reg: Register(2),
                             ty: person_struct_ty.clone(),
                             callee: Callee::Name(format!(
                                 "@_{}_Person_init",
                                 SymbolID::resolved(1).0
                             )),
                             args: RegisterList(vec![
-                                TypedRegister::new(IRType::Pointer, Register(2)),
-                                TypedRegister::new(IRType::Int, Register(1)),
+                                TypedRegister::new(IRType::Pointer, Register(1)),
+                                TypedRegister::new(IRType::Int, Register(0)),
                             ]),
                         },
                         Instr::Call {
-                            dest_reg: Register(4),
+                            dest_reg: Register(3),
                             ty: IRType::Int,
                             callee: Callee::Name(format!(
                                 "@_{}_Person_getAge",
@@ -1482,15 +1473,15 @@ pub mod lowering_tests {
                             )),
                             args: RegisterList(vec![TypedRegister::new(
                                 IRType::Pointer,
-                                Register(3),
+                                Register(2),
                             )]),
                         },
-                        Instr::Ret(IRType::Int, Some(Register(4).into())),
+                        Instr::Ret(IRType::Int, Some(Register(3).into())),
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 5,
+                size: 4,
             },
         );
     }

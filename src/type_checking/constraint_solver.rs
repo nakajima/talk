@@ -355,7 +355,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     self.unify(param, arg, substitutions)?;
                 }
 
-                self.unify(&Ty::Struct(*initializes_id, vec![]), ret, substitutions)?;
+                self.unify(&initializer.ty, ret, substitutions)?;
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::VariantMatch {
@@ -548,6 +548,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
+        if lhs == rhs {
+            return Ok(());
+        }
+
         log::trace!("Unifying: {lhs:?} <> {rhs:?}");
 
         match (
