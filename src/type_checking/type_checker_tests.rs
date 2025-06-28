@@ -604,11 +604,11 @@ mod type_tests {
         // Check variant types
         assert_eq!(
             checker.type_for(&body_ids[0]).unwrap(),
-            Ty::EnumVariant(SymbolID::typed(2), vec![Ty::Int]),
+            Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int]),
         );
         assert_eq!(
             checker.type_for(&body_ids[1]).unwrap(),
-            Ty::EnumVariant(SymbolID::typed(3), vec![])
+            Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
     }
 

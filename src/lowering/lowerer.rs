@@ -802,12 +802,11 @@ impl<'a> Lowerer<'a> {
 
         let struct_ty = IRType::Struct(
             *symbol_id,
-            vec![],
-            // struct_def
-            //     .properties
-            //     .iter()
-            //     .map(|p| p.ty.to_ir(self))
-            //     .collect(),
+            struct_def
+                .properties
+                .iter()
+                .map(|p| p.ty.to_ir(self))
+                .collect(),
             struct_def
                 .type_parameters
                 .iter()
@@ -869,12 +868,11 @@ impl<'a> Lowerer<'a> {
         // Override func type for init to always return the struct
         let init_func_ty = Ty::Func(
             params,
-            Ty::Void.into(),
-            // Ty::Struct(
-            //     *symbol_id,
-            //     struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
-            // )
-            // .into(),
+            Ty::Struct(
+                *symbol_id,
+                struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
+            )
+            .into(),
             generics,
         );
 
@@ -1361,7 +1359,11 @@ impl<'a> Lowerer<'a> {
                 reg
             }
             Pattern::Wildcard => todo!(),
-            Pattern::Variant { variant_name, .. } => {
+            Pattern::Variant {
+                variant_name,
+                fields,
+                ..
+            } => {
                 let Ty::Enum(enum_id, _) = pattern_typed_expr.ty else {
                     panic!("didn't get pattern type: {:?}", pattern_typed_expr.ty)
                 };
@@ -1369,7 +1371,7 @@ impl<'a> Lowerer<'a> {
                     panic!("didn't get type def for {enum_id:?}");
                 };
 
-                let (tag, _variant) = type_def
+                let (tag, variant) = type_def
                     .variants
                     .iter()
                     .enumerate()
@@ -1383,16 +1385,19 @@ impl<'a> Lowerer<'a> {
                     .unwrap();
 
                 let dest = self.allocate_register();
+                let Ty::EnumVariant(_, values) = &variant.ty else {
+                    self.push_err("did not get enum variant values", *pattern_id);
+                    return dest;
+                };
                 let args = RegisterList(
-                    // fields
-                    //     .iter()
-                    //     .zip(&variant.values)
-                    //     .map(|(f, ty)| TypedRegister {
-                    //         ty: ty.to_ir(self),
-                    //         register: self._lower_pattern(f),
-                    //     })
-                    //     .collect(),
-                    vec![],
+                    fields
+                        .iter()
+                        .zip(values)
+                        .map(|(f, ty)| TypedRegister {
+                            ty: ty.to_ir(self),
+                            register: self._lower_pattern(f),
+                        })
+                        .collect(),
                 );
                 self.push_instr(Instr::TagVariant(
                     dest,
@@ -1416,14 +1421,10 @@ impl<'a> Lowerer<'a> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         if let Ty::Enum(sym, _generics) = &typed_expr.ty {
-            // Since we got called directly from lower_expr, this is variant that doesn't
-            // have any attached values.
             return self.lower_enum_construction(*sym, name, &typed_expr.ty, &[]);
         }
 
         if let Ty::EnumVariant(sym, _generics) = &typed_expr.ty {
-            // Since we got called directly from lower_expr, this is variant that doesn't
-            // have any attached values.
             return self.lower_enum_construction(*sym, name, &typed_expr.ty, &[]);
         }
 
@@ -1479,10 +1480,10 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if let Some(_method) = struct_def.methods.iter().find(|m| m.name == name) {
+                if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
                     let name = Name::Resolved(struct_id, format!("{}_{name}", struct_def.name_str))
-                        .mangled(&&Ty::Void);
+                        .mangled(&method.ty);
                     self.push_instr(Instr::Ref(
                         func,
                         typed_expr.ty.to_ir(self),
@@ -1895,6 +1896,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
+        println!("lower_call: {:?}", callee_typed_expr.ty);
         if let Ty::Init(struct_id, params, _) = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &ty, arg_registers, params);
         }

@@ -365,7 +365,7 @@ impl<'a> TypeChecker<'a> {
                 self.infer_pattern_expr(id, env, pattern, expected, source_file)
             }
             Expr::Variable(Name::Raw(name_str), _) => Err(TypeError::Unresolved(name_str.clone())),
-            Expr::Variable(Name::_Self(sym), _) => Ok(env.lookup_symbol(sym).unwrap().ty.clone()),
+            Expr::Variable(Name::_Self(sym), _) => self.infer_variable(id, env, *sym, "self"),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
             Expr::Struct(name, generics, body) => {
@@ -1356,6 +1356,7 @@ impl<'a> TypeChecker<'a> {
 
             enum_def.methods = methods;
             enum_def.variants = variants;
+            env.register_enum(enum_def.clone());
         }
 
         Ok(())
