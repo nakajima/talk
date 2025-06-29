@@ -521,6 +521,7 @@ impl NameResolver {
                     }
 
                     self.resolve_nodes(&associated_types, source_file, symbol_table);
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
                     self.resolve_nodes(&[body], source_file, symbol_table);
                     self.type_symbol_stack.pop();
                 }
@@ -614,6 +615,32 @@ impl NameResolver {
                         body,
                         ret,
                         captures,
+                    },
+                );
+            }
+
+            if let FuncSignature {
+                name: Name::Raw(name),
+                generics,
+                params,
+                ret,
+            } = source_file.get(id).unwrap().clone()
+            {
+                let symbol_id = self.declare(
+                    name.clone(),
+                    SymbolKind::FuncDef,
+                    id,
+                    source_file,
+                    symbol_table,
+                );
+
+                source_file.nodes.insert(
+                    *id,
+                    FuncSignature {
+                        name: Name::Resolved(symbol_id, name),
+                        generics,
+                        params,
+                        ret,
                     },
                 );
             }
@@ -1349,8 +1376,8 @@ mod tests {
         let TypeRepr {
             name: Name::Resolved(SymbolID::ARRAY, _),
             generics,
-            conformances,
             introduces_type: false,
+            ..
         } = resolved.get(&ret.unwrap().into()).unwrap()
         else {
             panic!(

@@ -206,8 +206,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 type_def,
                 protocol,
             } => {
-                let conformance_checker =
-                    ConformanceChecker::new(&mut self.env, type_def, protocol, substitutions);
+                let conformance_checker = ConformanceChecker::new(type_def, protocol);
                 match conformance_checker.check() {
                     Ok(unifications) => {
                         for (lhs, rhs) in unifications {
@@ -250,6 +249,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
                 match &result_ty {
+                    // A variant with no values
                     Ty::Enum(enum_id, _generics) => {
                         let variant = self
                             .env
@@ -259,7 +259,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .1;
                         self.unify(&result_ty, &variant.ty, substitutions)?;
                     }
-                    Ty::Func(args, ret, _generics) => {
+                    // A variant with values
+                    Ty::Func(_args, ret, _generics) => {
                         let Ty::Enum(enum_id, _generics) = Self::apply(&ret, substitutions, 0)
                         else {
                             println!(
@@ -276,6 +277,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .unwrap()
                             .tag_with_variant_for(&member_name)
                             .1;
+
                         self.unify(&result_ty, &variant.ty, substitutions)?;
                         // println!(
                         //     "unqualified member: {:?} {:?} {:?}",

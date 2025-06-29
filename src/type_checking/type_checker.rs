@@ -5,7 +5,6 @@ use crate::{
     conformance_checker::ConformanceError,
     constraint_solver::{Constraint, ConstraintSolver, Substitutions},
     diagnostic::Diagnostic,
-    environment::{EnumVariant, Method, RawEnumVariant, RawMethod},
     expr::{Expr, Pattern},
     name::Name,
     name_resolver::NameResolverError,
@@ -17,7 +16,7 @@ use crate::{
 };
 
 use super::{
-    environment::{EnumDef, Environment, TypeDef},
+    environment::{Environment, TypeDef},
     typed_expr::TypedExpr,
 };
 
@@ -317,7 +316,15 @@ impl<'a> TypeChecker<'a> {
                 generics,
                 conformances,
                 introduces_type,
-            } => self.infer_type_repr(id, env, name, generics, introduces_type, source_file),
+            } => self.infer_type_repr(
+                id,
+                env,
+                name,
+                generics,
+                conformances,
+                introduces_type,
+                source_file,
+            ),
             Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
                 self.infer_func_type_repr(env, args, ret, expected, source_file)
             }
@@ -387,7 +394,15 @@ impl<'a> TypeChecker<'a> {
                 generics,
                 conformances,
                 body,
-            } => self.infer_struct(name, generics, body, env, expected, source_file),
+            } => self.infer_struct(
+                name,
+                generics,
+                conformances,
+                body,
+                env,
+                expected,
+                source_file,
+            ),
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, expected, env, source_file)
@@ -398,6 +413,13 @@ impl<'a> TypeChecker<'a> {
                 default_value,
             } => self.infer_property(&id, name, type_repr, default_value, env, source_file),
             Expr::Break => Ok(Ty::Void),
+            Expr::ProtocolDecl { name, .. } => Ok(Ty::Protocol(name.try_symbol_id(), vec![])),
+            Expr::FuncSignature {
+                name,
+                params,
+                generics,
+                ret,
+            } => Ok(Ty::Void),
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -529,6 +551,7 @@ impl<'a> TypeChecker<'a> {
         &self,
         name: &Name,
         generics: &[ExprID],
+        _conformances: &[ExprID],
         _body: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -708,6 +731,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         name: &Name,
         generics: &[ExprID],
+        _conformances: &[ExprID],
         is_type_parameter: &bool,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
@@ -1135,7 +1159,7 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_pattern(
         &self,
-        id: &ExprID,
+        _id: &ExprID,
         pattern: &Pattern,
         env: &mut Environment,
         expected: &Ty,

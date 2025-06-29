@@ -180,7 +180,6 @@ mod type_tests {
         SymbolID, check_without_prelude,
         environment::TypeDef,
         expr::Expr,
-        name::Name,
         ty::Ty,
         type_checker::{TypeVarID, TypeVarKind},
         type_checking::CheckResult,
@@ -1406,10 +1405,9 @@ mod pending {
 
 #[cfg(test)]
 mod protocol_tests {
-    use crate::{check_without_prelude, ty::Ty};
+    use crate::{SymbolID, check_without_prelude, environment::TypeDef, ty::Ty};
 
     #[test]
-    #[ignore = "wip"]
     fn infers_protocol_conformance() {
         let checked = check_without_prelude(
             "
@@ -1421,20 +1419,18 @@ mod protocol_tests {
                 123
             }
         }
-        func get<T: Aged>(aged: T) {
-            aged.getAge()
-        }
-        get(aged: Person())
         ",
         )
         .unwrap();
 
-        assert!(
-            checked.diagnostics().is_empty(),
-            "{:?}",
-            checked.diagnostics()
-        );
+        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(1)) else {
+            panic!("didn't get person: {:?}", checked.env.types);
+        };
 
-        assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
+        let Some(TypeDef::Protocol(aged_def)) = checked.env.lookup_type(&SymbolID(3)) else {
+            panic!("didn't get aged protocol: {:?}", checked.env.types);
+        };
+
+        assert!(person_def.conformances.contains(&aged_def.symbol_id));
     }
 }

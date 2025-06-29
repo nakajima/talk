@@ -1,15 +1,12 @@
 use crate::{
-    constraint_solver::Substitutions,
-    environment::{Environment, Method, ProtocolDef, TypeDef},
+    environment::{Method, ProtocolDef, TypeDef},
     ty::Ty,
     type_checker::TypeError,
 };
 
 pub struct ConformanceChecker<'a> {
-    env: &'a mut Environment,
     type_def: &'a TypeDef,
     protocol: &'a ProtocolDef,
-    substitutions: &'a mut Substitutions,
     errors: Vec<ConformanceError>,
 }
 
@@ -20,17 +17,10 @@ pub enum ConformanceError {
 }
 
 impl<'a> ConformanceChecker<'a> {
-    pub fn new(
-        env: &'a mut Environment,
-        type_def: &'a TypeDef,
-        protocol: &'a ProtocolDef,
-        substitutions: &'a mut Substitutions,
-    ) -> Self {
+    pub fn new(type_def: &'a TypeDef, protocol: &'a ProtocolDef) -> Self {
         Self {
-            env,
             type_def,
             protocol,
-            substitutions,
             errors: Default::default(),
         }
     }

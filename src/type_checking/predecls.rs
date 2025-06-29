@@ -28,60 +28,10 @@ pub(super) struct PredeclarationExprIDs {
 }
 
 impl<'a> TypeChecker<'a> {
-    fn predeclarable_type(&self, expr: &Expr) -> Option<PredeclarationExprIDs> {
-        if let Expr::Struct {
-            name,
-            generics,
-            conformances,
-            body,
-        } = expr.clone()
-        {
-            return Some(PredeclarationExprIDs {
-                name,
-                generics,
-                conformances,
-                body,
-                kind: PredeclarationKind::Struct,
-            });
-        }
-
-        if let Expr::ProtocolDecl {
-            name,
-            associated_types: generics,
-            body,
-            conformances,
-        } = expr.clone()
-        {
-            return Some(PredeclarationExprIDs {
-                name,
-                generics,
-                conformances,
-                body,
-                kind: PredeclarationKind::Protocol,
-            });
-        }
-
-        if let Expr::EnumDecl {
-            name,
-            generics,
-            conformances,
-            body,
-        } = expr.clone()
-        {
-            return Some(PredeclarationExprIDs {
-                name,
-                generics,
-                conformances,
-                body,
-                kind: PredeclarationKind::Enum,
-            });
-        }
-
-        None
-    }
-
-    // We want to go through and predeclare all struct names, then after that actually infer their members,
+    // We want to go through and predeclare all struct/enum/protocol names, then after that actually infer their members,
     // stashing properties, methods and initializers for each.
+    //
+    // Note: we may need to break this up into multiple methods to handle multiple files..
     pub(super) fn predeclare_types(
         &mut self,
         root_ids: &[ExprID],
@@ -89,6 +39,7 @@ impl<'a> TypeChecker<'a> {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), (ExprID, TypeError)> {
         let mut type_defs = vec![];
+        let mut type_def_conformances = vec![];
         let mut method_placeholders = vec![];
         let mut property_placeholders = vec![];
         let mut initializer_placeholders = vec![];
@@ -137,6 +88,8 @@ impl<'a> TypeChecker<'a> {
 
                 type_parameters.push(Ty::TypeVar(type_param));
             }
+
+            type_def_conformances.push((symbol_id, expr_ids.conformances));
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
@@ -234,6 +187,24 @@ impl<'a> TypeChecker<'a> {
                             expr_id: body_id,
                         });
                     }
+                    Expr::FuncSignature {
+                        name: Name::Resolved(func_id, name_str),
+                        ..
+                    } => {
+                        let placeholder = env.placeholder(&body_id, name_str.clone(), &func_id);
+                        let scheme = Scheme {
+                            ty: placeholder.clone(),
+                            unbound_vars: vec![],
+                        };
+                        env.declare(*func_id, scheme);
+
+                        ty_methods.push(placeholder);
+
+                        methods.push(RawMethod {
+                            name: name_str.clone(),
+                            expr_id: body_id,
+                        });
+                    }
                     _ => {
                         return {
                             log::error!("Unhandled property: {:?}", source_file.get(&body_id));
@@ -258,6 +229,7 @@ impl<'a> TypeChecker<'a> {
                     variants: Default::default(),
                     raw_methods: methods,
                     methods: Default::default(),
+                    conformances: Default::default(),
                 }),
                 PredeclarationKind::Struct => TypeDef::Struct(StructDef::new(
                     symbol_id,
@@ -291,7 +263,7 @@ impl<'a> TypeChecker<'a> {
             match type_def {
                 TypeDef::Enum(def) => env.register_enum(def),
                 TypeDef::Struct(def) => env.register_struct(def),
-                TypeDef::Protocol(_) => todo!(),
+                TypeDef::Protocol(def) => env.register_protocol(def),
             }
         }
 
@@ -363,7 +335,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             if matches!(def, TypeDef::Enum(_)) {
-                for (j, variant) in def.raw_variants().iter().enumerate() {
+                for variant in def.raw_variants().iter() {
                     let ty = self
                         .infer_node(
                             &variant.expr_id,
@@ -390,12 +362,95 @@ impl<'a> TypeChecker<'a> {
             match def {
                 TypeDef::Enum(def) => env.register_enum(def),
                 TypeDef::Struct(def) => env.register_struct(def),
-                TypeDef::Protocol(_) => todo!(),
+                TypeDef::Protocol(def) => env.register_protocol(def),
             }
         }
 
         env.replace_constraint_values(&substitutions);
 
+        // Track conformances.
+        for (type_id, conformance_ids) in type_def_conformances {
+            let mut conformances = vec![];
+            for id in conformance_ids.iter() {
+                let Some(Ty::Protocol(symbol_id, _)) =
+                    env.typed_exprs.get(id).map(|t| t.ty.clone()).clone()
+                else {
+                    log::error!(
+                        "Didn't get protocol for expr id: {id}: {:?}",
+                        env.typed_exprs.get(id)
+                    );
+                    continue;
+                };
+
+                conformances.push(symbol_id);
+            }
+
+            let Some(type_def) = &mut env.lookup_type_mut(&type_id) else {
+                log::error!("Did not get type def for symbol: {type_id:?}");
+                continue;
+            };
+
+            println!("setting {type_def:?} conformances: {conformances:?}");
+
+            match type_def {
+                TypeDef::Enum(def) => def.conformances = conformances,
+                TypeDef::Struct(def) => def.conformances = conformances,
+                TypeDef::Protocol(def) => def.conformances = conformances,
+            }
+        }
+
         Ok(())
+    }
+
+    fn predeclarable_type(&self, expr: &Expr) -> Option<PredeclarationExprIDs> {
+        if let Expr::Struct {
+            name,
+            generics,
+            conformances,
+            body,
+        } = expr.clone()
+        {
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind: PredeclarationKind::Struct,
+            });
+        }
+
+        if let Expr::ProtocolDecl {
+            name,
+            associated_types: generics,
+            body,
+            conformances,
+        } = expr.clone()
+        {
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind: PredeclarationKind::Protocol,
+            });
+        }
+
+        if let Expr::EnumDecl {
+            name,
+            generics,
+            conformances,
+            body,
+        } = expr.clone()
+        {
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind: PredeclarationKind::Enum,
+            });
+        }
+
+        None
     }
 }

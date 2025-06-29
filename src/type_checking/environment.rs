@@ -119,6 +119,7 @@ pub struct EnumDef {
     pub variants: Vec<EnumVariant>,
     pub raw_methods: Vec<RawMethod>,
     pub methods: Vec<Method>,
+    pub conformances: Vec<SymbolID>,
 }
 
 impl EnumDef {
@@ -151,6 +152,7 @@ pub struct StructDef {
     pub methods: Vec<Method>,
     pub raw_initializers: Vec<RawInitializer>,
     pub initializers: Vec<Initializer>,
+    pub conformances: Vec<SymbolID>,
 }
 
 impl StructDef {
@@ -172,6 +174,7 @@ impl StructDef {
             methods: Default::default(),
             properties: Default::default(),
             initializers: Default::default(),
+            conformances: Default::default(),
         }
     }
 
@@ -684,6 +687,10 @@ impl Environment {
         self.types.insert(def.symbol_id, TypeDef::Struct(def));
     }
 
+    pub fn register_protocol(&mut self, def: ProtocolDef) {
+        self.types.insert(def.symbol_id, TypeDef::Protocol(def));
+    }
+
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn lookup_symbol(&self, symbol_id: &SymbolID) -> Result<&Scheme, TypeError> {
         if let Some(scheme) = self
@@ -712,6 +719,10 @@ impl Environment {
 
     pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {
         self.types.get(name)
+    }
+
+    pub fn lookup_type_mut(&mut self, name: &SymbolID) -> Option<&mut TypeDef> {
+        self.types.get_mut(name)
     }
 
     pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {

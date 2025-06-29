@@ -90,6 +90,7 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
     driver.update_file(path, input.into());
     let typed_compilation_unit = driver.check().into_iter().next().unwrap().clone();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+
     Ok(CheckResult {
         source_file,
         env: typed_compilation_unit.env,
