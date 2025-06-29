@@ -1501,4 +1501,25 @@ mod protocol_tests {
 
         assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
     }
+
+    #[test]
+    fn infers_protocol_method() {
+        let checked = check_without_prelude(
+            "
+        protocol Aged {
+            func getAge() -> Int
+        }
+        struct Person: Aged {
+            func getAge() { 123 }
+        }
+        func get<T: Aged>(aged: T) {
+            aged.getAge()
+        }
+        get(Person())
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
+    }
 }
