@@ -9,7 +9,8 @@ use crate::{
     name::Name,
     parser::ExprID,
     ty::Ty,
-    type_checker::{Scheme, TypeChecker, TypeError, TypeVarKind},
+    type_checker::{Scheme, TypeChecker, TypeError},
+    type_var_id::TypeVarKind,
 };
 
 #[derive(PartialEq)]

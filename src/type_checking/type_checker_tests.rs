@@ -181,8 +181,8 @@ mod type_tests {
         environment::TypeDef,
         expr::Expr,
         ty::Ty,
-        type_checker::{TypeVarID, TypeVarKind},
         type_checking::CheckResult,
+        type_var_id::{TypeVarID, TypeVarKind},
     };
 
     fn check(code: &'static str) -> CheckResult {
@@ -1418,6 +1418,38 @@ mod protocol_tests {
             func getAge() {
                 123
             }
+        }
+        ",
+        )
+        .unwrap();
+
+        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(3)) else {
+            panic!("didn't get person: {:?}", checked.env.types);
+        };
+
+        let Some(TypeDef::Protocol(aged_def)) = checked.env.lookup_type(&SymbolID(1)) else {
+            panic!("didn't get aged protocol: {:#?}", checked.env.types);
+        };
+
+        assert!(
+            person_def.conformances.contains(&aged_def.symbol_id),
+            "{:#?}",
+            person_def.conformances
+        );
+    }
+
+    #[test]
+    fn infers_protocol_property() {
+        let checked = check_without_prelude(
+            "
+        protocol Aged {
+            let age: Int
+        }
+        struct Person: Aged {
+            let age: Int
+        }
+        func get<T: Aged>(aged: T) {
+            aged.age
         }
         ",
         )

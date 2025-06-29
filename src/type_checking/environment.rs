@@ -9,13 +9,10 @@ use crate::{
     parser::ExprID,
     ty::Ty,
     type_checker::TypeError,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
-use super::{
-    constraint_solver::Constraint,
-    type_checker::{Scheme, TypeVarID, TypeVarKind},
-    typed_expr::TypedExpr,
-};
+use super::{constraint_solver::Constraint, type_checker::Scheme, typed_expr::TypedExpr};
 
 pub type Scope = HashMap<SymbolID, Scheme>;
 
@@ -883,7 +880,8 @@ mod generalize_tests {
         SymbolID,
         environment::{Environment, Scope},
         ty::Ty,
-        type_checker::{Scheme, TypeVarID, TypeVarKind},
+        type_checker::Scheme,
+        type_var_id::{TypeVarID, TypeVarKind},
     };
     use std::collections::HashSet;
 

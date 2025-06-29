@@ -2,7 +2,8 @@ use std::fmt::Display;
 
 use crate::{
     SymbolID,
-    type_checker::{FuncParams, FuncReturning, TypeVarID},
+    type_checker::{FuncParams, FuncReturning},
+    type_var_id::TypeVarID,
 };
 
 #[derive(Clone, PartialEq, Debug)]

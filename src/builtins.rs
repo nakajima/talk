@@ -5,7 +5,8 @@ use crate::{
     environment::TypeDef,
     name::Name,
     ty::Ty,
-    type_checker::{Scheme, TypeVarID, TypeVarKind},
+    type_checker::Scheme,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 struct Builtin {

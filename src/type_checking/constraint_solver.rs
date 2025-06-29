@@ -9,10 +9,9 @@ use crate::{
     name::Name,
     parser::ExprID,
     ty::Ty,
-    type_checker::{Scheme, TypeError, TypeVarKind},
+    type_checker::{Scheme, TypeError},
+    type_var_id::{TypeVarID, TypeVarKind},
 };
-
-use super::type_checker::TypeVarID;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
