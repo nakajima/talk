@@ -1405,7 +1405,7 @@ mod pending {
 
 #[cfg(test)]
 mod protocol_tests {
-    use crate::{SymbolID, check_without_prelude, environment::TypeDef, ty::Ty};
+    use crate::{SymbolID, check_without_prelude, environment::TypeDef};
 
     #[test]
     fn infers_protocol_conformance() {

@@ -340,7 +340,6 @@ impl<'a> TypeChecker<'a> {
                 captures,
                 ..
             } => self.infer_func(
-                id,
                 env,
                 name,
                 generics,
@@ -348,7 +347,6 @@ impl<'a> TypeChecker<'a> {
                 captures,
                 body,
                 ret,
-                expected,
                 source_file,
             ),
             Expr::Let(Name::Resolved(symbol_id, _), rhs) => {
@@ -415,11 +413,16 @@ impl<'a> TypeChecker<'a> {
             Expr::Break => Ok(Ty::Void),
             Expr::ProtocolDecl { name, .. } => Ok(Ty::Protocol(name.try_symbol_id(), vec![])),
             Expr::FuncSignature {
-                name,
                 params,
                 generics,
                 ret,
-            } => Ok(Ty::Void),
+                ..
+            } => {
+                let params = self.infer_nodes(params, env, source_file)?;
+                let generics = self.infer_nodes(generics, env, source_file)?;
+                let ret = self.infer_node(ret, env, &None, source_file)?;
+                Ok(Ty::Func(params, ret.into(), generics))
+            }
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -791,14 +794,6 @@ impl<'a> TypeChecker<'a> {
         }
 
         let inferred_ret = self.infer_node(ret, env, expected, source_file)?;
-
-        // indented_println!(
-        //     env,
-        //     "&& infer_func_type_repr: ({:?}) -> {:?}",
-        //     inferred_args,
-        //     inferred_ret
-        // );
-
         let ty = Ty::Func(inferred_args, Box::new(inferred_ret), vec![]);
         Ok(ty)
     }
@@ -820,7 +815,6 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &self,
-        _id: &ExprID,
         env: &mut Environment,
         name: &Option<Name>,
         generics: &[ExprID],
@@ -828,7 +822,6 @@ impl<'a> TypeChecker<'a> {
         captures: &[SymbolID],
         body: &ExprID,
         ret: &Option<ExprID>,
-        _expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         env.start_scope();
@@ -837,7 +830,6 @@ impl<'a> TypeChecker<'a> {
             && let Ok(scheme) = env.lookup_symbol(symbol_id).cloned()
         {
             env.declare(*symbol_id, scheme.clone());
-            // Some(env.instantiate(&scheme))
         };
 
         let mut inferred_generics = vec![];
@@ -891,10 +883,6 @@ impl<'a> TypeChecker<'a> {
                 captures: captures.to_vec(),
             }
         };
-
-        // if let Some(predeclared_ty) = predeclared_ty {
-        //     env.constrain_equality(*id, predeclared_ty, inferred_ty.clone());
-        // }
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
             // Create the final, polymorphic scheme.

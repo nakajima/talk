@@ -82,7 +82,7 @@ impl Ty {
             Ty::Enum(_symbol_id, generics) => {
                 IRType::Enum(generics.iter().map(|i| i.to_ir(lowerer)).collect())
             }
-            Ty::EnumVariant(enum_id, items) => {
+            Ty::EnumVariant(_enum_id, items) => {
                 // let enum_def = lowerer.env.lookup_enum(enum_id).unwrap();
                 IRType::Enum(items.iter().map(|t| t.to_ir(lowerer)).collect())
             }
