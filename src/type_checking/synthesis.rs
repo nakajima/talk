@@ -117,7 +117,7 @@ pub fn synthesize_inits(
                 },
             );
 
-            let Some(Expr::Struct(_, _, body)) = source_file.get(&struct_info.expr_id).cloned()
+            let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
             else {
                 log::error!(
                     "didn't get struct from expr id: {:?}",
@@ -174,7 +174,7 @@ mod tests {
 
         synthesize_inits(&mut resolved, &mut symbol_table, &mut env);
 
-        let Some(Expr::Struct(_, _, body)) = resolved.get(&resolved.root_ids()[0]) else {
+        let Some(Expr::Struct { body, .. }) = resolved.get(&resolved.root_ids()[0]) else {
             panic!("didn't get struct: {:?}", resolved.roots()[0]);
         };
 

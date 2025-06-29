@@ -147,13 +147,23 @@ impl<'a> Formatter<'a> {
             } => self.format_call(*callee, type_args, args),
             Expr::Pattern(pattern) => self.format_pattern(pattern),
             Expr::Return(value) => self.format_return(value.as_ref()),
-            Expr::Struct(name, generics, body) => self.format_struct(name, generics, *body),
+            Expr::Struct {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.format_struct(name, generics, conformances, *body),
             Expr::Property {
                 name,
                 type_repr,
                 default_value,
             } => self.format_property(name, type_repr.as_ref(), default_value.as_ref()),
-            Expr::TypeRepr(name, generics, _) => self.format_type_repr(name, generics),
+            Expr::TypeRepr {
+                name,
+                generics,
+                conformances,
+                ..
+            } => self.format_type_repr(name, generics, conformances),
             Expr::FuncTypeRepr(args, ret, _) => self.format_func_type_repr(args, *ret),
             Expr::TupleTypeRepr(types, _) => self.format_tuple_type_repr(types),
             Expr::Member(receiver, property) => self.format_member(receiver.as_ref(), property),
@@ -199,8 +209,9 @@ impl<'a> Formatter<'a> {
             Expr::ProtocolDecl {
                 name,
                 associated_types,
+                conformances,
                 body,
-            } => self.format_protocol(name, associated_types, *body),
+            } => self.format_protocol(name, associated_types, conformances, *body),
             Expr::FuncSignature {
                 name,
                 params,
@@ -424,7 +435,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_struct(&self, name: &Name, generics: &[ExprID], body: ExprID) -> Doc {
+    fn format_struct(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -439,10 +456,27 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
+            );
+        }
+
         concat_space(result, self.format_expr(body))
     }
 
-    fn format_protocol(&self, name: &Name, associated_types: &[ExprID], body: ExprID) -> Doc {
+    fn format_protocol(
+        &self,
+        name: &Name,
+        associated_types: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("protocol"), self.format_name(name));
 
         if !associated_types.is_empty() {
@@ -460,6 +494,17 @@ impl<'a> Formatter<'a> {
                         text(">"),
                     ),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -485,7 +530,7 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_type_repr(&self, name: &Name, generics: &[ExprID]) -> Doc {
+    fn format_type_repr(&self, name: &Name, generics: &[ExprID], conformances: &[ExprID]) -> Doc {
         let mut result = self.format_name(name);
 
         if !generics.is_empty() {
@@ -497,6 +542,17 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 

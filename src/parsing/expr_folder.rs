@@ -43,9 +43,12 @@ pub trait ExprFolder<'a> {
             Pattern(pattern) => self._fold_pattern(expr_id, expr.clone(), &pattern.clone()),
             Return(rhs) => self._fold_return(expr_id, expr.clone(), rhs),
             Break => self._fold_break(expr_id, expr),
-            Struct(name, items, body) => {
-                self._fold_struct(expr_id, expr.clone(), name, items, body)
-            }
+            Struct {
+                name,
+                generics,
+                body,
+                ..
+            } => self._fold_struct(expr_id, expr.clone(), name, generics, body),
             Property {
                 name,
                 type_repr,
@@ -57,9 +60,12 @@ pub trait ExprFolder<'a> {
                 type_repr,
                 default_value,
             ),
-            TypeRepr(name, items, introduces_type) => {
-                self._fold_type_repr(expr_id, expr.clone(), name, items, introduces_type)
-            }
+            TypeRepr {
+                name,
+                generics,
+                introduces_type,
+                ..
+            } => self._fold_type_repr(expr_id, expr.clone(), name, generics, introduces_type),
             FuncTypeRepr(items, ret, introduces_type) => {
                 self._fold_func_type_repr(expr_id, expr.clone(), items, ret, introduces_type)
             }
@@ -106,6 +112,7 @@ pub trait ExprFolder<'a> {
             ProtocolDecl {
                 name,
                 associated_types,
+                conformances,
                 body,
             } => self._fold_protocol_decl(expr_id, expr.clone(), name, associated_types, body),
             FuncSignature {

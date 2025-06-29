@@ -330,12 +330,22 @@ mod optional_tests {
 
         assert_eq!(
             *parsed.get(ty).unwrap(),
-            Expr::TypeRepr("Optional".into(), vec![0], false)
+            Expr::TypeRepr {
+                name: "Optional".into(),
+                generics: vec![0],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 }

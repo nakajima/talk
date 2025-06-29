@@ -129,8 +129,14 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(rhs))
                 }
             }
-            Expr::Struct(_name, items, body) => {
-                result.extend(self.tokens_from_exprs(items));
+            Expr::Struct {
+                generics,
+                conformances,
+                body,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(&conformances));
                 result.extend(self.tokens_from_expr(body));
             }
             Expr::Property {
@@ -145,7 +151,11 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(default_value));
                 }
             }
-            Expr::TypeRepr(_name, items, _) => {
+            Expr::TypeRepr {
+                generics,
+                conformances,
+                ..
+            } => {
                 if let Some(meta) = self.source_file.meta.get(expr_id) {
                     result.extend(
                         meta.identifiers
@@ -153,7 +163,8 @@ impl<'a> SemanticTokenCollector<'a> {
                             .map(|i| (self.range_from_token(i), SemanticTokenType::TYPE_PARAMETER)),
                     )
                 }
-                result.extend(self.tokens_from_exprs(items))
+                result.extend(self.tokens_from_exprs(&generics));
+                result.extend(self.tokens_from_exprs(&conformances));
             }
             Expr::FuncTypeRepr(items, ret, _) => {
                 result.extend(self.tokens_from_exprs(items));

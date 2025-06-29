@@ -105,7 +105,12 @@ impl NameResolver {
                     self.resolve_nodes(&items, source_file, symbol_table);
                 }
                 LiteralTrue | LiteralFalse => continue,
-                Struct(name, generics, body) => {
+                Struct {
+                    name,
+                    generics,
+                    body,
+                    conformances,
+                } => {
                     match name {
                         Name::Raw(name_str) => {
                             let symbol_id = self.declare(
@@ -118,13 +123,19 @@ impl NameResolver {
                             self.type_symbol_stack.push(symbol_id);
                             source_file.nodes.insert(
                                 *node_id,
-                                Struct(Name::Resolved(symbol_id, name_str), generics.clone(), body),
+                                Struct {
+                                    name: Name::Resolved(symbol_id, name_str),
+                                    generics: generics.clone(),
+                                    conformances: conformances.clone(),
+                                    body,
+                                },
                             );
                         }
                         _ => continue,
                     }
 
                     self.resolve_nodes(&generics, source_file, symbol_table);
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
                     self.resolve_nodes(&[body], source_file, symbol_table);
                     self.type_symbol_stack.pop();
                 }
@@ -336,14 +347,19 @@ impl NameResolver {
                     }
                     Name::Resolved(_, _) | Name::_Self(_) => (),
                 },
-                TypeRepr(name, generics, is_type_parameter_decl) => {
+                TypeRepr {
+                    name,
+                    generics,
+                    conformances,
+                    introduces_type,
+                } => {
                     log::trace!(
-                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {is_type_parameter_decl}"
+                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {introduces_type}"
                     );
 
                     let resolved_name_for_node = match name.clone() {
                         Name::Raw(raw_name_str) => {
-                            if is_type_parameter_decl {
+                            if introduces_type {
                                 // Declaration site of a type parameter (e.g., T in `enum Option<T>`)
                                 // Ensure it's declared in the current scope.
                                 let symbol_id = self.declare(
@@ -368,11 +384,12 @@ impl NameResolver {
                     // The node type remains TypeRepr.
                     source_file.nodes.insert(
                         *node_id,
-                        TypeRepr(
-                            resolved_name_for_node,
-                            generics.clone(), // Keep original generics ExprIDs
-                            is_type_parameter_decl,
-                        ),
+                        TypeRepr {
+                            name: resolved_name_for_node,
+                            generics: generics.clone(), // Keep original generics ExprIDs
+                            conformances: conformances.clone(),
+                            introduces_type,
+                        },
                     );
 
                     // Recursively resolve any type arguments within this TypeRepr.
@@ -470,6 +487,7 @@ impl NameResolver {
                 ProtocolDecl {
                     name,
                     associated_types,
+                    conformances,
                     body,
                 } => {
                     match name {
@@ -487,6 +505,7 @@ impl NameResolver {
                                 ProtocolDecl {
                                     name: Name::Resolved(symbol_id, name_str),
                                     associated_types: associated_types.clone(),
+                                    conformances: conformances.clone(),
                                     body,
                                 },
                             );
@@ -601,8 +620,12 @@ impl NameResolver {
         symbol_table: &mut SymbolTable,
     ) {
         for id in node_ids {
-            let Some(Struct(Name::Raw(name_str), generics, body_expr)) =
-                source_file.get(id).cloned()
+            let Some(Struct {
+                name: Name::Raw(name_str),
+                generics,
+                conformances,
+                body,
+            }) = source_file.get(id).cloned()
             else {
                 continue;
             };
@@ -618,14 +641,20 @@ impl NameResolver {
             symbol_table.initialize_type_table(struct_symbol);
 
             self.resolve_nodes(&generics, source_file, symbol_table);
+            self.resolve_nodes(&conformances, source_file, symbol_table);
 
             source_file.nodes.insert(
                 *id,
-                Struct(Name::Resolved(struct_symbol, name_str), generics, body_expr),
+                Struct {
+                    name: Name::Resolved(struct_symbol, name_str),
+                    generics,
+                    conformances,
+                    body,
+                },
             );
 
             // Hoist properties
-            let Some(Block(ids)) = source_file.get(&body_expr) else {
+            let Some(Block(ids)) = source_file.get(&body) else {
                 log::error!("Didn't get struct body");
                 return;
             };
@@ -646,7 +675,7 @@ impl NameResolver {
 
                 symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
             }
-            self.hoist_enum_members(&body_expr, source_file, symbol_table);
+            self.hoist_enum_members(&body, source_file, symbol_table);
             self.type_symbol_stack.pop();
         }
     }
@@ -1162,7 +1191,12 @@ mod tests {
         assert_eq!(foo_name, "foo");
         assert_eq!(
             resolved.get(&foo_args[0]).unwrap(),
-            &Expr::TypeRepr(Name::Resolved(SymbolID::INT, "Int".into()), vec![], false)
+            &Expr::TypeRepr {
+                name: Name::Resolved(SymbolID::INT, "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
@@ -1295,8 +1329,12 @@ mod tests {
             panic!("didn't get a func");
         };
 
-        let TypeRepr(Name::Resolved(SymbolID::ARRAY, _), items, false) =
-            resolved.get(&ret.unwrap().into()).unwrap()
+        let TypeRepr {
+            name: Name::Resolved(SymbolID::ARRAY, _),
+            generics,
+            conformances,
+            introduces_type: false,
+        } = resolved.get(&ret.unwrap().into()).unwrap()
         else {
             panic!(
                 "didn't get array type repr: {:?}",
@@ -1305,15 +1343,25 @@ mod tests {
         };
 
         assert_eq!(
-            *resolved.get(&items[0].into()).unwrap(),
-            TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+            *resolved.get(&generics[0].into()).unwrap(),
+            TypeRepr {
+                name: Name::Resolved(SymbolID(-1), "Int".into()),
+                conformances: vec![],
+                generics: vec![],
+                introduces_type: false
+            }
         );
     }
 
     #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}\nPerson()");
-        let Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap() else {
+        let Struct {
+            name: Name::Resolved(sym, person_str),
+            body,
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
             panic!("didn't get struct");
         };
 
@@ -1338,7 +1386,12 @@ mod tests {
         }
         ",
         );
-        let Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap() else {
+        let Struct {
+            name: Name::Resolved(sym, person_str),
+            body,
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
             panic!("didn't get struct");
         };
 
@@ -1363,7 +1416,12 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&type_repr.unwrap()).unwrap(),
-            Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+            Expr::TypeRepr {
+                name: Name::Resolved(SymbolID(-1), "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -1381,7 +1439,11 @@ mod tests {
         ",
         );
 
-        let Expr::Struct(Name::Resolved(sym, person_str), _, body) = resolved.roots()[0].unwrap()
+        let Expr::Struct {
+            name: Name::Resolved(sym, person_str),
+            body,
+            ..
+        } = resolved.roots()[0].unwrap()
         else {
             panic!("didn't get struct");
         };
@@ -1407,7 +1469,12 @@ mod tests {
 
         assert_eq!(
             *resolved.get(&type_repr.unwrap()).unwrap(),
-            Expr::TypeRepr(Name::Resolved(SymbolID(-1), "Int".into()), vec![], false)
+            Expr::TypeRepr {
+                name: Name::Resolved(SymbolID(-1), "Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         let Expr::Init(_, _) = resolved.get(&body[1]).unwrap() else {

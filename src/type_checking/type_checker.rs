@@ -303,9 +303,12 @@ impl<'a> TypeChecker<'a> {
             Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
             Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
-            Expr::TypeRepr(name, generics, is_type_parameter) => {
-                self.infer_type_repr(id, env, name, generics, is_type_parameter, source_file)
-            }
+            Expr::TypeRepr {
+                name,
+                generics,
+                conformances,
+                introduces_type,
+            } => self.infer_type_repr(id, env, name, generics, introduces_type, source_file),
             Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
                 self.infer_func_type_repr(env, args, ret, expected, source_file)
             }
@@ -368,9 +371,12 @@ impl<'a> TypeChecker<'a> {
             Expr::Variable(Name::_Self(sym), _) => self.infer_variable(id, env, *sym, "self"),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
-            Expr::Struct(name, generics, body) => {
-                self.infer_struct(name, generics, body, env, expected, source_file)
-            }
+            Expr::Struct {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.infer_struct(name, generics, body, env, expected, source_file),
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, expected, env, source_file)
@@ -801,8 +807,10 @@ impl<'a> TypeChecker<'a> {
 
         let mut inferred_generics = vec![];
         for generic in generics {
-            if let Some(Expr::TypeRepr(Name::Resolved(symbol_id, _), _, _)) =
-                source_file.get(generic).cloned()
+            if let Some(Expr::TypeRepr {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            }) = source_file.get(generic).cloned()
             {
                 let ty = self.infer_node(generic, env, &None, source_file)?;
                 inferred_generics.push(ty.clone());
@@ -1240,8 +1248,10 @@ impl<'a> TypeChecker<'a> {
 
             let mut generic_vars = vec![];
             for id in generics {
-                let Some(Expr::TypeRepr(Name::Resolved(symbol_id, name_str), _, _)) =
-                    source_file.get(&id).cloned()
+                let Some(Expr::TypeRepr {
+                    name: Name::Resolved(symbol_id, name_str),
+                    ..
+                }) = source_file.get(&id).cloned()
                 else {
                     return Err((
                         id,

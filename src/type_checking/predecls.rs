@@ -28,7 +28,13 @@ impl<'a> TypeChecker<'a> {
 
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
-            let Expr::Struct(name, generics, body) = expr else {
+            let Expr::Struct {
+                name,
+                generics,
+                conformances,
+                body,
+            } = expr
+            else {
                 continue;
             };
 
@@ -42,8 +48,10 @@ impl<'a> TypeChecker<'a> {
             let mut initializers = vec![];
 
             for id in generics {
-                let Some(Expr::TypeRepr(Name::Resolved(symbol_id, name_str), _, _)) =
-                    source_file.get(&id)
+                let Some(Expr::TypeRepr {
+                    name: Name::Resolved(symbol_id, name_str),
+                    ..
+                }) = source_file.get(&id)
                 else {
                     return Err((
                         id,

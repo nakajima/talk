@@ -253,16 +253,36 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Protocol)?;
         let name = Name::Raw(self.identifier()?);
         let associated_types = self.type_reprs()?;
+        let conformances = self.conformances()?;
         let body = self.protocol_body()?;
 
         self.add_expr(
             Expr::ProtocolDecl {
                 name,
                 associated_types,
+                conformances,
                 body,
             },
             tok,
         )
+    }
+
+    fn conformances(&mut self) -> Result<Vec<ExprID>, ParserError> {
+        let mut conformances = vec![];
+
+        if !self.did_match(TokenKind::Colon)? {
+            return Ok(conformances);
+        }
+
+        while !(self.peek_is(TokenKind::LeftBrace)
+            || self.peek_is(TokenKind::EOF)
+            || self.peek_is(TokenKind::Greater))
+        {
+            conformances.push(self.type_repr(false)?);
+            self.consume(TokenKind::Comma).ok();
+        }
+
+        Ok(conformances)
     }
 
     pub(crate) fn struct_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
@@ -274,8 +294,17 @@ impl<'a> Parser<'a> {
         };
 
         let generics = self.type_reprs()?;
+        let conformances = self.conformances()?;
         let body = self.struct_body()?;
-        self.add_expr(Struct(Name::Raw(name_str), generics, body), tok)
+        self.add_expr(
+            Struct {
+                name: Name::Raw(name_str),
+                generics,
+                conformances,
+                body,
+            },
+            tok,
+        )
     }
 
     fn struct_body(&mut self) -> Result<ExprID, ParserError> {
@@ -402,6 +431,7 @@ impl<'a> Parser<'a> {
 
         let (name, _) = self.try_identifier().unwrap();
         let generics = self.type_reprs()?;
+        let conformances = self.conformances()?;
 
         // Consume the block
         let body = self.enum_body()?;
@@ -838,13 +868,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let Some((name, _)) = self.try_identifier() else {
-            return Err(ParserError::UnexpectedToken(
-                "Identifer".into(),
-                self.current.clone(),
-            ));
-        };
-
+        let name = self.identifier()?;
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
@@ -854,17 +878,25 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let type_repr = TypeRepr(name.into(), generics, is_type_parameter);
+        let conformances = self.conformances()?;
+
+        let type_repr = TypeRepr {
+            name: name.into(),
+            generics,
+            conformances,
+            introduces_type: is_type_parameter,
+        };
         let type_repr_id = self.add_expr(type_repr, tok)?;
 
         if self.did_match(TokenKind::QuestionMark)? {
             let tok = self.push_source_location();
             self.add_expr(
-                TypeRepr(
-                    Name::Raw("Optional".to_string()),
-                    vec![type_repr_id],
-                    is_type_parameter,
-                ),
+                TypeRepr {
+                    name: Name::Raw("Optional".to_string()),
+                    generics: vec![type_repr_id],
+                    conformances: vec![],
+                    introduces_type: is_type_parameter,
+                },
                 tok,
             )
         } else {
