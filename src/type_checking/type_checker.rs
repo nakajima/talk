@@ -505,7 +505,7 @@ impl<'a> TypeChecker<'a> {
             }
         };
 
-        Ok(Ty::Init(*struct_id, params, vec![]))
+        Ok(Ty::Init(*struct_id, params))
     }
 
     fn infer_struct(

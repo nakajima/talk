@@ -66,7 +66,7 @@ impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
             Ty::Pointer => IRType::Pointer,
-            Ty::Init(_sym, params, _generics) => IRType::Func(
+            Ty::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
             ),
@@ -1861,7 +1861,7 @@ impl<'a> Lowerer<'a> {
             func: box Ty::Func(params, _, _),
             ..
         }
-        | Ty::Init(_, params, _)) = &callee_typed_expr.ty
+        | Ty::Init(_, params)) = &callee_typed_expr.ty
         else {
             log::error!("didn't get callable: {callee_typed_expr:?}");
             return None;
@@ -1911,7 +1911,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        if let Ty::Init(struct_id, params, _) = &callee_typed_expr.ty {
+        if let Ty::Init(struct_id, params) = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &ty, arg_registers, params);
         }
 

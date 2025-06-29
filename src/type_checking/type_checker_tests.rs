@@ -38,7 +38,7 @@ mod tests {
             panic!("did not get callee")
         };
 
-        assert_eq!(ty, Ty::Init(SymbolID(1), vec![Ty::Int], vec![]));
+        assert_eq!(ty, Ty::Init(SymbolID(1), vec![Ty::Int]));
     }
 
     #[test]

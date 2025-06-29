@@ -425,10 +425,9 @@ impl Environment {
                     let new_generics = generics.iter().map(|g| walk(g, map)).collect();
                     Ty::Func(new_params, new_ret, new_generics)
                 }
-                Ty::Init(struct_id, params, generics) => {
+                Ty::Init(struct_id, params) => {
                     let new_params = params.iter().map(|p| walk(p, map)).collect();
-                    let new_generics = generics.iter().map(|p| walk(p, map)).collect();
-                    Ty::Init(*struct_id, new_params, new_generics)
+                    Ty::Init(*struct_id, new_params)
                 }
                 Ty::Closure { func, captures } => {
                     let func = Box::new(walk(func, map));
@@ -581,13 +580,9 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::TypeVar(v) => {
             s.insert(v.clone());
         }
-        Ty::Init(_, params, generics) => {
+        Ty::Init(_, params) => {
             for param in params {
                 s.extend(free_type_vars(param));
-            }
-
-            for generic in generics {
-                s.extend(free_type_vars(generic))
             }
         }
         Ty::Func(params, ret, generics) => {

@@ -344,7 +344,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 // TODO: Support multiple initializers
                 let initializer = &struct_def.initializers[0];
-                let Ty::Init(_, params, _) = &initializer.ty else {
+                let Ty::Init(_, params) = &initializer.ty else {
                     unreachable!();
                 };
 
@@ -524,10 +524,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 *sym,
                 Self::apply_multiple(generics, substitutions, depth + 1),
             ),
-            Ty::Init(struct_id, params, generics) => Ty::Init(
+            Ty::Init(struct_id, params) => Ty::Init(
                 *struct_id,
                 Self::apply_multiple(&params, substitutions, depth + 1),
-                Self::apply_multiple(generics, substitutions, depth + 1),
             ),
             Ty::Void => ty.clone(),
         }
@@ -762,16 +761,13 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     ty.clone() // Not in this substitution map, return as is.
                 }
             }
-            Ty::Init(struct_id, params, generics) => {
+            Ty::Init(struct_id, params) => {
                 let applied_params = params
                     .iter()
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
                     .collect();
-                let applied_generics = generics
-                    .iter()
-                    .map(|g| Self::substitute_ty_with_map(g, substitutions))
-                    .collect();
-                Ty::Init(*struct_id, applied_params, applied_generics)
+
+                Ty::Init(*struct_id, applied_params)
             }
             Ty::Func(params, returning, generics) => {
                 let applied_params = params
