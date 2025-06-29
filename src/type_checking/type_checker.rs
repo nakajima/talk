@@ -13,6 +13,7 @@ use crate::{
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
+    type_constraint::TypeConstraint,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -135,28 +136,6 @@ impl<'a> TypeChecker<'a> {
         self.infer_without_prelude(env, source_file)
     }
 
-    pub fn predeclare(
-        &mut self,
-        items: &[ExprID],
-        env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<(), TypeError> {
-        self.predeclare_types(items, env, source_file)
-            .map_err(|e| e.1)?;
-        // if let Err((id, err)) = self.predeclare_structs(items, env, source_file) {
-        //     source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        // }
-
-        // if let Err((id, err)) = self.predeclare_enums(items, env, source_file) {
-        //     source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        // }
-
-        self.predeclare_lets(items, env, source_file);
-        self.predeclare_functions(items, env, source_file)?;
-
-        Ok(())
-    }
-
     pub fn infer_without_prelude(
         &mut self,
         env: &mut Environment,
@@ -166,7 +145,7 @@ impl<'a> TypeChecker<'a> {
         synthesize_inits(&mut source_file, self.symbol_table, env);
 
         // Just define names for all of the funcs, structs and enums
-        self.predeclare(&root_ids, env, &mut source_file).ok();
+        self.hoist(&root_ids, env, &mut source_file).ok();
 
         let mut typed_roots = vec![];
         for id in &root_ids {
@@ -182,7 +161,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub fn infer_nodes(
-        &self,
+        &mut self,
         ids: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
@@ -196,7 +175,7 @@ impl<'a> TypeChecker<'a> {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn infer_node(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -383,7 +362,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_protocol(
-        &self,
+        &mut self,
         name: &Name,
         associated_types: &[ExprID],
         conformances: &[ExprID],
@@ -408,7 +387,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_property(
-        &self,
+        &mut self,
         expr_id: &ExprID,
         name: &Name,
         type_repr: &Option<ExprID>,
@@ -450,7 +429,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_enum_variant(
-        &self,
+        &mut self,
         _name: &Name,
         values: &[ExprID],
         expected: &Option<Ty>,
@@ -465,7 +444,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_parameter(
-        &self,
+        &mut self,
         name: &Name,
         param_ty: &Option<ExprID>,
         env: &mut Environment,
@@ -485,7 +464,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_init(
-        &self,
+        &mut self,
         struct_id: &SymbolID,
         func_id: &ExprID,
         expected: &Option<Ty>,
@@ -510,7 +489,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_struct(
-        &self,
+        &mut self,
         name: &Name,
         generics: &[ExprID],
         conformances: &[ExprID],
@@ -539,7 +518,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_array(
-        &self,
+        &mut self,
         items: &[ExprID],
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -560,7 +539,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_return(
-        &self,
+        &mut self,
         rhs: &Option<ExprID>,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -574,7 +553,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_loop(
-        &self,
+        &mut self,
         cond: &Option<ExprID>,
         body: &ExprID,
         env: &mut Environment,
@@ -590,7 +569,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_if(
-        &self,
+        &mut self,
         condition: &ExprID,
         consequence: &ExprID,
         alternative: &Option<ExprID>,
@@ -609,7 +588,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_call(
-        &self,
+        &mut self,
         _id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
@@ -675,7 +654,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_assignment(
-        &self,
+        &mut self,
         env: &mut Environment,
         lhs: &ExprID,
         rhs: &ExprID,
@@ -692,21 +671,32 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_type_repr(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         name: &Name,
         generics: &[ExprID],
-        _conformances: &[ExprID],
+        conformances: &[ExprID],
         is_type_parameter: &bool,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let symbol_id = name.try_symbol_id();
 
         if *is_type_parameter {
-            let foo = "";
+            let mut type_constraints = vec![];
+            for id in conformances {
+                let ty = self.infer_node(id, env, &None, source_file)?;
+                let Ty::Protocol(protocol_id, associated_types) = ty else {
+                    return Err(TypeError::Unknown(format!("{ty:?} is not a protocol")));
+                };
+                type_constraints.push(TypeConstraint {
+                    protocol_id,
+                    associated_types,
+                });
+            }
+
             let scheme = env.lookup_symbol(&symbol_id).cloned().unwrap_or(Scheme {
-                ty: env.placeholder(id, name.name_str(), &symbol_id, vec![]),
+                ty: env.placeholder(id, name.name_str(), &symbol_id, type_constraints),
                 unbound_vars: vec![],
             });
 
@@ -745,7 +735,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_func_type_repr(
-        &self,
+        &mut self,
         env: &mut Environment,
         args: &[ExprID],
         ret: &ExprID,
@@ -763,7 +753,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_tuple_type_repr(
-        &self,
+        &mut self,
         env: &mut Environment,
         types: &Vec<ExprID>,
         expected: &Option<Ty>,
@@ -778,7 +768,7 @@ impl<'a> TypeChecker<'a> {
 
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
-        &self,
+        &mut self,
         env: &mut Environment,
         name: &Option<Name>,
         generics: &[ExprID],
@@ -814,7 +804,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let expected_body_ty = if let Some(ret) = ret {
+        let expected_ret_ty = if let Some(ret) = ret {
             Some(self.infer_node(ret, env, &None, source_file)?)
         } else {
             None
@@ -826,10 +816,10 @@ impl<'a> TypeChecker<'a> {
             param_vars.push(param_ty);
         }
 
-        let body_ty = self.infer_node(body, env, &expected_body_ty, source_file)?;
+        let body_ty = self.infer_node(body, env, &expected_ret_ty, source_file)?;
         let mut ret_ty = body_ty.clone();
 
-        if let Some(ret_type) = expected_body_ty
+        if let Some(ret_type) = expected_ret_ty
             && let Some(ret_id) = ret
         {
             ret_ty = ret_type.clone();
@@ -849,18 +839,21 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
-            // Create the final, polymorphic scheme.
-            let scheme = env.generalize(&inferred_ty);
-
-            // Update the declaration in the environment with the *real*, polymorphic scheme.
-            env.declare(*symbol_id, scheme);
+            // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
+            env.declare(
+                *symbol_id,
+                Scheme {
+                    ty: inferred_ty.clone(),
+                    unbound_vars: vec![],
+                },
+            );
         }
 
         Ok(inferred_ty)
     }
 
     fn infer_let(
-        &self,
+        &mut self,
         env: &mut Environment,
         symbol_id: SymbolID,
         rhs: &Option<ExprID>,
@@ -872,7 +865,6 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(expected) = expected {
             expected.clone()
         } else {
-            let foo = "";
             Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
         };
 
@@ -889,16 +881,13 @@ impl<'a> TypeChecker<'a> {
         symbol_id: SymbolID,
         name: &str,
     ) -> Result<Ty, TypeError> {
-        let scheme = env.lookup_symbol(&symbol_id).cloned().unwrap_or(Scheme {
-            ty: env.placeholder(id, name.to_string(), &symbol_id, vec![]),
-            unbound_vars: vec![],
-        });
+        let scheme = env.lookup_symbol(&symbol_id)?.clone();
         let ty = env.instantiate(&scheme);
         Ok(ty)
     }
 
     fn infer_tuple(
-        &self,
+        &mut self,
         types: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
@@ -916,7 +905,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_unary(
-        &self,
+        &mut self,
         rhs: &ExprID,
         expected: &Option<Ty>,
         env: &mut Environment,
@@ -927,7 +916,7 @@ impl<'a> TypeChecker<'a> {
 
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
-        &self,
+        &mut self,
         _id: &ExprID,
         lhs_id: &ExprID,
         rhs_id: &ExprID,
@@ -958,7 +947,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_block(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -969,8 +958,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         env.start_scope();
-        self.predeclare_lets(&items, env, source_file);
-        self.predeclare_functions(&items, env, source_file)?;
+        // self.hoist(&items, env, source_file)?;
 
         let mut block_return_ty = expected.clone();
         let mut ret_tys = vec![];
@@ -1009,7 +997,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_match(
-        &self,
+        &mut self,
         env: &mut Environment,
         pattern: &ExprID,
         arms: &[ExprID],
@@ -1028,7 +1016,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_match_arm(
-        &self,
+        &mut self,
         env: &mut Environment,
         pattern: &ExprID,
         body: &ExprID,
@@ -1047,7 +1035,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_member(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         receiver: &Option<ExprID>,
@@ -1093,7 +1081,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_pattern_expr(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         pattern: &Pattern,
@@ -1111,7 +1099,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_pattern(
-        &self,
+        &mut self,
         _id: &ExprID,
         pattern: &Pattern,
         env: &mut Environment,
@@ -1143,14 +1131,14 @@ impl<'a> TypeChecker<'a> {
             } => {
                 // The expected type should be an Enum type
                 match expected {
-                    Ty::Enum(enum_id, type_args) => {
+                    Ty::Enum(enum_id, type_args) | Ty::EnumVariant(enum_id, type_args) => {
                         let enum_def = env.lookup_enum(enum_id).unwrap().clone();
                         // Find the variant by name
                         let Some(variant) = enum_def.variants.iter().find(|v| {
                             // Match variant name (comparing the raw string)
                             v.name == *variant_name
                         }) else {
-                            panic!("didn't find variant");
+                            panic!("didn't find variant: {:?}", enum_def);
                         };
                         let Ty::EnumVariant(_, values) = &variant.ty else {
                             unreachable!()
@@ -1205,86 +1193,11 @@ impl<'a> TypeChecker<'a> {
                                 .unwrap();
                         }
                     }
-                    _ => panic!("Unhandled pattern variant: {pattern:?}"),
+                    _ => panic!("Unhandled pattern variant: {pattern:?}, expected: {expected:?}"),
                 }
             }
         }
 
         Ok(())
-    }
-
-    fn predeclare_functions(
-        &self,
-        root_ids: &[ExprID],
-        env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<(), TypeError> {
-        log::trace!("Predeclaring lets");
-
-        let mut func_ids = vec![];
-        let mut placeholder_substitutions = HashMap::new();
-
-        // Predeclaration pass, just declare placeholders
-        for id in root_ids.iter() {
-            let Expr::Func {
-                name: Some(Name::Resolved(symbol_id, name_str)),
-                ..
-            } = source_file.get(id).unwrap().clone()
-            else {
-                continue;
-            };
-
-            let placeholder =
-                env.placeholder(id, format!("predecl[{}]", name_str), &symbol_id, vec![]);
-
-            // Stash this func ID so we can fully infer it in the next loop
-            func_ids.push((id, symbol_id, placeholder.clone()));
-
-            env.declare(
-                symbol_id,
-                Scheme {
-                    ty: placeholder,
-                    unbound_vars: vec![],
-                },
-            );
-        }
-
-        for (expr_id, symbol_id, placeholder) in func_ids {
-            let Ty::TypeVar(type_var_id) = placeholder.clone() else {
-                unreachable!()
-            };
-
-            let fn_var = self.infer_node(expr_id, env, &Some(placeholder), source_file)?;
-            let scheme = env.generalize(&fn_var);
-            env.declare(symbol_id, scheme);
-
-            placeholder_substitutions.insert(type_var_id.clone(), fn_var);
-        }
-
-        env.replace_typed_exprs_values(&placeholder_substitutions);
-        env.replace_constraint_values(&placeholder_substitutions);
-
-        Ok(())
-    }
-
-    fn predeclare_lets(
-        &self,
-        items: &[ExprID],
-        env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-    ) {
-        log::trace!("Predeclaring lets");
-
-        for id in items {
-            let Some(Expr::Assignment(lhs, _)) = source_file.get(&id).cloned() else {
-                continue;
-            };
-
-            let Some(Expr::Let(Name::Resolved(_, _), _)) = source_file.get(&lhs) else {
-                continue;
-            };
-
-            self.infer_node(&id, env, &None, source_file).ok();
-        }
     }
 }

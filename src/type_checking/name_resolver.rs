@@ -381,6 +381,8 @@ impl NameResolver {
                         Name::Resolved(_, _) | Name::_Self(_) => name, // Already resolved, no change needed to the name itself.
                     };
 
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
+
                     // Update the existing TypeRepr node with the resolved name.
                     // The node type remains TypeRepr.
                     source_file.nodes.insert(

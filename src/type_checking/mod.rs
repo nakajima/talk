@@ -8,11 +8,11 @@ pub mod conformance_checker;
 pub mod constraint_solver;
 pub mod environment;
 pub mod name_resolver;
-pub mod predecls;
 pub mod scope_tree;
 pub mod synthesis;
 pub mod ty;
 pub mod type_checker;
+pub mod type_checker_hoisting;
 #[cfg(test)]
 pub mod type_checker_tests;
 pub mod type_constraint;

@@ -36,6 +36,7 @@ pub struct RawInitializer {
     pub expr_id: ExprID,
     pub func_id: ExprID,
     pub params: Vec<ExprID>,
+    pub placeholder: TypeVarID,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -49,6 +50,7 @@ pub struct Initializer {
 pub struct RawProperty {
     pub name: String,
     pub expr_id: ExprID,
+    pub placeholder: TypeVarID,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProtocolDef {
@@ -56,13 +58,9 @@ pub struct ProtocolDef {
     pub name_str: String,
     pub associated_types: TypeParams,
     pub conformances: Vec<SymbolID>,
-    pub raw_properties: Vec<RawProperty>,
     pub properties: Vec<Property>,
-    pub raw_methods: Vec<RawMethod>,
     pub methods: Vec<Method>,
-    pub raw_initializers: Vec<RawInitializer>,
     pub initializers: Vec<Initializer>,
-    pub raw_method_requirements: Vec<RawMethod>,
     pub method_requirements: Vec<Method>,
 }
 
@@ -72,13 +70,9 @@ impl ProtocolDef {
         name_str: String,
         associated_types: TypeParams,
         conformances: Vec<SymbolID>,
-        raw_properties: Vec<RawProperty>,
         properties: Vec<Property>,
-        raw_methods: Vec<RawMethod>,
         methods: Vec<Method>,
-        raw_initializers: Vec<RawInitializer>,
         initializers: Vec<Initializer>,
-        raw_method_requirements: Vec<RawMethod>,
         method_requirements: Vec<Method>,
     ) -> Self {
         Self {
@@ -86,13 +80,9 @@ impl ProtocolDef {
             name_str,
             associated_types,
             conformances,
-            raw_properties,
             properties,
-            raw_methods,
             methods,
-            raw_initializers,
             initializers,
-            raw_method_requirements,
             method_requirements,
         }
     }
@@ -103,6 +93,10 @@ impl ProtocolDef {
         }
 
         if let Some(method) = self.methods.iter().find(|p| p.name == name) {
+            return Some(&method.ty);
+        }
+
+        if let Some(method) = self.method_requirements.iter().find(|p| p.name == name) {
             return Some(&method.ty);
         }
 
@@ -119,9 +113,7 @@ pub struct EnumDef {
     pub name: Option<SymbolID>,
     pub name_str: String,
     pub type_parameters: TypeParams,
-    pub raw_variants: Vec<RawEnumVariant>,
     pub variants: Vec<EnumVariant>,
-    pub raw_methods: Vec<RawMethod>,
     pub methods: Vec<Method>,
     pub conformances: Vec<SymbolID>,
 }
@@ -150,31 +142,18 @@ pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
-    pub raw_properties: Vec<RawProperty>,
     pub properties: Vec<Property>,
-    pub raw_methods: Vec<RawMethod>,
     pub methods: Vec<Method>,
-    pub raw_initializers: Vec<RawInitializer>,
     pub initializers: Vec<Initializer>,
     pub conformances: Vec<SymbolID>,
 }
 
 impl StructDef {
-    pub fn new(
-        symbol_id: SymbolID,
-        name_str: String,
-        type_parameters: TypeParams,
-        raw_properties: Vec<RawProperty>,
-        raw_methods: Vec<RawMethod>,
-        raw_initializers: Vec<RawInitializer>,
-    ) -> Self {
+    pub fn new(symbol_id: SymbolID, name_str: String, type_parameters: TypeParams) -> Self {
         Self {
             symbol_id,
             name_str,
             type_parameters,
-            raw_properties,
-            raw_methods,
-            raw_initializers,
             methods: Default::default(),
             properties: Default::default(),
             initializers: Default::default(),
@@ -245,62 +224,19 @@ impl TypeDef {
         }
     }
 
-    pub fn raw_variants(&self) -> &Vec<RawEnumVariant> {
-        match self {
-            Self::Enum(def) => &def.raw_variants,
-            Self::Struct(_) => unreachable!("structs don't have variants"),
-            Self::Protocol(_) => unreachable!("protocols don't have variants"),
-        }
-    }
-
-    pub fn raw_methods(&self) -> &Vec<RawMethod> {
-        match self {
-            Self::Enum(def) => &def.raw_methods,
-            Self::Struct(def) => &def.raw_methods,
-            Self::Protocol(def) => &def.raw_methods,
-        }
-    }
-
-    pub fn raw_method_requirements(&self) -> &Vec<RawMethod> {
-        match self {
-            Self::Enum(_) => unreachable!("enums do not have method requirements"),
-            Self::Struct(_) => unreachable!("structs do not have method requirements"),
-            Self::Protocol(def) => &def.raw_methods,
-        }
-    }
-
-    pub fn raw_initializers(&self) -> Vec<RawInitializer> {
-        match self {
-            Self::Enum(_def) => unreachable!("enums don't have initializers"),
-            Self::Struct(def) => def.raw_initializers.clone(),
-            Self::Protocol(def) => def.raw_initializers.clone(),
-        }
-    }
-
-    pub fn raw_properties(&self) -> &Vec<RawProperty> {
-        match self {
-            Self::Enum(_def) => unreachable!("enums don't have properties"),
-            Self::Struct(def) => &def.raw_properties,
-            Self::Protocol(def) => &def.raw_properties,
-        }
-    }
-
-    pub fn set_raw_method_requirements(&mut self, methods: Vec<RawMethod>) {
-        if methods.is_empty() {
-            return;
-        }
-        match self {
-            Self::Enum(_) => unreachable!("enums do not have method requirements"),
-            Self::Struct(_) => unreachable!("structs do not have methods requirements"),
-            Self::Protocol(def) => def.raw_method_requirements = methods,
-        }
-    }
-
     pub fn find_method(&self, method_name: &str) -> Option<&Method> {
         match self {
             Self::Enum(def) => def.methods.iter().find(|m| m.name == method_name),
             Self::Struct(def) => def.methods.iter().find(|m| m.name == method_name),
             Self::Protocol(def) => def.methods.iter().find(|m| m.name == method_name),
+        }
+    }
+
+    pub fn find_property(&self, name: &str) -> Option<&Property> {
+        match self {
+            Self::Enum(_) => unreachable!("enums do not have properties"),
+            Self::Struct(def) => def.properties.iter().find(|p| p.name == name),
+            Self::Protocol(def) => def.properties.iter().find(|p| p.name == name),
         }
     }
 
@@ -359,6 +295,14 @@ impl TypeDef {
             Self::Protocol(_) => unreachable!("protocols don't have variants"),
         }
     }
+
+    pub fn set_conformances(&mut self, conformances: Vec<SymbolID>) {
+        match self {
+            Self::Enum(def) => def.conformances = conformances,
+            Self::Struct(def) => def.conformances = conformances,
+            Self::Protocol(def) => def.conformances = conformances,
+        }
+    }
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
@@ -393,11 +337,16 @@ impl Method {
 pub struct RawMethod {
     pub name: String,
     pub expr_id: ExprID,
+    pub placeholder: TypeVarID,
 }
 
 impl RawMethod {
-    pub fn new(name: String, expr_id: ExprID) -> Self {
-        Self { name, expr_id }
+    pub fn new(name: String, expr_id: ExprID, placeholder: TypeVarID) -> Self {
+        Self {
+            name,
+            expr_id,
+            placeholder,
+        }
     }
 }
 
@@ -504,7 +453,6 @@ impl Environment {
     ) -> Result<HashMap<TypeVarID, Ty>, TypeError> {
         let mut solver = ConstraintSolver::new(source_file, self, symbol_table);
         let substitutions = solver.solve();
-        self.constraints.clear();
         Ok(substitutions)
     }
 
@@ -532,11 +480,32 @@ impl Environment {
     }
 
     pub fn replace_typed_exprs_values(&mut self, substitutions: &Substitutions) {
-        for (_, typed_expr) in &mut self.typed_exprs {
-            typed_expr.ty = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+        for (_, typed_expr) in self.typed_exprs.iter_mut() {
+            let replaced = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
                 &typed_expr.ty,
                 substitutions,
             );
+
+            if typed_expr.ty == replaced {
+                continue;
+            }
+
+            typed_expr.ty = replaced
+        }
+
+        for scope in self.scopes.iter_mut() {
+            for (_, scheme) in scope {
+                let replaced = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                    &scheme.ty,
+                    substitutions,
+                );
+
+                if scheme.ty == replaced {
+                    continue;
+                }
+
+                scheme.ty = replaced;
+            }
         }
     }
 
@@ -581,10 +550,12 @@ impl Environment {
 
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
-    pub fn generalize(&self, t: &Ty) -> Scheme {
+    pub fn generalize(&self, t: &Ty, symbol_id: &SymbolID) -> Scheme {
         let ftv_t = free_type_vars(t);
-        let ftv_env = free_type_vars_in_env(&self.scopes);
+        let ftv_env = free_type_vars_in_env(&self.scopes, *symbol_id);
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
+
+        println!("Generalizing {t:?}. Unbound: {unbound_vars:?}");
 
         Scheme {
             unbound_vars,
@@ -592,13 +563,20 @@ impl Environment {
         }
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::trace!(
+                "Instantiate {:?} from {}:{}",
+                scheme,
+                loc.file(),
+                loc.line()
+            );
+        }
         self.instantiate_with_args(scheme, Default::default())
     }
 
-    /// Instantiate a polymorphic scheme into a fresh monotype:
-    /// for each α ∈ scheme.vars, generate β = new_type_variable(α.kind),
-    /// and substitute α ↦ β throughout scheme.ty.
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
         if cfg!(debug_assertions) {
@@ -683,7 +661,6 @@ impl Environment {
         let ret = if let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() {
             self.instantiate(&scheme)
         } else {
-            println!("generating placeholder {:?}", name);
             self.placeholder(id, name.to_string(), &symbol_id, vec![])
         };
 
@@ -713,7 +690,7 @@ impl Environment {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!(
-                "new_type_variable {:?} from {}:{}",
+                "+ {:?} from {}:{}",
                 Ty::TypeVar(self.type_var_id.clone()),
                 loc.file(),
                 loc.line()
@@ -723,18 +700,61 @@ impl Environment {
         self.type_var_id.clone()
     }
 
+    pub fn register(&mut self, def: &TypeDef) {
+        match def {
+            TypeDef::Enum(def) => self.register_enum(&def),
+            TypeDef::Struct(def) => self.register_struct(&def),
+            TypeDef::Protocol(def) => self.register_protocol(&def),
+        }
+    }
+
     // Helper methods for enum definitions
-    pub fn register_enum(&mut self, def: EnumDef) {
+    pub fn register_enum(&mut self, def: &EnumDef) {
+        self.declare(
+            def.name.unwrap(),
+            Scheme {
+                ty: Ty::Enum(def.name.unwrap(), def.type_parameters.clone()),
+                unbound_vars: self.extract_type_variables(&def.type_parameters),
+            },
+        );
         self.types
-            .insert(def.clone().name.unwrap(), TypeDef::Enum(def));
+            .insert(def.clone().name.unwrap(), TypeDef::Enum(def.clone()));
     }
 
-    pub fn register_struct(&mut self, def: StructDef) {
-        self.types.insert(def.symbol_id, TypeDef::Struct(def));
+    pub fn register_struct(&mut self, def: &StructDef) {
+        self.declare(
+            def.symbol_id,
+            Scheme {
+                ty: Ty::Struct(def.symbol_id, def.type_parameters.clone()),
+                unbound_vars: self.extract_type_variables(&def.type_parameters),
+            },
+        );
+        self.types
+            .insert(def.symbol_id, TypeDef::Struct(def.clone()));
     }
 
-    pub fn register_protocol(&mut self, def: ProtocolDef) {
-        self.types.insert(def.symbol_id, TypeDef::Protocol(def));
+    pub fn register_protocol(&mut self, def: &ProtocolDef) {
+        self.declare(
+            def.symbol_id,
+            Scheme {
+                ty: Ty::Protocol(def.symbol_id, def.associated_types.clone()),
+                unbound_vars: self.extract_type_variables(&def.associated_types),
+            },
+        );
+        self.types
+            .insert(def.symbol_id, TypeDef::Protocol(def.clone()));
+    }
+
+    fn extract_type_variables(&self, tys: &[Ty]) -> Vec<TypeVarID> {
+        tys.iter()
+            .filter_map(|a| {
+                if let Ty::TypeVar(id) = a.clone() {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
@@ -749,7 +769,7 @@ impl Environment {
         } else {
             if cfg!(debug_assertions) {
                 let loc = std::panic::Location::caller();
-                log::error!(
+                log::warn!(
                     "Did not find symbol {symbol_id:?}: {}:{}",
                     loc.file(),
                     loc.line()
@@ -865,11 +885,18 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
 /// Collect all free type-vars in *every* in-scope Scheme,
 /// *after* applying the current substitutions.  We exclude
 /// each scheme's own quantified vars.
-pub fn free_type_vars_in_env(scopes: &[HashMap<SymbolID, Scheme>]) -> HashSet<TypeVarID> {
+pub fn free_type_vars_in_env(
+    scopes: &[HashMap<SymbolID, Scheme>],
+    ignoring: SymbolID,
+) -> HashSet<TypeVarID> {
     let mut s = HashSet::new();
 
     for frame in scopes.iter() {
-        for scheme in frame.values() {
+        for (symbol_id, scheme) in frame {
+            if symbol_id == &ignoring {
+                continue;
+            }
+
             // collect its free vars
             let mut ftv = free_type_vars(&scheme.ty);
 
@@ -914,7 +941,7 @@ mod generalize_tests {
         let env = Environment::new();
         let ty_to_generalize = Ty::Func(vec![ty_var(1)], Box::new(ty_var(2)), vec![]);
 
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme's unbound_vars should contain both tv1 and tv2.
         assert_eq!(scheme.ty, ty_to_generalize);
@@ -944,7 +971,7 @@ mod generalize_tests {
 
         let ty_to_generalize =
             Ty::Func(vec![Ty::TypeVar(tv_a.clone())], Box::new(ty_var(2)), vec![]);
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should only bind `b` (tv2). `a` remains free.
         assert_eq!(scheme.ty, ty_to_generalize);
@@ -976,7 +1003,7 @@ mod generalize_tests {
         env.scopes = vec![initial_scope];
 
         let ty_to_generalize = Ty::Func(vec![ty_var(2)], Box::new(ty_var(3)), vec![]);
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should bind `b` (tv2) and `c` (tv3).
         assert_eq!(scheme.ty, ty_to_generalize);
@@ -1003,7 +1030,7 @@ mod generalize_tests {
         env.scopes = vec![initial_scope];
 
         let ty_to_generalize = Ty::TypeVar(tv_a.clone());
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should bind nothing new.
         assert!(scheme.unbound_vars.is_empty());
@@ -1016,7 +1043,7 @@ mod generalize_tests {
         let env = Environment::new();
         let ty_to_generalize = Ty::Tuple(vec![ty_var(1), ty_var(2)]);
 
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
@@ -1029,7 +1056,7 @@ mod generalize_tests {
         let env = Environment::new();
         let ty_to_generalize = Ty::Array(Box::new(ty_var(1)));
 
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1)].into_iter().collect();
@@ -1042,7 +1069,7 @@ mod generalize_tests {
         let env = Environment::new();
         let ty_to_generalize = Ty::Struct(SymbolID(100), vec![ty_var(1), ty_var(2)]);
 
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
@@ -1089,7 +1116,7 @@ mod generalize_tests {
         let tuple = Ty::Tuple(vec![array_b, ty_var(3)]); // c
         let ty_to_generalize = Ty::Func(vec![], Box::new(tuple), vec![]);
 
-        let scheme = env.generalize(&ty_to_generalize);
+        let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // Should bind `b` and `c`, but not `a`.
         let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();

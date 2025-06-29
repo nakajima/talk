@@ -1,5 +1,5 @@
 use crate::{
-    environment::{Method, ProtocolDef, TypeDef},
+    environment::{Method, Property, ProtocolDef, TypeDef},
     ty::Ty,
     type_checker::TypeError,
 };
@@ -13,7 +13,7 @@ pub struct ConformanceChecker<'a> {
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum ConformanceError {
     TypeCannotConform(Ty),
-    MethodNotImplemented(TypeDef, ProtocolDef, String),
+    MemberNotImplemented(TypeDef, ProtocolDef, String),
 }
 
 impl<'a> ConformanceChecker<'a> {
@@ -32,7 +32,7 @@ impl<'a> ConformanceChecker<'a> {
             self.protocol.name_str
         );
 
-        let mut result = vec![];
+        let mut unifications = vec![];
 
         for method in self.protocol.methods.iter() {
             let ty_method = match self.find_method(&method.name) {
@@ -43,14 +43,37 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            result.push((method.ty.clone(), ty_method.ty.clone()));
+            unifications.push((method.ty.clone(), ty_method.ty.clone()));
         }
 
-        for _property in self.protocol.properties.iter() {}
+        for method in self.protocol.method_requirements.iter() {
+            let ty_method = match self.find_method(&method.name) {
+                Ok(m) => m.clone(),
+                Err(e) => {
+                    self.errors.push(e);
+                    continue;
+                }
+            };
+
+            unifications.push((method.ty.clone(), ty_method.ty.clone()));
+        }
+
+        for property in self.protocol.properties.iter() {
+            let ty_property = match self.find_property(&property.name) {
+                Ok(p) => p.clone(),
+                Err(e) => {
+                    self.errors.push(e);
+                    continue;
+                }
+            };
+
+            unifications.push((property.ty.clone(), ty_property.ty.clone()));
+        }
+
         for _initializer in self.protocol.initializers.iter() {}
 
         if self.errors.is_empty() {
-            Ok(result)
+            Ok(unifications)
         } else {
             log::error!(
                 "{} does not conform: {:?}",
@@ -61,11 +84,23 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
+    fn find_property(&self, name: &str) -> Result<&Property, ConformanceError> {
+        if let Some(property) = self.type_def.find_property(name) {
+            Ok(property)
+        } else {
+            Err(ConformanceError::MemberNotImplemented(
+                self.type_def.clone(),
+                self.protocol.clone(),
+                name.to_string(),
+            ))
+        }
+    }
+
     fn find_method(&self, method_name: &str) -> Result<&Method, ConformanceError> {
         if let Some(method) = self.type_def.find_method(method_name) {
             Ok(method)
         } else {
-            Err(ConformanceError::MethodNotImplemented(
+            Err(ConformanceError::MemberNotImplemented(
                 self.type_def.clone(),
                 self.protocol.clone(),
                 method_name.to_string(),

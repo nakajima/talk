@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
 
 impl std::fmt::Debug for SymbolID {

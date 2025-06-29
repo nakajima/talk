@@ -156,7 +156,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.diagnostics().len(), 1);
+        assert_eq!(
+            checked.diagnostics().len(),
+            1,
+            "{:?}",
+            checked.diagnostics()
+        );
     }
 
     #[test]
@@ -182,6 +187,7 @@ mod type_tests {
         expr::Expr,
         ty::Ty,
         type_checking::CheckResult,
+        type_constraint::TypeConstraint,
         type_var_id::{TypeVarID, TypeVarKind},
     };
 
@@ -383,12 +389,12 @@ mod type_tests {
         assert_eq!(inner_params.len(), 1);
 
         let Ty::TypeVar(TypeVarID {
-            id: _,
-            kind: TypeVarKind::Instantiated(inner_id),
+            id: inner_id,
+            kind: TypeVarKind::FuncParam(_),
             ..
         }) = inner_params[0]
         else {
-            panic!("didn't get innerid");
+            panic!("didn't get innerid: {:?}", inner_params[0]);
         };
 
         let Ty::TypeVar(TypeVarID { id: g_arg, .. }) = g_args[0] else {
@@ -398,11 +404,12 @@ mod type_tests {
         assert_eq!(inner_id, g_arg);
 
         let Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::Instantiated(inner_ret),
+            id: inner_ret,
+            kind: TypeVarKind::CallReturn,
             ..
         }) = *inner_ret
         else {
-            panic!("didn't get inner_ret");
+            panic!("didn't get inner_ret: {:?}", inner_ret);
         };
 
         let Ty::TypeVar(TypeVarID { id: f_ret, .. }) = *f_ret else {
@@ -507,6 +514,29 @@ mod type_tests {
 
         assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
         assert_eq!(checker.type_for(&checker.root_ids()[2]).unwrap(), Ty::Float);
+    }
+
+    #[test]
+    fn generalizes_at_the_right_time() {
+        let checker = check_without_prelude(
+            "
+            protocol Aged { let age: Int }
+            func id<T: Aged>(t: T) { t.age }
+        ",
+        )
+        .unwrap();
+        let id = Ty::TypeVar(TypeVarID {
+            id: 3,
+            kind: TypeVarKind::Placeholder("T".into()),
+            constraints: vec![TypeConstraint {
+                protocol_id: SymbolID(1),
+                associated_types: vec![],
+            }],
+        });
+        assert_eq!(
+            checker.type_for(&checker.root_ids()[1]).unwrap(),
+            Ty::Func(vec![id.clone()], Ty::Int.into(), vec![id])
+        );
     }
 
     #[test]
@@ -1427,7 +1457,7 @@ mod pending {
 
 #[cfg(test)]
 mod protocol_tests {
-    use crate::{SymbolID, check_without_prelude, environment::TypeDef};
+    use crate::{SymbolID, check_without_prelude, environment::TypeDef, ty::Ty};
 
     #[test]
     fn infers_protocol_conformance() {
@@ -1473,22 +1503,11 @@ mod protocol_tests {
         func get<T: Aged>(aged: T) {
             aged.age
         }
+        get(Person(age: 123))
         ",
         )
         .unwrap();
 
-        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(3)) else {
-            panic!("didn't get person: {:?}", checked.env.types);
-        };
-
-        let Some(TypeDef::Protocol(aged_def)) = checked.env.lookup_type(&SymbolID(1)) else {
-            panic!("didn't get aged protocol: {:#?}", checked.env.types);
-        };
-
-        assert!(
-            person_def.conformances.contains(&aged_def.symbol_id),
-            "{:#?}",
-            person_def.conformances
-        );
+        assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
     }
 }

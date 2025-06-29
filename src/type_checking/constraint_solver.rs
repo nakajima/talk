@@ -4,7 +4,7 @@ use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
     conformance_checker::ConformanceChecker,
     diagnostic::Diagnostic,
-    environment::{Environment, ProtocolDef, TypeDef},
+    environment::{Environment, TypeDef},
     expr::Expr,
     name::Name,
     parser::ExprID,
@@ -39,8 +39,8 @@ pub enum Constraint {
     },
     ConformsTo {
         expr_id: ExprID,
-        type_def: TypeDef,
-        protocol: ProtocolDef,
+        type_def: SymbolID,
+        protocol: SymbolID,
     },
 }
 
@@ -198,13 +198,27 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         constraint: &Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
-        log::info!("Solving constraint: {:?}", constraint);
-        match &constraint {
+        log::info!(
+            "Solving constraint: {:?}",
+            constraint.replacing(substitutions)
+        );
+        match &constraint.replacing(substitutions) {
             Constraint::ConformsTo {
                 expr_id,
                 type_def,
                 protocol,
             } => {
+                let Some(type_def) = self.env.lookup_type(type_def) else {
+                    return Err(TypeError::Unknown(format!(
+                        "could not find type: {type_def:?}"
+                    )));
+                };
+                let Some(TypeDef::Protocol(protocol)) = self.env.lookup_type(protocol) else {
+                    return Err(TypeError::Unknown(format!(
+                        "could not find protocol: {protocol:?}"
+                    )));
+                };
+
                 let conformance_checker = ConformanceChecker::new(type_def, protocol);
                 match conformance_checker.check() {
                     Ok(unifications) => {
@@ -336,6 +350,38 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             enum_def.type_parameters.clone(),
                             generics,
                         )
+                    }
+                    Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
+                        let mut result: Option<(Ty, Vec<Ty>, &Vec<Ty>)> = None;
+
+                        for constraint in type_var.constraints.iter() {
+                            let Some(TypeDef::Protocol(protocol_def)) =
+                                self.env.lookup_type(&constraint.protocol_id).cloned()
+                            else {
+                                return Err(TypeError::Unknown(format!(
+                                    "did not find protocol with ID: {:?}",
+                                    constraint.protocol_id
+                                )));
+                            };
+
+                            if let Some(ty) = protocol_def.member_ty(&member_name) {
+                                result = Some((
+                                    ty.clone(),
+                                    protocol_def.associated_types,
+                                    &constraint.associated_types,
+                                ));
+
+                                break;
+                            }
+                        }
+
+                        if let Some(result) = result {
+                            result
+                        } else {
+                            return Err(TypeError::Unknown(format!(
+                                "Did not find member {member_name} for {receiver_ty:?}"
+                            )));
+                        }
                     }
                     _ => {
                         todo!(
@@ -520,6 +566,27 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(type_var) {
                     Self::apply(ty, substitutions, depth + 1)
+                } else if let TypeVarID {
+                    kind: TypeVarKind::Instantiated(i),
+                    ..
+                } = type_var
+                {
+                    let parent_type_var = TypeVarID::new(
+                        *i,
+                        TypeVarKind::Canonicalized(type_var.id),
+                        type_var.constraints.clone(),
+                    );
+                    Self::apply(&Ty::TypeVar(parent_type_var), substitutions, depth + 1)
+                } else if let TypeVarID {
+                    kind: TypeVarKind::Canonicalized(i),
+                    ..
+                } = type_var
+                {
+                    Ty::TypeVar(TypeVarID::new(
+                        *i,
+                        TypeVarKind::Instantiated(type_var.id),
+                        type_var.constraints.clone(),
+                    ))
                 } else {
                     ty.clone()
                 }
@@ -596,7 +663,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             return Ok(());
         }
 
-        log::trace!(
+        log::debug!(
             "Unifying: {:?} <> {:?}",
             Self::apply(lhs, substitutions, 0),
             Self::apply(rhs, substitutions, 0)

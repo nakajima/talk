@@ -207,7 +207,6 @@ impl<'a> Parser<'a> {
             .source_location_stack
             .pop()
             .unwrap_or_else(|| panic!("unbalanced source location stack. current: {token:?}"));
-        log::trace!("pop location: {:?}", start.token);
 
         let expr_meta = ExprMeta {
             start: start.token,
@@ -215,7 +214,11 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        Ok(self.parse_tree.add(self.env.next_id(), expr, expr_meta))
+        let next_id = self.env.next_id();
+
+        log::trace!("Add [{next_id}] {expr:?}");
+
+        Ok(self.parse_tree.add(next_id, expr, expr_meta))
     }
 
     fn push_identifier(&mut self, identifier: Token) {

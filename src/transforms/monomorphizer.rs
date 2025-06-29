@@ -477,7 +477,7 @@ mod tests {
                         Instr::GetElementPointer {
                             dest: Register(3),
                             base: Register(0),
-                            ty: IRType::array(IRType::TypeVar("T46".into())),
+                            ty: IRType::array(IRType::TypeVar("T24".into())),
                             index: IRValue::ImmediateInt(2)
                         },
                         Instr::Load {
