@@ -442,39 +442,8 @@ impl<'a> TypeChecker<'a> {
         enum_id: &SymbolID,
         _body: &ExprID,
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
+        _source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        // 1. Look up the EnumDef that predeclareing created.
-        let enum_def = env.lookup_enum(enum_id).unwrap().clone();
-        let enum_scheme = env.lookup_symbol(enum_id).unwrap().clone();
-
-        env.start_scope();
-        env.declare(*enum_id, enum_scheme.clone());
-
-        let mut inferred_methods = HashMap::new();
-        for (name, raw_method) in enum_def.raw_methods.iter() {
-            let method_ty = self.infer_node(&raw_method.expr_id, env, &None, source_file)?;
-            inferred_methods.insert(
-                name.clone(),
-                Method::new(name.clone(), raw_method.expr_id, method_ty),
-            );
-        }
-
-        let mut inferred_variants = vec![];
-        for variant in enum_def.raw_variants {
-            let ty = self
-                .infer_node(&variant.expr_id, env, &None, source_file)?
-                .clone();
-            inferred_variants.push(EnumVariant {
-                name: variant.name,
-                ty,
-            });
-        }
-
-        let enum_def_mut = env.lookup_enum_mut(enum_id).unwrap();
-        enum_def_mut.methods = inferred_methods;
-        enum_def_mut.variants = inferred_variants;
-
         let scheme = env.lookup_symbol(enum_id)?;
         Ok(scheme.ty.clone())
     }
