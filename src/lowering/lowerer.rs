@@ -2069,7 +2069,7 @@ impl<'a> Lowerer<'a> {
         struct_id: &SymbolID,
         ty: &Ty,
         mut arg_registers: Vec<TypedRegister>,
-        params: &Vec<Ty>,
+        params: &[Ty],
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned() else {
             unreachable!()
@@ -2094,7 +2094,7 @@ impl<'a> Lowerer<'a> {
         );
 
         let init_func_ty = Ty::Func(
-            params.clone(),
+            params.to_vec(),
             Box::new(ty.clone()),
             vec![], // No generics on init
         );

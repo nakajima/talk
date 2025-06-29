@@ -1263,7 +1263,7 @@ mod formatter_tests {
         let long_function = "func long_name(param: Int) {}";
         let formatted = format_code(long_function, 40);
         // The exact formatting might vary, but it should be reasonable
-        assert!(formatted.len() > 0);
+        assert!(!formatted.is_empty());
     }
 
     #[test]

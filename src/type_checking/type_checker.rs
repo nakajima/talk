@@ -33,8 +33,8 @@ pub enum TypeError {
     UnknownEnum(Name),
     UnknownVariant(Name),
     Unknown(String),
-    UnexpectedType(Ty, Ty),
-    Mismatch(Ty, Ty),
+    UnexpectedType(String, String),
+    Mismatch(String, String),
     ArgumentError(String),
     Handled, // If we've already reported it
     OccursConflict,
@@ -114,7 +114,10 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
             (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => (),
             (typ, expected) => {
                 if typ != expected {
-                    return Err(TypeError::UnexpectedType(expected.clone(), actual.clone()));
+                    return Err(TypeError::UnexpectedType(
+                        expected.to_string(),
+                        actual.to_string(),
+                    ));
                 }
             }
         }
@@ -488,6 +491,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Init(*struct_id, params))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_struct(
         &mut self,
         name: &Name,
@@ -587,6 +591,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_call(
         &mut self,
         _id: &ExprID,
@@ -670,6 +675,7 @@ impl<'a> TypeChecker<'a> {
         Ok(rhs_ty)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_type_repr(
         &mut self,
         id: &ExprID,

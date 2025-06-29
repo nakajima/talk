@@ -85,6 +85,7 @@ impl<'a> TypeChecker<'a> {
 
     // We want to go through and predeclare all struct/enum/protocol names, then after that actually infer their members,
     // stashing properties, methods and initializers for each.
+    #[allow(clippy::type_complexity)]
     pub(super) fn predeclare_types(
         &mut self,
         root_ids: &[ExprID],

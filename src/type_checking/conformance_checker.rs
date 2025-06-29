@@ -1,4 +1,5 @@
 use crate::{
+    SymbolID,
     environment::{Method, Property, ProtocolDef, TypeDef},
     ty::Ty,
     type_checker::TypeError,
@@ -12,8 +13,12 @@ pub struct ConformanceChecker<'a> {
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum ConformanceError {
-    TypeCannotConform(Ty),
-    MemberNotImplemented(TypeDef, ProtocolDef, String),
+    TypeCannotConform(String),
+    MemberNotImplemented {
+        ty: SymbolID,
+        protocol: SymbolID,
+        member: String,
+    },
 }
 
 impl<'a> ConformanceChecker<'a> {
@@ -88,11 +93,11 @@ impl<'a> ConformanceChecker<'a> {
         if let Some(property) = self.type_def.find_property(name) {
             Ok(property)
         } else {
-            Err(ConformanceError::MemberNotImplemented(
-                self.type_def.clone(),
-                self.protocol.clone(),
-                name.to_string(),
-            ))
+            Err(ConformanceError::MemberNotImplemented {
+                ty: self.type_def.symbol_id(),
+                protocol: self.protocol.symbol_id,
+                member: name.to_string(),
+            })
         }
     }
 
@@ -100,11 +105,11 @@ impl<'a> ConformanceChecker<'a> {
         if let Some(method) = self.type_def.find_method(method_name) {
             Ok(method)
         } else {
-            Err(ConformanceError::MemberNotImplemented(
-                self.type_def.clone(),
-                self.protocol.clone(),
-                method_name.to_string(),
-            ))
+            Err(ConformanceError::MemberNotImplemented {
+                ty: self.type_def.symbol_id(),
+                protocol: self.protocol.symbol_id,
+                member: method_name.to_string(),
+            })
         }
     }
 }

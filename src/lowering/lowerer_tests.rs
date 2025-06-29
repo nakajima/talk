@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub mod lowering_tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::{
         SymbolID, assert_lowered_function,
@@ -10,7 +10,6 @@ pub mod lowering_tests {
             ir_error::IRError,
             ir_function::IRFunction,
             ir_module::IRModule,
-            ir_printer::print,
             ir_type::IRType,
             ir_value::IRValue,
             lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList, TypedRegister},
@@ -27,7 +26,7 @@ pub mod lowering_tests {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = lowered.source_file(&"-".into()).unwrap().diagnostics();
+        let diagnostics = lowered.source_file(Path::new("-")).unwrap().diagnostics();
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -41,7 +40,7 @@ pub mod lowering_tests {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = lowered.source_file(&"-".into()).unwrap().diagnostics();
+        let diagnostics = lowered.source_file(Path::new("-")).unwrap().diagnostics();
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -242,8 +241,8 @@ pub mod lowering_tests {
         let type_var = format!("T{}", compile_prelude().environment.type_var_id.id + 2);
 
         let foo_func_type = IRType::Func(
-            vec![IRType::TypeVar(type_var.clone().into())],
-            Box::new(IRType::TypeVar(type_var.clone().into())),
+            vec![IRType::TypeVar(type_var.clone())],
+            Box::new(IRType::TypeVar(type_var.clone())),
         );
 
         let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
@@ -258,7 +257,7 @@ pub mod lowering_tests {
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![Instr::Ret(
-                        IRType::TypeVar(type_var.clone().into()),
+                        IRType::TypeVar(type_var.clone()),
                         Some(Register(0).into())
                     )],
                 }],
@@ -280,7 +279,7 @@ pub mod lowering_tests {
                         Instr::Ref(
                             Register(0),
                             IRType::Func(
-                                vec![IRType::TypeVar(type_var.clone().into())],
+                                vec![IRType::TypeVar(type_var.clone())],
                                 IRType::TypeVar(type_var.clone()).into()
                             ),
                             RefKind::Func(foo_name.clone())
@@ -1116,8 +1115,7 @@ pub mod lowering_tests {
                         Instr::Call {
                             dest_reg: Register(9),
                             ty: IRType::Int,
-                            callee: Callee::Name(format!("@_{}_add", SymbolID::resolved(1).0))
-                                .into(),
+                            callee: Callee::Name(format!("@_{}_add", SymbolID::resolved(1).0)),
                             args: RegisterList(vec![
                                 TypedRegister::new(IRType::Pointer, Register(8)),
                                 TypedRegister::new(IRType::Int, Register(7))
@@ -1156,7 +1154,7 @@ pub mod lowering_tests {
             IRFunction {
                 debug_info: Default::default(),
                 ty: IRType::Func(vec![IRType::Int], IRType::Pointer.into()),
-                name: format!("@_1_Person_init"),
+                name: "@_1_Person_init".into(),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
@@ -1210,7 +1208,7 @@ pub mod lowering_tests {
                         // Call the init directly
                         Instr::Call {
                             dest_reg: Register(2),
-                            ty: IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]).into(),
+                            ty: IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
                             callee: Callee::Name(format!("@_{}_Person_init", SymbolID(1).0),),
                             args: RegisterList(vec![
                                 TypedRegister::new(IRType::Pointer, Register(1)),

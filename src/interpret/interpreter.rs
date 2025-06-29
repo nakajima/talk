@@ -1,7 +1,5 @@
-use std::usize;
-
 use crate::{
-    interpreter::{memory::Memory, value::Value},
+    interpret::{memory::Memory, value::Value},
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -512,7 +510,7 @@ mod tests {
 
     use crate::{
         compiling::driver::Driver,
-        interpreter::{
+        interpret::{
             interpreter::{IRInterpreter, InterpreterError},
             value::Value,
         },

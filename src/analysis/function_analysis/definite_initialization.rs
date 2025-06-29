@@ -142,6 +142,8 @@ impl DefiniteInitizationPass {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     use crate::{
@@ -157,7 +159,7 @@ mod tests {
         let mut driver = Driver::with_str(code);
 
         let lowered = driver.lower().into_iter().next().unwrap();
-        let file = lowered.source_file(&"-".into()).unwrap().clone();
+        let file = lowered.source_file(Path::new("-")).unwrap().clone();
         let env = lowered.env.clone();
         let module = lowered.module();
         (module, file, env)
@@ -188,7 +190,7 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert!(
             DefiniteInitizationPass::new(struct_def.clone())
@@ -220,7 +222,7 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert_eq!(
             Err(IRError::PartialInitialization(
@@ -262,7 +264,7 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert_eq!(
             Err(IRError::PartialInitialization(
@@ -306,7 +308,7 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert_eq!(
             Ok(()),

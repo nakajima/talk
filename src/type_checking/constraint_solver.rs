@@ -182,10 +182,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 continue;
             };
 
-            symbol_info
-                .definition
-                .as_mut()
-                .map(|d| d.sym = Some(def_symbol));
+            if let Some(definition) = symbol_info.definition.as_mut() {
+                definition.sym = Some(def_symbol);
+            }
         }
 
         self.constraints.clear();
@@ -799,8 +798,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             _ => {
                 log::error!("Mismatch: {lhs:?} and {rhs:?}");
                 Err(TypeError::Mismatch(
-                    Self::apply(lhs, substitutions, 0),
-                    Self::apply(rhs, substitutions, 0),
+                    Self::apply(lhs, substitutions, 0).to_string(),
+                    Self::apply(rhs, substitutions, 0).to_string(),
                 ))
             }
         }

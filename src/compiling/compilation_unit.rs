@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     NameResolved, SourceFile, SymbolTable,
@@ -15,7 +18,7 @@ use crate::{
 
 pub trait StageTrait: std::fmt::Debug {
     type SourceFilePhase: source_file::Phase;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<Self::SourceFilePhase>>;
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<Self::SourceFilePhase>>;
 }
 
 #[derive(Debug)]
@@ -39,7 +42,7 @@ impl<Stage: StageTrait> CompilationUnit<Stage> {
         Ok(self.src_cache.get(path).expect("src cache bad").as_str())
     }
 
-    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<Stage::SourceFilePhase>> {
+    pub fn source_file(&self, path: &Path) -> Option<&SourceFile<Stage::SourceFilePhase>> {
         self.stage.source_file(path)
     }
 }
@@ -48,7 +51,7 @@ impl<Stage: StageTrait> CompilationUnit<Stage> {
 pub struct Raw {}
 impl StageTrait for Raw {
     type SourceFilePhase = source_file::Parsed;
-    fn source_file(&self, _path: &PathBuf) -> Option<&SourceFile> {
+    fn source_file(&self, _path: &Path) -> Option<&SourceFile> {
         None
     }
 }
@@ -126,7 +129,7 @@ pub struct Parsed {
 
 impl StageTrait for Parsed {
     type SourceFilePhase = source_file::Parsed;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Parsed>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }
@@ -154,7 +157,7 @@ pub struct Resolved {
 }
 impl StageTrait for Resolved {
     type SourceFilePhase = source_file::NameResolved;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::NameResolved>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::NameResolved>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }
@@ -193,7 +196,7 @@ pub struct Typed {
 }
 impl StageTrait for Typed {
     type SourceFilePhase = source_file::Typed;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Typed>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }
@@ -232,7 +235,7 @@ pub struct Lowered {
 
 impl StageTrait for Lowered {
     type SourceFilePhase = source_file::Lowered;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Lowered>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Lowered>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }

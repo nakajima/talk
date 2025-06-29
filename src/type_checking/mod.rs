@@ -69,7 +69,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
 
     for diagnostic in source_file.diagnostics() {
-        log::error!("{:?}", diagnostic);
+        log::error!("{diagnostic:?}");
     }
 
     Ok(CheckResult {

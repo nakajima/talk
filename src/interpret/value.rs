@@ -1,4 +1,4 @@
-use crate::interpreter::{interpreter::InterpreterError, memory::Pointer};
+use crate::interpret::{interpreter::InterpreterError, memory::Pointer};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {

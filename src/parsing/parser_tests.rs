@@ -1327,7 +1327,7 @@ mod error_handling_tests {
     #[test]
     fn recovers() {
         let parsed = parse("func foo() {\n\nfunc fizz() {}", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1, "{:?}", parsed);
+        assert_eq!(parsed.diagnostics.len(), 1, "{parsed:?}");
         assert!(parsed.diagnostics.contains(&Diagnostic::parser(
             Token {
                 kind: TokenKind::Func,
@@ -1425,7 +1425,7 @@ mod error_handling_tests {
         assert!(params.is_empty());
         assert!(generics.is_empty());
         assert_eq!(
-            *parsed.get(&ret).unwrap(),
+            *parsed.get(ret).unwrap(),
             Expr::TypeRepr {
                 name: Name::Raw("Int".into()),
                 generics: vec![],

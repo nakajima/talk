@@ -755,7 +755,7 @@ mod stdlib_tests {
                         },
                         Instr::Load {
                             dest: Register(2),
-                            ty: IRType::Int.into(),
+                            ty: IRType::Int,
                             addr: Register(4)
                         },
                         Instr::Ret(IRType::Int, Some(Register(2).into()))

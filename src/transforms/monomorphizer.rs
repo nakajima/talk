@@ -495,7 +495,7 @@ mod tests {
                         },
                         Instr::Load {
                             dest: Register(2),
-                            ty: IRType::Int.into(),
+                            ty: IRType::Int,
                             addr: Register(5)
                         },
                         Instr::Ret(IRType::Int, Some(Register(2).into()))

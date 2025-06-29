@@ -55,7 +55,7 @@ async fn main() {
             let mut driver = Driver::with_files(vec![filename.clone()]);
             let lowered = driver.lower();
 
-            use talk::interpreter::interpreter::IRInterpreter;
+            use talk::interpret::interpreter::IRInterpreter;
 
             // let contents = std::fs::read_to_string(filename).expect("Could not read file");
             // let lowered = lower(&contents);

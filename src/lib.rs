@@ -17,7 +17,7 @@ pub use parsing::*;
 pub mod analysis;
 pub mod compiling;
 pub mod diagnostic;
-pub mod interpreter;
+pub mod interpret;
 pub mod lowering;
 pub mod transforms;
 

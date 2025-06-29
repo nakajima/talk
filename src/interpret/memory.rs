@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use crate::{interpreter::value::Value, lowering::ir_type::IRType};
+use crate::{interpret::value::Value, lowering::ir_type::IRType};
 
 pub const MEM_SIZE: usize = 2048;
 

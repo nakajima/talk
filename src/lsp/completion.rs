@@ -161,6 +161,8 @@ impl<'a> CompletionContext<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use async_lsp::lsp_types::{CompletionItem, Position};
     use indoc::formatdoc;
 
@@ -173,12 +175,12 @@ mod tests {
     ) -> Vec<CompletionItem> {
         let mut driver = Driver::new(Default::default());
         for (i, file) in files.iter().enumerate() {
-            driver.update_file(&(&format!("./file-{}.tlk", i)).into(), file.to_string());
+            driver.update_file(&(&format!("./file-{i}.tlk")).into(), file.to_string());
         }
 
         let checked = driver.check();
-        let checked_unit = checked.iter().next().unwrap();
-        let source_file = checked_unit.source_file(&"./file-0.tlk".into()).unwrap();
+        let checked_unit = checked.first().unwrap();
+        let source_file = checked_unit.source_file(Path::new("./file-0.tlk")).unwrap();
         let env = &checked_unit.env.clone();
 
         CompletionContext {

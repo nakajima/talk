@@ -175,7 +175,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.diagnostics().len() >= 1);
+        assert!(!checked.diagnostics().is_empty());
     }
 }
 
@@ -409,11 +409,11 @@ mod type_tests {
             ..
         }) = *inner_ret
         else {
-            panic!("didn't get inner_ret: {:?}", inner_ret);
+            panic!("didn't get inner_ret: {inner_ret:?}");
         };
 
         let Ty::TypeVar(TypeVarID { id: f_ret, .. }) = *f_ret else {
-            panic!("didn't get f_ret: {:?}", f_ret);
+            panic!("didn't get f_ret: {f_ret:?}");
         };
 
         assert_eq!(inner_ret, f_ret); // inner returns C
@@ -553,16 +553,7 @@ mod type_tests {
         .unwrap();
 
         let symbols = checker.symbols.all();
-        let person_local = symbols
-            .values()
-            .find_map(|info| {
-                if info.name == "person" {
-                    Some(info)
-                } else {
-                    None
-                }
-            })
-            .unwrap();
+        let person_local = symbols.values().find(|info| info.name == "person").unwrap();
         let person_struct = symbols
             .iter()
             .find_map(|(id, info)| {
@@ -846,7 +837,7 @@ mod type_tests {
             panic!("did not get enum decl");
         };
 
-        let Some(Expr::Block(exprs)) = checker.expr(&body) else {
+        let Some(Expr::Block(exprs)) = checker.expr(body) else {
             panic!("did not get body");
         };
 
@@ -1080,7 +1071,7 @@ mod type_tests {
             ..
         }) = ret
         else {
-            panic!("didn't get U: {:?}", ret);
+            panic!("didn't get U: {ret:?}");
         };
         assert_eq!(*u, "U");
 
@@ -1169,7 +1160,7 @@ mod type_tests {
             panic!("no body");
         };
 
-        let Some(Expr::Block(ids)) = checked.source_file.get(&body) else {
+        let Some(Expr::Block(ids)) = checked.source_file.get(body) else {
             panic!("didn't get body");
         };
 
@@ -1177,7 +1168,7 @@ mod type_tests {
             panic!("didn't get binary expr");
         };
 
-        assert_eq!(checked.type_for(&lhs).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(lhs).unwrap(), Ty::Int);
     }
 
     #[test]
@@ -1324,7 +1315,7 @@ mod pending {
         assert!(
             checked.diagnostics().contains(&&Diagnostic::typing(
                 checked.root_ids()[0] - 3,
-                TypeError::UnexpectedType(Ty::Bool, Ty::Float)
+                TypeError::UnexpectedType(Ty::Bool.to_string(), Ty::Float.to_string())
             )),
             "{:?}",
             checked.diagnostics()

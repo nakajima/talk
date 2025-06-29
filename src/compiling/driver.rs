@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
@@ -254,11 +254,11 @@ impl Driver {
 
     pub fn resolved_source_file(
         &mut self,
-        path: &PathBuf,
+        path: &Path,
     ) -> Option<SourceFile<source_file::NameResolved>> {
         for unit in self.units.clone() {
             let typed = unit.parse().resolved(&mut self.symbol_table);
-            if let Some(file) = typed.source_file(path) {
+            if let Some(file) = typed.source_file(&PathBuf::from(path)) {
                 return Some(file.clone());
             }
         }

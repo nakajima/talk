@@ -65,6 +65,7 @@ pub struct ProtocolDef {
 }
 
 impl ProtocolDef {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         symbol_id: SymbolID,
         name_str: String,
@@ -599,7 +600,7 @@ impl Environment {
             }
         }
         // 2) walk the type, replacing each old with its fresh
-        fn walk<'a>(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
+        fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
                     if let Some(new_tv) = map.get(tv).cloned() {
@@ -790,10 +791,7 @@ impl Environment {
     }
 
     pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {
-        match self.lookup_type(symbol_id) {
-            Some(TypeDef::Struct(_)) => true,
-            _ => false,
-        }
+        matches!(self.lookup_type(symbol_id), Some(TypeDef::Struct(_)))
     }
 
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {

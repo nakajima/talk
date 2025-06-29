@@ -532,12 +532,13 @@ impl NameResolver {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn resolve_func(
         &mut self,
         name: &Option<Name>,
         node_id: &ExprID,
         params: &Vec<ExprID>,
-        generics: &Vec<ExprID>,
+        generics: &[ExprID],
         body: Option<&ExprID>,
         ret: &Option<ExprID>,
         symbol_table: &mut SymbolTable,
@@ -1187,7 +1188,7 @@ mod tests {
         assert_eq!("none", member_name);
 
         assert_eq!(
-            *tree.get(&receiver_id).unwrap(),
+            *tree.get(receiver_id).unwrap(),
             Variable(Name::Resolved(SymbolID::OPTIONAL, "Optional".into()), None)
         );
     }
@@ -1231,11 +1232,11 @@ mod tests {
         };
 
         assert_eq!(
-            *resolved.get(&ids[0].into()).unwrap(),
+            *resolved.get(&ids[0]).unwrap(),
             EnumVariant(Name::Resolved(SymbolID::resolved(2), "foo".into()), vec![])
         );
         assert_eq!(
-            *resolved.get(&ids[1].into()).unwrap(),
+            *resolved.get(&ids[1]).unwrap(),
             EnumVariant(Name::Resolved(SymbolID::resolved(3), "bar".into()), vec![])
         );
 
@@ -1269,7 +1270,7 @@ mod tests {
 
         assert_eq!(name, &Name::Resolved(SymbolID::resolved(1), "Fizz".into()));
 
-        let Expr::Block(ids) = resolved.get(&body).unwrap() else {
+        let Expr::Block(ids) = resolved.get(body).unwrap() else {
             panic!("didn't get body");
         };
 
@@ -1298,13 +1299,13 @@ mod tests {
             panic!("didn't get call");
         };
 
-        let Expr::Member(Some(receiver), member_name) = resolved.get(&callee).unwrap() else {
+        let Expr::Member(Some(receiver), member_name) = resolved.get(callee).unwrap() else {
             panic!("didn't get .foo member");
         };
 
         assert_eq!(member_name, "foo");
         assert_eq!(
-            *resolved.get(&receiver).unwrap(),
+            *resolved.get(receiver).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Fizz".into()), None)
         );
 
@@ -1312,7 +1313,7 @@ mod tests {
             panic!("didn't get call arg");
         };
 
-        assert_eq!(resolved.get(&value), Some(&Expr::LiteralInt("123".into())));
+        assert_eq!(resolved.get(value), Some(&Expr::LiteralInt("123".into())));
     }
 
     #[test]
@@ -1363,7 +1364,7 @@ mod tests {
         };
         assert_eq!(*resolved.get(rhs).unwrap(), Expr::LiteralInt("0".into()));
         assert_eq!(
-            *resolved.get(&lhs).unwrap(),
+            *resolved.get(lhs).unwrap(),
             Let(Name::Resolved(SymbolID::resolved(2), "count".into()), None)
         );
 
@@ -1424,16 +1425,16 @@ mod tests {
             generics,
             introduces_type: false,
             ..
-        } = resolved.get(&ret.unwrap().into()).unwrap()
+        } = resolved.get(&ret.unwrap()).unwrap()
         else {
             panic!(
                 "didn't get array type repr: {:?}",
-                resolved.get(&ret.unwrap().into()).unwrap()
+                resolved.get(&ret.unwrap()).unwrap()
             );
         };
 
         assert_eq!(
-            *resolved.get(&generics[0].into()).unwrap(),
+            *resolved.get(&generics[0]).unwrap(),
             TypeRepr {
                 name: Name::Resolved(SymbolID(-1), "Int".into()),
                 conformances: vec![],
@@ -1459,10 +1460,10 @@ mod tests {
         assert_eq!(*person_str, "Person".to_string());
 
         let Expr::Call { callee, .. } = resolved.get(&resolved.root_ids()[1]).unwrap() else {
-            panic!("didn't get call: {:?}", resolved.get(&body));
+            panic!("didn't get call: {:?}", resolved.get(body));
         };
         assert_eq!(
-            *resolved.get(&callee).unwrap(),
+            *resolved.get(callee).unwrap(),
             Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Person".into()), None)
         )
     }
@@ -1488,7 +1489,7 @@ mod tests {
         assert_eq!(SymbolID::resolved(1), *sym);
         assert_eq!(*person_str, "Person".to_string());
 
-        let Expr::Block(body) = resolved.get(&body).unwrap() else {
+        let Expr::Block(body) = resolved.get(body).unwrap() else {
             panic!("didn't get block");
         };
 
@@ -1541,7 +1542,7 @@ mod tests {
         assert_eq!(SymbolID::resolved(1), *sym);
         assert_eq!(*person_str, "Person".to_string());
 
-        let Expr::Block(body) = resolved.get(&body).unwrap() else {
+        let Expr::Block(body) = resolved.get(body).unwrap() else {
             panic!("didn't get block");
         };
 
