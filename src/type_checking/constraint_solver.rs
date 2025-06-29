@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
+    conformance_checker::ConformanceChecker,
     diagnostic::Diagnostic,
-    environment::Environment,
+    environment::{Environment, ProtocolDef, TypeDef},
     expr::Expr,
     name::Name,
     parser::ExprID,
@@ -37,6 +38,11 @@ pub enum Constraint {
         ty: Ty,
         symbol_id: SymbolID,
     },
+    ConformsTo {
+        expr_id: ExprID,
+        type_def: TypeDef,
+        protocol: ProtocolDef,
+    },
 }
 
 pub type Substitutions = HashMap<TypeVarID, Ty>;
@@ -50,6 +56,7 @@ impl Constraint {
             Self::InitializerCall { expr_id, .. } => expr_id,
             Self::VariantMatch { expr_id, .. } => expr_id,
             Self::InstanceOf { expr_id, .. } => expr_id,
+            Self::ConformsTo { expr_id, .. } => expr_id,
         }
     }
 
@@ -117,6 +124,7 @@ impl Constraint {
                     unbound_vars: scheme.unbound_vars.clone(),
                 },
             },
+            constraint @ Constraint::ConformsTo { .. } => constraint.clone(),
         }
     }
 }
@@ -193,6 +201,27 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
     ) -> Result<(), TypeError> {
         log::info!("Solving constraint: {:?}", constraint);
         match &constraint {
+            Constraint::ConformsTo {
+                expr_id,
+                type_def,
+                protocol,
+            } => {
+                let conformance_checker =
+                    ConformanceChecker::new(&mut self.env, type_def, protocol, substitutions);
+                match conformance_checker.check() {
+                    Ok(unifications) => {
+                        for (lhs, rhs) in unifications {
+                            self.unify(&lhs, &rhs, substitutions)?;
+                        }
+                        Self::normalize_substitutions(substitutions);
+                    }
+                    Err(err) => {
+                        self.source_file
+                            .diagnostics
+                            .insert(Diagnostic::typing(*expr_id, err));
+                    }
+                }
+            }
             Constraint::Equality(_node_id, lhs, rhs) => {
                 let lhs = Self::apply(lhs, substitutions, 0);
                 let rhs = Self::apply(rhs, substitutions, 0);
@@ -552,7 +581,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         }
     }
 
-    fn unify(
+    pub fn unify(
         &self,
         lhs: &Ty,
         rhs: &Ty,

@@ -1067,7 +1067,12 @@ mod type_tests {
         assert_eq!(enum_def.raw_methods.len(), 2);
         assert_eq!(
             checked
-                .type_for(&enum_def.raw_methods.get("buzz").unwrap().expr_id)
+                .type_for(
+                    &TypeDef::Enum(enum_def.clone())
+                        .find_method("buzz")
+                        .unwrap()
+                        .expr_id
+                )
                 .unwrap(),
             Ty::Func(
                 vec![],
@@ -1077,7 +1082,12 @@ mod type_tests {
         );
         assert_eq!(
             checked
-                .type_for(&enum_def.raw_methods.get("foo").unwrap().expr_id)
+                .type_for(
+                    &TypeDef::Enum(enum_def.clone())
+                        .find_method("foo")
+                        .unwrap()
+                        .expr_id
+                )
                 .unwrap(),
             Ty::Func(vec![], Box::new(Ty::Int), vec![])
         );

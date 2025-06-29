@@ -19,20 +19,20 @@ use super::{
 
 pub type Scope = HashMap<SymbolID, Scheme>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RawEnumVariant {
     pub name: String,
     pub expr_id: ExprID,
     pub values: Vec<ExprID>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumVariant {
     pub name: String,
     pub ty: Ty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RawInitializer {
     pub name: String,
     pub expr_id: ExprID,
@@ -40,33 +40,81 @@ pub struct RawInitializer {
     pub params: Vec<ExprID>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Initializer {
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RawProperty {
     pub name: String,
     pub expr_id: ExprID,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProtocolDef {
+    pub symbol_id: SymbolID,
+    pub name_str: String,
+    pub associated_types: TypeParams,
+    pub conformances: Vec<SymbolID>,
+    pub properties: Vec<Property>,
+    pub methods: Vec<Method>,
+    pub initializers: Vec<ExprID>,
+}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl ProtocolDef {
+    pub fn new(
+        symbol_id: SymbolID,
+        name_str: String,
+        associated_types: TypeParams,
+        conformances: Vec<SymbolID>,
+        properties: Vec<Property>,
+        methods: Vec<Method>,
+        initializers: Vec<ExprID>,
+    ) -> Self {
+        Self {
+            symbol_id,
+            name_str,
+            associated_types,
+            conformances,
+            properties,
+            methods,
+            initializers,
+        }
+    }
+
+    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
+        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
+            return Some(&property.ty);
+        }
+
+        if let Some(method) = self.methods.iter().find(|p| p.name == name) {
+            return Some(&method.ty);
+        }
+
+        None
+    }
+
+    pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
+        Ty::Struct(self.symbol_id, type_parameters.clone())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumDef {
     pub name: Option<SymbolID>,
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub raw_variants: Vec<RawEnumVariant>,
     pub variants: Vec<EnumVariant>,
-    pub raw_methods: HashMap<String, RawMethod>,
-    pub methods: HashMap<String, Method>,
+    pub raw_methods: Vec<RawMethod>,
+    pub methods: Vec<Method>,
 }
 
 impl EnumDef {
     pub fn member_ty(&self, member_name: &str) -> Option<Ty> {
-        if let Some((_, method)) = self.methods.iter().find(|(name, _)| name == &member_name) {
+        if let Some(method) = self.methods.iter().find(|m| m.name == member_name) {
             return Some(method.ty.clone());
         }
 
@@ -83,7 +131,7 @@ impl EnumDef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
@@ -149,10 +197,29 @@ impl EnumDef {
 
 pub type TypeParams = Vec<Ty>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDef {
     Enum(EnumDef),
     Struct(StructDef),
+    Protocol(ProtocolDef),
+}
+
+impl TypeDef {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Enum(def) => &def.name_str,
+            Self::Struct(def) => &def.name_str,
+            Self::Protocol(def) => &def.name_str,
+        }
+    }
+
+    pub fn find_method(&self, method_name: &str) -> Option<&Method> {
+        match self {
+            Self::Enum(def) => def.methods.iter().find(|m| m.name == method_name),
+            Self::Struct(def) => def.methods.iter().find(|m| m.name == method_name),
+            Self::Protocol(def) => def.methods.iter().find(|m| m.name == method_name),
+        }
+    }
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;

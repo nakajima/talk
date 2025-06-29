@@ -2,6 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
+    conformance_checker::ConformanceError,
     constraint_solver::{Constraint, ConstraintSolver, Substitutions},
     diagnostic::Diagnostic,
     environment::{EnumVariant, Method, RawEnumVariant, RawMethod},
@@ -110,6 +111,8 @@ pub enum TypeError {
     ArgumentError(String),
     Handled, // If we've already reported it
     OccursConflict,
+    ConformanceError(Vec<ConformanceError>),
+    Nonconformance(String, String),
 }
 
 impl TypeError {
@@ -129,6 +132,10 @@ impl TypeError {
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),
             Self::ArgumentError(message) => message.to_string(),
+            Self::Nonconformance(protocol, structname) => {
+                format!("{structname} does not conform to the {protocol} protocol")
+            }
+            Self::ConformanceError(_err) => todo!(),
         }
     }
 }
@@ -1279,7 +1286,7 @@ impl<'a> TypeChecker<'a> {
             let scheme = Scheme::new(enum_ty, unbound_vars);
             env.declare(enum_id, scheme);
 
-            let mut raw_methods: HashMap<String, RawMethod> = Default::default();
+            let mut raw_methods: Vec<RawMethod> = Default::default();
             let mut variant_defs: Vec<RawEnumVariant> = vec![];
 
             for expr_id in expr_ids.clone() {
@@ -1290,10 +1297,7 @@ impl<'a> TypeChecker<'a> {
                     ..
                 } = &expr
                 {
-                    raw_methods.insert(
-                        name_str.clone(),
-                        RawMethod::new(name_str.to_string(), expr_id),
-                    );
+                    raw_methods.push(RawMethod::new(name_str.to_string(), expr_id));
                 }
 
                 if let Expr::EnumVariant(name, values) = source_file.get(&expr_id).cloned().unwrap()
@@ -1323,7 +1327,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         for (enum_def, generic_vars) in &mut enum_defs {
-            let mut methods = HashMap::new();
+            let mut methods = vec![];
             let mut variants = vec![];
 
             env.start_scope();
@@ -1338,14 +1342,11 @@ impl<'a> TypeChecker<'a> {
                 );
             }
 
-            for (_, raw_method) in enum_def.raw_methods.iter() {
+            for raw_method in enum_def.raw_methods.iter() {
                 let ty = self
                     .infer_node(&raw_method.expr_id, env, &None, source_file)
                     .map_err(|e| (raw_method.expr_id, e))?;
-                methods.insert(
-                    raw_method.name.clone(),
-                    Method::new(raw_method.name.clone(), raw_method.expr_id, ty),
-                );
+                methods.push(Method::new(raw_method.name.clone(), raw_method.expr_id, ty));
             }
 
             for raw_variant in enum_def.raw_variants.iter() {
