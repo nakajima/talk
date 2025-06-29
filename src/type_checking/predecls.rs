@@ -417,8 +417,6 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            println!("setting {type_def:?} conformances: {conformances:?}");
-
             match type_def {
                 TypeDef::Enum(def) => def.conformances = conformances,
                 TypeDef::Struct(def) => def.conformances = conformances,
