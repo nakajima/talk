@@ -561,8 +561,7 @@ impl<'a> TypeChecker<'a> {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         if let Some(rhs_id) = rhs {
-            let inferred_rhs_ty = self.infer_node(rhs_id, env, expected, source_file)?;
-            Ok(inferred_rhs_ty)
+            self.infer_node(rhs_id, env, expected, source_file)
         } else {
             Ok(Ty::Void)
         }
