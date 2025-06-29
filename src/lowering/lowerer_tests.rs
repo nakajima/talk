@@ -1157,10 +1157,7 @@ pub mod lowering_tests {
             format!("@_1_Person_init"),
             IRFunction {
                 debug_info: Default::default(),
-                ty: IRType::Func(
-                    vec![IRType::Int],
-                    IRType::Struct(SymbolID(1), vec![IRType::Int], vec![IRType::Int]).into()
-                ),
+                ty: IRType::Func(vec![IRType::Int], IRType::Pointer.into()),
                 name: format!("@_1_Person_init"),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
@@ -1224,7 +1221,7 @@ pub mod lowering_tests {
                         },
                         Instr::Ret(
                             IRType::Struct(SymbolID(1), vec![IRType::Int], vec![]),
-                            Some(Register(2).into()),
+                            Some(Register(1).into()),
                         ),
                     ],
                 }],
@@ -1253,10 +1250,7 @@ pub mod lowering_tests {
         .unwrap();
 
         let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]);
-        let person_init_func_ty = IRType::Func(
-            vec![IRType::Int],
-            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![IRType::Int]).into(),
-        );
+        let person_init_func_ty = IRType::Func(vec![IRType::Int], IRType::Pointer.into());
 
         assert_lowered_function!(
             lowered,
@@ -1325,7 +1319,7 @@ pub mod lowering_tests {
                         // .age
                         Instr::GetElementPointer {
                             dest: Register(3),
-                            base: Register(2),
+                            base: Register(1),
                             ty: person_struct_ty,
                             index: 0.into(),
                         },
@@ -1366,10 +1360,7 @@ pub mod lowering_tests {
         .unwrap();
 
         let person_struct_ty = IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![]);
-        let person_init_func_ty = IRType::Func(
-            vec![IRType::Int],
-            IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![IRType::Int]).into(),
-        );
+        let person_init_func_ty = IRType::Func(vec![IRType::Int], IRType::Pointer.into());
 
         assert_lowered_function!(
             lowered,
@@ -1473,7 +1464,7 @@ pub mod lowering_tests {
                             )),
                             args: RegisterList(vec![TypedRegister::new(
                                 IRType::Pointer,
-                                Register(2),
+                                Register(1),
                             )]),
                         },
                         Instr::Ret(IRType::Int, Some(Register(3).into())),

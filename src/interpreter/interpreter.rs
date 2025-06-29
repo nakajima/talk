@@ -685,7 +685,7 @@ mod tests {
             Value::Int(3),
             interpret(
                 "
-    func makeCounter() {
+        func makeCounter() {
 			let count = 0
 
 			return func() {
@@ -696,8 +696,8 @@ mod tests {
 
 		let counter = makeCounter()
 		counter()
-    counter()
-    counter()
+        counter()
+        counter()
         "
             )
             .unwrap()

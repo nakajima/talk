@@ -1196,7 +1196,6 @@ impl<'a> TypeChecker<'a> {
                 fields,
                 ..
             } => {
-                println!("hey we're inferring a variant: {expected:?}");
                 // The expected type should be an Enum type
                 match expected {
                     Ty::Enum(enum_id, type_args) => {
@@ -1413,7 +1412,6 @@ impl<'a> TypeChecker<'a> {
             enum_def.methods = methods;
             enum_def.variants = variants;
             env.register_enum(enum_def.clone());
-            println!("******* hoisting {:?}", enum_def);
             env.declare(
                 enum_def.name.unwrap(),
                 Scheme {

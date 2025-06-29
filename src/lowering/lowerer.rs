@@ -872,11 +872,12 @@ impl<'a> Lowerer<'a> {
         // Override func type for init to always return the struct
         let init_func_ty = Ty::Func(
             params,
-            Ty::Struct(
-                *symbol_id,
-                struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
-            )
-            .into(),
+            // Ty::Struct(
+            //     *symbol_id,
+            //     struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
+            // )
+            // .into(),
+            Ty::Pointer.into(),
             generics,
         );
 
@@ -892,7 +893,7 @@ impl<'a> Lowerer<'a> {
 
         self.lowered_functions.push(func.clone());
 
-        Some(loaded_reg)
+        Some(env)
     }
 
     fn lower_method(
@@ -1023,7 +1024,12 @@ impl<'a> Lowerer<'a> {
                         let capture_ty = self
                             .env
                             .lookup_symbol(&capture_types[i])
-                            .unwrap()
+                            .unwrap_or_else(|_| {
+                                let sym = capture_types[i].clone();
+                                let info = self.symbol_table.get(&sym).unwrap();
+                                dbg!(info);
+                                panic!("hi: {:?}", self.source_file.get(&info.expr_id));
+                            })
                             .ty
                             .clone();
                         captured_ir_types.push(capture_ty.to_ir(self));
@@ -1898,7 +1904,6 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        println!("lower_call: {:?}", callee_typed_expr.ty);
         if let Ty::Init(struct_id, params, _) = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &ty, arg_registers, params);
         }
@@ -2095,7 +2100,7 @@ impl<'a> Lowerer<'a> {
             args: RegisterList(arg_registers),
         });
 
-        Some(initialized_struct_reg)
+        Some(struct_instance_reg)
     }
 
     fn lower_method_call(
