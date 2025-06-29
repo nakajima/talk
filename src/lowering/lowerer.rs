@@ -1898,6 +1898,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
+        println!("lower_call: {:?}", callee_typed_expr.ty);
         if let Ty::Init(struct_id, params, _) = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &ty, arg_registers, params);
         }

@@ -338,7 +338,7 @@ impl Environment {
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        log::trace!("Declare {:?} -> {:?}", symbol_id, scheme);
+        log::info!("Declare {:?} -> {:?}", symbol_id, scheme);
         self.scopes.last_mut().unwrap().insert(symbol_id, scheme);
     }
 
@@ -512,6 +512,7 @@ impl Environment {
         self.types.insert(def.symbol_id, TypeDef::Struct(def));
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn lookup_symbol(&self, symbol_id: &SymbolID) -> Result<&Scheme, TypeError> {
         if let Some(scheme) = self
             .scopes
@@ -521,11 +522,15 @@ impl Environment {
         {
             Ok(scheme)
         } else {
-            log::error!(
-                "Did not find symbol {:?} in scope: {:?}",
-                symbol_id,
-                self.scopes
-            );
+            if cfg!(debug_assertions) {
+                let loc = std::panic::Location::caller();
+                log::error!(
+                    "Did not find symbol {symbol_id:?}: {}:{}",
+                    loc.file(),
+                    loc.line()
+                );
+            }
+
             Err(TypeError::Unresolved(format!(
                 "Did not find symbol {:?} in scope: {:?}",
                 symbol_id, self.scopes

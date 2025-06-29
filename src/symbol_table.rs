@@ -34,7 +34,7 @@ impl SymbolID {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolKind {
     FuncDef,
     Param,
@@ -53,7 +53,7 @@ pub enum SymbolKind {
     Protocol,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     pub path: PathBuf,
     pub line: u32,
@@ -68,7 +68,7 @@ pub struct PropertyInfo {
     pub default_value_id: Option<ExprID>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
@@ -83,7 +83,7 @@ pub struct TypeTable {
     pub initializers: Vec<ExprID>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolTable {
     symbols: HashMap<SymbolID, SymbolInfo>,
     next_id: i32,

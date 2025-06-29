@@ -711,13 +711,7 @@ impl NameResolver {
                 fields,
             } => {
                 let enum_name = if let Some(Name::Raw(enum_name)) = enum_name {
-                    let symbol = self.declare(
-                        enum_name.clone(),
-                        SymbolKind::PatternBind,
-                        node_id,
-                        source_file,
-                        symbol_table,
-                    );
+                    let symbol = self.lookup(&enum_name).0;
                     Some(Name::Resolved(symbol, enum_name.to_string()))
                 } else {
                     None
@@ -826,6 +820,7 @@ impl NameResolver {
             }
         }
 
+        // panic!("Undeclared name: {name}");
         (SymbolID(0), 0)
     }
 

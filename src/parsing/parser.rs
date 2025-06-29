@@ -439,15 +439,12 @@ impl<'a> Parser<'a> {
 
     fn match_block(&mut self) -> Result<Vec<ExprID>, ParserError> {
         self.skip_newlines();
-        log::debug!("in match block");
         self.consume(TokenKind::LeftBrace)?;
-        log::debug!("consumed left brace");
 
         let mut items: Vec<ExprID> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             let tok = self.push_source_location();
             let pattern = self.parse_match_pattern()?;
-            log::trace!("parsed pattern: {pattern:?}");
             let pattern_id = self.add_expr(Pattern(pattern), tok)?;
             self.consume(TokenKind::Arrow)?;
             let tok = self.push_source_location();
@@ -489,16 +486,13 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if let Some((name, _)) = self.try_identifier() {
+        if let Ok(name) = self.identifier() {
             // It's not an enum variant so it's a bind
             if !self.did_match(TokenKind::Dot)? {
                 return Ok(expr::Pattern::Bind(Name::Raw(name)));
             }
 
-            let Some((variant_name, _)) = self.try_identifier() else {
-                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
-            };
-
+            let variant_name = self.identifier()?;
             let mut fields: Vec<ExprID> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
