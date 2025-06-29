@@ -752,8 +752,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     self.unify(e_ty, &v_ty, substitutions)?;
                 }
 
-                println!("UNIFY {lhs:?} {rhs:?}");
-
                 Ok(())
             }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {

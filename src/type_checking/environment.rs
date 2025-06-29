@@ -555,8 +555,6 @@ impl Environment {
         let ftv_env = free_type_vars_in_env(&self.scopes, *symbol_id);
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
 
-        println!("Generalizing {t:?}. Unbound: {unbound_vars:?}");
-
         Scheme {
             unbound_vars,
             ty: t.clone(),

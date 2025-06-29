@@ -1150,8 +1150,6 @@ pub mod lowering_tests {
         )
         .unwrap();
 
-        println!("{}", print(&lowered));
-
         assert_lowered_function!(
             lowered,
             format!("@_1_Person_init"),

@@ -351,7 +351,6 @@ impl<'a> TypeChecker<'a> {
                     let ty = self
                         .infer_node(&property.expr_id, env, &None, source_file)
                         .map_err(|e| (property.expr_id, e))?;
-                    println!("inferred property: {property:?} -> {ty:?}");
                     properties.push(Property {
                         name: property.name.clone(),
                         expr_id: property.expr_id,
@@ -367,7 +366,6 @@ impl<'a> TypeChecker<'a> {
 
             let mut methods = vec![];
             for method in &placeholders.methods {
-                println!("{method:?}");
                 let ty = self
                     .infer_node(&method.expr_id, env, &None, source_file)
                     .map_err(|e| (method.expr_id, e))
@@ -379,7 +377,6 @@ impl<'a> TypeChecker<'a> {
                 });
                 substitutions.insert(method.placeholder.clone(), ty.clone());
             }
-            println!("methods = {methods:?}");
             def.set_methods(methods);
             env.register(&def);
 
