@@ -15,6 +15,7 @@ pub mod ty;
 pub mod type_checker;
 #[cfg(test)]
 pub mod type_checker_tests;
+pub mod type_constraint;
 pub mod type_var_id;
 pub mod typed_expr;
 

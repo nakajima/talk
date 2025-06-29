@@ -217,7 +217,12 @@ mod type_tests {
 
         assert_eq!(return_type, param_type.into());
 
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::FuncParam(name))) = *return_type else {
+        let Ty::TypeVar(TypeVarID {
+            id: _,
+            kind: TypeVarKind::FuncParam(name),
+            ..
+        }) = *return_type
+        else {
             panic!("did not get func param type var");
         };
 
@@ -377,21 +382,30 @@ mod type_tests {
         };
         assert_eq!(inner_params.len(), 1);
 
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::Instantiated(inner_id))) = inner_params[0] else {
+        let Ty::TypeVar(TypeVarID {
+            id: _,
+            kind: TypeVarKind::Instantiated(inner_id),
+            ..
+        }) = inner_params[0]
+        else {
             panic!("didn't get innerid");
         };
 
-        let Ty::TypeVar(TypeVarID(g_arg, _)) = g_args[0] else {
+        let Ty::TypeVar(TypeVarID { id: g_arg, .. }) = g_args[0] else {
             panic!("didn't get arg: {:?}", g_args[0]);
         };
 
         assert_eq!(inner_id, g_arg);
 
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::Instantiated(inner_ret))) = *inner_ret else {
+        let Ty::TypeVar(TypeVarID {
+            kind: TypeVarKind::Instantiated(inner_ret),
+            ..
+        }) = *inner_ret
+        else {
             panic!("didn't get inner_ret");
         };
 
-        let Ty::TypeVar(TypeVarID(f_ret, _)) = *f_ret else {
+        let Ty::TypeVar(TypeVarID { id: f_ret, .. }) = *f_ret else {
             panic!("didn't get f_ret: {:?}", f_ret);
         };
 
@@ -419,7 +433,7 @@ mod type_tests {
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
-        let Ty::TypeVar(TypeVarID(_, _call_ret)) = *ret else {
+        let Ty::TypeVar(TypeVarID { .. }) = *ret else {
             panic!("didn't get call return");
         };
     }
@@ -1022,12 +1036,20 @@ mod type_tests {
         };
 
         assert_eq!(1, params.len());
-        let Ty::TypeVar(TypeVarID(_, TypeVarKind::Placeholder(t))) = &params[0] else {
+        let Ty::TypeVar(TypeVarID {
+            kind: TypeVarKind::Placeholder(t),
+            ..
+        }) = &params[0]
+        else {
             panic!("didn't get T: {:?}", params[0]);
         };
         assert_eq!(*t, "T");
 
-        let box Ty::TypeVar(TypeVarID(_, TypeVarKind::Placeholder(u))) = ret else {
+        let box Ty::TypeVar(TypeVarID {
+            kind: TypeVarKind::Placeholder(u),
+            ..
+        }) = ret
+        else {
             panic!("didn't get U: {:?}", ret);
         };
         assert_eq!(*u, "U");

@@ -9,6 +9,7 @@ use crate::{
     parser::ExprID,
     ty::Ty,
     type_checker::TypeError,
+    type_constraint::TypeConstraint,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -420,7 +421,7 @@ impl Environment {
     pub fn new() -> Self {
         Self {
             typed_exprs: HashMap::new(),
-            type_var_id: TypeVarID(0, TypeVarKind::Blank),
+            type_var_id: TypeVarID::new(0, TypeVarKind::Blank, vec![]),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
@@ -435,10 +436,17 @@ impl Environment {
     }
 
     #[track_caller]
-    pub fn placeholder(&mut self, expr_id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
+    pub fn placeholder(
+        &mut self,
+        expr_id: &ExprID,
+        name: String,
+        symbol_id: &SymbolID,
+        constraints: Vec<TypeConstraint>,
+    ) -> Ty {
         // 1. Create a fresh placeholder for this usage of the type name.
-        let usage_placeholder =
-            Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name.clone())));
+        let usage_placeholder = Ty::TypeVar(
+            self.new_type_variable(TypeVarKind::Placeholder(name.clone()), constraints),
+        );
 
         // 2. Generate the InstanceOf constraint.
         self.constraints.push(Constraint::InstanceOf {
@@ -609,8 +617,8 @@ impl Environment {
                 var_map.insert(old.clone(), arg_ty.clone());
                 // self.constrain_equality(-1, Ty::TypeVar(fresh.clone()), arg_ty.clone());
             } else {
-                let type_var = TypeVarKind::Instantiated(old.0);
-                let fresh = self.new_type_variable(type_var);
+                let type_var = TypeVarKind::Instantiated(old.id);
+                let fresh = self.new_type_variable(type_var, old.constraints.clone());
                 var_map.insert(old.clone(), Ty::TypeVar(fresh));
             }
         }
@@ -676,7 +684,7 @@ impl Environment {
             self.instantiate(&scheme)
         } else {
             println!("generating placeholder {:?}", name);
-            self.placeholder(id, name.to_string(), &symbol_id)
+            self.placeholder(id, name.to_string(), &symbol_id, vec![])
         };
 
         if cfg!(debug_assertions) {
@@ -695,8 +703,12 @@ impl Environment {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
-        self.type_var_id = TypeVarID(self.type_var_id.0 + 1, kind);
+    pub fn new_type_variable(
+        &mut self,
+        kind: TypeVarKind,
+        constraints: Vec<TypeConstraint>,
+    ) -> TypeVarID {
+        self.type_var_id = TypeVarID::new(self.type_var_id.id + 1, kind, constraints);
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
@@ -887,7 +899,7 @@ mod generalize_tests {
 
     // Helper to create a blank type variable.
     fn new_tv(id: i32) -> TypeVarID {
-        TypeVarID(id, TypeVarKind::Blank)
+        TypeVarID::new(id, TypeVarKind::Blank, vec![])
     }
 
     // Helper to create a Ty::TypeVar.

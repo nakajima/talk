@@ -77,9 +77,10 @@ impl<'a> TypeChecker<'a> {
                     ));
                 };
 
-                let type_param = env.new_type_variable(TypeVarKind::CanonicalTypeParameter(
-                    format!("{}{}", name_str, symbol_id.0),
-                ));
+                let type_param = env.new_type_variable(
+                    TypeVarKind::CanonicalTypeParameter(format!("{}{}", name_str, symbol_id.0)),
+                    vec![],
+                );
 
                 env.declare(
                     *symbol_id,
@@ -131,7 +132,8 @@ impl<'a> TypeChecker<'a> {
                         name: Name::Resolved(prop_id, name_str),
                         ..
                     } if expr_ids.kind != PredeclarationKind::Enum => {
-                        let placeholder = env.placeholder(&body_id, name_str.clone(), &prop_id);
+                        let placeholder =
+                            env.placeholder(&body_id, name_str.clone(), &prop_id, vec![]);
                         let scheme = Scheme {
                             ty: placeholder.clone(),
                             unbound_vars: vec![],
@@ -155,7 +157,8 @@ impl<'a> TypeChecker<'a> {
                             unreachable!()
                         };
 
-                        let placeholder = env.placeholder(&body_id, name.clone(), &symbol_id);
+                        let placeholder =
+                            env.placeholder(&body_id, name.clone(), &symbol_id, vec![]);
                         let scheme = Scheme {
                             ty: placeholder.clone(),
                             unbound_vars: vec![],
@@ -179,7 +182,8 @@ impl<'a> TypeChecker<'a> {
                         name: Some(Name::Resolved(func_id, name_str)),
                         ..
                     } => {
-                        let placeholder = env.placeholder(&body_id, name_str.clone(), &func_id);
+                        let placeholder =
+                            env.placeholder(&body_id, name_str.clone(), &func_id, vec![]);
                         let scheme = Scheme {
                             ty: placeholder.clone(),
                             unbound_vars: vec![],
@@ -197,7 +201,8 @@ impl<'a> TypeChecker<'a> {
                         name: Name::Resolved(func_id, name_str),
                         ..
                     } => {
-                        let placeholder = env.placeholder(&body_id, name_str.clone(), &func_id);
+                        let placeholder =
+                            env.placeholder(&body_id, name_str.clone(), &func_id, vec![]);
                         let scheme = Scheme {
                             ty: placeholder.clone(),
                             unbound_vars: vec![],

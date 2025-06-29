@@ -236,7 +236,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 for unbound_var in &scheme.unbound_vars {
                     mapping.insert(
                         unbound_var.clone(),
-                        Ty::TypeVar(self.env.new_type_variable(TypeVarKind::Unbound)),
+                        Ty::TypeVar(self.env.new_type_variable(TypeVarKind::Unbound, vec![])),
                     );
                 }
                 let instantiated_ty = Self::substitute_ty_with_map(&ty, &mapping);
@@ -611,7 +611,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
                 // When unifying two type variables, pick one consistently
-                if v1.0 < v2.0 {
+                if v1.id < v2.id {
                     substitutions.insert(v2.clone(), Ty::TypeVar(v1.clone()));
                 } else {
                     substitutions.insert(v1.clone(), Ty::TypeVar(v2.clone()));

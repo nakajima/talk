@@ -430,7 +430,9 @@ impl<'a> TypeChecker<'a> {
             }
             (None, Some(default_value)) => default_value,
             (Some(type_repr), None) => type_repr,
-            (None, None) => env.placeholder(expr_id, name.name_str(), &name.try_symbol_id()),
+            (None, None) => {
+                env.placeholder(expr_id, name.name_str(), &name.try_symbol_id(), vec![])
+            }
         };
 
         Ok(ty)
@@ -472,7 +474,7 @@ impl<'a> TypeChecker<'a> {
         let param_ty = if let Some(param_ty) = &param_ty {
             self.infer_node(param_ty, env, &None, source_file)?
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str())))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), vec![]))
         };
 
         // Parameters are monomorphic inside the function body
@@ -552,7 +554,7 @@ impl<'a> TypeChecker<'a> {
         let ty = tys
             .into_iter()
             .last()
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element, vec![])));
 
         Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
@@ -620,7 +622,7 @@ impl<'a> TypeChecker<'a> {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn);
+            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn, vec![]);
             Ty::TypeVar(call_return_var)
         };
 
@@ -641,7 +643,7 @@ impl<'a> TypeChecker<'a> {
                 if env.is_struct_symbol(&symbol_id) =>
             {
                 let placeholder =
-                    env.placeholder(callee, format!("init({:?})", symbol_id), &symbol_id);
+                    env.placeholder(callee, format!("init({:?})", symbol_id), &symbol_id, vec![]);
 
                 env.typed_exprs.insert(
                     *callee,
@@ -702,8 +704,9 @@ impl<'a> TypeChecker<'a> {
         let symbol_id = name.try_symbol_id();
 
         if *is_type_parameter {
+            let foo = "";
             let scheme = env.lookup_symbol(&symbol_id).cloned().unwrap_or(Scheme {
-                ty: env.placeholder(id, name.name_str(), &symbol_id),
+                ty: env.placeholder(id, name.name_str(), &symbol_id, vec![]),
                 unbound_vars: vec![],
             });
 
@@ -869,7 +872,8 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(expected) = expected {
             expected.clone()
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
+            let foo = "";
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
         };
 
         let scheme = Scheme::new(rhs_ty.clone(), vec![]);
@@ -886,7 +890,7 @@ impl<'a> TypeChecker<'a> {
         name: &str,
     ) -> Result<Ty, TypeError> {
         let scheme = env.lookup_symbol(&symbol_id).cloned().unwrap_or(Scheme {
-            ty: env.placeholder(id, name.to_string(), &symbol_id),
+            ty: env.placeholder(id, name.to_string(), &symbol_id, vec![]),
             unbound_vars: vec![],
         });
         let ty = env.instantiate(&scheme);
@@ -1059,7 +1063,7 @@ impl<'a> TypeChecker<'a> {
                     expected.clone()
                 } else {
                     let member_var =
-                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()));
+                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]);
                     Ty::TypeVar(member_var.clone())
                 };
 
@@ -1072,7 +1076,7 @@ impl<'a> TypeChecker<'a> {
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
                 let member_var = Ty::TypeVar(
-                    env.new_type_variable(TypeVarKind::Member(member_name.to_string())),
+                    env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
                 );
 
                 // Add a constraint that links the receiver type to the member
@@ -1194,6 +1198,7 @@ impl<'a> TypeChecker<'a> {
                         for field_pattern in fields {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
+                                vec![],
                             ));
 
                             self.infer_node(field_pattern, env, &Some(field_ty), source_file)
@@ -1229,7 +1234,8 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let placeholder = env.placeholder(id, format!("predecl[{}]", name_str), &symbol_id);
+            let placeholder =
+                env.placeholder(id, format!("predecl[{}]", name_str), &symbol_id, vec![]);
 
             // Stash this func ID so we can fully infer it in the next loop
             func_ids.push((id, symbol_id, placeholder.clone()));

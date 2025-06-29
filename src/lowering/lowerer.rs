@@ -78,7 +78,7 @@ impl Ty {
                 items.iter().map(|t| t.to_ir(lowerer)).collect(),
                 Box::new(ty.to_ir(lowerer)),
             ),
-            Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.0)),
+            Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.id)),
             Ty::Enum(_symbol_id, generics) => {
                 IRType::Enum(generics.iter().map(|i| i.to_ir(lowerer)).collect())
             }

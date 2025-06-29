@@ -1,11 +1,15 @@
-use crate::{SymbolID, name::Name};
+use crate::{SymbolID, name::Name, type_constraint::TypeConstraint};
 
 #[derive(Clone)]
-pub struct TypeVarID(pub i32, pub TypeVarKind);
+pub struct TypeVarID {
+    pub id: i32,
+    pub kind: TypeVarKind,
+    pub constraints: Vec<TypeConstraint>,
+}
 
 impl PartialEq for TypeVarID {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.id == other.id
     }
 }
 
@@ -13,14 +17,26 @@ impl Eq for TypeVarID {}
 
 impl std::hash::Hash for TypeVarID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_i32(self.0);
+        state.write_i32(self.id);
     }
 }
 
 impl TypeVarID {
+    pub fn new(id: i32, kind: TypeVarKind, constraints: Vec<TypeConstraint>) -> Self {
+        Self {
+            id,
+            kind,
+            constraints,
+        }
+    }
+
     pub fn canonicalized(&self) -> Option<TypeVarID> {
-        if let TypeVarKind::Instantiated(parent_id) = self.1 {
-            return Some(TypeVarID(parent_id, TypeVarKind::Unbound));
+        if let TypeVarKind::Instantiated(parent_id) = self.kind {
+            return Some(TypeVarID {
+                id: parent_id,
+                kind: TypeVarKind::Unbound,
+                constraints: self.constraints.clone(),
+            });
         }
 
         None
@@ -29,26 +45,26 @@ impl TypeVarID {
 
 impl std::fmt::Debug for TypeVarID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.1 {
-            TypeVarKind::Blank => write!(f, "T{}[blank]", self.0),
-            TypeVarKind::CallArg => write!(f, "T{}[arg]", self.0),
-            TypeVarKind::CallReturn => write!(f, "T{}[ret]", self.0),
-            TypeVarKind::FuncParam(name) => write!(f, "T{}[param({})]", self.0, name),
-            TypeVarKind::FuncType => write!(f, "T{}[func]", self.0),
-            TypeVarKind::FuncNameVar(symbol_id) => write!(f, "T{}[${}]", self.0, symbol_id.0),
-            TypeVarKind::FuncBody => write!(f, "T{}[body]", self.0),
-            TypeVarKind::Let => write!(f, "T{}[let]", self.0),
-            TypeVarKind::TypeRepr(name) => write!(f, "T{}[<{:?}>]", self.0, name),
-            TypeVarKind::Member(name) => write!(f, "T{}[.{}]", self.0, name),
-            TypeVarKind::Element => write!(f, "T{}[E]", self.0),
-            TypeVarKind::VariantValue => write!(f, "T{}[variant]", self.0),
-            TypeVarKind::PatternBind(name) => write!(f, "T{}[->{}]", self.0, name.name_str()),
+        match &self.kind {
+            TypeVarKind::Blank => write!(f, "T{}[blank]", self.id),
+            TypeVarKind::CallArg => write!(f, "T{}[arg]", self.id),
+            TypeVarKind::CallReturn => write!(f, "T{}[ret]", self.id),
+            TypeVarKind::FuncParam(name) => write!(f, "T{}[param({})]", self.id, name),
+            TypeVarKind::FuncType => write!(f, "T{}[func]", self.id),
+            TypeVarKind::FuncNameVar(symbol_id) => write!(f, "T{}[${}]", self.id, symbol_id.0),
+            TypeVarKind::FuncBody => write!(f, "T{}[body]", self.id),
+            TypeVarKind::Let => write!(f, "T{}[let]", self.id),
+            TypeVarKind::TypeRepr(name) => write!(f, "T{}[<{:?}>]", self.id, name),
+            TypeVarKind::Member(name) => write!(f, "T{}[.{}]", self.id, name),
+            TypeVarKind::Element => write!(f, "T{}[E]", self.id),
+            TypeVarKind::VariantValue => write!(f, "T{}[variant]", self.id),
+            TypeVarKind::PatternBind(name) => write!(f, "T{}[->{}]", self.id, name.name_str()),
             TypeVarKind::CanonicalTypeParameter(name) => {
-                write!(f, "T{}[C<{}>]", self.0, name)
+                write!(f, "T{}[C<{}>]", self.id, name)
             }
-            TypeVarKind::Placeholder(name) => write!(f, "T{}[...{}]", self.0, name),
-            TypeVarKind::Instantiated(from) => write!(f, "T{}[Inst.({})]", self.0, from),
-            TypeVarKind::Unbound => write!(f, "T{}[?]", self.0),
+            TypeVarKind::Placeholder(name) => write!(f, "T{}[...{}]", self.id, name),
+            TypeVarKind::Instantiated(from) => write!(f, "T{}[Inst.({})]", self.id, from),
+            TypeVarKind::Unbound => write!(f, "T{}[?]", self.id),
         }
     }
 }
