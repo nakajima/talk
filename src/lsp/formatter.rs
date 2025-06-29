@@ -183,7 +183,12 @@ impl<'a> Formatter<'a> {
                 self.format_if(*cond, *then_block, else_block.as_ref())
             }
             Expr::Loop(cond, body) => self.format_loop(cond.as_ref(), *body),
-            Expr::EnumDecl(name, generics, body) => self.format_enum_decl(name, generics, *body),
+            Expr::EnumDecl {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.format_enum_decl(name, generics, conformances, *body),
             Expr::EnumVariant(name, types) => self.format_enum_variant(name, types),
             Expr::Match(target, arms) => self.format_match(*target, arms),
             Expr::MatchArm(pattern, body) => self.format_match_arm(*pattern, *body),
@@ -708,7 +713,13 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_expr(body))
     }
 
-    fn format_enum_decl(&self, name: &Name, generics: &[ExprID], body: ExprID) -> Doc {
+    fn format_enum_decl(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("enum"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -720,6 +731,17 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 

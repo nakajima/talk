@@ -147,11 +147,12 @@ pub enum Expr {
     Loop(Option<ExprID> /* condition */, ExprID /* body */),
 
     // Enum declaration
-    EnumDecl(
-        Name,        // TypeRepr name: Option
-        Vec<ExprID>, // Generics TypeParams <T>
-        ExprID,      // Body
-    ),
+    EnumDecl {
+        name: Name, // TypeRepr name: Option
+        conformances: Vec<ExprID>,
+        generics: Vec<ExprID>, // Generics TypeParams <T>
+        body: ExprID,          // Body
+    },
 
     // Individual enum variant in declaration
     EnumVariant(
@@ -220,7 +221,10 @@ impl Expr {
             } => Some(*symbol_id),
             Expr::Let(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
             Expr::Variable(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
-            Expr::EnumDecl(Name::Resolved(symbol_id, _), _, _) => Some(*symbol_id),
+            Expr::EnumDecl {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
             Expr::EnumVariant(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
             Expr::ProtocolDecl {
                 name: Name::Resolved(symbol_id, _),

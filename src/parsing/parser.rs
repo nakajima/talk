@@ -436,7 +436,15 @@ impl<'a> Parser<'a> {
         // Consume the block
         let body = self.enum_body()?;
 
-        self.add_expr(EnumDecl(Name::Raw(name), generics, body), tok)
+        self.add_expr(
+            EnumDecl {
+                name: Name::Raw(name),
+                generics,
+                conformances,
+                body,
+            },
+            tok,
+        )
     }
 
     pub(crate) fn break_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {

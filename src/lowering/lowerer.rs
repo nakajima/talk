@@ -109,6 +109,7 @@ impl Ty {
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
+            Ty::Protocol(_, _) => todo!(),
         }
     }
 }
@@ -495,7 +496,7 @@ impl<'a> Lowerer<'a> {
             ),
             Expr::Func { .. } => self.lower_function(expr_id),
             Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
-            Expr::EnumDecl(_, _, _) => None,
+            Expr::EnumDecl { .. } => None,
             Expr::Member(receiver, name) => self.lower_member(&receiver, expr_id, &name, false),
             Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
             Expr::CallArg { value, .. } => self.lower_expr(&value),

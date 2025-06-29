@@ -402,7 +402,12 @@ impl NameResolver {
                 TupleTypeRepr(types, _) => {
                     self.resolve_nodes(&types, source_file, symbol_table);
                 }
-                EnumDecl(name, generics, body) => {
+                EnumDecl {
+                    name,
+                    generics,
+                    conformances,
+                    body,
+                } => {
                     match name {
                         Name::Raw(name_str) => {
                             let symbol_id = self.declare(
@@ -414,14 +419,16 @@ impl NameResolver {
                             );
                             self.type_symbol_stack.push(symbol_id);
                             self.resolve_nodes(&generics, source_file, symbol_table);
+                            self.resolve_nodes(&conformances, source_file, symbol_table);
                             self.resolve_nodes(&vec![body], source_file, symbol_table);
                             source_file.nodes.insert(
                                 *node_id,
-                                EnumDecl(
-                                    Name::Resolved(symbol_id, name_str),
-                                    generics.clone(),
+                                EnumDecl {
+                                    name: Name::Resolved(symbol_id, name_str),
+                                    generics: generics.clone(),
+                                    conformances: conformances.clone(),
                                     body,
-                                ),
+                                },
                             );
                         }
                         _ => continue,
@@ -687,8 +694,12 @@ impl NameResolver {
         symbol_table: &mut SymbolTable,
     ) {
         for id in node_ids {
-            let Some(EnumDecl(Name::Raw(name_str), generics, body_expr)) =
-                source_file.get(id).cloned()
+            let Some(EnumDecl {
+                name: Name::Raw(name_str),
+                generics,
+                conformances,
+                body,
+            }) = source_file.get(id).cloned()
             else {
                 continue;
             };
@@ -703,15 +714,21 @@ impl NameResolver {
             );
 
             self.resolve_nodes(&generics, source_file, symbol_table);
+            self.resolve_nodes(&conformances, source_file, symbol_table);
 
             source_file.nodes.insert(
                 *id,
-                EnumDecl(Name::Resolved(enum_symbol, name_str), generics, body_expr),
+                EnumDecl {
+                    name: Name::Resolved(enum_symbol, name_str),
+                    generics,
+                    conformances,
+                    body,
+                },
             );
 
             // Hoist variants
             self.type_symbol_stack.push(enum_symbol);
-            self.hoist_enum_members(&body_expr, source_file, symbol_table);
+            self.hoist_enum_members(&body, source_file, symbol_table);
             self.type_symbol_stack.pop();
         }
     }
@@ -1131,12 +1148,12 @@ mod tests {
         ",
         );
 
-        let Expr::EnumDecl(name, _, body_id) = resolved.roots()[0].unwrap() else {
+        let Expr::EnumDecl { name, body, .. } = resolved.roots()[0].unwrap() else {
             panic!("Didn't get enum decl");
         };
 
         assert_eq!(name, &Name::Resolved(SymbolID::resolved(1), "Fizz".into()));
-        let Expr::Block(ids) = resolved.get(body_id).unwrap() else {
+        let Expr::Block(ids) = resolved.get(body).unwrap() else {
             panic!("did not get ids");
         };
 
@@ -1173,7 +1190,7 @@ mod tests {
         ",
         );
 
-        let Expr::EnumDecl(name, _, body) = resolved.roots()[0].unwrap() else {
+        let Expr::EnumDecl { name, body, .. } = resolved.roots()[0].unwrap() else {
             panic!("didn't get enum decl");
         };
 

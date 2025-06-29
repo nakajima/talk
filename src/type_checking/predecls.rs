@@ -2,8 +2,8 @@ use crate::{
     NameResolved, SourceFile,
     constraint_solver::Substitutions,
     environment::{
-        Environment, Initializer, Method, Property, RawInitializer, RawMethod, RawProperty,
-        StructDef,
+        EnumDef, EnumVariant, Environment, Initializer, Method, Property, ProtocolDef,
+        RawEnumVariant, RawInitializer, RawMethod, RawProperty, StructDef, TypeDef,
     },
     expr::Expr,
     name::Name,
@@ -12,42 +12,104 @@ use crate::{
     type_checker::{Scheme, TypeChecker, TypeError, TypeVarKind},
 };
 
+#[derive(PartialEq)]
+pub(super) enum PredeclarationKind {
+    Struct,
+    Protocol,
+    Enum,
+}
+
+pub(super) struct PredeclarationExprIDs {
+    name: Name,
+    generics: Vec<ExprID>,
+    conformances: Vec<ExprID>,
+    body: ExprID,
+    kind: PredeclarationKind,
+}
+
 impl<'a> TypeChecker<'a> {
+    fn predeclarable_type(&self, expr: &Expr) -> Option<PredeclarationExprIDs> {
+        if let Expr::Struct {
+            name,
+            generics,
+            conformances,
+            body,
+        } = expr.clone()
+        {
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind: PredeclarationKind::Struct,
+            });
+        }
+
+        if let Expr::ProtocolDecl {
+            name,
+            associated_types: generics,
+            body,
+            conformances,
+        } = expr.clone()
+        {
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind: PredeclarationKind::Protocol,
+            });
+        }
+
+        if let Expr::EnumDecl {
+            name,
+            generics,
+            conformances,
+            body,
+        } = expr.clone()
+        {
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind: PredeclarationKind::Enum,
+            });
+        }
+
+        None
+    }
+
     // We want to go through and predeclare all struct names, then after that actually infer their members,
     // stashing properties, methods and initializers for each.
-    pub(super) fn predeclare_structs(
+    pub(super) fn predeclare_types(
         &mut self,
         root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), (ExprID, TypeError)> {
-        let mut struct_defs = vec![];
+        let mut type_defs = vec![];
         let mut method_placeholders = vec![];
         let mut property_placeholders = vec![];
         let mut initializer_placeholders = vec![];
 
         for id in root_ids {
             let expr = source_file.get(id).unwrap().clone();
-            let Expr::Struct {
-                name,
-                generics,
-                conformances,
-                body,
-            } = expr
-            else {
+            let Some(expr_ids) = self.predeclarable_type(&expr) else {
                 continue;
             };
 
-            let Name::Resolved(symbol_id, name_str) = name else {
-                return Err((*id, TypeError::Unresolved(name.name_str())));
+            let Name::Resolved(symbol_id, name_str) = expr_ids.name else {
+                return Err((*id, TypeError::Unresolved(expr_ids.name.name_str())));
             };
 
             let mut methods: Vec<RawMethod> = Default::default();
             let mut properties: Vec<RawProperty> = Default::default();
             let mut type_parameters = vec![];
             let mut initializers = vec![];
+            let mut variants = vec![];
 
-            for id in generics {
+            for id in expr_ids.generics {
                 let Some(Expr::TypeRepr {
                     name: Name::Resolved(symbol_id, name_str),
                     ..
@@ -55,7 +117,9 @@ impl<'a> TypeChecker<'a> {
                 else {
                     return Err((
                         id,
-                        TypeError::Unresolved("did not resolve type parameter for struct".into()),
+                        TypeError::Unresolved(
+                            "did not resolve type parameter for predeclarable".into(),
+                        ),
                     ));
                 };
 
@@ -74,8 +138,12 @@ impl<'a> TypeChecker<'a> {
                 type_parameters.push(Ty::TypeVar(type_param));
             }
 
-            // The type of the struct, using the canonical placeholders.
-            let struct_ty = Ty::Struct(symbol_id, type_parameters.clone());
+            // The type, using the canonical placeholders.
+            let ty = match expr_ids.kind {
+                PredeclarationKind::Struct => Ty::Struct(symbol_id, type_parameters.clone()),
+                PredeclarationKind::Enum => Ty::Enum(symbol_id, type_parameters.clone()),
+                PredeclarationKind::Protocol => Ty::Protocol(symbol_id, type_parameters.clone()),
+            };
 
             // The unbound vars of this type ARE its canonical placeholders.
             let unbound_vars = type_parameters
@@ -86,23 +154,24 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect();
 
-            let scheme = Scheme::new(struct_ty, unbound_vars);
+            let scheme = Scheme::new(ty, unbound_vars);
             env.declare(symbol_id, scheme);
 
-            let Some(Expr::Block(body_ids)) = source_file.get(&body).cloned() else {
+            let Some(Expr::Block(body_ids)) = source_file.get(&expr_ids.body).cloned() else {
                 unreachable!()
             };
 
-            let mut struct_initializers = vec![];
-            let mut struct_methods = vec![];
-            let mut struct_properties = vec![];
+            let mut ty_initializers = vec![];
+            let mut ty_methods = vec![];
+            let mut ty_properties = vec![];
+
             for body_id in body_ids {
                 let expr = &source_file.get(&body_id).cloned().unwrap();
                 match &expr {
                     Expr::Property {
                         name: Name::Resolved(prop_id, name_str),
                         ..
-                    } => {
+                    } if expr_ids.kind != PredeclarationKind::Enum => {
                         let placeholder = env.placeholder(&body_id, name_str.clone(), &prop_id);
                         let scheme = Scheme {
                             ty: placeholder.clone(),
@@ -110,14 +179,14 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*prop_id, scheme);
 
-                        struct_properties.push(placeholder);
+                        ty_properties.push(placeholder);
 
                         properties.push(RawProperty {
                             name: name_str.clone(),
                             expr_id: body_id,
                         });
                     }
-                    Expr::Init(_, func_id) => {
+                    Expr::Init(_, func_id) if expr_ids.kind != PredeclarationKind::Enum => {
                         let Some(Expr::Func {
                             name: Some(Name::Resolved(symbol_id, name)),
                             params,
@@ -134,7 +203,7 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*symbol_id, scheme);
 
-                        struct_initializers.push(placeholder);
+                        ty_initializers.push(placeholder);
                         initializers.push(RawInitializer {
                             name: name.clone(),
                             expr_id: body_id,
@@ -142,6 +211,11 @@ impl<'a> TypeChecker<'a> {
                             params: params.clone(),
                         });
                     }
+                    Expr::EnumVariant(name, values) => variants.push(RawEnumVariant {
+                        name: name.name_str(),
+                        expr_id: body_id,
+                        values: values.to_vec(),
+                    }),
                     Expr::Func {
                         name: Some(Name::Resolved(func_id, name_str)),
                         ..
@@ -153,7 +227,7 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*func_id, scheme);
 
-                        struct_methods.push(placeholder);
+                        ty_methods.push(placeholder);
 
                         methods.push(RawMethod {
                             name: name_str.clone(),
@@ -175,74 +249,104 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            let struct_def = StructDef::new(
-                symbol_id,
-                name_str,
-                type_parameters.clone(),
-                properties,
-                methods,
-                initializers,
-            );
+            let type_def = match expr_ids.kind {
+                PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
+                    name: Some(symbol_id),
+                    name_str,
+                    type_parameters,
+                    raw_variants: variants,
+                    variants: Default::default(),
+                    raw_methods: methods,
+                    methods: Default::default(),
+                }),
+                PredeclarationKind::Struct => TypeDef::Struct(StructDef::new(
+                    symbol_id,
+                    name_str,
+                    type_parameters,
+                    properties,
+                    methods,
+                    initializers,
+                )),
+                PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
+                    symbol_id,
+                    name_str,
+                    associated_types: type_parameters,
+                    conformances: vec![],
+                    raw_properties: properties,
+                    properties: Default::default(),
+                    raw_methods: methods,
+                    methods: Default::default(),
+                    raw_initializers: initializers,
+                    initializers: Default::default(),
+                }),
+            };
 
-            struct_defs.push(struct_def.clone());
+            type_defs.push(type_def.clone());
 
-            method_placeholders.push(struct_methods);
-            property_placeholders.push(struct_properties);
-            initializer_placeholders.push(struct_initializers);
+            method_placeholders.push(ty_methods);
+            property_placeholders.push(ty_properties);
+            initializer_placeholders.push(ty_initializers);
 
             // Register updated definition
-            env.register_struct(struct_def);
+            match type_def {
+                TypeDef::Enum(def) => env.register_enum(def),
+                TypeDef::Struct(def) => env.register_struct(def),
+                TypeDef::Protocol(_) => todo!(),
+            }
         }
 
         let mut substitutions: Substitutions = Default::default();
 
         // Sick, all the names are declared. Now let's actually infer.
-        for (i, mut struct_def) in &mut struct_defs.into_iter().enumerate() {
+        for (i, mut def) in &mut type_defs.into_iter().enumerate() {
             let mut initializers = vec![];
             let mut properties = vec![];
             let mut methods = vec![];
-            for (j, initializer) in struct_def.raw_initializers.iter().enumerate() {
-                let ty = self
-                    .infer_node(
-                        &initializer.expr_id,
-                        env,
-                        &Some(Ty::Struct(
-                            struct_def.symbol_id,
-                            struct_def.type_parameters.clone(),
-                        )),
-                        source_file,
-                    )
-                    .map_err(|e| (initializer.expr_id, e))?;
+            let mut variants = vec![];
 
-                let Ty::TypeVar(placeholder) = &initializer_placeholders[i][j] else {
-                    unreachable!();
-                };
-                substitutions.insert(placeholder.clone(), ty.clone());
+            if !matches!(def, TypeDef::Enum(_)) {
+                for (j, initializer) in def.raw_initializers().iter().enumerate() {
+                    let ty = self
+                        .infer_node(
+                            &initializer.expr_id,
+                            env,
+                            &Some(Ty::Struct(def.symbol_id(), def.type_parameters().clone())),
+                            source_file,
+                        )
+                        .map_err(|e| (initializer.expr_id, e))?;
 
-                initializers.push(Initializer {
-                    name: initializer.name.clone(),
-                    expr_id: initializer.expr_id,
-                    ty: ty,
-                });
+                    let Ty::TypeVar(placeholder) = &initializer_placeholders[i][j] else {
+                        unreachable!();
+                    };
+                    substitutions.insert(placeholder.clone(), ty.clone());
+
+                    initializers.push(Initializer {
+                        name: initializer.name.clone(),
+                        expr_id: initializer.expr_id,
+                        ty: ty,
+                    });
+                }
             }
 
-            for (j, property) in struct_def.raw_properties.iter().enumerate() {
-                let ty = self
-                    .infer_node(&property.expr_id, env, &None, source_file)
-                    .map_err(|e| (property.expr_id, e))?;
-                properties.push(Property {
-                    name: property.name.clone(),
-                    expr_id: property.expr_id,
-                    ty: ty.clone(),
-                });
+            if !matches!(def, TypeDef::Enum(_)) {
+                for (j, property) in def.raw_properties().iter().enumerate() {
+                    let ty = self
+                        .infer_node(&property.expr_id, env, &None, source_file)
+                        .map_err(|e| (property.expr_id, e))?;
+                    properties.push(Property {
+                        name: property.name.clone(),
+                        expr_id: property.expr_id,
+                        ty: ty.clone(),
+                    });
 
-                let Ty::TypeVar(placeholder) = &property_placeholders[i][j] else {
-                    unreachable!();
-                };
-                substitutions.insert(placeholder.clone(), ty.clone());
+                    let Ty::TypeVar(placeholder) = &property_placeholders[i][j] else {
+                        unreachable!();
+                    };
+                    substitutions.insert(placeholder.clone(), ty.clone());
+                }
             }
 
-            for (j, method) in struct_def.raw_methods.iter().enumerate() {
+            for (j, method) in def.raw_methods().iter().enumerate() {
                 let ty = self
                     .infer_node(&method.expr_id, env, &None, source_file)
                     .map_err(|e| (method.expr_id, e))?;
@@ -258,12 +362,36 @@ impl<'a> TypeChecker<'a> {
                 substitutions.insert(placeholder.clone(), ty.clone());
             }
 
-            struct_def.initializers = initializers;
-            struct_def.properties = properties;
-            struct_def.methods = methods;
+            if matches!(def, TypeDef::Enum(_)) {
+                for (j, variant) in def.raw_variants().iter().enumerate() {
+                    let ty = self
+                        .infer_node(
+                            &variant.expr_id,
+                            env,
+                            &Some(Ty::Enum(def.symbol_id(), vec![])),
+                            source_file,
+                        )
+                        .map_err(|e| (variant.expr_id, e))?;
+                    variants.push(EnumVariant {
+                        name: variant.name.clone(),
+                        ty,
+                    });
+                }
+            }
+
+            def.set_initializers(initializers);
+            def.set_properties(properties);
+            def.set_methods(methods);
+            def.set_variants(variants);
 
             // Register the inferred struct
-            env.register_struct(struct_def.clone());
+
+            // Register updated definition
+            match def {
+                TypeDef::Enum(def) => env.register_enum(def),
+                TypeDef::Struct(def) => env.register_struct(def),
+                TypeDef::Protocol(_) => todo!(),
+            }
         }
 
         env.replace_constraint_values(&substitutions);

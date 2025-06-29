@@ -110,11 +110,12 @@ pub enum FullExpr<'a> {
     ),
 
     // Enum declaration
-    EnumDecl(
-        &'a Name,              // TypeRepr name: Option
-        Vec<&'a FullExpr<'a>>, // Generics TypeParams <T>
-        &'a FullExpr<'a>,      // Body
-    ),
+    EnumDecl {
+        name: &'a Name,                  // TypeRepr name: Option
+        generics: Vec<&'a FullExpr<'a>>, // Generics TypeParams <T>
+        conformances: Vec<&'a FullExpr<'a>>,
+        body: &'a FullExpr<'a>, // Body
+    },
 
     // Individual enum variant in declaration
     EnumVariant(
@@ -300,9 +301,17 @@ impl<'a, P: Phase> Filler<'a, P> {
             Expr::Loop(cond, body) => {
                 FullExpr::Loop(cond.map(|cond| self.fill(cond)), self.fill(*body))
             }
-            Expr::EnumDecl(name, items, body) => {
-                FullExpr::EnumDecl(name, self.fill_mult(items), self.fill(*body))
-            }
+            Expr::EnumDecl {
+                name,
+                generics,
+                conformances,
+                body,
+            } => FullExpr::EnumDecl {
+                name,
+                generics: self.fill_mult(generics),
+                conformances: self.fill_mult(conformances),
+                body: self.fill(*body),
+            },
             Expr::EnumVariant(name, items) => FullExpr::EnumVariant(name, self.fill_mult(items)),
             Expr::Match(scrutinee, items) => {
                 FullExpr::Match(self.fill(*scrutinee), self.fill_mult(items))

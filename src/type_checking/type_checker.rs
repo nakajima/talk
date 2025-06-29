@@ -215,13 +215,15 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
-        if let Err((id, err)) = self.predeclare_structs(items, env, source_file) {
-            source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        }
+        self.predeclare_types(items, env, source_file)
+            .map_err(|e| e.1)?;
+        // if let Err((id, err)) = self.predeclare_structs(items, env, source_file) {
+        //     source_file.diagnostics.insert(Diagnostic::typing(id, err));
+        // }
 
-        if let Err((id, err)) = self.predeclare_enums(items, env, source_file) {
-            source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        }
+        // if let Err((id, err)) = self.predeclare_enums(items, env, source_file) {
+        //     source_file.diagnostics.insert(Diagnostic::typing(id, err));
+        // }
 
         self.predeclare_lets(items, env, source_file);
         self.predeclare_functions(items, env, source_file)?;
@@ -357,9 +359,11 @@ impl<'a> TypeChecker<'a> {
                 self.infer_binary(id, lhs, rhs, op, expected, env, source_file)
             }
             Expr::Block(_) => self.infer_block(id, env, expected, source_file),
-            Expr::EnumDecl(Name::Resolved(symbol_id, _), _generics, body) => {
-                self.infer_enum_decl(symbol_id, body, env, source_file)
-            }
+            Expr::EnumDecl {
+                name: Name::Resolved(symbol_id, _),
+                body,
+                ..
+            } => self.infer_enum_decl(symbol_id, body, env, source_file),
             Expr::EnumVariant(name, values) => {
                 self.infer_enum_variant(name, values, expected, env, source_file)
             }
@@ -1226,166 +1230,6 @@ impl<'a> TypeChecker<'a> {
                     _ => panic!("Unhandled pattern variant: {pattern:?}"),
                 }
             }
-        }
-
-        Ok(())
-    }
-
-    fn predeclare_enums(
-        &self,
-        root_ids: &[ExprID],
-        env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<(), (ExprID, TypeError)> {
-        log::trace!("Predeclaring enums");
-
-        let mut enum_defs = vec![];
-        for id in root_ids {
-            let expr = source_file.get(id).unwrap().clone();
-
-            let Expr::EnumDecl(Name::Resolved(enum_id, enum_name_str), generics, body) =
-                expr.clone()
-            else {
-                continue;
-            };
-
-            let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
-                unreachable!()
-            };
-
-            let mut generic_vars = vec![];
-            for id in generics {
-                let Some(Expr::TypeRepr {
-                    name: Name::Resolved(symbol_id, name_str),
-                    ..
-                }) = source_file.get(&id).cloned()
-                else {
-                    return Err((
-                        id,
-                        TypeError::Unresolved("did not resolve type parameter for struct".into()),
-                    ));
-                };
-
-                let generic_type_var = env.new_type_variable(TypeVarKind::CanonicalTypeParameter(
-                    format!("{}{}", name_str, symbol_id.0),
-                ));
-                let ty = Ty::TypeVar(generic_type_var.clone());
-
-                generic_vars.push((symbol_id, ty));
-            }
-
-            let enum_ty = Ty::Enum(enum_id, generic_vars.iter().map(|v| v.1.clone()).collect());
-            let unbound_vars = generic_vars
-                .iter()
-                .filter_map(|ty| match ty.1.clone() {
-                    Ty::TypeVar(tv) => Some(tv.clone()),
-                    _ => None,
-                })
-                .collect();
-
-            let scheme = Scheme::new(enum_ty, unbound_vars);
-            env.declare(enum_id, scheme);
-
-            let mut raw_methods: Vec<RawMethod> = Default::default();
-            let mut variant_defs: Vec<RawEnumVariant> = vec![];
-
-            for expr_id in expr_ids.clone() {
-                let expr = source_file.get(&expr_id).cloned().unwrap();
-
-                if let Expr::Func {
-                    name: Some(Name::Resolved(_, name_str)),
-                    ..
-                } = &expr
-                {
-                    raw_methods.push(RawMethod::new(name_str.to_string(), expr_id));
-                }
-
-                if let Expr::EnumVariant(name, values) = source_file.get(&expr_id).cloned().unwrap()
-                {
-                    variant_defs.push(RawEnumVariant {
-                        name: name.name_str(),
-                        expr_id: expr_id,
-                        values,
-                    });
-                } else {
-                    log::debug!("Non-raw expr: {:?}", source_file.get(&expr_id).unwrap());
-                }
-            }
-
-            let enum_def = EnumDef {
-                name: Some(enum_id),
-                name_str: enum_name_str,
-                raw_variants: variant_defs,
-                variants: Default::default(),
-                type_parameters: generic_vars.iter().map(|v| v.1.clone()).collect(),
-                raw_methods,
-                methods: Default::default(),
-            };
-
-            enum_defs.push((enum_def.clone(), generic_vars));
-            env.register_enum(enum_def);
-        }
-
-        for (enum_def, generic_vars) in &mut enum_defs {
-            let mut methods = vec![];
-            let mut variants = vec![];
-
-            env.start_scope();
-
-            for (sym, ty) in generic_vars.clone() {
-                env.declare(
-                    sym,
-                    Scheme {
-                        ty,
-                        unbound_vars: vec![],
-                    },
-                );
-            }
-
-            for raw_method in enum_def.raw_methods.iter() {
-                let ty = self
-                    .infer_node(&raw_method.expr_id, env, &None, source_file)
-                    .map_err(|e| (raw_method.expr_id, e))?;
-                methods.push(Method::new(raw_method.name.clone(), raw_method.expr_id, ty));
-            }
-
-            for raw_variant in enum_def.raw_variants.iter() {
-                let ty = self
-                    .infer_node(
-                        &raw_variant.expr_id,
-                        env,
-                        &Some(Ty::Enum(
-                            enum_def.name.unwrap(),
-                            enum_def.type_parameters.clone(),
-                        )),
-                        source_file,
-                    )
-                    .map_err(|e| (raw_variant.expr_id, e))?;
-                variants.push(EnumVariant {
-                    name: raw_variant.name.clone(),
-                    ty: ty,
-                });
-            }
-
-            env.end_scope();
-
-            enum_def.methods = methods;
-            enum_def.variants = variants;
-            env.register_enum(enum_def.clone());
-            env.declare(
-                enum_def.name.unwrap(),
-                Scheme {
-                    ty: Ty::Enum(enum_def.name.unwrap(), enum_def.type_parameters.clone()),
-                    unbound_vars: enum_def
-                        .type_parameters
-                        .iter()
-                        .filter_map(|ty| match &ty {
-                            Ty::TypeVar(tv) => Some(tv.clone()),
-                            _ => None,
-                        })
-                        .collect(),
-                },
-            );
         }
 
         Ok(())

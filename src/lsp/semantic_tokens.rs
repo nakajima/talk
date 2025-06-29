@@ -218,8 +218,8 @@ impl<'a> SemanticTokenCollector<'a> {
                 }
                 result.extend(self.tokens_from_expr(body));
             }
-            Expr::EnumDecl(_name, items, body) => {
-                result.extend(self.tokens_from_exprs(items));
+            Expr::EnumDecl { generics, body, .. } => {
+                result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_expr(body));
             }
             Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(items)),

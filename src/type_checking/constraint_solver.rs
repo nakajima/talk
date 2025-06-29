@@ -553,6 +553,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 *sym,
                 Self::apply_multiple(generics, substitutions, depth + 1),
             ),
+            Ty::Protocol(sym, generics) => Ty::Protocol(
+                *sym,
+                Self::apply_multiple(generics, substitutions, depth + 1),
+            ),
             Ty::Init(struct_id, params) => Ty::Init(
                 *struct_id,
                 Self::apply_multiple(&params, substitutions, depth + 1),
@@ -842,6 +846,13 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             ),
             Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
             Ty::Struct(sym, generics) => Ty::Struct(
+                *sym,
+                generics
+                    .iter()
+                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
+                    .collect(),
+            ),
+            Ty::Protocol(sym, generics) => Ty::Protocol(
                 *sym,
                 generics
                     .iter()

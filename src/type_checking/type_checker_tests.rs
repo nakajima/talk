@@ -558,7 +558,7 @@ mod type_tests {
             Ty::Enum(SymbolID(1), vec![])
         );
 
-        let Some(Expr::EnumDecl(_, _, body)) = checker.source_file.get(&checker.root_ids()[0])
+        let Some(Expr::EnumDecl { body, .. }) = checker.source_file.get(&checker.root_ids()[0])
         else {
             panic!("didn't get enum decl");
         };
@@ -593,7 +593,7 @@ mod type_tests {
             Ty::Enum(SymbolID::typed(1), vec![])
         );
 
-        let Some(Expr::EnumDecl(_, _, body)) = checker.source_file.get(&checker.root_ids()[0])
+        let Some(Expr::EnumDecl { body, .. }) = checker.source_file.get(&checker.root_ids()[0])
         else {
             panic!("didn't get enum decl");
         };
@@ -799,7 +799,7 @@ mod type_tests {
             _ => panic!("Expected List<T> type, got {enum_ty:?}"),
         }
 
-        let Some(Expr::EnumDecl(_, _, body)) = checker.expr(&checker.root_ids()[0]) else {
+        let Some(Expr::EnumDecl { body, .. }) = checker.expr(&checker.root_ids()[0]) else {
             panic!("did not get enum decl");
         };
 
@@ -1064,7 +1064,7 @@ mod type_tests {
         let Some(TypeDef::Enum(enum_def)) = checked.env.lookup_type(&SymbolID::typed(1)) else {
             panic!();
         };
-        assert_eq!(enum_def.raw_methods.len(), 2);
+        assert_eq!(enum_def.methods.len(), 2);
         assert_eq!(
             checked
                 .type_for(
@@ -1401,5 +1401,40 @@ mod pending {
             }
         ",
         );
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use crate::{check_without_prelude, ty::Ty};
+
+    #[test]
+    #[ignore = "wip"]
+    fn infers_protocol_conformance() {
+        let checked = check_without_prelude(
+            "
+        protocol Aged {
+            func getAge() -> Int
+        }
+        struct Person: Aged {
+            func getAge() {
+                123
+            }
+        }
+        func get<T: Aged>(aged: T) {
+            aged.getAge()
+        }
+        get(aged: Person())
+        ",
+        )
+        .unwrap();
+
+        assert!(
+            checked.diagnostics().is_empty(),
+            "{:?}",
+            checked.diagnostics()
+        );
+
+        assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
     }
 }

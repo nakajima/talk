@@ -642,7 +642,12 @@ mod tests {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("Fizz".into(), vec![], 0)
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 0
+            }
         );
     }
 
@@ -682,7 +687,15 @@ mod tests {
         );
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::EnumDecl("Fizz".into(), vec![0, 1], 6));
+        assert_eq!(
+            *expr,
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![0, 1],
+                conformances: vec![],
+                body: 6
+            }
+        );
 
         // Check the enum generics
         assert_eq!(
@@ -740,7 +753,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("Fizz".into(), vec![], 3)
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 3
+            }
         );
 
         let Expr::Block(exprs) = parsed.get(&3).unwrap() else {
@@ -771,7 +789,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("Fizz".into(), vec![], 6)
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 6
+            }
         );
 
         let Expr::Block(exprs) = parsed.get(&6).unwrap() else {
@@ -972,7 +995,12 @@ mod tests {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("MyEnum".into(), vec![], 6)
+            Expr::EnumDecl {
+                name: "MyEnum".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 6
+            }
         );
 
         let Expr::Block(exprs) = parsed.get(&6).unwrap() else {

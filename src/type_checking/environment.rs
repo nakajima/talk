@@ -58,9 +58,12 @@ pub struct ProtocolDef {
     pub name_str: String,
     pub associated_types: TypeParams,
     pub conformances: Vec<SymbolID>,
+    pub raw_properties: Vec<RawProperty>,
     pub properties: Vec<Property>,
+    pub raw_methods: Vec<RawMethod>,
     pub methods: Vec<Method>,
-    pub initializers: Vec<ExprID>,
+    pub raw_initializers: Vec<RawInitializer>,
+    pub initializers: Vec<Initializer>,
 }
 
 impl ProtocolDef {
@@ -69,17 +72,23 @@ impl ProtocolDef {
         name_str: String,
         associated_types: TypeParams,
         conformances: Vec<SymbolID>,
+        raw_properties: Vec<RawProperty>,
         properties: Vec<Property>,
+        raw_methods: Vec<RawMethod>,
         methods: Vec<Method>,
-        initializers: Vec<ExprID>,
+        raw_initializers: Vec<RawInitializer>,
+        initializers: Vec<Initializer>,
     ) -> Self {
         Self {
             symbol_id,
             name_str,
             associated_types,
             conformances,
+            raw_properties,
             properties,
+            raw_methods,
             methods,
+            raw_initializers,
             initializers,
         }
     }
@@ -205,6 +214,14 @@ pub enum TypeDef {
 }
 
 impl TypeDef {
+    pub fn symbol_id(&self) -> SymbolID {
+        match self {
+            Self::Enum(def) => def.name.unwrap(),
+            Self::Struct(def) => def.symbol_id,
+            Self::Protocol(def) => def.symbol_id,
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
             Self::Enum(def) => &def.name_str,
@@ -213,11 +230,96 @@ impl TypeDef {
         }
     }
 
+    pub fn type_parameters(&self) -> &Vec<Ty> {
+        match self {
+            Self::Enum(def) => &def.type_parameters,
+            Self::Struct(def) => &def.type_parameters,
+            Self::Protocol(def) => &def.associated_types,
+        }
+    }
+
+    pub fn raw_variants(&self) -> &Vec<RawEnumVariant> {
+        match self {
+            Self::Enum(def) => &def.raw_variants,
+            Self::Struct(_) => unreachable!("structs don't have variants"),
+            Self::Protocol(_) => unreachable!("protocols don't have variants"),
+        }
+    }
+
+    pub fn raw_methods(&self) -> &Vec<RawMethod> {
+        match self {
+            Self::Enum(def) => &def.raw_methods,
+            Self::Struct(def) => &def.raw_methods,
+            Self::Protocol(def) => &def.raw_methods,
+        }
+    }
+
+    pub fn raw_initializers(&self) -> Vec<RawInitializer> {
+        match self {
+            Self::Enum(_def) => unreachable!("enums don't have initializers"),
+            Self::Struct(def) => def.raw_initializers.clone(),
+            Self::Protocol(def) => def.raw_initializers.clone(),
+        }
+    }
+
+    pub fn raw_properties(&self) -> &Vec<RawProperty> {
+        match self {
+            Self::Enum(_def) => unreachable!("enums don't have properties"),
+            Self::Struct(def) => &def.raw_properties,
+            Self::Protocol(def) => &def.raw_properties,
+        }
+    }
+
     pub fn find_method(&self, method_name: &str) -> Option<&Method> {
         match self {
             Self::Enum(def) => def.methods.iter().find(|m| m.name == method_name),
             Self::Struct(def) => def.methods.iter().find(|m| m.name == method_name),
             Self::Protocol(def) => def.methods.iter().find(|m| m.name == method_name),
+        }
+    }
+
+    pub fn set_methods(&mut self, methods: Vec<Method>) {
+        if methods.is_empty() {
+            return;
+        }
+        match self {
+            Self::Enum(def) => def.methods = methods,
+            Self::Struct(def) => def.methods = methods,
+            Self::Protocol(def) => def.methods = methods,
+        }
+    }
+
+    pub fn set_initializers(&mut self, initializers: Vec<Initializer>) {
+        if initializers.is_empty() {
+            return;
+        }
+
+        match self {
+            Self::Enum(_) => unreachable!("enums don't have initializers"),
+            Self::Struct(def) => def.initializers = initializers,
+            Self::Protocol(def) => def.initializers = initializers,
+        }
+    }
+
+    pub fn set_properties(&mut self, properties: Vec<Property>) {
+        if properties.is_empty() {
+            return;
+        }
+        match self {
+            Self::Enum(_) => unreachable!("enums don't have properties"),
+            Self::Struct(def) => def.properties = properties,
+            Self::Protocol(def) => def.properties = properties,
+        }
+    }
+
+    pub fn set_variants(&mut self, variants: Vec<EnumVariant>) {
+        if variants.is_empty() {
+            return;
+        }
+        match self {
+            Self::Enum(def) => def.variants = variants,
+            Self::Struct(_) => unreachable!("structs don't have variants"),
+            Self::Protocol(_) => unreachable!("protocols don't have variants"),
         }
     }
 }
@@ -515,6 +617,10 @@ impl Environment {
                     let new_generics = generics.iter().map(|g| walk(g, map)).collect();
                     Ty::Struct(*sym, new_generics)
                 }
+                Ty::Protocol(sym, generics) => {
+                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+                    Ty::Protocol(*sym, new_generics)
+                }
                 Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
                 Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
@@ -683,6 +789,11 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
             s.extend(free_type_vars(ty));
         }
         Ty::Struct(_, generics) => {
+            for generic in generics {
+                s.extend(free_type_vars(generic));
+            }
+        }
+        Ty::Protocol(_, generics) => {
             for generic in generics {
                 s.extend(free_type_vars(generic));
             }
