@@ -512,7 +512,7 @@ impl<'a> TypeChecker<'a> {
         &self,
         name: &Name,
         generics: &[ExprID],
-        body: &ExprID,
+        _body: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
@@ -528,25 +528,6 @@ impl<'a> TypeChecker<'a> {
         let Name::Resolved(symbol_id, _) = name else {
             return Err(TypeError::Unresolved(name.name_str()));
         };
-
-        let Some(Expr::Block(body_ids)) = source_file.get(body).cloned() else {
-            unreachable!()
-        };
-
-        for id in body_ids {
-            match source_file.get(&id) {
-                // Some(Expr::Property {
-                //     name,
-                //     type_repr,
-                //     default_value,
-                // }) => {
-                //     println!("hi");
-                // }
-                _ => {
-                    self.infer_node(&id, env, expected, source_file)?;
-                }
-            }
-        }
 
         Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
