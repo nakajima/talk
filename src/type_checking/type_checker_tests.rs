@@ -1423,14 +1423,18 @@ mod protocol_tests {
         )
         .unwrap();
 
-        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(1)) else {
+        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(3)) else {
             panic!("didn't get person: {:?}", checked.env.types);
         };
 
-        let Some(TypeDef::Protocol(aged_def)) = checked.env.lookup_type(&SymbolID(3)) else {
-            panic!("didn't get aged protocol: {:?}", checked.env.types);
+        let Some(TypeDef::Protocol(aged_def)) = checked.env.lookup_type(&SymbolID(1)) else {
+            panic!("didn't get aged protocol: {:#?}", checked.env.types);
         };
 
-        assert!(person_def.conformances.contains(&aged_def.symbol_id));
+        assert!(
+            person_def.conformances.contains(&aged_def.symbol_id),
+            "{:#?}",
+            person_def.conformances
+        );
     }
 }

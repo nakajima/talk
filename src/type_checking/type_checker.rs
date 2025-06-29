@@ -411,7 +411,12 @@ impl<'a> TypeChecker<'a> {
                 default_value,
             } => self.infer_property(&id, name, type_repr, default_value, env, source_file),
             Expr::Break => Ok(Ty::Void),
-            Expr::ProtocolDecl { name, .. } => Ok(Ty::Protocol(name.try_symbol_id(), vec![])),
+            Expr::ProtocolDecl {
+                name,
+                associated_types,
+                conformances,
+                ..
+            } => self.infer_protocol(name, associated_types, conformances, env, source_file),
             Expr::FuncSignature {
                 params,
                 generics,
@@ -448,6 +453,31 @@ impl<'a> TypeChecker<'a> {
         }
 
         ty
+    }
+
+    fn infer_protocol(
+        &self,
+        name: &Name,
+        associated_types: &[ExprID],
+        conformances: &[ExprID],
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let mut inferred_associated_types: Vec<Ty> = vec![];
+        for generic in associated_types {
+            inferred_associated_types
+                .push(self.infer_node(generic, env, &None, source_file)?.clone());
+        }
+
+        for id in conformances {
+            self.infer_node(id, env, &None, source_file)?;
+        }
+
+        let Name::Resolved(symbol_id, _) = name else {
+            return Err(TypeError::Unresolved(name.name_str()));
+        };
+
+        Ok(Ty::Protocol(*symbol_id, inferred_associated_types))
     }
 
     fn infer_property(
@@ -554,7 +584,7 @@ impl<'a> TypeChecker<'a> {
         &self,
         name: &Name,
         generics: &[ExprID],
-        _conformances: &[ExprID],
+        conformances: &[ExprID],
         _body: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -566,6 +596,10 @@ impl<'a> TypeChecker<'a> {
                 self.infer_node(generic, env, expected, source_file)?
                     .clone(),
             );
+        }
+
+        for id in conformances {
+            self.infer_node(id, env, expected, source_file)?;
         }
 
         let Name::Resolved(symbol_id, _) = name else {

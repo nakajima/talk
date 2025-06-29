@@ -41,6 +41,7 @@ impl<'a> TypeChecker<'a> {
         let mut type_defs = vec![];
         let mut type_def_conformances = vec![];
         let mut method_placeholders = vec![];
+        let mut method_req_placeholders = vec![];
         let mut property_placeholders = vec![];
         let mut initializer_placeholders = vec![];
 
@@ -54,11 +55,12 @@ impl<'a> TypeChecker<'a> {
                 return Err((*id, TypeError::Unresolved(expr_ids.name.name_str())));
             };
 
-            let mut methods: Vec<RawMethod> = Default::default();
-            let mut properties: Vec<RawProperty> = Default::default();
-            let mut type_parameters = vec![];
-            let mut initializers = vec![];
-            let mut variants = vec![];
+            let mut raw_methods = vec![];
+            let mut raw_method_requirements = vec![];
+            let mut raw_properties = vec![];
+            let mut raw_type_parameters = vec![];
+            let mut raw_initializers = vec![];
+            let mut raw_variants = vec![];
 
             for id in expr_ids.generics {
                 let Some(Expr::TypeRepr {
@@ -86,20 +88,22 @@ impl<'a> TypeChecker<'a> {
                     },
                 );
 
-                type_parameters.push(Ty::TypeVar(type_param));
+                raw_type_parameters.push(Ty::TypeVar(type_param));
             }
 
             type_def_conformances.push((symbol_id, expr_ids.conformances));
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::Struct(symbol_id, type_parameters.clone()),
-                PredeclarationKind::Enum => Ty::Enum(symbol_id, type_parameters.clone()),
-                PredeclarationKind::Protocol => Ty::Protocol(symbol_id, type_parameters.clone()),
+                PredeclarationKind::Struct => Ty::Struct(symbol_id, raw_type_parameters.clone()),
+                PredeclarationKind::Enum => Ty::Enum(symbol_id, raw_type_parameters.clone()),
+                PredeclarationKind::Protocol => {
+                    Ty::Protocol(symbol_id, raw_type_parameters.clone())
+                }
             };
 
             // The unbound vars of this type ARE its canonical placeholders.
-            let unbound_vars = type_parameters
+            let unbound_vars = raw_type_parameters
                 .iter()
                 .filter_map(|ty| match ty {
                     Ty::TypeVar(tv) => Some(tv.clone()),
@@ -114,9 +118,10 @@ impl<'a> TypeChecker<'a> {
                 unreachable!()
             };
 
-            let mut ty_initializers = vec![];
-            let mut ty_methods = vec![];
-            let mut ty_properties = vec![];
+            let mut ty_initializer_placeholders = vec![];
+            let mut ty_method_placeholders = vec![];
+            let mut ty_property_placeholders = vec![];
+            let mut ty_method_req_placeholders = vec![];
 
             for body_id in body_ids {
                 let expr = &source_file.get(&body_id).cloned().unwrap();
@@ -132,9 +137,9 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*prop_id, scheme);
 
-                        ty_properties.push(placeholder);
+                        ty_property_placeholders.push(placeholder);
 
-                        properties.push(RawProperty {
+                        raw_properties.push(RawProperty {
                             name: name_str.clone(),
                             expr_id: body_id,
                         });
@@ -156,15 +161,15 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*symbol_id, scheme);
 
-                        ty_initializers.push(placeholder);
-                        initializers.push(RawInitializer {
+                        ty_initializer_placeholders.push(placeholder);
+                        raw_initializers.push(RawInitializer {
                             name: name.clone(),
                             expr_id: body_id,
                             func_id: *func_id,
                             params: params.clone(),
                         });
                     }
-                    Expr::EnumVariant(name, values) => variants.push(RawEnumVariant {
+                    Expr::EnumVariant(name, values) => raw_variants.push(RawEnumVariant {
                         name: name.name_str(),
                         expr_id: body_id,
                         values: values.to_vec(),
@@ -180,9 +185,9 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*func_id, scheme);
 
-                        ty_methods.push(placeholder);
+                        ty_method_placeholders.push(placeholder);
 
-                        methods.push(RawMethod {
+                        raw_methods.push(RawMethod {
                             name: name_str.clone(),
                             expr_id: body_id,
                         });
@@ -198,9 +203,9 @@ impl<'a> TypeChecker<'a> {
                         };
                         env.declare(*func_id, scheme);
 
-                        ty_methods.push(placeholder);
+                        ty_method_req_placeholders.push(placeholder);
 
-                        methods.push(RawMethod {
+                        raw_method_requirements.push(RawMethod {
                             name: name_str.clone(),
                             expr_id: body_id,
                         });
@@ -224,40 +229,43 @@ impl<'a> TypeChecker<'a> {
                 PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
                     name: Some(symbol_id),
                     name_str,
-                    type_parameters,
-                    raw_variants: variants,
+                    type_parameters: raw_type_parameters,
+                    raw_variants,
                     variants: Default::default(),
-                    raw_methods: methods,
+                    raw_methods,
                     methods: Default::default(),
                     conformances: Default::default(),
                 }),
                 PredeclarationKind::Struct => TypeDef::Struct(StructDef::new(
                     symbol_id,
                     name_str,
-                    type_parameters,
-                    properties,
-                    methods,
-                    initializers,
+                    raw_type_parameters,
+                    raw_properties,
+                    raw_methods,
+                    raw_initializers,
                 )),
                 PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
                     symbol_id,
                     name_str,
-                    associated_types: type_parameters,
+                    associated_types: raw_type_parameters,
                     conformances: vec![],
-                    raw_properties: properties,
+                    raw_properties,
                     properties: Default::default(),
-                    raw_methods: methods,
+                    raw_methods,
                     methods: Default::default(),
-                    raw_initializers: initializers,
+                    raw_initializers,
                     initializers: Default::default(),
+                    raw_method_requirements,
+                    method_requirements: Default::default(),
                 }),
             };
 
             type_defs.push(type_def.clone());
 
-            method_placeholders.push(ty_methods);
-            property_placeholders.push(ty_properties);
-            initializer_placeholders.push(ty_initializers);
+            method_placeholders.push(ty_method_placeholders);
+            method_req_placeholders.push(ty_method_req_placeholders);
+            property_placeholders.push(ty_property_placeholders);
+            initializer_placeholders.push(ty_initializer_placeholders);
 
             // Register updated definition
             match type_def {
@@ -274,6 +282,7 @@ impl<'a> TypeChecker<'a> {
             let mut initializers = vec![];
             let mut properties = vec![];
             let mut methods = vec![];
+            let mut method_requirements = vec![];
             let mut variants = vec![];
 
             if !matches!(def, TypeDef::Enum(_)) {
@@ -334,6 +343,23 @@ impl<'a> TypeChecker<'a> {
                 substitutions.insert(placeholder.clone(), ty.clone());
             }
 
+            if matches!(def, TypeDef::Protocol(_)) {
+                for (j, method) in def.raw_method_requirements().iter().enumerate() {
+                    let ty = self
+                        .infer_node(&method.expr_id, env, &None, source_file)
+                        .map_err(|e| (method.expr_id, e))?;
+                    method_requirements.push(Method {
+                        name: method.name.clone(),
+                        expr_id: method.expr_id,
+                        ty: ty.clone(),
+                    });
+                    let Ty::TypeVar(placeholder) = &method_req_placeholders[i][j] else {
+                        unreachable!();
+                    };
+                    substitutions.insert(placeholder.clone(), ty.clone());
+                }
+            }
+
             if matches!(def, TypeDef::Enum(_)) {
                 for variant in def.raw_variants().iter() {
                     let ty = self
@@ -351,12 +377,12 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
+            // Infer conformances
+
             def.set_initializers(initializers);
             def.set_properties(properties);
             def.set_methods(methods);
             def.set_variants(variants);
-
-            // Register the inferred struct
 
             // Register updated definition
             match def {
@@ -372,12 +398,13 @@ impl<'a> TypeChecker<'a> {
         for (type_id, conformance_ids) in type_def_conformances {
             let mut conformances = vec![];
             for id in conformance_ids.iter() {
-                let Some(Ty::Protocol(symbol_id, _)) =
-                    env.typed_exprs.get(id).map(|t| t.ty.clone()).clone()
+                let Ty::Protocol(symbol_id, _) = self
+                    .infer_node(id, env, &None, source_file)
+                    .map_err(|e| (*id, e))?
                 else {
                     log::error!(
-                        "Didn't get protocol for expr id: {id}: {:?}",
-                        env.typed_exprs.get(id)
+                        "Didn't get protocol for expr id: {id}: {:#?}",
+                        env.typed_exprs
                     );
                     continue;
                 };

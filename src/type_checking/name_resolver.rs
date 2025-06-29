@@ -91,6 +91,7 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {
+        self.hoist_protocols(node_ids, source_file, symbol_table);
         self.hoist_enums(node_ids, source_file, symbol_table);
         self.hoist_funcs(node_ids, source_file, symbol_table);
         self.hoise_structs(node_ids, source_file, symbol_table);
@@ -805,6 +806,49 @@ impl NameResolver {
         match name {
             Name::Raw(name_str) => symbol_table.lookup(name_str),
             _ => None,
+        }
+    }
+
+    fn hoist_protocols(
+        &mut self,
+        items: &[ExprID],
+        source_file: &mut SourceFile,
+        symbol_table: &mut SymbolTable,
+    ) {
+        for id in items {
+            let Some(Expr::ProtocolDecl {
+                name: Name::Raw(name),
+                associated_types,
+                conformances,
+                body,
+            }) = source_file.get(id).cloned()
+            else {
+                continue;
+            };
+
+            let symbol_id = self.declare(
+                name.clone(),
+                SymbolKind::Protocol,
+                id,
+                source_file,
+                symbol_table,
+            );
+
+            self.start_scope(source_file, source_file.span(id));
+            self.resolve_nodes(&associated_types, source_file, symbol_table);
+            self.resolve_nodes(&conformances, source_file, symbol_table);
+            self.resolve_nodes(&vec![body], source_file, symbol_table);
+            self.end_scope();
+
+            source_file.nodes.insert(
+                *id,
+                Expr::ProtocolDecl {
+                    name: Name::Resolved(symbol_id, name),
+                    associated_types,
+                    body,
+                    conformances,
+                },
+            );
         }
     }
 

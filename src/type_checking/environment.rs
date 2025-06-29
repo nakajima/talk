@@ -64,6 +64,8 @@ pub struct ProtocolDef {
     pub methods: Vec<Method>,
     pub raw_initializers: Vec<RawInitializer>,
     pub initializers: Vec<Initializer>,
+    pub raw_method_requirements: Vec<RawMethod>,
+    pub method_requirements: Vec<Method>,
 }
 
 impl ProtocolDef {
@@ -78,6 +80,8 @@ impl ProtocolDef {
         methods: Vec<Method>,
         raw_initializers: Vec<RawInitializer>,
         initializers: Vec<Initializer>,
+        raw_method_requirements: Vec<RawMethod>,
+        method_requirements: Vec<Method>,
     ) -> Self {
         Self {
             symbol_id,
@@ -90,6 +94,8 @@ impl ProtocolDef {
             methods,
             raw_initializers,
             initializers,
+            raw_method_requirements,
+            method_requirements,
         }
     }
 
@@ -257,6 +263,14 @@ impl TypeDef {
         }
     }
 
+    pub fn raw_method_requirements(&self) -> &Vec<RawMethod> {
+        match self {
+            Self::Enum(_) => unreachable!("enums do not have method requirements"),
+            Self::Struct(_) => unreachable!("structs do not have method requirements"),
+            Self::Protocol(def) => &def.raw_methods,
+        }
+    }
+
     pub fn raw_initializers(&self) -> Vec<RawInitializer> {
         match self {
             Self::Enum(_def) => unreachable!("enums don't have initializers"),
@@ -270,6 +284,17 @@ impl TypeDef {
             Self::Enum(_def) => unreachable!("enums don't have properties"),
             Self::Struct(def) => &def.raw_properties,
             Self::Protocol(def) => &def.raw_properties,
+        }
+    }
+
+    pub fn set_raw_method_requirements(&mut self, methods: Vec<RawMethod>) {
+        if methods.is_empty() {
+            return;
+        }
+        match self {
+            Self::Enum(_) => unreachable!("enums do not have method requirements"),
+            Self::Struct(_) => unreachable!("structs do not have methods requirements"),
+            Self::Protocol(def) => def.raw_method_requirements = methods,
         }
     }
 
@@ -289,6 +314,17 @@ impl TypeDef {
             Self::Enum(def) => def.methods = methods,
             Self::Struct(def) => def.methods = methods,
             Self::Protocol(def) => def.methods = methods,
+        }
+    }
+
+    pub fn set_method_requirements(&mut self, methods: Vec<Method>) {
+        if methods.is_empty() {
+            return;
+        }
+        match self {
+            Self::Enum(_) => unreachable!("enums do not have method requirements"),
+            Self::Struct(_) => unreachable!("structs do not have methods requirements"),
+            Self::Protocol(def) => def.method_requirements = methods,
         }
     }
 
@@ -642,6 +678,7 @@ impl Environment {
         let ret = if let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() {
             self.instantiate(&scheme)
         } else {
+            println!("generating placeholder {:?}", name);
             self.placeholder(id, name.to_string(), &symbol_id)
         };
 
