@@ -26,6 +26,7 @@ use crate::{
     token::Token,
     token_kind::TokenKind,
     ty::Ty,
+    type_checker::Scheme,
     typed_expr::TypedExpr,
 };
 
@@ -1024,14 +1025,20 @@ impl<'a> Lowerer<'a> {
                         let capture_ty = self
                             .env
                             .lookup_symbol(&capture_types[i])
+                            .cloned()
                             .unwrap_or_else(|_| {
                                 let sym = capture_types[i].clone();
                                 let info = self.symbol_table.get(&sym).unwrap();
-                                dbg!(info);
-                                panic!("hi: {:?}", self.source_file.get(&info.expr_id));
+                                let typed_expr = self
+                                    .source_file
+                                    .typed_expr(&info.expr_id, &self.env)
+                                    .unwrap();
+                                Scheme {
+                                    ty: typed_expr.ty,
+                                    unbound_vars: vec![],
+                                }
                             })
-                            .ty
-                            .clone();
+                            .ty;
                         captured_ir_types.push(capture_ty.to_ir(self));
                     }
                 }
