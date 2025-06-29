@@ -494,7 +494,7 @@ impl Environment {
         }
 
         for scope in self.scopes.iter_mut() {
-            for (_, scheme) in scope {
+            for scheme in scope.values_mut() {
                 let replaced = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
                     &scheme.ty,
                     substitutions,
@@ -513,14 +513,14 @@ impl Environment {
         let mut new_constraints = vec![];
         let mut new_constraint;
         for constraint in self.constraints.iter() {
-            new_constraint = constraint.replacing(&substitutions);
+            new_constraint = constraint.replacing(substitutions);
             new_constraints.push(new_constraint);
         }
         self.constraints = new_constraints;
     }
 
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        log::info!("Declare {:?} -> {:?}", symbol_id, scheme);
+        log::info!("Declare {symbol_id:?} -> {scheme:?}");
         self.scopes.last_mut().unwrap().insert(symbol_id, scheme);
     }
 
@@ -591,7 +591,7 @@ impl Environment {
         // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, Ty> = HashMap::new();
         for old in &scheme.unbound_vars {
-            if let Some(arg_ty) = args.get(&old) {
+            if let Some(arg_ty) = args.get(old) {
                 var_map.insert(old.clone(), arg_ty.clone());
                 // self.constrain_equality(-1, Ty::TypeVar(fresh.clone()), arg_ty.clone());
             } else {
@@ -604,7 +604,7 @@ impl Environment {
         fn walk<'a>(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
-                    if let Some(new_tv) = map.get(&tv).cloned() {
+                    if let Some(new_tv) = map.get(tv).cloned() {
                         new_tv
                     } else {
                         Ty::TypeVar(tv.clone())
@@ -658,10 +658,10 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn ty_for_symbol(&mut self, id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
-        let ret = if let Ok(scheme) = self.lookup_symbol(&symbol_id).cloned() {
+        let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
             self.instantiate(&scheme)
         } else {
-            self.placeholder(id, name.to_string(), &symbol_id, vec![])
+            self.placeholder(id, name.to_string(), symbol_id, vec![])
         };
 
         if cfg!(debug_assertions) {
@@ -702,9 +702,9 @@ impl Environment {
 
     pub fn register(&mut self, def: &TypeDef) {
         match def {
-            TypeDef::Enum(def) => self.register_enum(&def),
-            TypeDef::Struct(def) => self.register_struct(&def),
-            TypeDef::Protocol(def) => self.register_protocol(&def),
+            TypeDef::Enum(def) => self.register_enum(def),
+            TypeDef::Struct(def) => self.register_struct(def),
+            TypeDef::Protocol(def) => self.register_protocol(def),
         }
     }
 

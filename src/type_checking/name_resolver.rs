@@ -423,7 +423,7 @@ impl NameResolver {
                             self.type_symbol_stack.push(symbol_id);
                             self.resolve_nodes(&generics, source_file, symbol_table);
                             self.resolve_nodes(&conformances, source_file, symbol_table);
-                            self.resolve_nodes(&vec![body], source_file, symbol_table);
+                            self.resolve_nodes(&[body], source_file, symbol_table);
                             source_file.nodes.insert(
                                 *node_id,
                                 EnumDecl {
@@ -787,7 +787,7 @@ impl NameResolver {
                 fields,
             } => {
                 let enum_name = if let Some(Name::Raw(enum_name)) = enum_name {
-                    let symbol = self.lookup(&enum_name).0;
+                    let symbol = self.lookup(enum_name).0;
                     Some(Name::Resolved(symbol, enum_name.to_string()))
                 } else {
                     None
@@ -839,7 +839,7 @@ impl NameResolver {
             self.start_scope(source_file, source_file.span(id));
             self.resolve_nodes(&associated_types, source_file, symbol_table);
             self.resolve_nodes(&conformances, source_file, symbol_table);
-            self.resolve_nodes(&vec![body], source_file, symbol_table);
+            self.resolve_nodes(&[body], source_file, symbol_table);
             self.end_scope();
 
             source_file.nodes.insert(

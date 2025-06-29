@@ -1030,11 +1030,11 @@ impl<'a> Lowerer<'a> {
                             .lookup_symbol(&capture_types[i])
                             .cloned()
                             .unwrap_or_else(|_| {
-                                let sym = capture_types[i].clone();
+                                let sym = capture_types[i];
                                 let info = self.symbol_table.get(&sym).unwrap();
                                 let typed_expr = self
                                     .source_file
-                                    .typed_expr(&info.expr_id, &self.env)
+                                    .typed_expr(&info.expr_id, self.env)
                                     .unwrap();
                                 Scheme {
                                     ty: typed_expr.ty,

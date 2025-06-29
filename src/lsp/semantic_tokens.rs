@@ -136,7 +136,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 ..
             } => {
                 result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_exprs(&conformances));
+                result.extend(self.tokens_from_exprs(conformances));
                 result.extend(self.tokens_from_expr(body));
             }
             Expr::Property {
@@ -163,8 +163,8 @@ impl<'a> SemanticTokenCollector<'a> {
                             .map(|i| (self.range_from_token(i), SemanticTokenType::TYPE_PARAMETER)),
                     )
                 }
-                result.extend(self.tokens_from_exprs(&generics));
-                result.extend(self.tokens_from_exprs(&conformances));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
             }
             Expr::FuncTypeRepr(items, ret, _) => {
                 result.extend(self.tokens_from_exprs(items));

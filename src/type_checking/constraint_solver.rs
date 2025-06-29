@@ -253,9 +253,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         Ty::TypeVar(self.env.new_type_variable(TypeVarKind::Unbound, vec![])),
                     );
                 }
-                let instantiated_ty = Self::substitute_ty_with_map(&ty, &mapping);
+                let instantiated_ty = Self::substitute_ty_with_map(ty, &mapping);
 
-                self.unify(&ty, &instantiated_ty, substitutions)?;
+                self.unify(ty, &instantiated_ty, substitutions)?;
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
@@ -266,19 +266,19 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     Ty::Enum(enum_id, _generics) => {
                         let variant = self
                             .env
-                            .lookup_enum(&enum_id)
+                            .lookup_enum(enum_id)
                             .unwrap()
-                            .tag_with_variant_for(&member_name)
+                            .tag_with_variant_for(member_name)
                             .1;
                         self.unify(&result_ty, &variant.ty, substitutions)?;
                     }
                     // A variant with values
                     Ty::Func(_args, ret, _generics) => {
-                        let Ty::Enum(enum_id, _generics) = Self::apply(&ret, substitutions, 0)
+                        let Ty::Enum(enum_id, _generics) = Self::apply(ret, substitutions, 0)
                         else {
                             println!(
                                 "did not get enum type: {:?}",
-                                Self::apply(&ret, substitutions, 0)
+                                Self::apply(ret, substitutions, 0)
                             );
                             return Ok(());
                         };
@@ -288,7 +288,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .env
                             .lookup_enum(&enum_id)
                             .unwrap()
-                            .tag_with_variant_for(&member_name)
+                            .tag_with_variant_for(member_name)
                             .1;
 
                         self.unify(&result_ty, &variant.ty, substitutions)?;
@@ -308,18 +308,15 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 let (member_ty, type_params, type_args) = match &receiver_ty {
                     Ty::Struct(struct_id, generics) => {
-                        let struct_def = self.env.lookup_struct(&struct_id).unwrap();
-                        let Some(member_ty) = struct_def.member_ty(&member_name) else {
+                        let struct_def = self.env.lookup_struct(struct_id).unwrap();
+                        let Some(member_ty) = struct_def.member_ty(member_name) else {
                             return Err(TypeError::Unresolved(format!(
                                 "Did not find member: {member_name}"
                             )));
                         };
 
                         log::warn!(
-                            "MemberAccess {receiver_ty:?}.{member_name:?} {:?} -> {:?} {:?}",
-                            member_ty,
-                            result_ty,
-                            generics
+                            "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
                         );
 
                         (
@@ -329,9 +326,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         )
                     }
                     Ty::Enum(enum_id, generics) => {
-                        let enum_def = self.env.lookup_enum(&enum_id).unwrap();
+                        let enum_def = self.env.lookup_enum(enum_id).unwrap();
 
-                        let Some(member_ty) = enum_def.member_ty(&member_name) else {
+                        let Some(member_ty) = enum_def.member_ty(member_name) else {
                             return Err(TypeError::Unknown(format!(
                                 "Member not found for enum {}: {}",
                                 enum_def.name_str, member_name
@@ -339,10 +336,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         };
 
                         log::warn!(
-                            "MemberAccess {receiver_ty:?}.{member_name:?} {:?} -> {:?} {:?}",
-                            member_ty,
-                            result_ty,
-                            generics
+                            "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
                         );
 
                         (
@@ -364,7 +358,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                 )));
                             };
 
-                            if let Some(ty) = protocol_def.member_ty(&member_name) {
+                            if let Some(ty) = protocol_def.member_ty(member_name) {
                                 result = Some((
                                     ty.clone(),
                                     protocol_def.associated_types,
@@ -396,7 +390,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in type_params.iter().zip(type_args) {
                     if let Ty::TypeVar(type_var) = type_param {
-                        log::trace!("Member substitution: {:?} -> {:?}", type_var, type_arg);
+                        log::trace!("Member substitution: {type_var:?} -> {type_arg:?}");
                         member_substitutions.insert(type_var.clone(), type_arg.clone());
                     }
                 }
@@ -480,8 +474,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     // If the scrutinee isn't an enum yet (it's still a TypeVar), we can't solve this.
                     // This indicates an issue, as the scrutinee's type should be known by this point.
                     return Err(TypeError::Unknown(format!(
-                        "VariantMatch expected an enum, but got {:?}",
-                        scrutinee_ty
+                        "VariantMatch expected an enum, but got {scrutinee_ty:?}"
                     )));
                 };
 
@@ -627,7 +620,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             ),
             Ty::Init(struct_id, params) => Ty::Init(
                 *struct_id,
-                Self::apply_multiple(&params, substitutions, depth + 1),
+                Self::apply_multiple(params, substitutions, depth + 1),
             ),
             Ty::Void => ty.clone(),
         }
@@ -785,7 +778,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in enum_def.type_parameters.iter().zip(generics) {
                     if let Ty::TypeVar(type_var) = type_param {
-                        log::trace!("Member substitution: {:?} -> {:?}", type_var, type_arg);
+                        log::trace!("Member substitution: {type_var:?} -> {type_arg:?}");
                         member_substitutions.insert(type_var.clone(), type_arg.clone());
                     }
                 }

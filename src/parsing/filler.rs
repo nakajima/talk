@@ -237,7 +237,7 @@ impl<'a, P: Phase> Filler<'a, P> {
                 conformances,
                 body,
             } => FullExpr::Struct {
-                name: name,
+                name,
                 generics: self.fill_mult(generics),
                 conformances: self.fill_mult(conformances),
                 body: self.fill(*body),
@@ -247,7 +247,7 @@ impl<'a, P: Phase> Filler<'a, P> {
                 type_repr,
                 default_value,
             } => FullExpr::Property {
-                name: name,
+                name,
                 type_repr: type_repr.map(|type_repr| self.fill(type_repr)),
                 default_value: default_value.map(|default_value| self.fill(default_value)),
             },

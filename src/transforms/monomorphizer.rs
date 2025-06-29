@@ -36,7 +36,7 @@ impl Monomorphizer {
         let mut module = module;
 
         let (generic_templates, concrete_funcs): (Vec<_>, Vec<_>) =
-            module.functions.into_iter().partition(|f| is_generic(f));
+            module.functions.into_iter().partition(is_generic);
 
         self.generic_functions = generic_templates;
 

@@ -184,7 +184,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(typed_expr) = env.typed_exprs.get(id)
             && expected.is_none()
         {
-            log::trace!("Already inferred {:?}, returning from cache", typed_expr);
+            log::trace!("Already inferred {typed_expr:?}, returning from cache");
             return Ok(typed_expr.ty.clone());
         }
 
@@ -197,7 +197,7 @@ impl<'a> TypeChecker<'a> {
         //     std::panic::Location::caller().file(),
         //     std::panic::Location::caller().line()
         // );
-        log::trace!("Infer node [{}]: {:?}", id, expr);
+        log::trace!("Infer node [{id}]: {expr:?}");
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
@@ -315,7 +315,7 @@ impl<'a> TypeChecker<'a> {
                 name,
                 type_repr,
                 default_value,
-            } => self.infer_property(&id, name, type_repr, default_value, env, source_file),
+            } => self.infer_property(id, name, type_repr, default_value, env, source_file),
             Expr::Break => Ok(Ty::Void),
             Expr::ProtocolDecl {
                 name,
@@ -622,7 +622,7 @@ impl<'a> TypeChecker<'a> {
                 if env.is_struct_symbol(&symbol_id) =>
             {
                 let placeholder =
-                    env.placeholder(callee, format!("init({:?})", symbol_id), &symbol_id, vec![]);
+                    env.placeholder(callee, format!("init({symbol_id:?})"), &symbol_id, vec![]);
 
                 env.typed_exprs.insert(
                     *callee,
@@ -967,7 +967,7 @@ impl<'a> TypeChecker<'a> {
                 block_return_ty = Some(ty);
             } else if i == items.len() - 1 {
                 // The last item counts as a return value
-                let ty = self.infer_node(item_id, env, &expected, source_file)?;
+                let ty = self.infer_node(item_id, env, expected, source_file)?;
                 block_return_ty = Some(ty);
 
                 // If we have any explicit returns, we need to constrain equality of this with them
@@ -1132,7 +1132,7 @@ impl<'a> TypeChecker<'a> {
                             // Match variant name (comparing the raw string)
                             v.name == *variant_name
                         }) else {
-                            panic!("didn't find variant: {:?}", enum_def);
+                            panic!("didn't find variant: {enum_def:?}");
                         };
                         let Ty::EnumVariant(_, values) = &variant.ty else {
                             unreachable!()

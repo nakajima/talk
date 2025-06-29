@@ -180,8 +180,8 @@ impl<'a> TypeChecker<'a> {
                     } if expr_ids.kind != PredeclarationKind::Enum => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_id,
-                            format!("predecl[{}]", name_str),
-                            &prop_id,
+                            format!("predecl[{name_str}]"),
+                            prop_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -210,8 +210,8 @@ impl<'a> TypeChecker<'a> {
 
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_id,
-                            format!("predecl[{}]", name),
-                            &symbol_id,
+                            format!("predecl[{name}]"),
+                            symbol_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -243,8 +243,8 @@ impl<'a> TypeChecker<'a> {
                     } => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_id,
-                            format!("predecl[{}]", name_str),
-                            &func_id,
+                            format!("predecl[{name_str}]"),
+                            func_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -267,8 +267,8 @@ impl<'a> TypeChecker<'a> {
                     } => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_id,
-                            format!("predecl[{}]", name_str),
-                            &func_id,
+                            format!("predecl[{name_str}]"),
+                            func_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -419,7 +419,7 @@ impl<'a> TypeChecker<'a> {
                     initializers.push(Initializer {
                         name: initializer.name.clone(),
                         expr_id: initializer.expr_id,
-                        ty: ty,
+                        ty,
                     });
                 }
 
@@ -508,7 +508,7 @@ impl<'a> TypeChecker<'a> {
             };
 
             let ref placeholder @ Ty::TypeVar(ref type_var) =
-                env.placeholder(&id, format!("predecl[{}]", name_str), &symbol_id, vec![])
+                env.placeholder(id, format!("predecl[{name_str}]"), &symbol_id, vec![])
             else {
                 unreachable!()
             };
@@ -572,7 +572,7 @@ impl<'a> TypeChecker<'a> {
         let mut result = vec![];
 
         for id in items {
-            let Some(Expr::Assignment(lhs, _)) = source_file.get(&id).cloned() else {
+            let Some(Expr::Assignment(lhs, _)) = source_file.get(id).cloned() else {
                 continue;
             };
 
@@ -582,7 +582,7 @@ impl<'a> TypeChecker<'a> {
             };
 
             let ref placeholder @ Ty::TypeVar(ref type_var) =
-                env.placeholder(&id, format!("predecl[{}]", name_str), symbol_id, vec![])
+                env.placeholder(id, format!("predecl[{name_str}]"), symbol_id, vec![])
             else {
                 unreachable!()
             };
@@ -610,7 +610,7 @@ impl<'a> TypeChecker<'a> {
         let mut results = vec![];
 
         for (id, symbol, type_var) in let_ids {
-            let ty = self.infer_node(&id, env, &None, source_file)?;
+            let ty = self.infer_node(id, env, &None, source_file)?;
             placeholder_substitutions.insert(type_var.clone(), ty.clone());
             results.push((*symbol, ty.clone()));
             env.declare(
