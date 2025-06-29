@@ -258,8 +258,8 @@ impl<'a> TypeChecker<'a> {
             Expr::Let(Name::Resolved(symbol_id, _), rhs) => {
                 self.infer_let(env, *symbol_id, rhs, expected, source_file)
             }
-            Expr::Variable(Name::Resolved(symbol_id, name), _) => {
-                self.infer_variable(id, env, *symbol_id, name)
+            Expr::Variable(Name::Resolved(symbol_id, _name), _) => {
+                self.infer_variable(env, *symbol_id)
             }
             Expr::Parameter(name @ Name::Resolved(_, _), param_ty) => {
                 self.infer_parameter(name, param_ty, env, source_file)
@@ -290,7 +290,7 @@ impl<'a> TypeChecker<'a> {
                 self.infer_pattern_expr(id, env, pattern, expected, source_file)
             }
             Expr::Variable(Name::Raw(name_str), _) => Err(TypeError::Unresolved(name_str.clone())),
-            Expr::Variable(Name::_Self(sym), _) => self.infer_variable(id, env, *sym, "self"),
+            Expr::Variable(Name::_Self(sym), _) => self.infer_variable(env, *sym),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
             Expr::Struct {
@@ -874,13 +874,7 @@ impl<'a> TypeChecker<'a> {
         Ok(rhs_ty)
     }
 
-    fn infer_variable(
-        &self,
-        id: &ExprID,
-        env: &mut Environment,
-        symbol_id: SymbolID,
-        name: &str,
-    ) -> Result<Ty, TypeError> {
+    fn infer_variable(&self, env: &mut Environment, symbol_id: SymbolID) -> Result<Ty, TypeError> {
         let scheme = env.lookup_symbol(&symbol_id)?.clone();
         let ty = env.instantiate(&scheme);
         Ok(ty)
