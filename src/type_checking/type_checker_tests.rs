@@ -1560,6 +1560,40 @@ mod protocol_tests {
     }
 
     #[test]
+    fn infers_protocol_associated_type_conformance() {
+        let checked = check_without_prelude(
+            "
+        protocol Gettable {
+            func get() -> Int
+        }
+
+        protocol Aged<T: Gettable> {
+            let getter: T
+
+            func get() -> Int {
+                self.getter.get()
+            }
+        }
+
+        struct Getter: Gettable {
+            func get() {
+                123
+            }
+        }
+
+        struct Person<G: Gettable>: Aged<G> {
+            let getter: G
+        }
+
+        Person<Getter>().get()
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.type_for(&checked.root_ids()[4]).unwrap(), Ty::Int);
+    }
+
+    #[test]
     fn errors_on_non_conformance() {
         let checked = check_without_prelude(
             "

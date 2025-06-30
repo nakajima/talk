@@ -309,7 +309,8 @@ impl NameResolver {
                                     *node_id,
                                     NameResolverError::InvalidSelf,
                                 ));
-                                Name::_Self(SymbolID(0))
+
+                                panic!("Did not get type symbol for self");
                             }
                         } else {
                             let (symbol_id, depth) = self.lookup(&name_str);
@@ -499,35 +500,33 @@ impl NameResolver {
                     associated_types,
                     conformances,
                     body,
-                } => {
-                    match name {
-                        Name::Raw(name_str) => {
-                            let symbol_id = self.declare(
-                                name_str.clone(),
-                                SymbolKind::Protocol,
-                                node_id,
-                                source_file,
-                                symbol_table,
-                            );
-                            self.type_symbol_stack.push(symbol_id);
-                            source_file.nodes.insert(
-                                *node_id,
-                                ProtocolDecl {
-                                    name: Name::Resolved(symbol_id, name_str),
-                                    associated_types: associated_types.clone(),
-                                    conformances: conformances.clone(),
-                                    body,
-                                },
-                            );
-                        }
-                        _ => continue,
-                    }
+                } => match name {
+                    Name::Raw(name_str) => {
+                        let symbol_id = self.declare(
+                            name_str.clone(),
+                            SymbolKind::Protocol,
+                            node_id,
+                            source_file,
+                            symbol_table,
+                        );
+                        self.type_symbol_stack.push(symbol_id);
+                        source_file.nodes.insert(
+                            *node_id,
+                            ProtocolDecl {
+                                name: Name::Resolved(symbol_id, name_str),
+                                associated_types: associated_types.clone(),
+                                conformances: conformances.clone(),
+                                body,
+                            },
+                        );
 
-                    self.resolve_nodes(&associated_types, source_file, symbol_table);
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-                    self.resolve_nodes(&[body], source_file, symbol_table);
-                    self.type_symbol_stack.pop();
-                }
+                        self.resolve_nodes(&associated_types, source_file, symbol_table);
+                        self.resolve_nodes(&conformances, source_file, symbol_table);
+                        self.resolve_nodes(&[body], source_file, symbol_table);
+                        self.type_symbol_stack.pop();
+                    }
+                    _ => continue,
+                },
             }
         }
     }
@@ -838,9 +837,11 @@ impl NameResolver {
             );
 
             self.start_scope(source_file, source_file.span(id));
+            self.type_symbol_stack.push(symbol_id);
             self.resolve_nodes(&associated_types, source_file, symbol_table);
             self.resolve_nodes(&conformances, source_file, symbol_table);
             self.resolve_nodes(&[body], source_file, symbol_table);
+            self.type_symbol_stack.pop();
             self.end_scope();
 
             source_file.nodes.insert(

@@ -51,6 +51,7 @@ pub enum Constraint {
         ty: Ty,
         constraints: Vec<TypeConstraint>,
     },
+    Retry(Box<Constraint>),
 }
 
 pub type Substitutions = HashMap<TypeVarID, Ty>;
@@ -66,6 +67,7 @@ impl Constraint {
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
             Self::Satisfies { expr_id, .. } => expr_id,
+            Self::Retry(c) => c.expr_id(),
         }
     }
 
@@ -145,6 +147,7 @@ impl Constraint {
                 ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
                 constraints: constraints.clone(),
             },
+            Constraint::Retry(c) => c.replacing(substitutions).clone(),
         }
     }
 }
@@ -174,7 +177,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
 
         while let Some(constraint) = self.constraints.pop() {
-            match self.solve_constraint(&constraint, &mut substitutions) {
+            match self.solve_constraint(&constraint, &mut substitutions, false) {
                 Ok(_) => (),
                 Err(err) => {
                     self.source_file
@@ -216,7 +219,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
         log::warn!("Remaining type variables: {remaining_type_vars:#?}");
 
-        self.constraints.clear();
+        // self.constraints.clear();
 
         substitutions
     }
@@ -225,12 +228,16 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         &mut self,
         constraint: &Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
+        is_retry: bool,
     ) -> Result<(), TypeError> {
         log::info!(
             "Solving constraint: {:?}",
             constraint.replacing(substitutions)
         );
         match &constraint.replacing(substitutions) {
+            Constraint::Retry(c) => {
+                self.solve_constraint(c, substitutions, true)?;
+            }
             Constraint::ConformsTo {
                 expr_id,
                 type_def,
@@ -281,7 +288,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 for unbound_var in &scheme.unbound_vars {
                     mapping.insert(
                         unbound_var.clone(),
-                        Ty::TypeVar(self.env.new_type_variable(TypeVarKind::Unbound, vec![])),
+                        Ty::TypeVar(self.env.new_type_variable(
+                            TypeVarKind::Unbound,
+                            unbound_var.constraints.clone(),
+                        )),
                     );
                 }
                 let instantiated_ty = Self::substitute_ty_with_map(ty, &mapping);
@@ -341,12 +351,36 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
                 let (member_ty, type_params, type_args) = match &receiver_ty {
-                    Ty::Struct(struct_id, generics) => {
-                        let struct_def = self.env.lookup_struct(struct_id).unwrap();
-                        let Some(member_ty) = struct_def.member_ty(member_name) else {
-                            return Err(TypeError::Unresolved(format!(
-                                "Did not find member: {member_name}"
-                            )));
+                    Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
+                        let type_def = self.env.lookup_type(type_id).unwrap().clone();
+                        let mut member_ty_search = type_def.member_ty(member_name).cloned();
+
+                        if member_ty_search.is_none() {
+                            for conformance in type_def.conformances() {
+                                if let Some(TypeDef::Protocol(protocol_def)) =
+                                    self.env.lookup_type(&conformance.protocol_id).cloned()
+                                    && let Some(ty) = protocol_def.member_ty(member_name)
+                                {
+                                    let mut subst = HashMap::new();
+                                    for (param, arg) in protocol_def
+                                        .associated_types
+                                        .iter()
+                                        .zip(&conformance.associated_types)
+                                    {
+                                        subst.insert(param.type_var.clone(), arg.clone());
+                                    }
+                                    member_ty_search =
+                                        Some(Self::substitute_ty_with_map(ty, &subst));
+                                    break;
+                                }
+                            }
+                        }
+
+                        let Some(member_ty) = member_ty_search else {
+                            return Err(TypeError::MemberNotFound(
+                                member_name.to_string(),
+                                type_def.name().to_string(),
+                            ));
                         };
 
                         log::warn!(
@@ -355,7 +389,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                         (
                             member_ty.clone(),
-                            struct_def.type_parameters.clone(),
+                            type_def.type_parameters().clone(),
                             generics,
                         )
                     }
@@ -416,6 +450,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                         )));
                                     };
 
+                                    log::error!(
+                                        "MEMBER CONFORMS CHECK: {protocol_def:?}\n{associated_types:?}\n{result_ty:?}\n{result_ty:?}"
+                                    );
+
                                     if let Some(ty) = protocol_def.member_ty(member_name) {
                                         result = Some((
                                             ty.clone(),
@@ -439,12 +477,23 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         }
                     }
                     _ => {
-                        todo!(
-                            "{:?} {:?}",
-                            Self::apply(&receiver_ty, substitutions, 0),
-                            Self::apply(&result_ty, substitutions, 0)
-                        );
-                        // self.constraints.push(constraint.clone());
+                        // todo!(
+                        //     "{:?} {:?}",
+                        //     Self::apply(&receiver_ty, substitutions, 0),
+                        //     Self::apply(&result_ty, substitutions, 0)
+                        // );
+                        if !is_retry && !matches!(constraint, Constraint::Retry(_)) {
+                            log::error!("Pushing retry {constraint:?}");
+
+                            self.constraints
+                                .push(Constraint::Retry(constraint.clone().into()));
+                            return Ok(());
+                        } else {
+                            log::error!("Retry failed for {constraint:?}");
+                            return Err(TypeError::Unknown(format!(
+                                "Retry failed for: {constraint:?}",
+                            )));
+                        }
                     }
                 };
 
@@ -697,16 +746,20 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             (a, b) if a == b => Ok(()),
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
-                if !v1.constraints.is_empty() || !v2.constraints.is_empty() {
-                    log::warn!(
-                        "Unifying two type vars without empty constraints: {v1:?} <> {v2:?}"
-                    );
+                let combined_constraints =
+                    [v1.constraints.clone(), v2.constraints.clone()].concat();
+
+                if !combined_constraints.is_empty() {
+                    log::warn!("Combined constraints: {combined_constraints:?}");
                 };
+
                 // When unifying two type variables, pick one consistently
                 if v1.id < v2.id {
-                    substitutions.insert(v2.clone(), Ty::TypeVar(v1.clone()));
+                    let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
+                    substitutions.insert(v2.clone(), Ty::TypeVar(id));
                 } else {
-                    substitutions.insert(v1.clone(), Ty::TypeVar(v2.clone()));
+                    let id = TypeVarID::new(v2.id, v2.kind, combined_constraints);
+                    substitutions.insert(v1.clone(), Ty::TypeVar(id));
                 }
                 Self::normalize_substitutions(substitutions);
                 Ok(())

@@ -19,6 +19,13 @@ use super::{constraint_solver::Constraint, type_checker::Scheme, typed_expr::Typ
 pub type Scope = HashMap<SymbolID, Scheme>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RawTypeParameter {
+    pub symbol_id: SymbolID,
+    pub expr_id: ExprID,
+    pub placeholder: TypeVarID,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeParameter {
     pub id: SymbolID,
     pub type_var: TypeVarID,

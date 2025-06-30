@@ -289,7 +289,10 @@ impl Monomorphizer {
             ),
             IRType::Struct(symbol_id, properties, generics) => IRType::Struct(
                 *symbol_id,
-                properties.clone(),
+                properties
+                    .iter()
+                    .map(|g| Self::apply_type(g, substitutions))
+                    .collect(),
                 generics
                     .iter()
                     .map(|g| Self::apply_type(g, substitutions))

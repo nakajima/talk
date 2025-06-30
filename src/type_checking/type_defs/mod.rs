@@ -90,6 +90,14 @@ impl TypeDef {
         }
     }
 
+    pub fn set_type_parameters(&mut self, params: Vec<TypeParameter>) {
+        match self {
+            Self::Enum(def) => def.type_parameters = params,
+            Self::Struct(def) => def.type_parameters = params,
+            Self::Protocol(def) => def.associated_types = params,
+        }
+    }
+
     pub fn set_method_requirements(&mut self, methods: Vec<Method>) {
         if methods.is_empty() {
             return;

@@ -376,6 +376,8 @@ impl<'a> TypeChecker<'a> {
                 .push(self.infer_node(generic, env, &None, source_file)?.clone());
         }
 
+        println!("PROTOCOL PROTOCOL: {inferred_associated_types:?}");
+
         for id in conformances {
             self.infer_node(id, env, &None, source_file)?;
         }
@@ -414,6 +416,8 @@ impl<'a> TypeChecker<'a> {
                 env.placeholder(expr_id, name.name_str(), &name.try_symbol_id(), vec![])
             }
         };
+
+        println!("INFER PROPERTY: {name:?} : {ty:?}");
 
         Ok(ty)
     }
@@ -735,12 +739,16 @@ impl<'a> TypeChecker<'a> {
                 });
             }
 
+            log::error!("Infer type repr {name:?}: {type_constraints:?}");
+
             let scheme = Scheme {
                 ty: env.placeholder(id, name.name_str(), &symbol_id, type_constraints),
                 unbound_vars,
             };
 
             env.declare(symbol_id, scheme.clone());
+
+            log::error!("scheme is {scheme:?}");
 
             return Ok(scheme.ty);
         }
@@ -1100,6 +1108,8 @@ impl<'a> TypeChecker<'a> {
             Some(receiver_id) => {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
+
+                log::error!("infer_member RECEIVER: {receiver_ty:?}");
 
                 let member_var = Ty::TypeVar(
                     env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),

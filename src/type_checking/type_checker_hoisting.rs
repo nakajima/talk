@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     NameResolved, SourceFile, SymbolID,
     constraint_solver::{Constraint, Substitutions},
-    environment::{Environment, TypeParameter},
+    environment::{Environment, RawTypeParameter, TypeParameter},
     expr::Expr,
     name::Name,
     parser::ExprID,
@@ -134,15 +134,16 @@ impl<'a> TypeChecker<'a> {
                     },
                 );
 
-                raw_type_parameters.push(TypeParameter {
-                    id: *symbol_id,
-                    type_var: type_param,
+                raw_type_parameters.push(RawTypeParameter {
+                    symbol_id: *symbol_id,
+                    expr_id: id,
+                    placeholder: type_param,
                 });
             }
 
             let unbound_vars: Vec<TypeVarID> = raw_type_parameters
                 .iter()
-                .map(|t| t.type_var.clone())
+                .map(|t| t.placeholder.clone())
                 .collect();
             let canonical_types: Vec<Ty> = unbound_vars
                 .iter()
@@ -298,22 +299,30 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
+            let type_params: Vec<TypeParameter> = raw_type_parameters
+                .iter()
+                .map(|p| TypeParameter {
+                    id: p.symbol_id,
+                    type_var: p.placeholder.clone(),
+                })
+                .collect();
+
             let type_def = match expr_ids.kind {
                 PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
                     name: Some(symbol_id),
                     name_str,
-                    type_parameters: raw_type_parameters,
+                    type_parameters: type_params,
                     variants: Default::default(),
                     methods: Default::default(),
                     conformances: Default::default(),
                 }),
                 PredeclarationKind::Struct => {
-                    TypeDef::Struct(StructDef::new(symbol_id, name_str, raw_type_parameters))
+                    TypeDef::Struct(StructDef::new(symbol_id, name_str, type_params))
                 }
                 PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
                     symbol_id,
                     name_str,
-                    associated_types: raw_type_parameters,
+                    associated_types: type_params,
                     conformances: vec![],
                     properties: Default::default(),
                     methods: Default::default(),
@@ -450,6 +459,8 @@ impl<'a> TypeChecker<'a> {
                     log::error!("Didn't get protocol for expr id: {id}");
                     continue;
                 };
+
+                println!("ASSOCIATEDDDDDD TYPES: {associated_types:?}");
 
                 let conformance = Conformance::new(symbol_id, associated_types);
                 conformances.push(conformance.clone());
