@@ -90,4 +90,8 @@ impl Ty {
     pub fn optional(&self) -> Ty {
         Ty::EnumVariant(SymbolID::OPTIONAL, vec![self.clone()])
     }
+
+    pub fn is_concrete(&self) -> bool {
+        !matches!(self, Ty::TypeVar(_))
+    }
 }

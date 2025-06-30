@@ -8,7 +8,7 @@ use crate::{
     },
     compiling::driver::DriverConfig,
     diagnostic::Diagnostic,
-    environment::{Environment, StructDef, TypeDef},
+    environment::Environment,
     expr::{Expr, ExprMeta, Pattern},
     lowering::{
         instr::{Callee, Instr},
@@ -27,6 +27,7 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
+    type_defs::{TypeDef, struct_def::StructDef},
     typed_expr::TypedExpr,
 };
 
@@ -818,7 +819,7 @@ impl<'a> Lowerer<'a> {
             struct_def
                 .type_parameters
                 .iter()
-                .map(|t| t.to_ir(self))
+                .map(|t| Ty::TypeVar(t.type_var.clone()).to_ir(self))
                 .collect(),
         );
 
@@ -1293,14 +1294,7 @@ impl<'a> Lowerer<'a> {
                                 let Some(generic_pos) = type_def
                                     .type_parameters
                                     .iter()
-                                    .filter_map(|t| {
-                                        if let Ty::TypeVar(var_id) = t {
-                                            Some(var_id)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .position(|t| t == &var)
+                                    .position(|t| t.type_var == var)
                                 // t == var.0)
                                 else {
                                     panic!("unable to determine enum generic: {var:?}")

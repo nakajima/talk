@@ -3,15 +3,20 @@ use std::collections::HashMap;
 use crate::{
     NameResolved, SourceFile, SymbolID,
     constraint_solver::{Constraint, Substitutions},
-    environment::{
-        EnumDef, EnumVariant, Environment, Initializer, Method, Property, ProtocolDef,
-        RawEnumVariant, RawInitializer, RawMethod, RawProperty, StructDef, TypeDef,
-    },
+    environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
     parser::ExprID,
     ty::Ty,
     type_checker::{Scheme, TypeChecker, TypeError},
+    type_defs::{
+        TypeDef,
+        enum_def::{EnumDef, EnumVariant, RawEnumVariant},
+        protocol_def::{Conformance, ProtocolDef},
+        struct_def::{
+            Initializer, Method, Property, RawInitializer, RawMethod, RawProperty, StructDef,
+        },
+    },
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -22,6 +27,7 @@ pub(super) struct TypePlaceholders {
     initializers: Vec<RawInitializer>,
     properties: Vec<RawProperty>,
     variants: Vec<RawEnumVariant>,
+    conformances: Vec<ExprID>,
 }
 
 #[derive(PartialEq)]
@@ -50,20 +56,15 @@ impl<'a> TypeChecker<'a> {
 
         // The first pass goes through and finds all the named things that need to be predeclared and just defines
         // them with placeholder type variables.
-        let (type_defs_with_placeholders, type_conformances) = self
+        let type_defs_with_placeholders = self
             .predeclare_types(items, env, source_file)
             .map_err(|e| e.1)?;
         let lets_results = self.predeclare_lets(items, env, source_file);
         let func_results = self.predeclare_functions(items, env, source_file)?;
 
         // Then go through and actually infer stuff
-        self.infer_types(
-            type_defs_with_placeholders,
-            type_conformances,
-            env,
-            source_file,
-        )
-        .map_err(|e| e.1)?;
+        self.infer_types(type_defs_with_placeholders, env, source_file)
+            .map_err(|e| e.1)?;
 
         to_generalize.extend(self.infer_lets(&lets_results, env, source_file)?);
         to_generalize.extend(self.infer_funcs(&func_results, env, source_file)?);
@@ -91,14 +92,7 @@ impl<'a> TypeChecker<'a> {
         root_ids: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<
-        (
-            Vec<(SymbolID, TypePlaceholders)>,
-            Vec<(SymbolID, Vec<ExprID>)>,
-        ),
-        (ExprID, TypeError),
-    > {
-        let mut type_def_conformances = vec![];
+    ) -> Result<Vec<(SymbolID, TypePlaceholders)>, (ExprID, TypeError)> {
         let mut placeholders = vec![];
 
         for id in root_ids {
@@ -128,7 +122,7 @@ impl<'a> TypeChecker<'a> {
                 };
 
                 let type_param = env.new_type_variable(
-                    TypeVarKind::CanonicalTypeParameter(format!("{}{}", name_str, symbol_id.0)),
+                    TypeVarKind::CanonicalTypeParameter(name_str.to_string()),
                     vec![],
                 );
 
@@ -140,28 +134,27 @@ impl<'a> TypeChecker<'a> {
                     },
                 );
 
-                raw_type_parameters.push(Ty::TypeVar(type_param));
+                raw_type_parameters.push(TypeParameter {
+                    id: *symbol_id,
+                    type_var: type_param,
+                });
             }
 
-            type_def_conformances.push((symbol_id, expr_ids.conformances));
+            let unbound_vars: Vec<TypeVarID> = raw_type_parameters
+                .iter()
+                .map(|t| t.type_var.clone())
+                .collect();
+            let canonical_types: Vec<Ty> = unbound_vars
+                .iter()
+                .map(|t| Ty::TypeVar(t.clone()))
+                .collect();
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::Struct(symbol_id, raw_type_parameters.clone()),
-                PredeclarationKind::Enum => Ty::Enum(symbol_id, raw_type_parameters.clone()),
-                PredeclarationKind::Protocol => {
-                    Ty::Protocol(symbol_id, raw_type_parameters.clone())
-                }
+                PredeclarationKind::Struct => Ty::Struct(symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty::Enum(symbol_id, canonical_types.clone()),
+                PredeclarationKind::Protocol => Ty::Protocol(symbol_id, canonical_types.clone()),
             };
-
-            // The unbound vars of this type ARE its canonical placeholders.
-            let unbound_vars = raw_type_parameters
-                .iter()
-                .filter_map(|ty| match ty {
-                    Ty::TypeVar(tv) => Some(tv.clone()),
-                    _ => None,
-                })
-                .collect();
 
             let scheme = Scheme::new(ty, unbound_vars);
             env.declare(symbol_id, scheme);
@@ -170,10 +163,14 @@ impl<'a> TypeChecker<'a> {
                 unreachable!()
             };
 
-            let mut ty_placeholders = TypePlaceholders::default();
+            let mut ty_placeholders = TypePlaceholders {
+                conformances: expr_ids.conformances.clone(),
+                ..Default::default()
+            };
 
             for body_id in body_ids {
                 let expr = &source_file.get(&body_id).cloned().unwrap();
+
                 match &expr {
                     Expr::Property {
                         name: Name::Resolved(prop_id, name_str),
@@ -330,13 +327,12 @@ impl<'a> TypeChecker<'a> {
             placeholders.push((type_def.symbol_id(), ty_placeholders));
         }
 
-        Ok((placeholders, type_def_conformances))
+        Ok(placeholders)
     }
 
     fn infer_types(
         &mut self,
         placeholders: Vec<(SymbolID, TypePlaceholders)>,
-        type_def_conformances: Vec<(SymbolID, Vec<ExprID>)>,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), (ExprID, TypeError)> {
@@ -404,12 +400,7 @@ impl<'a> TypeChecker<'a> {
 
                 for initializer in placeholders.initializers.iter() {
                     let ty = self
-                        .infer_node(
-                            &initializer.expr_id,
-                            env,
-                            &Some(Ty::Struct(def.symbol_id(), def.type_parameters().clone())),
-                            source_file,
-                        )
+                        .infer_node(&initializer.expr_id, env, &None, source_file)
                         .map_err(|e| (initializer.expr_id, e))?;
 
                     substitutions.insert(initializer.placeholder.clone(), ty.clone());
@@ -445,17 +436,11 @@ impl<'a> TypeChecker<'a> {
                 def.set_variants(variants);
                 env.register(&def);
             }
-        }
 
-        env.replace_constraint_values(&substitutions);
-
-        let mut conformance_constraints = vec![];
-
-        // Track conformances.
-        for (type_id, conformance_ids) in type_def_conformances {
+            let mut conformance_constraints = vec![];
             let mut conformances = vec![];
-            for id in conformance_ids.iter() {
-                let Ty::Protocol(symbol_id, _) = self
+            for id in placeholders.conformances.iter() {
+                let Ty::Protocol(symbol_id, associated_types) = self
                     .infer_node(id, env, &None, source_file)
                     .map_err(|e| (*id, e))?
                 else {
@@ -463,24 +448,20 @@ impl<'a> TypeChecker<'a> {
                     continue;
                 };
 
+                let conformance = Conformance::new(symbol_id, associated_types);
+                conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: *id,
-                    type_def: type_id,
-                    protocol: symbol_id,
+                    type_def: def.symbol_id(),
+                    conformance,
                 });
-
-                conformances.push(symbol_id);
             }
 
-            let Some(def) = env.lookup_type_mut(&type_id) else {
-                log::error!("Did not get type def for symbol: {type_id:?}");
-                continue;
-            };
-
             def.set_conformances(conformances);
+            env.register(&def);
         }
 
-        env.constraints.extend(conformance_constraints);
+        env.replace_constraint_values(&substitutions);
 
         Ok(())
     }

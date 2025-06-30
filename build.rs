@@ -167,6 +167,8 @@ fn generate_display_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStream
         use std::fmt;
         use crate::lowering::instr::*;
 
+        #[allow(unknown_lints)]
+        #[allow(clippy::all)]
         impl fmt::Display for Instr {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match self {
@@ -330,6 +332,8 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
 
         parser_arms.push(quote! {
             #[allow(unused)]
+            #[allow(unknown_lints)]
+            #[allow(clippy::all)]
             if let Some(caps) = #static_re_ident.captures(s) {
                 #parsers
                 return Ok(Self::#variant_ident #constructor);
@@ -345,6 +349,8 @@ fn generate_from_str_impl(instr_enum: &syn::ItemEnum) -> proc_macro2::TokenStrea
 
         #(#static_regexes)*
 
+        #[allow(unknown_lints)]
+        #[allow(clippy::all)]
         impl FromStr for Instr {
             type Err = String;
 

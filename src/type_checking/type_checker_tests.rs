@@ -183,11 +183,11 @@ mod tests {
 mod type_tests {
     use crate::{
         SymbolID, check_without_prelude,
-        environment::TypeDef,
         expr::Expr,
         ty::Ty,
         type_checking::CheckResult,
         type_constraint::TypeConstraint,
+        type_defs::TypeDef,
         type_var_id::{TypeVarID, TypeVarKind},
     };
 
@@ -1448,16 +1448,23 @@ mod pending {
 
 #[cfg(test)]
 mod protocol_tests {
-    use crate::{SymbolID, check_without_prelude, environment::TypeDef, ty::Ty};
+    use crate::{
+        SymbolID, check_without_prelude,
+        diagnostic::{Diagnostic, DiagnosticKind},
+        expr::Expr,
+        ty::Ty,
+        type_checker::TypeError,
+        type_defs::{TypeDef, protocol_def::Conformance},
+    };
 
     #[test]
     fn infers_protocol_conformance() {
         let checked = check_without_prelude(
             "
-        protocol Aged {
-            func getAge() -> Int
+        protocol Aged<T> {
+            func getAge() -> T
         }
-        struct Person: Aged {
+        struct Person: Aged<Int> {
             func getAge() {
                 123
             }
@@ -1466,18 +1473,18 @@ mod protocol_tests {
         )
         .unwrap();
 
-        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(3)) else {
+        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(4)) else {
             panic!("didn't get person: {:?}", checked.env.types);
         };
 
-        let Some(TypeDef::Protocol(aged_def)) = checked.env.lookup_type(&SymbolID(1)) else {
+        let Some(TypeDef::Protocol(_aged_def)) = checked.env.lookup_type(&SymbolID(1)) else {
             panic!("didn't get aged protocol: {:#?}", checked.env.types);
         };
 
-        assert!(
-            person_def.conformances.contains(&aged_def.symbol_id),
-            "{:#?}",
-            person_def.conformances
+        assert_eq!(person_def.conformances.len(), 1);
+        assert_eq!(
+            person_def.conformances[0],
+            Conformance::new(SymbolID(1), vec![Ty::Int])
         );
     }
 
@@ -1521,5 +1528,106 @@ mod protocol_tests {
         .unwrap();
 
         assert_eq!(checked.type_for(&checked.root_ids()[3]).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn infers_protocol_associated_type() {
+        let checked = check_without_prelude(
+            "
+        protocol Aged<T> {
+            let age: T
+        }
+
+        struct Person<A>: Aged<A> {
+            let age: A
+        }
+
+        func getFloat<T: Aged<Float>>(aged: T) {
+            aged.age            
+        }
+
+        func getInt<T: Aged<Int>>(aged: T) {
+            aged.age
+        }
+
+        getFloat(Person(age: 1.2))
+        getInt(Person(age: 1))
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.type_for(&checked.root_ids()[4]).unwrap(), Ty::Float);
+        assert_eq!(checked.type_for(&checked.root_ids()[5]).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn errors_on_non_conformance() {
+        let checked = check_without_prelude(
+            "
+        protocol Aged<T> {
+            let age: T
+        }
+
+        struct Person {}
+
+        func getInt<T: Aged<Int>>(aged: T) {
+            aged.age
+        }
+
+        getInt(Person())
+        ",
+        )
+        .unwrap();
+
+        println!("diagnostics: {:?}", checked.diagnostics());
+        assert!(!checked.diagnostics().is_empty());
+        assert!(matches!(
+            checked.diagnostics()[0],
+            Diagnostic {
+                kind: DiagnosticKind::Typing(_, TypeError::ConformanceError(_))
+            }
+        ))
+    }
+
+    #[test]
+    fn errors_on_wrong_associated_type() {
+        let checked = check_without_prelude(
+            "
+        protocol Aged<T> {
+            let age: T
+        }
+
+        struct Person<T>: Aged<T> {
+            let age: T
+
+            init(age) {
+                self.age = age
+            }
+        }
+
+        func getInt<T: Aged<Int>>(aged: T) {
+            aged.age
+        }
+
+        getInt(Person(age: 1.23))
+        ",
+        )
+        .unwrap();
+
+        let Some(Expr::Func { generics, .. }) = checked.source_file.get(&checked.root_ids()[2])
+        else {
+            panic!("didn't get func");
+        };
+
+        let ty = checked.type_for(&generics[0]).unwrap();
+        println!("!!!!! {ty:?}");
+
+        assert!(!checked.diagnostics().is_empty());
+        assert!(matches!(
+            checked.diagnostics()[0],
+            Diagnostic {
+                kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _))
+            }
+        ))
     }
 }

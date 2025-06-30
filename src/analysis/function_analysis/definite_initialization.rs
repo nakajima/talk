@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     analysis::{cfg::ControlFlowGraph, function_analysis_pass::FunctionAnalysisPass},
-    environment::{Property, StructDef},
     lowering::{
         instr::Instr, ir_error::IRError, ir_function::IRFunction, ir_value::IRValue,
         lowerer::BasicBlockID, register::Register,
     },
+    type_defs::struct_def::{Property, StructDef},
 };
 
 pub struct DefiniteInitizationPass {
@@ -147,12 +147,8 @@ mod tests {
     use super::*;
 
     use crate::{
-        SourceFile, SymbolID,
-        compiling::driver::Driver,
-        environment::{Environment, Property, TypeDef},
-        lowering::ir_module::IRModule,
-        source_file,
-        ty::Ty,
+        SourceFile, SymbolID, compiling::driver::Driver, environment::Environment,
+        lowering::ir_module::IRModule, source_file, ty::Ty, type_defs::TypeDef,
     };
 
     fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>, Environment) {

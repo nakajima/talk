@@ -25,7 +25,7 @@ pub enum DiagnosticKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Diagnostic {
-    kind: DiagnosticKind,
+    pub kind: DiagnosticKind,
 }
 
 impl Diagnostic {

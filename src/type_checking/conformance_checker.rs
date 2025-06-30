@@ -1,8 +1,12 @@
 use crate::{
     SymbolID,
-    environment::{Method, Property, ProtocolDef, TypeDef},
     ty::Ty,
     type_checker::TypeError,
+    type_defs::{
+        TypeDef,
+        protocol_def::ProtocolDef,
+        struct_def::{Method, Property},
+    },
 };
 
 pub struct ConformanceChecker<'a> {
@@ -14,6 +18,7 @@ pub struct ConformanceChecker<'a> {
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum ConformanceError {
     TypeCannotConform(String),
+    TypeDoesNotConform(String, String),
     MemberNotImplemented {
         ty: SymbolID,
         protocol: SymbolID,

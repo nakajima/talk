@@ -10,6 +10,7 @@ use crate::{
     ty::Ty,
     type_checker::TypeError,
     type_constraint::TypeConstraint,
+    type_defs::{TypeDef, enum_def::EnumDef, protocol_def::ProtocolDef, struct_def::StructDef},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -18,338 +19,12 @@ use super::{constraint_solver::Constraint, type_checker::Scheme, typed_expr::Typ
 pub type Scope = HashMap<SymbolID, Scheme>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawEnumVariant {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub values: Vec<ExprID>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EnumVariant {
-    pub name: String,
-    pub ty: Ty,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawInitializer {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub func_id: ExprID,
-    pub params: Vec<ExprID>,
-    pub placeholder: TypeVarID,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Initializer {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub ty: Ty,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawProperty {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub placeholder: TypeVarID,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ProtocolDef {
-    pub symbol_id: SymbolID,
-    pub name_str: String,
-    pub associated_types: TypeParams,
-    pub conformances: Vec<SymbolID>,
-    pub properties: Vec<Property>,
-    pub methods: Vec<Method>,
-    pub initializers: Vec<Initializer>,
-    pub method_requirements: Vec<Method>,
-}
-
-impl ProtocolDef {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        symbol_id: SymbolID,
-        name_str: String,
-        associated_types: TypeParams,
-        conformances: Vec<SymbolID>,
-        properties: Vec<Property>,
-        methods: Vec<Method>,
-        initializers: Vec<Initializer>,
-        method_requirements: Vec<Method>,
-    ) -> Self {
-        Self {
-            symbol_id,
-            name_str,
-            associated_types,
-            conformances,
-            properties,
-            methods,
-            initializers,
-            method_requirements,
-        }
-    }
-
-    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
-        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
-            return Some(&property.ty);
-        }
-
-        if let Some(method) = self.methods.iter().find(|p| p.name == name) {
-            return Some(&method.ty);
-        }
-
-        if let Some(method) = self.method_requirements.iter().find(|p| p.name == name) {
-            return Some(&method.ty);
-        }
-
-        None
-    }
-
-    pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
-        Ty::Struct(self.symbol_id, type_parameters.clone())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EnumDef {
-    pub name: Option<SymbolID>,
-    pub name_str: String,
-    pub type_parameters: TypeParams,
-    pub variants: Vec<EnumVariant>,
-    pub methods: Vec<Method>,
-    pub conformances: Vec<SymbolID>,
-}
-
-impl EnumDef {
-    pub fn member_ty(&self, member_name: &str) -> Option<Ty> {
-        if let Some(method) = self.methods.iter().find(|m| m.name == member_name) {
-            return Some(method.ty.clone());
-        }
-
-        for variant in self.variants.iter() {
-            if variant.name == member_name {
-                let Ty::EnumVariant(_, values) = variant.ty.clone() else {
-                    unreachable!();
-                };
-                return Some(Ty::EnumVariant(self.name.unwrap(), values));
-            }
-        }
-
-        None
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StructDef {
-    pub symbol_id: SymbolID,
-    pub name_str: String,
-    pub type_parameters: TypeParams,
-    pub properties: Vec<Property>,
-    pub methods: Vec<Method>,
-    pub initializers: Vec<Initializer>,
-    pub conformances: Vec<SymbolID>,
-}
-
-impl StructDef {
-    pub fn new(symbol_id: SymbolID, name_str: String, type_parameters: TypeParams) -> Self {
-        Self {
-            symbol_id,
-            name_str,
-            type_parameters,
-            methods: Default::default(),
-            properties: Default::default(),
-            initializers: Default::default(),
-            conformances: Default::default(),
-        }
-    }
-
-    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
-        if let Some(property) = self.properties.iter().find(|p| p.name == name) {
-            return Some(&property.ty);
-        }
-
-        if let Some(method) = self.methods.iter().find(|p| p.name == name) {
-            return Some(&method.ty);
-        }
-
-        None
-    }
-
-    pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
-        Ty::Struct(self.symbol_id, type_parameters.clone())
-    }
-}
-
-impl EnumDef {
-    pub(crate) fn tag_with_variant_for(&self, name: &str) -> (u16, &EnumVariant) {
-        for (i, variant) in self.variants.iter().enumerate() {
-            if variant.name == name {
-                return (i as u16, variant);
-            }
-        }
-
-        panic!("no variant named {:?} for {:?}", name, self.name)
-    }
-}
-
-pub type TypeParams = Vec<Ty>;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypeDef {
-    Enum(EnumDef),
-    Struct(StructDef),
-    Protocol(ProtocolDef),
-}
-
-impl TypeDef {
-    pub fn symbol_id(&self) -> SymbolID {
-        match self {
-            Self::Enum(def) => def.name.unwrap(),
-            Self::Struct(def) => def.symbol_id,
-            Self::Protocol(def) => def.symbol_id,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Enum(def) => &def.name_str,
-            Self::Struct(def) => &def.name_str,
-            Self::Protocol(def) => &def.name_str,
-        }
-    }
-
-    pub fn type_parameters(&self) -> &Vec<Ty> {
-        match self {
-            Self::Enum(def) => &def.type_parameters,
-            Self::Struct(def) => &def.type_parameters,
-            Self::Protocol(def) => &def.associated_types,
-        }
-    }
-
-    pub fn find_method(&self, method_name: &str) -> Option<&Method> {
-        match self {
-            Self::Enum(def) => def.methods.iter().find(|m| m.name == method_name),
-            Self::Struct(def) => def.methods.iter().find(|m| m.name == method_name),
-            Self::Protocol(def) => def.methods.iter().find(|m| m.name == method_name),
-        }
-    }
-
-    pub fn find_property(&self, name: &str) -> Option<&Property> {
-        match self {
-            Self::Enum(_) => unreachable!("enums do not have properties"),
-            Self::Struct(def) => def.properties.iter().find(|p| p.name == name),
-            Self::Protocol(def) => def.properties.iter().find(|p| p.name == name),
-        }
-    }
-
-    pub fn set_methods(&mut self, methods: Vec<Method>) {
-        if methods.is_empty() {
-            return;
-        }
-        match self {
-            Self::Enum(def) => def.methods = methods,
-            Self::Struct(def) => def.methods = methods,
-            Self::Protocol(def) => def.methods = methods,
-        }
-    }
-
-    pub fn set_method_requirements(&mut self, methods: Vec<Method>) {
-        if methods.is_empty() {
-            return;
-        }
-        match self {
-            Self::Enum(_) => unreachable!("enums do not have method requirements"),
-            Self::Struct(_) => unreachable!("structs do not have methods requirements"),
-            Self::Protocol(def) => def.method_requirements = methods,
-        }
-    }
-
-    pub fn set_initializers(&mut self, initializers: Vec<Initializer>) {
-        if initializers.is_empty() {
-            return;
-        }
-
-        match self {
-            Self::Enum(_) => unreachable!("enums don't have initializers"),
-            Self::Struct(def) => def.initializers = initializers,
-            Self::Protocol(def) => def.initializers = initializers,
-        }
-    }
-
-    pub fn set_properties(&mut self, properties: Vec<Property>) {
-        if properties.is_empty() {
-            return;
-        }
-        match self {
-            Self::Enum(_) => unreachable!("enums don't have properties"),
-            Self::Struct(def) => def.properties = properties,
-            Self::Protocol(def) => def.properties = properties,
-        }
-    }
-
-    pub fn set_variants(&mut self, variants: Vec<EnumVariant>) {
-        if variants.is_empty() {
-            return;
-        }
-        match self {
-            Self::Enum(def) => def.variants = variants,
-            Self::Struct(_) => unreachable!("structs don't have variants"),
-            Self::Protocol(_) => unreachable!("protocols don't have variants"),
-        }
-    }
-
-    pub fn set_conformances(&mut self, conformances: Vec<SymbolID>) {
-        match self {
-            Self::Enum(def) => def.conformances = conformances,
-            Self::Struct(def) => def.conformances = conformances,
-            Self::Protocol(def) => def.conformances = conformances,
-        }
-    }
+pub struct TypeParameter {
+    pub id: SymbolID,
+    pub type_var: TypeVarID,
 }
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Property {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub ty: Ty,
-}
-
-impl Property {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
-        Self { name, expr_id, ty }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Method {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub ty: Ty,
-}
-
-impl Method {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
-        Self { name, expr_id, ty }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawMethod {
-    pub name: String,
-    pub expr_id: ExprID,
-    pub placeholder: TypeVarID,
-}
-
-impl RawMethod {
-    pub fn new(name: String, expr_id: ExprID, placeholder: TypeVarID) -> Self {
-        Self {
-            name,
-            expr_id,
-            placeholder,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Environment {
@@ -656,11 +331,17 @@ impl Environment {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn ty_for_symbol(&mut self, id: &ExprID, name: String, symbol_id: &SymbolID) -> Ty {
+    pub fn ty_for_symbol(
+        &mut self,
+        id: &ExprID,
+        name: String,
+        symbol_id: &SymbolID,
+        constraints: &[TypeConstraint],
+    ) -> Ty {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
             self.instantiate(&scheme)
         } else {
-            self.placeholder(id, name.to_string(), symbol_id, vec![])
+            self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };
 
         if cfg!(debug_assertions) {
@@ -709,11 +390,12 @@ impl Environment {
 
     // Helper methods for enum definitions
     pub fn register_enum(&mut self, def: &EnumDef) {
+        log::info!("Registering {def:?}");
         self.declare(
             def.name.unwrap(),
             Scheme {
-                ty: Ty::Enum(def.name.unwrap(), def.type_parameters.clone()),
-                unbound_vars: self.extract_type_variables(&def.type_parameters),
+                ty: Ty::Enum(def.name.unwrap(), def.canonical_type_parameters()),
+                unbound_vars: def.canonical_type_vars(),
             },
         );
         self.types
@@ -721,11 +403,12 @@ impl Environment {
     }
 
     pub fn register_struct(&mut self, def: &StructDef) {
+        log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
             Scheme {
-                ty: Ty::Struct(def.symbol_id, def.type_parameters.clone()),
-                unbound_vars: self.extract_type_variables(&def.type_parameters),
+                ty: Ty::Struct(def.symbol_id, def.canonical_type_parameters()),
+                unbound_vars: def.canonical_type_vars(),
             },
         );
         self.types
@@ -733,27 +416,16 @@ impl Environment {
     }
 
     pub fn register_protocol(&mut self, def: &ProtocolDef) {
+        log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
             Scheme {
-                ty: Ty::Protocol(def.symbol_id, def.associated_types.clone()),
-                unbound_vars: self.extract_type_variables(&def.associated_types),
+                ty: Ty::Protocol(def.symbol_id, def.canonical_associated_types()),
+                unbound_vars: def.canonical_associated_type_vars(),
             },
         );
         self.types
             .insert(def.symbol_id, TypeDef::Protocol(def.clone()));
-    }
-
-    fn extract_type_variables(&self, tys: &[Ty]) -> Vec<TypeVarID> {
-        tys.iter()
-            .filter_map(|a| {
-                if let Ty::TypeVar(id) = a.clone() {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect()
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
@@ -812,6 +484,14 @@ impl Environment {
 
     pub fn lookup_struct(&self, name: &SymbolID) -> Option<&StructDef> {
         if let Some(TypeDef::Struct(def)) = self.types.get(name) {
+            Some(def)
+        } else {
+            None
+        }
+    }
+
+    pub fn lookup_protocol(&self, name: &SymbolID) -> Option<&ProtocolDef> {
+        if let Some(TypeDef::Protocol(def)) = self.types.get(name) {
             Some(def)
         } else {
             None
@@ -892,9 +572,32 @@ pub fn free_type_vars_in_env(
             if symbol_id == &ignoring {
                 continue;
             }
+            //     // If its self, then only return explicit type parameters
+            //     let items: Vec<TypeVarID> = match scheme.ty.clone() {
+            //         Ty::Enum(_, vars)
+            //         | Ty::Struct(_, vars)
+            //         | Ty::Protocol(_, vars)
+            //         | Ty::Func(_, _, vars) => vars,
+            //         _ => vec![],
+            //     }
+            //     .iter()
+            //     .filter_map(|t| {
+            //         if let Ty::TypeVar(id) = t {
+            //             Some(id.clone())
+            //         } else {
+            //             None
+            //         }
+            //     })
+            //     .collect();
 
-            // collect its free vars
+            //     println!("gathering free vars from t: {scheme:?} {items:?}");
+
+            //     let mut set = HashSet::new();
+            //     set.extend(items);
+            //     set
+            // } else {
             let mut ftv = free_type_vars(&scheme.ty);
+            // };
 
             // remove those vars that the scheme already quantifies
             for q in &scheme.unbound_vars {

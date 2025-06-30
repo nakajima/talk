@@ -4,12 +4,15 @@ use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
     conformance_checker::ConformanceChecker,
     diagnostic::Diagnostic,
-    environment::{Environment, TypeDef},
+    environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
     parser::ExprID,
+    satisfies_checker::SatisfiesChecker,
     ty::Ty,
     type_checker::{Scheme, TypeError},
+    type_constraint::TypeConstraint,
+    type_defs::{TypeDef, protocol_def::Conformance},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -22,7 +25,7 @@ pub enum Constraint {
         expr_id: ExprID,
         initializes_id: SymbolID,
         args: Vec<Ty>,
-        ret: Ty,
+        func_ty: Ty,
     },
     VariantMatch {
         expr_id: ExprID,
@@ -40,7 +43,12 @@ pub enum Constraint {
     ConformsTo {
         expr_id: ExprID,
         type_def: SymbolID,
-        protocol: SymbolID,
+        conformance: Conformance,
+    },
+    Satisfies {
+        expr_id: ExprID,
+        ty: Ty,
+        constraints: Vec<TypeConstraint>,
     },
 }
 
@@ -56,6 +64,7 @@ impl Constraint {
             Self::VariantMatch { expr_id, .. } => expr_id,
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
+            Self::Satisfies { expr_id, .. } => expr_id,
         }
     }
 
@@ -81,7 +90,7 @@ impl Constraint {
                 expr_id,
                 initializes_id,
                 args,
-                ret,
+                func_ty: ret,
             } => Constraint::InitializerCall {
                 expr_id: *expr_id,
                 initializes_id: *initializes_id,
@@ -89,7 +98,7 @@ impl Constraint {
                     .iter()
                     .map(|a| ConstraintSolver::<NameResolved>::apply(a, substitutions, 0))
                     .collect(),
-                ret: ret.clone(),
+                func_ty: ret.clone(),
             },
             Constraint::VariantMatch {
                 expr_id,
@@ -124,6 +133,15 @@ impl Constraint {
                 },
             },
             constraint @ Constraint::ConformsTo { .. } => constraint.clone(),
+            Constraint::Satisfies {
+                expr_id,
+                ty,
+                constraints,
+            } => Constraint::Satisfies {
+                expr_id: *expr_id,
+                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                constraints: constraints.clone(),
+            },
         }
     }
 }
@@ -205,16 +223,19 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Constraint::ConformsTo {
                 expr_id,
                 type_def,
-                protocol,
+                conformance,
             } => {
                 let Some(type_def) = self.env.lookup_type(type_def) else {
                     return Err(TypeError::Unknown(format!(
                         "could not find type: {type_def:?}"
                     )));
                 };
-                let Some(TypeDef::Protocol(protocol)) = self.env.lookup_type(protocol) else {
+
+                let Some(TypeDef::Protocol(protocol)) =
+                    self.env.lookup_type(&conformance.protocol_id)
+                else {
                     return Err(TypeError::Unknown(format!(
-                        "could not find protocol: {protocol:?}"
+                        "could not find protocol: {conformance:?}"
                     )));
                 };
 
@@ -291,14 +312,17 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .1;
 
                         self.unify(&result_ty, &variant.ty, substitutions)?;
-                        // println!(
-                        //     "unqualified member: {:?} {:?} {:?}",
-                        //     Self::apply_multiple(args, substitutions, 0),
-                        //     Self::apply(ret, substitutions, 0),
-                        //     Self::apply_multiple(generics, substitutions, 0)
-                        // );
                     }
                     _ => (),
+                }
+            }
+            Constraint::Satisfies {
+                ty, constraints, ..
+            } => {
+                let checker = SatisfiesChecker::new(self.env, ty, constraints);
+                let unifications = checker.check()?;
+                for (lhs, rhs) in unifications {
+                    self.unify(&lhs, &rhs, substitutions)?;
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
@@ -345,7 +369,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         )
                     }
                     Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
-                        let mut result: Option<(Ty, Vec<Ty>, &Vec<Ty>)> = None;
+                        let mut result: Option<(Ty, Vec<TypeParameter>, &Vec<Ty>)> = None;
 
                         for constraint in type_var.constraints.iter() {
                             let Some(TypeDef::Protocol(protocol_def)) =
@@ -388,10 +412,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in type_params.iter().zip(type_args) {
-                    if let Ty::TypeVar(type_var) = type_param {
-                        log::trace!("Member substitution: {type_var:?} -> {type_arg:?}");
-                        member_substitutions.insert(type_var.clone(), type_arg.clone());
-                    }
+                    member_substitutions.insert(type_param.type_var.clone(), type_arg.clone());
                 }
 
                 let specialized_ty =
@@ -402,7 +423,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Constraint::InitializerCall {
                 initializes_id,
                 args,
-                ret,
+                func_ty: ret,
                 ..
             } => {
                 let Some(struct_def) = self.env.lookup_struct(initializes_id) else {
@@ -438,40 +459,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 field_tys,
                 ..
             } => {
-                // let Ty::Enum(enum_id, generics) = Self::apply(scrutinee_ty, &substitutions, 0)
-                // else {
-                //     unreachable!()
-                // };
-
-                // let Some(enum_def) = self.env.lookup_enum(&enum_id) else {
-                //     unreachable!()
-                // };
-
-                // let Some(variant) = enum_def.variants.iter().find(|v| v.name == *variant_name)
-                // else {
-                //     unreachable!()
-                // };
-
-                // let Ty::EnumVariant(_, values) = &variant.ty else {
-                //     unreachable!();
-                // };
-
-                // for (value, field) in values.iter().zip(field_tys) {
-                //     self.unify(value, field, substitutions)?;
-                // }
-
-                // for (param, arg) in enum_def.type_parameters.iter().zip(generics) {
-                //     self.unify(param, &arg, substitutions)?
-                // }
-
-                // Self::normalize_substitutions(substitutions);
-                // Apply existing substitutions to get the most up-to-date type of the value being matched.
-                // Apply existing substitutions to get the most up-to-date type of the scrutinee.
                 let scrutinee_ty = Self::apply(scrutinee_ty, substitutions, 0);
 
                 let Ty::Enum(enum_id, concrete_type_args) = &scrutinee_ty else {
-                    // If the scrutinee isn't an enum yet (it's still a TypeVar), we can't solve this.
-                    // This indicates an issue, as the scrutinee's type should be known by this point.
                     return Err(TypeError::Unknown(format!(
                         "VariantMatch expected an enum, but got {scrutinee_ty:?}"
                     )));
@@ -481,7 +471,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     unreachable!("Enum definition not found for a typed enum.");
                 };
 
-                // Find the variant definition within the enum.
                 let Some(variant_def) = enum_def.variants.iter().find(|v| v.name == *variant_name)
                 else {
                     return Err(TypeError::UnknownVariant(Name::Raw(variant_name.clone())));
@@ -498,9 +487,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 for (type_param, concrete_arg) in
                     enum_def.type_parameters.iter().zip(concrete_type_args)
                 {
-                    if let Ty::TypeVar(type_var_id) = type_param {
-                        local_substitutions.insert(type_var_id.clone(), concrete_arg.clone());
-                    }
+                    local_substitutions.insert(type_param.type_var.clone(), concrete_arg.clone());
                 }
 
                 // Specialize the variant's generic field types using the local map.
@@ -669,6 +656,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             (a, b) if a == b => Ok(()),
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
+                if !v1.constraints.is_empty() || !v2.constraints.is_empty() {
+                    log::warn!(
+                        "Unifying two type vars without empty constraints: {v1:?} <> {v2:?}"
+                    );
+                };
                 // When unifying two type variables, pick one consistently
                 if v1.id < v2.id {
                     substitutions.insert(v2.clone(), Ty::TypeVar(v1.clone()));
@@ -683,6 +675,15 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 if Self::occurs_check(&v, &ty, substitutions) {
                     Err(TypeError::OccursConflict)
                 } else {
+                    // Having this here is icky.
+                    if !v.constraints.is_empty() {
+                        let checker = SatisfiesChecker::new(self.env, &ty, &v.constraints);
+                        let unifications = checker.check()?;
+                        for (lhs, rhs) in unifications {
+                            self.unify(&lhs, &rhs, substitutions)?;
+                        }
+                    }
+
                     substitutions.insert(v.clone(), ty.clone());
                     Self::normalize_substitutions(substitutions);
                     Ok(())
@@ -774,10 +775,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in enum_def.type_parameters.iter().zip(generics) {
-                    if let Ty::TypeVar(type_var) = type_param {
-                        log::trace!("Member substitution: {type_var:?} -> {type_arg:?}");
-                        member_substitutions.insert(type_var.clone(), type_arg.clone());
-                    }
+                    log::trace!("Member substitution: {type_param:?} -> {type_arg:?}");
+                    member_substitutions.insert(type_param.type_var.clone(), type_arg.clone());
                 }
                 let specialized_ty = Self::substitute_ty_with_map(
                     &Ty::EnumVariant(enum_id, func_args),
@@ -796,7 +795,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 Ok(())
             }
             _ => {
-                log::error!("Mismatch: {lhs:?} and {rhs:?}");
+                log::error!(
+                    "Mismatch: {:?} and {:?}",
+                    Self::apply(lhs, substitutions, 0),
+                    Self::apply(rhs, substitutions, 0)
+                );
                 Err(TypeError::Mismatch(
                     Self::apply(lhs, substitutions, 0).to_string(),
                     Self::apply(rhs, substitutions, 0).to_string(),
@@ -844,9 +847,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         match ty {
             Ty::TypeVar(type_var_id) => {
                 if let Some(substituted_ty) = substitutions.get(type_var_id) {
-                    // Important: Clone the substituted type. If it's also a TypeVar that needs further substitution,
-                    // the caller (or a broader substitution application like `apply_substitutions_to_ty`) must handle it.
-                    // This function only applies one layer from the provided map.
                     substituted_ty.clone()
                 } else {
                     ty.clone() // Not in this substitution map, return as is.

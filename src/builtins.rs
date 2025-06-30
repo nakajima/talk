@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
-    environment::TypeDef,
     name::Name,
     ty::Ty,
     type_checker::Scheme,
+    type_defs::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 

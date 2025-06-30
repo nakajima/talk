@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{SymbolID, environment::Property};
+use crate::{SymbolID, type_defs::struct_def::Property};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IRError {

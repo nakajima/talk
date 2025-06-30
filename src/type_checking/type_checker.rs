@@ -14,13 +14,11 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_constraint::TypeConstraint,
+    type_defs::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-use super::{
-    environment::{Environment, TypeDef},
-    typed_expr::TypedExpr,
-};
+use super::{environment::Environment, typed_expr::TypedExpr};
 
 pub type TypeDefs = HashMap<SymbolID, TypeDef>;
 pub type FuncParams = Vec<Ty>;
@@ -594,7 +592,7 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_call(
         &mut self,
-        _id: &ExprID,
+        id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
@@ -626,6 +624,8 @@ impl<'a> TypeChecker<'a> {
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
                 if env.is_struct_symbol(&symbol_id) =>
             {
+                let struct_def = env.lookup_struct(&symbol_id).unwrap().clone();
+
                 let placeholder =
                     env.placeholder(callee, format!("init({symbol_id:?})"), &symbol_id, vec![]);
 
@@ -642,10 +642,31 @@ impl<'a> TypeChecker<'a> {
                     expr_id: *callee,
                     initializes_id: symbol_id,
                     args: arg_tys.clone(),
-                    ret: placeholder.clone(),
+                    func_ty: placeholder.clone(),
                 });
 
-                ret_var = Ty::Struct(symbol_id, vec![]);
+                // If there aren't explicit type params specified, create some placeholders. I guess for now
+                // if there are _some_ we'll just use positional values?
+                let mut type_args = vec![];
+
+                if !struct_def.type_parameters.is_empty() {
+                    for (i, type_arg) in struct_def.type_parameters.iter().enumerate() {
+                        type_args.push(if inferred_type_args.len().saturating_sub(1) > i {
+                            inferred_type_args[i].clone()
+                        } else {
+                            env.placeholder(
+                                id,
+                                format!("Call Placeholder {type_arg:?}"),
+                                &type_arg.id,
+                                vec![],
+                            )
+                        });
+                    }
+                }
+
+                println!("type_args: {type_args:?}");
+
+                ret_var = Ty::Struct(symbol_id, type_args);
             }
             _ => {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
@@ -689,33 +710,43 @@ impl<'a> TypeChecker<'a> {
         let symbol_id = name.try_symbol_id();
 
         if *is_type_parameter {
+            let mut unbound_vars = vec![];
             let mut type_constraints = vec![];
+
             for id in conformances {
                 let ty = self.infer_node(id, env, &None, source_file)?;
-                let Ty::Protocol(protocol_id, associated_types) = ty else {
-                    return Err(TypeError::Unknown(format!("{ty:?} is not a protocol")));
+                let Ty::Protocol(protocol_id, associated_types) = ty.clone() else {
+                    return Err(TypeError::Unknown(format!("{ty:?} is not a protocol",)));
                 };
+                println!("is type parameter: {ty:?} {protocol_id:?}/{associated_types:?}",);
+
+                unbound_vars.extend(associated_types.iter().filter_map(|t| {
+                    if let Ty::TypeVar(var) = t {
+                        Some(var.clone())
+                    } else {
+                        None
+                    }
+                }));
+
                 type_constraints.push(TypeConstraint {
                     protocol_id,
-                    associated_types,
+                    associated_types: associated_types.clone(),
                 });
             }
 
-            let scheme = env.lookup_symbol(&symbol_id).cloned().unwrap_or(Scheme {
+            let scheme = Scheme {
                 ty: env.placeholder(id, name.name_str(), &symbol_id, type_constraints),
-                unbound_vars: vec![],
-            });
+                unbound_vars,
+            };
 
             env.declare(symbol_id, scheme.clone());
 
-            return Ok(env.instantiate(&scheme));
+            return Ok(scheme.ty);
         }
-
-        let base_ty_placeholder = env.ty_for_symbol(id, name.name_str(), &symbol_id);
 
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
-            return Ok(base_ty_placeholder);
+            return Ok(env.ty_for_symbol(id, name.name_str(), &symbol_id, &[]));
         }
 
         let ty_scheme = env.lookup_symbol(&symbol_id).unwrap().clone();
@@ -728,6 +759,8 @@ impl<'a> TypeChecker<'a> {
         }
 
         let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
+
+        println!("instantiated: {instantiated:?}");
 
         // indented_println!(
         //     env,
@@ -1131,7 +1164,7 @@ impl<'a> TypeChecker<'a> {
             } => {
                 // The expected type should be an Enum type
                 match expected {
-                    Ty::Enum(enum_id, type_args) | Ty::EnumVariant(enum_id, type_args) => {
+                    Ty::Enum(enum_id, type_args) => {
                         let enum_def = env.lookup_enum(enum_id).unwrap().clone();
                         // Find the variant by name
                         let Some(variant) = enum_def.variants.iter().find(|v| {
@@ -1147,13 +1180,10 @@ impl<'a> TypeChecker<'a> {
                         // We need to substitute the enum's type parameters with the actual type args
 
                         // Create substitution map: enum type param -> concrete type arg
-                        let mut substitutions = HashMap::new();
-                        for (param_ty, arg_ty) in
-                            enum_def.type_parameters.iter().zip(type_args.iter())
+                        let mut substitutions: HashMap<TypeVarID, Ty> = HashMap::new();
+                        for (param, arg_ty) in enum_def.type_parameters.iter().zip(type_args.iter())
                         {
-                            if let Ty::TypeVar(param_id) = param_ty {
-                                substitutions.insert(param_id.clone(), arg_ty.clone());
-                            }
+                            substitutions.insert(param.type_var.clone(), arg_ty.clone());
                         }
 
                         // Apply substitutions to get concrete field types
@@ -1171,6 +1201,18 @@ impl<'a> TypeChecker<'a> {
                         for (field_pattern, field_ty) in
                             fields.iter().zip(concrete_field_types.iter())
                         {
+                            self.infer_node(
+                                field_pattern,
+                                env,
+                                &Some(field_ty.clone()),
+                                source_file,
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Ty::EnumVariant(_enum_id, values_types) => {
+                        // Now match field patterns with their concrete types
+                        for (field_pattern, field_ty) in fields.iter().zip(values_types.iter()) {
                             self.infer_node(
                                 field_pattern,
                                 env,

@@ -8,6 +8,7 @@ pub mod conformance_checker;
 pub mod constraint_solver;
 pub mod environment;
 pub mod name_resolver;
+pub mod satisfies_checker;
 pub mod scope_tree;
 pub mod synthesis;
 pub mod ty;
@@ -16,6 +17,7 @@ pub mod type_checker_hoisting;
 #[cfg(test)]
 pub mod type_checker_tests;
 pub mod type_constraint;
+pub mod type_defs;
 pub mod type_var_id;
 pub mod typed_expr;
 
