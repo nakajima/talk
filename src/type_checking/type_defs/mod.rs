@@ -1,6 +1,7 @@
 use crate::{
     SymbolID,
     environment::TypeParameter,
+    ty::Ty,
     type_defs::{
         enum_def::{EnumDef, EnumVariant},
         protocol_def::{Conformance, ProtocolDef},
@@ -22,6 +23,14 @@ pub enum TypeDef {
 }
 
 impl TypeDef {
+    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
+        match self {
+            TypeDef::Enum(enum_def) => enum_def.member_ty(name),
+            TypeDef::Struct(struct_def) => struct_def.member_ty(name),
+            TypeDef::Protocol(protocol_def) => protocol_def.member_ty(name),
+        }
+    }
+
     pub fn symbol_id(&self) -> SymbolID {
         match self {
             Self::Enum(def) => def.name.unwrap(),

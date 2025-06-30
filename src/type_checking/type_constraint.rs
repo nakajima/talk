@@ -1,7 +1,16 @@
 use crate::{SymbolID, ty::Ty};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeConstraint {
-    pub protocol_id: SymbolID,
-    pub associated_types: Vec<Ty>,
+pub enum TypeConstraint {
+    Conforms {
+        protocol_id: SymbolID,
+        associated_types: Vec<Ty>,
+    },
+    InstanceOf {
+        symbol_id: SymbolID,
+        associated_types: Vec<Ty>,
+    },
+    Equals {
+        ty: Ty,
+    },
 }

@@ -44,17 +44,14 @@ impl EnumDef {
             .collect()
     }
 
-    pub fn member_ty(&self, member_name: &str) -> Option<Ty> {
+    pub fn member_ty(&self, member_name: &str) -> Option<&Ty> {
         if let Some(method) = self.methods.iter().find(|m| m.name == member_name) {
-            return Some(method.ty.clone());
+            return Some(&method.ty);
         }
 
         for variant in self.variants.iter() {
             if variant.name == member_name {
-                let Ty::EnumVariant(_, values) = variant.ty.clone() else {
-                    unreachable!();
-                };
-                return Some(Ty::EnumVariant(self.name.unwrap(), values));
+                return Some(&variant.ty);
             }
         }
 

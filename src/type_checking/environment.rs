@@ -33,6 +33,7 @@ pub struct Environment {
     pub constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
+    pub selfs: Vec<Ty>,
     next_id: i32,
 }
 
@@ -51,6 +52,7 @@ impl Environment {
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
             next_id: 0,
+            selfs: vec![],
         }
     }
 
@@ -339,7 +341,8 @@ impl Environment {
         constraints: &[TypeConstraint],
     ) -> Ty {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
-            self.instantiate(&scheme)
+            scheme.ty.clone()
+            // self.instantiate(&scheme)
         } else {
             self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };

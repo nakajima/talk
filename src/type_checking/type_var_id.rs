@@ -52,7 +52,7 @@ impl std::fmt::Debug for TypeVarID {
                 ": {}",
                 self.constraints
                     .iter()
-                    .map(|i| format!("{:?}", i.protocol_id))
+                    .map(|i| format!("{i:?}"))
                     .collect::<Vec<String>>()
                     .join(", ")
             )
@@ -66,6 +66,7 @@ impl std::fmt::Debug for TypeVarID {
                 write!(f, "T{}[param({}){}]", self.id, name, constraints_str)
             }
             TypeVarKind::FuncType => write!(f, "T{}[func{}]", self.id, constraints_str),
+            TypeVarKind::SelfVar(sym) => write!(f, "T{}[self{sym:?}]", self.id),
             TypeVarKind::FuncNameVar(symbol_id) => {
                 write!(f, "T{}[${}{}]", self.id, symbol_id.0, constraints_str)
             }
@@ -84,7 +85,7 @@ impl std::fmt::Debug for TypeVarID {
                 write!(f, "T{}[{}']", self.id, name)
             } //µ≤≥÷œ∑®†¥¨øπåß©˙∆˚¬…æ≈ç√¡™£¢∞§¶•ªº–≠
             TypeVarKind::Placeholder(name) => {
-                write!(f, "T{}[...{}{}]", self.id, name, constraints_str)
+                write!(f, "T{}[Placeholder {}{}]", self.id, name, constraints_str)
             }
             TypeVarKind::Instantiated(from) => {
                 write!(f, "T{}[Inst.({}){}]", self.id, from, constraints_str)
@@ -99,6 +100,7 @@ impl std::fmt::Debug for TypeVarID {
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum TypeVarKind {
+    SelfVar(SymbolID),
     Blank,
     CallArg,
     CallReturn,

@@ -184,8 +184,14 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
         }
 
+        let mut remaining_type_vars = vec![];
+
         for (_id, typed_expr) in &mut self.env.typed_exprs.iter_mut() {
             typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
+
+            if let Ty::TypeVar(var) = &typed_expr.ty {
+                remaining_type_vars.push(var.clone());
+            }
 
             // Try to fill in the symbol ID of types of variables
             let this_symbol = match typed_expr.expr {
@@ -207,6 +213,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 definition.sym = Some(def_symbol);
             }
         }
+
+        log::warn!("Remaining type variables: {remaining_type_vars:#?}");
 
         self.constraints.clear();
 
@@ -375,23 +383,50 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         let mut result: Option<(Ty, Vec<TypeParameter>, &Vec<Ty>)> = None;
 
                         for constraint in type_var.constraints.iter() {
-                            let Some(TypeDef::Protocol(protocol_def)) =
-                                self.env.lookup_type(&constraint.protocol_id).cloned()
-                            else {
-                                return Err(TypeError::Unknown(format!(
-                                    "did not find protocol with ID: {:?}",
-                                    constraint.protocol_id
-                                )));
-                            };
+                            match constraint {
+                                TypeConstraint::InstanceOf {
+                                    symbol_id,
+                                    associated_types,
+                                } => {
+                                    let type_def = self
+                                        .env
+                                        .lookup_type(symbol_id)
+                                        .expect("did not get type def from symbol for member");
+                                    let Some(ty) = type_def.member_ty(member_name) else {
+                                        return Err(TypeError::MemberNotFound(
+                                            member_name.to_string(),
+                                            type_def.name().to_string(),
+                                        ));
+                                    };
+                                    result = Some((
+                                        ty.clone(),
+                                        type_def.type_parameters().clone(),
+                                        associated_types,
+                                    ));
+                                }
+                                TypeConstraint::Conforms {
+                                    protocol_id,
+                                    associated_types,
+                                } => {
+                                    let Some(TypeDef::Protocol(protocol_def)) =
+                                        self.env.lookup_type(protocol_id).cloned()
+                                    else {
+                                        return Err(TypeError::Unknown(format!(
+                                            "did not find protocol with ID: {protocol_id:?}",
+                                        )));
+                                    };
 
-                            if let Some(ty) = protocol_def.member_ty(member_name) {
-                                result = Some((
-                                    ty.clone(),
-                                    protocol_def.associated_types,
-                                    &constraint.associated_types,
-                                ));
+                                    if let Some(ty) = protocol_def.member_ty(member_name) {
+                                        result = Some((
+                                            ty.clone(),
+                                            protocol_def.associated_types,
+                                            associated_types,
+                                        ));
 
-                                break;
+                                        break;
+                                    }
+                                }
+                                TypeConstraint::Equals { .. } => todo!(),
                             }
                         }
 
@@ -455,14 +490,15 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 }
 
                 self.unify(&initializer.ty, func_ty, substitutions)?;
-                Self::normalize_substitutions(substitutions);
 
-                println!(
-                    "init constraint: params: {:?}, args: {:?}, return: {result_ty:?} func: {func_ty:?} init: {:?}",
-                    Self::apply_multiple(params, substitutions, 0),
-                    Self::apply_multiple(args, substitutions, 0),
-                    Self::apply(&initializer.ty, substitutions, 0)
-                );
+                let struct_with_generics =
+                    Ty::Struct(*initializes_id, struct_def.canonical_type_parameters());
+
+                let specialized_struct = Self::apply(&struct_with_generics, substitutions, 0);
+
+                self.unify(result_ty, &specialized_struct, substitutions)?;
+
+                Self::normalize_substitutions(substitutions);
             }
             Constraint::VariantMatch {
                 scrutinee_ty,
@@ -653,13 +689,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             return Ok(());
         }
 
-        log::debug!(
-            "Unifying: {:?} <> {:?}",
-            Self::apply(lhs, substitutions, 0),
-            Self::apply(rhs, substitutions, 0)
-        );
-
-        match (
+        let res = match (
             Self::apply(lhs, substitutions, 0),
             Self::apply(rhs, substitutions, 0),
         ) {
@@ -710,23 +740,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
                     self.unify(lhs, &rhs, substitutions)?;
-                }
-
-                if let (Ty::TypeVar(ret_var), concrete_ret) =
-                    (lhs_returning.as_ref(), rhs_returning.as_ref())
-                {
-                    // If we're unifying a function with a TypeVar return against a function with a concrete return,
-                    // record that the TypeVar should be the concrete type
-                    if !matches!(concrete_ret, Ty::TypeVar(_)) {
-                        substitutions.insert(ret_var.clone(), concrete_ret.clone());
-                    }
-                }
-
-                if let (concrete_ret, Ty::TypeVar(ret_var)) =
-                    (lhs_returning.as_ref(), rhs_returning.as_ref())
-                    && !matches!(concrete_ret, Ty::TypeVar(_))
-                {
-                    substitutions.insert(ret_var.clone(), concrete_ret.clone());
                 }
 
                 self.unify(&lhs_returning, &rhs_returning, substitutions)?;
@@ -816,7 +829,17 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     Self::apply(rhs, substitutions, 0).to_string(),
                 ))
             }
-        }
+        };
+
+        log::debug!(
+            "∪ {:?} <> {:?} = {:?} <> {:?}",
+            lhs,
+            rhs,
+            Self::apply(lhs, substitutions, 0),
+            Self::apply(rhs, substitutions, 0)
+        );
+
+        res
     }
 
     /// Returns true if `v` occurs inside `ty`

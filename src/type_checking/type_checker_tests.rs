@@ -197,7 +197,7 @@ mod type_tests {
 
     #[test]
     fn checks_an_int() {
-        let checker = check("123");
+        let checker = check_without_prelude("123").unwrap();
         assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Int);
     }
 
@@ -528,7 +528,7 @@ mod type_tests {
         let id = Ty::TypeVar(TypeVarID {
             id: 3,
             kind: TypeVarKind::Placeholder("T".into()),
-            constraints: vec![TypeConstraint {
+            constraints: vec![TypeConstraint::Conforms {
                 protocol_id: SymbolID(1),
                 associated_types: vec![],
             }],
@@ -1620,7 +1620,7 @@ mod protocol_tests {
         };
 
         let ty = checked.type_for(&generics[0]).unwrap();
-        println!("!!!!! {ty:?}");
+        println!("!!!!! {ty:?} {:?}", checked.diagnostics());
 
         assert!(!checked.diagnostics().is_empty());
         assert!(matches!(

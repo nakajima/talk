@@ -38,6 +38,7 @@ pub enum TypeError {
     OccursConflict,
     ConformanceError(Vec<ConformanceError>),
     Nonconformance(String, String),
+    MemberNotFound(String, String),
 }
 
 impl TypeError {
@@ -59,6 +60,9 @@ impl TypeError {
             Self::ArgumentError(message) => message.to_string(),
             Self::Nonconformance(protocol, structname) => {
                 format!("{structname} does not conform to the {protocol} protocol")
+            }
+            Self::MemberNotFound(name, receiver) => {
+                format!("Cannot find member named {name} for {receiver}")
             }
             Self::ConformanceError(_err) => todo!(),
         }
@@ -259,9 +263,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Let(Name::Resolved(symbol_id, _), rhs) => {
                 self.infer_let(env, *symbol_id, rhs, expected, source_file)
             }
-            Expr::Variable(Name::Resolved(symbol_id, _name), _) => {
-                self.infer_variable(env, *symbol_id)
-            }
+            Expr::Variable(name, _) => self.infer_variable(env, name),
             Expr::Parameter(name @ Name::Resolved(_, _), param_ty) => {
                 self.infer_parameter(name, param_ty, env, source_file)
             }
@@ -290,8 +292,6 @@ impl<'a> TypeChecker<'a> {
             Expr::Pattern(pattern) => {
                 self.infer_pattern_expr(id, env, pattern, expected, source_file)
             }
-            Expr::Variable(Name::Raw(name_str), _) => Err(TypeError::Unresolved(name_str.clone())),
-            Expr::Variable(Name::_Self(sym), _) => self.infer_variable(env, *sym),
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
             Expr::Struct {
@@ -661,7 +661,10 @@ impl<'a> TypeChecker<'a> {
 
                 println!("type_args: {type_args:?}");
 
-                ret_var = Ty::Struct(symbol_id, type_args);
+                ret_var = env.instantiate(&Scheme {
+                    ty: Ty::Struct(symbol_id, type_args),
+                    unbound_vars: struct_def.canonical_type_vars(),
+                });
 
                 env.constraints.push(Constraint::InitializerCall {
                     expr_id: *callee,
@@ -735,7 +738,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }));
 
-                type_constraints.push(TypeConstraint {
+                type_constraints.push(TypeConstraint::Conforms {
                     protocol_id,
                     associated_types: associated_types.clone(),
                 });
@@ -913,6 +916,7 @@ impl<'a> TypeChecker<'a> {
         } else {
             Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
         };
+        println!("infer let: {symbol_id:?} = {rhs_ty}");
 
         let scheme = Scheme::new(rhs_ty.clone(), vec![]);
         env.declare(symbol_id, scheme);
@@ -920,10 +924,19 @@ impl<'a> TypeChecker<'a> {
         Ok(rhs_ty)
     }
 
-    fn infer_variable(&self, env: &mut Environment, symbol_id: SymbolID) -> Result<Ty, TypeError> {
-        let scheme = env.lookup_symbol(&symbol_id)?.clone();
-        let ty = env.instantiate(&scheme);
-        Ok(ty)
+    fn infer_variable(&self, env: &mut Environment, name: &Name) -> Result<Ty, TypeError> {
+        match name {
+            Name::_Self(_sym) => {
+                println!("SELF -> {:?}", env.selfs.last().unwrap().clone());
+                Ok(env.selfs.last().unwrap().clone())
+            }
+            Name::Resolved(symbol_id, _) => {
+                let scheme = env.lookup_symbol(symbol_id)?.clone();
+                let ty = env.instantiate(&scheme);
+                Ok(ty)
+            }
+            Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
+        }
     }
 
     fn infer_tuple(

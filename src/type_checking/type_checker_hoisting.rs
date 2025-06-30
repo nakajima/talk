@@ -341,6 +341,9 @@ impl<'a> TypeChecker<'a> {
         // Sick, all the names are declared. Now let's actually infer.
         for (sym, placeholders) in &mut placeholders.into_iter() {
             let mut def = env.lookup_type(&sym).unwrap().clone();
+            let scheme = env.lookup_symbol(&sym).unwrap().clone();
+            let ty = env.instantiate(&scheme);
+            env.selfs.push(ty);
 
             if !matches!(def, TypeDef::Enum(_)) {
                 let mut properties = vec![];
@@ -459,6 +462,8 @@ impl<'a> TypeChecker<'a> {
 
             def.set_conformances(conformances);
             env.register(&def);
+
+            env.selfs.pop();
         }
 
         env.replace_constraint_values(&substitutions);
