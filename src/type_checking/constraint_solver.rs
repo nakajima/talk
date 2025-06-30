@@ -26,6 +26,7 @@ pub enum Constraint {
         initializes_id: SymbolID,
         args: Vec<Ty>,
         func_ty: Ty,
+        result_ty: Ty,
     },
     VariantMatch {
         expr_id: ExprID,
@@ -90,7 +91,8 @@ impl Constraint {
                 expr_id,
                 initializes_id,
                 args,
-                func_ty: ret,
+                func_ty,
+                result_ty,
             } => Constraint::InitializerCall {
                 expr_id: *expr_id,
                 initializes_id: *initializes_id,
@@ -98,7 +100,8 @@ impl Constraint {
                     .iter()
                     .map(|a| ConstraintSolver::<NameResolved>::apply(a, substitutions, 0))
                     .collect(),
-                func_ty: ret.clone(),
+                func_ty: ConstraintSolver::<NameResolved>::apply(func_ty, substitutions, 0),
+                result_ty: ConstraintSolver::<NameResolved>::apply(result_ty, substitutions, 0),
             },
             Constraint::VariantMatch {
                 expr_id,
@@ -423,7 +426,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Constraint::InitializerCall {
                 initializes_id,
                 args,
-                func_ty: ret,
+                func_ty,
+                result_ty,
                 ..
             } => {
                 let Some(struct_def) = self.env.lookup_struct(initializes_id) else {
@@ -450,8 +454,15 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     self.unify(param, arg, substitutions)?;
                 }
 
-                self.unify(&initializer.ty, ret, substitutions)?;
+                self.unify(&initializer.ty, func_ty, substitutions)?;
                 Self::normalize_substitutions(substitutions);
+
+                println!(
+                    "init constraint: params: {:?}, args: {:?}, return: {result_ty:?} func: {func_ty:?} init: {:?}",
+                    Self::apply_multiple(params, substitutions, 0),
+                    Self::apply_multiple(args, substitutions, 0),
+                    Self::apply(&initializer.ty, substitutions, 0)
+                );
             }
             Constraint::VariantMatch {
                 scrutinee_ty,

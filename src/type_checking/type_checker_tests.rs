@@ -1597,15 +1597,15 @@ mod protocol_tests {
             let age: T
         }
 
-        struct Person<T>: Aged<T> {
-            let age: T
+        struct Person<U>: Aged<U> {
+            let age: U
 
             init(age) {
                 self.age = age
             }
         }
 
-        func getInt<T: Aged<Int>>(aged: T) {
+        func getInt<V: Aged<Int>>(aged: V) {
             aged.age
         }
 

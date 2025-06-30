@@ -185,7 +185,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(typed_expr) = env.typed_exprs.get(id)
             && expected.is_none()
         {
-            log::trace!("Already inferred {typed_expr:?}, returning from cache");
+            log::error!("Already inferred {typed_expr:?}, returning from cache");
             return Ok(typed_expr.ty.clone());
         }
 
@@ -457,6 +457,8 @@ impl<'a> TypeChecker<'a> {
             Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), vec![]))
         };
 
+        println!("PARAM: {param_ty:?}");
+
         // Parameters are monomorphic inside the function body
         let scheme = Scheme::new(param_ty.clone(), vec![]);
         env.declare(name.try_symbol_id(), scheme);
@@ -638,13 +640,6 @@ impl<'a> TypeChecker<'a> {
                     },
                 );
 
-                env.constraints.push(Constraint::InitializerCall {
-                    expr_id: *callee,
-                    initializes_id: symbol_id,
-                    args: arg_tys.clone(),
-                    func_ty: placeholder.clone(),
-                });
-
                 // If there aren't explicit type params specified, create some placeholders. I guess for now
                 // if there are _some_ we'll just use positional values?
                 let mut type_args = vec![];
@@ -667,6 +662,14 @@ impl<'a> TypeChecker<'a> {
                 println!("type_args: {type_args:?}");
 
                 ret_var = Ty::Struct(symbol_id, type_args);
+
+                env.constraints.push(Constraint::InitializerCall {
+                    expr_id: *callee,
+                    initializes_id: symbol_id,
+                    args: arg_tys.clone(),
+                    func_ty: placeholder.clone(),
+                    result_ty: ret_var.clone(),
+                });
             }
             _ => {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
@@ -691,6 +694,8 @@ impl<'a> TypeChecker<'a> {
         // Expect lhs to be the same as rhs
         let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.clone()), source_file)?;
 
+        println!("INFER ASSIGNMENT: {lhs_ty:?} = {rhs_ty:?}");
+
         env.constrain_equality(*rhs, rhs_ty.clone(), lhs_ty);
 
         Ok(rhs_ty)
@@ -708,6 +713,8 @@ impl<'a> TypeChecker<'a> {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let symbol_id = name.try_symbol_id();
+
+        println!("infer-type {name:?}");
 
         if *is_type_parameter {
             let mut unbound_vars = vec![];

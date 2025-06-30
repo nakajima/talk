@@ -1,8 +1,7 @@
 use crate::{
-    NameResolved, conformance_checker::ConformanceError, constraint_solver::ConstraintSolver,
-    environment::Environment, ty::Ty, type_checker::TypeError, type_constraint::TypeConstraint,
+    conformance_checker::ConformanceError, environment::Environment, ty::Ty,
+    type_checker::TypeError, type_constraint::TypeConstraint,
 };
-use std::collections::HashMap;
 
 pub struct SatisfiesChecker<'a> {
     env: &'a Environment,
@@ -33,11 +32,7 @@ impl<'a> SatisfiesChecker<'a> {
             }
         };
 
-        let type_def = self
-            .env
-            .lookup_type(type_id)
-            .expect("didn't find type")
-            .clone();
+        let type_def = self.env.lookup_type(type_id).expect("didn't find type");
 
         let mut unifications = vec![];
         let mut errors = vec![];
@@ -50,40 +45,29 @@ impl<'a> SatisfiesChecker<'a> {
                 .lookup_protocol(&constraint.protocol_id)
                 .expect("did not get protocol definition (should be impossible)");
 
+            if type_args.len() != constraint.associated_types.len() {
+                errors.push(ConformanceError::TypeDoesNotConform(
+                    type_def.name().to_string(),
+                    "could not determine type parameters".to_string(),
+                ));
+            }
+
             if let Some(conformance) = type_def
                 .conformances()
                 .iter()
                 .find(|c| c.protocol_id == constraint.protocol_id)
             {
-                let mut specialization_map = HashMap::new();
-                for (param, arg) in type_def.type_parameters().iter().zip(type_args.iter()) {
-                    specialization_map.insert(param.type_var.clone(), arg.clone());
+                for (param, arg) in type_args.iter().zip(constraint.associated_types.iter()) {
+                    unifications.push((param.clone(), arg.clone()));
                 }
 
-                let specialized_conformance_types = conformance
+                for (provided, required) in conformance
                     .associated_types
                     .iter()
-                    .map(|ty| {
-                        ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                            ty,
-                            &specialization_map,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-
-                if specialized_conformance_types.len() != constraint.associated_types.len() {
-                    errors.push(ConformanceError::TypeDoesNotConform(
-                        type_def.name().to_string(),
-                        "mismatched associated type count".to_string(),
-                    ));
-                    continue;
-                }
-
-                for (provided, required) in specialized_conformance_types
-                    .iter()
-                    .zip(&constraint.associated_types)
+                    .zip(constraint.associated_types.iter())
                 {
-                    unifications.push((provided.clone(), required.clone()));
+                    println!("-> Unifying provided: {provided:?} <> {required:?}");
+                    unifications.push((required.clone(), provided.clone()));
                 }
             } else {
                 errors.push(ConformanceError::TypeDoesNotConform(
