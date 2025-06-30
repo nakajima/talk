@@ -189,7 +189,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(typed_expr) = env.typed_exprs.get(id)
             && expected.is_none()
         {
-            log::error!("Already inferred {typed_expr:?}, returning from cache");
+            log::trace!("Already inferred {typed_expr:?}, returning from cache");
             return Ok(typed_expr.ty.clone());
         }
 
@@ -457,8 +457,6 @@ impl<'a> TypeChecker<'a> {
             Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), vec![]))
         };
 
-        println!("PARAM: {param_ty:?}");
-
         // Parameters are monomorphic inside the function body
         let scheme = Scheme::new(param_ty.clone(), vec![]);
         env.declare(name.try_symbol_id(), scheme);
@@ -659,8 +657,6 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                println!("type_args: {type_args:?}");
-
                 ret_var = env.instantiate(&Scheme {
                     ty: Ty::Struct(symbol_id, type_args),
                     unbound_vars: struct_def.canonical_type_vars(),
@@ -697,8 +693,6 @@ impl<'a> TypeChecker<'a> {
         // Expect lhs to be the same as rhs
         let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.clone()), source_file)?;
 
-        println!("INFER ASSIGNMENT: {lhs_ty:?} = {rhs_ty:?}");
-
         env.constrain_equality(*rhs, rhs_ty.clone(), lhs_ty);
 
         Ok(rhs_ty)
@@ -717,8 +711,6 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<Ty, TypeError> {
         let symbol_id = name.try_symbol_id();
 
-        println!("infer-type {name:?}");
-
         if *is_type_parameter {
             let mut unbound_vars = vec![];
             let mut type_constraints = vec![];
@@ -728,7 +720,6 @@ impl<'a> TypeChecker<'a> {
                 let Ty::Protocol(protocol_id, associated_types) = ty.clone() else {
                     return Err(TypeError::Unknown(format!("{ty:?} is not a protocol",)));
                 };
-                println!("is type parameter: {ty:?} {protocol_id:?}/{associated_types:?}",);
 
                 unbound_vars.extend(associated_types.iter().filter_map(|t| {
                     if let Ty::TypeVar(var) = t {
@@ -769,8 +760,6 @@ impl<'a> TypeChecker<'a> {
         }
 
         let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
-
-        println!("instantiated: {instantiated:?}");
 
         // indented_println!(
         //     env,
@@ -916,7 +905,6 @@ impl<'a> TypeChecker<'a> {
         } else {
             Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
         };
-        println!("infer let: {symbol_id:?} = {rhs_ty}");
 
         let scheme = Scheme::new(rhs_ty.clone(), vec![]);
         env.declare(symbol_id, scheme);
@@ -926,10 +914,7 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_variable(&self, env: &mut Environment, name: &Name) -> Result<Ty, TypeError> {
         match name {
-            Name::_Self(_sym) => {
-                println!("SELF -> {:?}", env.selfs.last().unwrap().clone());
-                Ok(env.selfs.last().unwrap().clone())
-            }
+            Name::_Self(_sym) => Ok(env.selfs.last().unwrap().clone()),
             Name::Resolved(symbol_id, _) => {
                 let scheme = env.lookup_symbol(symbol_id)?.clone();
                 let ty = env.instantiate(&scheme);

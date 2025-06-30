@@ -1451,7 +1451,6 @@ mod protocol_tests {
     use crate::{
         SymbolID, check_without_prelude,
         diagnostic::{Diagnostic, DiagnosticKind},
-        expr::Expr,
         ty::Ty,
         type_checker::TypeError,
         type_defs::{TypeDef, protocol_def::Conformance},
@@ -1579,7 +1578,6 @@ mod protocol_tests {
         )
         .unwrap();
 
-        println!("diagnostics: {:?}", checked.diagnostics());
         assert!(!checked.diagnostics().is_empty());
         assert!(matches!(
             checked.diagnostics()[0],
@@ -1613,14 +1611,6 @@ mod protocol_tests {
         ",
         )
         .unwrap();
-
-        let Some(Expr::Func { generics, .. }) = checked.source_file.get(&checked.root_ids()[2])
-        else {
-            panic!("didn't get func");
-        };
-
-        let ty = checked.type_for(&generics[0]).unwrap();
-        println!("!!!!! {ty:?} {:?}", checked.diagnostics());
 
         assert!(!checked.diagnostics().is_empty());
         assert!(matches!(

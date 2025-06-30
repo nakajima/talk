@@ -79,7 +79,6 @@ impl<'a> SatisfiesChecker<'a> {
                         for (param, arg) in associated_types.iter().zip(type_args) {
                             let arg = map.get(arg).unwrap_or(arg);
                             unifications.push((param.clone(), arg.clone()));
-                            println!("-> Unifying provided: {param:?} <> {arg:?}");
                         }
                     } else {
                         errors.push(ConformanceError::TypeDoesNotConform(
