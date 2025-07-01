@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    SourceFile, diagnostic::Diagnostic, environment::Environment, lexer::Lexer, token::Token,
-    token_kind::TokenKind,
+    SourceFile, compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
+    environment::Environment, lexer::Lexer, token::Token, token_kind::TokenKind,
 };
 
 use super::{
@@ -50,6 +50,7 @@ pub struct Parser<'a> {
     pub(crate) next: Option<Token>,
     pub(crate) parse_tree: SourceFile,
     pub(crate) source_location_stack: SourceLocationStack,
+    session: SharedCompilationSession,
     env: &'a mut Environment,
     previous_before_newline: Option<Token>,
 }
@@ -102,15 +103,34 @@ impl ParserError {
 #[cfg(test)]
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
-    let mut env = Environment::new();
-    let mut parser = Parser::new(lexer, file_path, &mut env);
+    let mut env = Environment::default();
+    let mut parser = Parser::new(Default::default(), lexer, file_path, &mut env);
 
     parser.parse();
     parser.parse_tree
 }
 
+#[cfg(test)]
+pub fn parse_with_session(
+    code: &str,
+    file_path: PathBuf,
+) -> (SourceFile, SharedCompilationSession) {
+    let lexer = Lexer::new(code);
+    let mut env = Environment::default();
+    let session = env.session.clone();
+    let mut parser = Parser::new(session.clone(), lexer, file_path, &mut env);
+
+    parser.parse();
+    (parser.parse_tree, session)
+}
+
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer<'a>, file_path: PathBuf, env: &'a mut Environment) -> Self {
+    pub fn new(
+        session: SharedCompilationSession,
+        lexer: Lexer<'a>,
+        file_path: PathBuf,
+        env: &'a mut Environment,
+    ) -> Self {
         Self {
             lexer,
             previous: None,
@@ -118,6 +138,7 @@ impl<'a> Parser<'a> {
             next: None,
             parse_tree: SourceFile::new(file_path),
             source_location_stack: Default::default(),
+            session,
             previous_before_newline: None,
             env,
         }
@@ -142,15 +163,21 @@ impl<'a> Parser<'a> {
                 Ok(expr) => self.parse_tree.push_root(expr),
                 Err(err) => {
                     log::error!("{}", err.message());
-                    self.parse_tree
-                        .diagnostics
-                        .insert(Diagnostic::parser(current, err));
+                    self.add_diagnostic(Diagnostic::parser(current, err));
                     self.recover();
                 }
             }
 
             self.skip_newlines();
         }
+    }
+
+    fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        #[allow(clippy::unwrap_used)]
+        self.session
+            .lock()
+            .unwrap()
+            .add_diagnostic(self.parse_tree.path.clone(), diagnostic)
     }
 
     fn recover(&mut self) {
@@ -610,7 +637,7 @@ impl<'a> Parser<'a> {
             Ok(name) => name,
             Err(e) => {
                 // Add an empty member name so name resolution can  but still emit the error
-                self.parse_tree.diagnostics.insert(Diagnostic::parser(
+                self.add_diagnostic(Diagnostic::parser(
                     self.current.clone().unwrap_or(Token::EOF),
                     e,
                 ));

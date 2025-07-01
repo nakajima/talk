@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub mod helpers {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use crate::{
         compiling::driver::{Driver, DriverConfig},
@@ -15,7 +15,7 @@ pub mod helpers {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = lowered.source_file(Path::new("-")).unwrap().diagnostics();
+        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -31,7 +31,7 @@ pub mod helpers {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = lowered.source_file(Path::new("-")).unwrap().diagnostics();
+        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -41,7 +41,7 @@ pub mod helpers {
 
 #[cfg(test)]
 pub mod lowering_tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use crate::{
         SymbolID, assert_lowered_function,
@@ -68,7 +68,7 @@ pub mod lowering_tests {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = lowered.source_file(Path::new("-")).unwrap().diagnostics();
+        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");

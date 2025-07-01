@@ -1,11 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap,},
     path::PathBuf,
 };
 
 use crate::{
-    diagnostic::Diagnostic, environment::Environment, scope_tree::ScopeTree, span::Span, ty::Ty,
-    typed_expr::TypedExpr,
+    environment::Environment, scope_tree::ScopeTree, span::Span, ty::Ty, typed_expr::TypedExpr,
 };
 
 use super::{
@@ -37,7 +36,6 @@ pub struct SourceFile<P: Phase = Parsed> {
     roots: Vec<ExprID>,
     pub(crate) nodes: HashMap<ExprID, Expr>,
     pub(crate) meta: HashMap<ExprID, ExprMeta>,
-    pub diagnostics: HashSet<Diagnostic>,
     phase_data: P,
     pub scope_tree: ScopeTree,
 }
@@ -50,7 +48,6 @@ impl SourceFile {
             nodes: Default::default(),
             meta: Default::default(),
             phase_data: Parsed,
-            diagnostics: Default::default(),
             scope_tree: Default::default(),
         }
     }
@@ -64,7 +61,6 @@ impl SourceFile<Parsed> {
             nodes: self.nodes,
             meta: self.meta,
             phase_data: NameResolved,
-            diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }
     }
@@ -78,7 +74,6 @@ impl SourceFile<NameResolved> {
             nodes: self.nodes,
             meta: self.meta,
             phase_data: Typed {},
-            diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }
     }
@@ -147,7 +142,6 @@ impl SourceFile<Typed> {
             nodes: self.nodes.clone(),
             meta: self.meta.clone(),
             phase_data: Parsed,
-            diagnostics: self.diagnostics.clone(),
             scope_tree: self.scope_tree.clone(),
         }
     }
@@ -159,7 +153,6 @@ impl SourceFile<Typed> {
             nodes: self.nodes,
             meta: self.meta,
             phase_data: Lowered {},
-            diagnostics: self.diagnostics,
             scope_tree: self.scope_tree,
         }
     }
@@ -173,13 +166,6 @@ impl<P: Phase> SourceFile<P> {
         self.nodes.insert(id, expr);
         self.meta.insert(id, meta);
         id
-    }
-
-    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
-        self.diagnostics
-            .iter()
-            .filter(|d| d.is_unhandled())
-            .collect()
     }
 
     pub fn push_root(&mut self, root: ExprID) {

@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
+    compiling::compilation_session::SharedCompilationSession,
     constraint_solver::{ConstraintSolver, Substitutions},
     parser::ExprID,
     ty::Ty,
@@ -33,7 +34,7 @@ pub struct TypeParameter {
 
 pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
@@ -41,17 +42,18 @@ pub struct Environment {
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
+    pub(crate) session: SharedCompilationSession,
     next_id: i32,
 }
 
 impl Default for Environment {
     fn default() -> Self {
-        Self::new()
+        Self::new(Default::default())
     }
 }
 
 impl Environment {
-    pub fn new() -> Self {
+    pub fn new(session: SharedCompilationSession) -> Self {
         Self {
             typed_exprs: HashMap::new(),
             type_var_id: TypeVarID::new(0, TypeVarKind::Blank, vec![]),
@@ -60,6 +62,7 @@ impl Environment {
             types: crate::builtins::default_env_types(),
             next_id: 0,
             selfs: vec![],
+            session,
         }
     }
 
@@ -136,7 +139,8 @@ impl Environment {
         source_file: &mut SourceFile<P>,
         symbol_table: &mut SymbolTable,
     ) -> Result<HashMap<TypeVarID, Ty>, TypeError> {
-        let mut solver = ConstraintSolver::new(source_file, self, symbol_table);
+        let mut solver =
+            ConstraintSolver::new(self.session.clone(), source_file, self, symbol_table);
         let substitutions = solver.solve();
         Ok(substitutions)
     }
@@ -635,7 +639,7 @@ mod generalize_tests {
     fn test_generalize_in_empty_env() {
         // In an empty environment, generalize(a -> b) should produce `forall a, b. a -> b`.
         // All type variables in the type are free and should be bound.
-        let env = Environment::new();
+        let env = Environment::default();
         let ty_to_generalize = Ty::Func(vec![ty_var(1)], Box::new(ty_var(2)), vec![]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -651,7 +655,7 @@ mod generalize_tests {
     fn test_generalize_with_free_var_in_env() {
         // If the environment already contains a free `a`, then generalize(a -> b)
         // should produce `forall b. a -> b`. `a` should not be bound again.
-        let mut env = Environment::new();
+        let mut env = Environment::default();
         let tv_a = new_tv(1);
 
         // Add a variable to the environment's scope that has `a` as a free variable.
@@ -682,7 +686,7 @@ mod generalize_tests {
         // If the environment contains `id: forall a. a -> a`, and we generalize `b -> c`,
         // the `a` from the `id` function is not free in the environment and should have no effect.
         // The result should be `forall b, c. b -> c`.
-        let mut env = Environment::new();
+        let mut env = Environment::default();
         let tv_a = new_tv(1);
 
         // Create a scheme for `id: forall a. a -> a`.
@@ -713,7 +717,7 @@ mod generalize_tests {
     fn test_generalize_no_new_variables() {
         // If we generalize a type `a` where `a` is already free in the environment,
         // the resulting scheme should bind no variables.
-        let mut env = Environment::new();
+        let mut env = Environment::default();
         let tv_a = new_tv(1);
 
         let mut initial_scope = Scope::new();
@@ -737,7 +741,7 @@ mod generalize_tests {
     #[test]
     fn test_generalize_tuple_type() {
         // generalize((a, b)) -> forall a, b. (a, b)
-        let env = Environment::new();
+        let env = Environment::default();
         let ty_to_generalize = Ty::Tuple(vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -750,7 +754,7 @@ mod generalize_tests {
     #[test]
     fn test_generalize_array_type() {
         // generalize(Array<a>) -> forall a. Array<a>
-        let env = Environment::new();
+        let env = Environment::default();
         let ty_to_generalize = Ty::Array(Box::new(ty_var(1)));
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -763,7 +767,7 @@ mod generalize_tests {
     #[test]
     fn test_generalize_struct_type() {
         // generalize(Struct<a, b>) -> forall a, b. Struct<a, b>
-        let env = Environment::new();
+        let env = Environment::default();
         let ty_to_generalize = Ty::Struct(SymbolID(100), vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -795,7 +799,7 @@ mod generalize_tests {
     fn test_generalize_deeply_nested_type() {
         // If env contains `a`, generalize `func() -> (Array<b>, c)`
         // should result in `forall b, c. func() -> (Array<b>, c)`
-        let mut env = Environment::new();
+        let mut env = Environment::default();
         let tv_a = new_tv(1);
 
         // Put `a` into the environment as a free variable

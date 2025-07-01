@@ -1,7 +1,8 @@
 #[cfg(test)]
 use crate::{
-    SourceFile, SymbolTable, Typed, diagnostic::Diagnostic, environment::Environment, expr::Expr,
-    parser::ExprID, ty::Ty, type_checker::TypeError, typed_expr::TypedExpr,
+    SourceFile, SymbolTable, Typed, compiling::compilation_session::SharedCompilationSession,
+    diagnostic::Diagnostic, environment::Environment, expr::Expr, parser::ExprID, ty::Ty,
+    type_checker::TypeError, typed_expr::TypedExpr,
 };
 
 pub mod conformance_checker;
@@ -24,6 +25,7 @@ pub mod typed_expr;
 #[cfg(test)]
 #[derive(Debug)]
 pub struct CheckResult {
+    pub session: SharedCompilationSession,
     pub source_file: SourceFile<Typed>,
     pub env: Environment,
     pub symbols: SymbolTable,
@@ -43,8 +45,26 @@ impl CheckResult {
         self.source_file.typed_expr(id, &self.env)
     }
 
-    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
-        self.source_file.diagnostics()
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        use std::path::PathBuf;
+
+        let diagnostics = self
+            .session
+            .lock()
+            .unwrap()
+            .diagnostics()
+            .get(&PathBuf::from("-"))
+            .cloned();
+
+        if let Some(diagnostics) = diagnostics {
+            diagnostics
+                .iter()
+                .filter(|d| d.is_unhandled())
+                .cloned()
+                .collect()
+        } else {
+            vec![]
+        }
     }
 
     pub fn root_ids(&self) -> Vec<ExprID> {
@@ -71,11 +91,19 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
 
-    for diagnostic in source_file.diagnostics() {
+    for diagnostic in driver
+        .session
+        .lock()
+        .unwrap()
+        .diagnostics()
+        .get(path)
+        .unwrap_or(&Default::default())
+    {
         log::error!("{diagnostic:?}");
     }
 
     Ok(CheckResult {
+        session: driver.session,
         source_file,
         env: typed_compilation_unit.env,
         symbols: driver.symbol_table,
@@ -97,6 +125,7 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
 
     Ok(CheckResult {
+        session: driver.session,
         source_file,
         env: typed_compilation_unit.env,
         symbols: driver.symbol_table,

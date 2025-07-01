@@ -1,10 +1,16 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
     SourceFile, SymbolID, SymbolTable,
-    compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+    compiling::{
+        compilation_session::SharedCompilationSession,
+        compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+    },
     environment::Environment,
     lowering::ir_module::IRModule,
     prelude::compile_prelude,
@@ -22,7 +28,7 @@ impl DriverConfig {
         if self.include_prelude {
             compile_prelude().environment.clone()
         } else {
-            Environment::new()
+            Environment::default()
         }
     }
 }
@@ -41,6 +47,7 @@ pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
     pub config: DriverConfig,
+    pub session: SharedCompilationSession,
 }
 
 impl Default for Driver {
@@ -51,14 +58,21 @@ impl Default for Driver {
 
 impl Driver {
     pub fn new(config: DriverConfig) -> Self {
+        let session = SharedCompilationSession::default();
+
         Self {
-            units: vec![CompilationUnit::new(vec![], config.new_environment())],
+            units: vec![CompilationUnit::new(
+                session.clone(),
+                vec![],
+                config.new_environment(),
+            )],
             symbol_table: if config.include_prelude {
                 compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
             },
             config,
+            session,
         }
     }
 
@@ -70,7 +84,7 @@ impl Driver {
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
         let config = DriverConfig::default();
-        let unit = CompilationUnit::new(files, config.new_environment());
+        let unit = CompilationUnit::new(Default::default(), files, config.new_environment());
         Self {
             units: vec![unit],
             symbol_table: if config.include_prelude {
@@ -79,6 +93,7 @@ impl Driver {
                 SymbolTable::base()
             },
             config,
+            session: Default::default(),
         }
     }
 
@@ -161,17 +176,17 @@ impl Driver {
                 0 => {
                     let parsed = self.parse();
                     round += 1;
-                    self.diagnostics_from(path, parsed)
+                    self.diagnostics_from(path, parsed).unwrap_or_default()
                 }
                 1 => {
                     let checked = self.check();
                     round += 1;
-                    self.diagnostics_from(path, checked)
+                    self.diagnostics_from(path, checked).unwrap_or_default()
                 }
                 _ => {
                     let lowered = self.lower();
                     round += 1;
-                    self.diagnostics_from(path, lowered)
+                    self.diagnostics_from(path, lowered).unwrap_or_default()
                 }
             };
 
@@ -185,7 +200,7 @@ impl Driver {
         &self,
         path: &PathBuf,
         units: Vec<CompilationUnit<S>>,
-    ) -> Vec<Diagnostic> {
+    ) -> Option<Vec<Diagnostic>> {
         let mut result = vec![];
         for unit in units {
             log::info!("checking {unit:?} for diagnostics");
@@ -193,7 +208,14 @@ impl Driver {
                 && let Some(source_file) = unit.source_file(path)
             {
                 log::info!("checking {:?} for diagnostics", source_file.path);
-                for diag in &source_file.diagnostics() {
+                for diag in self
+                    .session
+                    .lock()
+                    .ok()?
+                    .diagnostics()
+                    .get(path)
+                    .unwrap_or(&HashSet::default())
+                {
                     let diag_range = diag.range(source_file);
                     let range = Range::new(
                         Position::new(diag_range.0.line, diag_range.0.col),
@@ -211,7 +233,8 @@ impl Driver {
                 }
             }
         }
-        result
+
+        Some(result)
     }
 
     pub fn has_file(&self, path: &PathBuf) -> bool {

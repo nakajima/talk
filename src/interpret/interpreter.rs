@@ -521,7 +521,7 @@ mod tests {
         let mut driver = Driver::with_str(code);
         let unit = driver.lower().into_iter().next().unwrap();
 
-        let diagnostics = unit.source_file(&PathBuf::from("-")).unwrap().diagnostics();
+        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let module = unit.module();
 

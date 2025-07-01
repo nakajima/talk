@@ -1249,7 +1249,10 @@ mod type_tests {
 #[cfg(test)]
 mod pending {
     use crate::{
-        check_without_prelude, diagnostic::Diagnostic, ty::Ty, type_checker::TypeError,
+        check_without_prelude,
+        diagnostic::{Diagnostic, DiagnosticKind},
+        ty::Ty,
+        type_checker::TypeError,
         type_checking::CheckResult,
     };
 
@@ -1308,7 +1311,15 @@ mod pending {
     #[test]
     fn checks_if_expression_with_non_bool_condition() {
         let checked = check_err("if 123 { 1 }").unwrap();
-        assert_eq!(checked.diagnostics().len(), 1);
+        assert!(!checked.diagnostics().is_empty());
+        assert!(
+            matches!(
+                checked.diagnostics()[0].kind,
+                DiagnosticKind::Typing(0, TypeError::UnexpectedType(_, _))
+            ),
+            "{:?}",
+            checked.diagnostics()
+        );
     }
 
     #[test]
@@ -1326,7 +1337,7 @@ mod pending {
         let checked = check_err("loop 1.2 { 1 }").unwrap();
         assert_eq!(checked.diagnostics().len(), 1);
         assert!(
-            checked.diagnostics().contains(&&Diagnostic::typing(
+            checked.diagnostics().contains(&Diagnostic::typing(
                 checked.root_ids()[0] - 3,
                 TypeError::UnexpectedType(Ty::Bool.to_string(), Ty::Float.to_string())
             )),

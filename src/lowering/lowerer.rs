@@ -6,7 +6,7 @@ use crate::{
         cfg::ControlFlowGraph, function_analysis::definite_initialization::DefiniteInitizationPass,
         function_analysis_pass::FunctionAnalysisPass,
     },
-    compiling::driver::DriverConfig,
+    compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     diagnostic::Diagnostic,
     environment::Environment,
     expr::{Expr, ExprMeta, Pattern},
@@ -413,6 +413,7 @@ pub struct Lowerer<'a> {
     globals: HashMap<SymbolID, SymbolValue>,
     current_expr_ids: Vec<ExprID>,
     pub env: &'a mut Environment,
+    session: SharedCompilationSession,
 }
 
 impl<'a> Lowerer<'a> {
@@ -420,6 +421,7 @@ impl<'a> Lowerer<'a> {
         source_file: SourceFile<Typed>,
         symbol_table: &'a mut SymbolTable,
         env: &'a mut Environment,
+        session: SharedCompilationSession,
     ) -> Self {
         Self {
             source_file,
@@ -430,6 +432,7 @@ impl<'a> Lowerer<'a> {
             loop_exits: vec![],
             current_expr_ids: vec![],
             env,
+            session,
         }
     }
 
@@ -530,7 +533,7 @@ impl<'a> Lowerer<'a> {
             Expr::Loop(cond, body) => self.lower_loop(&cond, &body),
             Expr::Break => {
                 let Some(current_loop_exit) = self.loop_exits.last() else {
-                    self.source_file.diagnostics.insert(Diagnostic::lowering(
+                    self.add_diagnostic(Diagnostic::lowering(
                         *expr_id,
                         IRError::Unknown("trying to break while not in a loop".into()),
                     ));
@@ -549,7 +552,7 @@ impl<'a> Lowerer<'a> {
             } => self.lower_protocol(&typed_expr, name, associated_types, body, conformances),
             Expr::Tuple(items) => self.lower_tuple(expr_id, items),
             expr => {
-                self.source_file.diagnostics.insert(Diagnostic::lowering(
+                self.add_diagnostic(Diagnostic::lowering(
                     *expr_id,
                     IRError::Unknown(format!("Cannot lower {expr:?}")),
                 ));
@@ -649,7 +652,7 @@ impl<'a> Lowerer<'a> {
             let loop_cond = self.new_basic_block();
             self.set_current_block(loop_cond);
             let Some(cond_reg) = self.lower_expr(cond) else {
-                self.source_file.diagnostics.insert(Diagnostic::lowering(
+                self.add_diagnostic(Diagnostic::lowering(
                     *cond,
                     IRError::Unknown(format!("Cannot lower loop condition {cond:?}")),
                 ));
@@ -800,7 +803,7 @@ impl<'a> Lowerer<'a> {
         body_id: &ExprID,
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned() else {
-            self.source_file.diagnostics.insert(Diagnostic::lowering(
+            self.add_diagnostic(Diagnostic::lowering(
                 *expr_id,
                 IRError::Unknown(format!(
                     "Could not resolve struct for symbol: {struct_id:?}"
@@ -819,16 +822,14 @@ impl<'a> Lowerer<'a> {
                 match pass.run(init_func, &cfg) {
                     Ok(_) => (),
                     Err(e) => {
-                        self.source_file
-                            .diagnostics
-                            .insert(Diagnostic::lowering(initializer.expr_id, e));
+                        self.add_diagnostic(Diagnostic::lowering(initializer.expr_id, e));
                     }
                 }
             }
         }
 
         let Some(Expr::Block(member_ids)) = self.source_file.get(body_id) else {
-            self.source_file.diagnostics.insert(Diagnostic::lowering(
+            self.add_diagnostic(Diagnostic::lowering(
                 *body_id,
                 IRError::Unknown("Did not get struct body".into()),
             ));
@@ -2544,8 +2545,14 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    pub fn add_diagnostic(&self, diagnostic: Diagnostic) {
+        if let Ok(mut lock) = self.session.lock() {
+            lock.add_diagnostic(self.source_file.path.clone(), diagnostic);
+        }
+    }
+
     pub fn push_err(&mut self, message: &str, expr_id: ExprID) -> IRError {
-        self.source_file.diagnostics.insert(Diagnostic::lowering(
+        self.add_diagnostic(Diagnostic::lowering(
             expr_id,
             IRError::Unknown(message.to_string()),
         ));

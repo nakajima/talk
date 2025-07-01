@@ -303,9 +303,9 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let mut env = Environment::new();
+        let mut env = Environment::default();
         let lexer = Lexer::new(&code);
-        let mut parser = Parser::new(lexer, path, &mut env);
+        let mut parser = Parser::new(self.driver.session.clone(), lexer, path, &mut env);
         parser.parse();
         let source_file = parser.parse_tree;
 

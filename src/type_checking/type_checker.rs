@@ -2,6 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
+    compiling::compilation_session::SharedCompilationSession,
     conformance_checker::ConformanceError,
     constraint_solver::{Constraint, ConstraintSolver, Substitutions},
     diagnostic::Diagnostic,
@@ -86,6 +87,7 @@ impl Scheme {
 #[derive(Debug)]
 pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
+    session: SharedCompilationSession,
 }
 
 #[allow(unused)]
@@ -131,8 +133,11 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
 }
 
 impl<'a> TypeChecker<'a> {
-    pub fn new(symbol_table: &'a mut SymbolTable) -> Self {
-        Self { symbol_table }
+    pub fn new(session: SharedCompilationSession, symbol_table: &'a mut SymbolTable) -> Self {
+        Self {
+            session,
+            symbol_table,
+        }
     }
 
     pub fn infer(
@@ -153,9 +158,11 @@ impl<'a> TypeChecker<'a> {
 
         // Just define names for all of the funcs, structs and enums
         if let Err(e) = self.hoist(&root_ids, env, &mut source_file) {
-            source_file
-                .diagnostics
-                .insert(Diagnostic::typing(*root_ids.first().unwrap_or(&0), e));
+            #[allow(clippy::unwrap_used)]
+            self.session.lock().unwrap().add_diagnostic(
+                source_file.path.clone(),
+                Diagnostic::typing(*root_ids.first().unwrap_or(&0), e),
+            );
         }
 
         let mut typed_roots = vec![];
@@ -163,9 +170,11 @@ impl<'a> TypeChecker<'a> {
             #[allow(clippy::unwrap_used)]
             match self.infer_node(id, env, &None, &mut source_file) {
                 Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
-                Err(e) => {
-                    source_file.diagnostics.insert(Diagnostic::typing(*id, e));
-                }
+                Err(e) => self
+                    .session
+                    .lock()
+                    .unwrap()
+                    .add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e)),
             }
         }
 
@@ -354,10 +363,12 @@ impl<'a> TypeChecker<'a> {
             }
             Err(e) => {
                 log::error!("error inferring {:?}: {:?}", source_file.get(id), e);
-                source_file
-                    .diagnostics
-                    .insert(Diagnostic::typing(*id, e.clone()));
-                ty = Err(TypeError::Handled)
+                #[allow(clippy::unwrap_used)]
+                self.session
+                    .lock()
+                    .unwrap()
+                    .add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e.clone()));
+                ty = Err(TypeError::Handled);
             }
         }
 

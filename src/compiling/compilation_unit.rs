@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     NameResolved, SourceFile, SymbolTable,
-    compiling::driver::DriverConfig,
+    compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     constraint_solver::ConstraintSolver,
     environment::Environment,
     lexer::{Lexer, LexerError},
@@ -68,6 +68,7 @@ where
     pub input: Vec<PathBuf>,
     pub stage: Stage,
     pub env: Environment,
+    pub session: SharedCompilationSession,
 }
 
 impl<S: StageTrait> CompilationUnit<S> {
@@ -77,12 +78,13 @@ impl<S: StageTrait> CompilationUnit<S> {
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(input: Vec<PathBuf>, env: Environment) -> Self {
+    pub fn new(session: SharedCompilationSession, input: Vec<PathBuf>, env: Environment) -> Self {
         Self {
             src_cache: Default::default(),
             input,
             stage: Raw {},
             env,
+            session,
         }
     }
 
@@ -99,7 +101,7 @@ impl CompilationUnit<Raw> {
             };
 
             let lexer = Lexer::new(&source);
-            let mut parser = Parser::new(lexer, path, &mut self.env);
+            let mut parser = Parser::new(self.session.clone(), lexer, path, &mut self.env);
             parser.parse();
             files.push(parser.parse_tree);
         }
@@ -109,6 +111,7 @@ impl CompilationUnit<Raw> {
             input: self.input,
             stage: Parsed { files },
             env: self.env,
+            session: self.session,
         }
     }
 
@@ -141,7 +144,8 @@ impl CompilationUnit<Parsed> {
     pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
         let mut files = vec![];
         for file in self.stage.files {
-            let resolved = NameResolver::new(symbol_table).resolve(file, symbol_table);
+            let resolved =
+                NameResolver::new(symbol_table, self.session.clone()).resolve(file, symbol_table);
             files.push(resolved);
         }
 
@@ -150,6 +154,7 @@ impl CompilationUnit<Parsed> {
             input: self.input,
             stage: Resolved { files },
             env: self.env,
+            session: self.session,
         }
     }
 }
@@ -175,11 +180,17 @@ impl CompilationUnit<Resolved> {
 
         for file in self.stage.files {
             let mut typed = if driver_config.include_prelude {
-                TypeChecker::new(symbol_table).infer(file, &mut self.env)
+                TypeChecker::new(self.session.clone(), symbol_table).infer(file, &mut self.env)
             } else {
-                TypeChecker::new(symbol_table).infer_without_prelude(&mut self.env, file)
+                TypeChecker::new(self.session.clone(), symbol_table)
+                    .infer_without_prelude(&mut self.env, file)
             };
-            let mut solver = ConstraintSolver::new(&mut typed, &mut self.env, symbol_table);
+            let mut solver = ConstraintSolver::new(
+                self.session.clone(),
+                &mut typed,
+                &mut self.env,
+                symbol_table,
+            );
             solver.solve();
             files.push(typed);
         }
@@ -189,6 +200,7 @@ impl CompilationUnit<Resolved> {
             input: self.input,
             stage: Typed { files },
             env: self.env,
+            session: self.session,
         }
     }
 }
@@ -213,8 +225,8 @@ impl CompilationUnit<Typed> {
     ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered =
-                Lowerer::new(file, symbol_table, &mut self.env).lower(&mut module, driver_config);
+            let lowered = Lowerer::new(file, symbol_table, &mut self.env, Default::default())
+                .lower(&mut module, driver_config);
             files.push(lowered);
         }
 
@@ -226,6 +238,7 @@ impl CompilationUnit<Typed> {
                 files,
             },
             env: self.env,
+            session: self.session,
         }
     }
 }

@@ -1041,8 +1041,8 @@ mod pattern_parsing_tests {
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut env = Environment::new();
-        let mut parser = Parser::new(lexer, "-".into(), &mut env);
+        let mut env = Environment::default();
+        let mut parser = Parser::new(Default::default(), lexer, "-".into(), &mut env);
         parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()
@@ -1276,6 +1276,8 @@ mod structs {
 
 #[cfg(test)]
 mod error_handling_tests {
+    use std::path::PathBuf;
+
     use typed_arena::Arena;
 
     use crate::{
@@ -1283,16 +1285,18 @@ mod error_handling_tests {
         expr::Expr,
         filler::{Filler, FullExpr},
         name::Name,
-        parser::parse,
+        parser::{parse, parse_with_session},
         token::Token,
         token_kind::TokenKind,
     };
 
     #[test]
     fn handles_unclosed_paren() {
-        let parsed = parse("(", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1);
-        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+        let (_, session) = parse_with_session("(", "-".into());
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics.contains(&Diagnostic::parser(
             Token {
                 kind: TokenKind::LeftParen,
                 col: 1,
@@ -1306,10 +1310,12 @@ mod error_handling_tests {
 
     #[test]
     fn handles_unclosed_brace() {
-        let parsed = parse("func foo() {", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1);
+        let (_, session) = parse_with_session("func foo() {", "-".into());
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        assert_eq!(diagnostics.len(), 1);
         assert!(
-            parsed.diagnostics.contains(&Diagnostic::parser(
+            diagnostics.contains(&Diagnostic::parser(
                 Token {
                     kind: TokenKind::Func,
                     col: 4,
@@ -1320,15 +1326,17 @@ mod error_handling_tests {
                 crate::parser::ParserError::UnexpectedEndOfInput(None)
             )),
             "{:?}",
-            parsed.diagnostics
+            session.diagnostics()
         )
     }
 
     #[test]
     fn recovers() {
-        let parsed = parse("func foo() {\n\nfunc fizz() {}", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1, "{parsed:?}");
-        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+        let (parsed, session) = parse_with_session("func foo() {\n\nfunc fizz() {}", "-".into());
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics.contains(&Diagnostic::parser(
             Token {
                 kind: TokenKind::Func,
                 col: 4,

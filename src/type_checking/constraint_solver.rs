@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
+    compiling::compilation_session::SharedCompilationSession,
     conformance_checker::ConformanceChecker,
     diagnostic::Diagnostic,
     environment::{Environment, TypeParameter},
@@ -157,10 +158,12 @@ pub struct ConstraintSolver<'a, P: Phase = NameResolved> {
     env: &'a mut Environment,
     symbol_table: &'a mut SymbolTable,
     constraints: Vec<Constraint>,
+    session: SharedCompilationSession,
 }
 
 impl<'a, P: Phase> ConstraintSolver<'a, P> {
     pub fn new(
+        session: SharedCompilationSession,
         source_file: &'a mut SourceFile<P>,
         env: &'a mut Environment,
         symbol_table: &'a mut SymbolTable,
@@ -170,7 +173,16 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             env,
             source_file,
             symbol_table,
+            session,
         }
+    }
+
+    fn add_diagnostic(&self, diagnostic: Diagnostic) {
+        #[allow(clippy::unwrap_used)]
+        self.session
+            .lock()
+            .unwrap()
+            .add_diagnostic(self.source_file.path.clone(), diagnostic)
     }
 
     pub fn solve(&mut self) -> HashMap<TypeVarID, Ty> {
@@ -180,9 +192,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             match self.solve_constraint(&constraint, &mut substitutions, false) {
                 Ok(_) => (),
                 Err(err) => {
-                    self.source_file
-                        .diagnostics
-                        .insert(Diagnostic::typing(*constraint.expr_id(), err));
+                    self.add_diagnostic(Diagnostic::typing(*constraint.expr_id(), err));
                 }
             }
         }
@@ -265,9 +275,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         Self::normalize_substitutions(substitutions);
                     }
                     Err(err) => {
-                        self.source_file
-                            .diagnostics
-                            .insert(Diagnostic::typing(*expr_id, err));
+                        self.add_diagnostic(Diagnostic::typing(*expr_id, err));
                     }
                 }
             }
@@ -357,9 +365,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         }
                     }
                     Err(err) => {
-                        self.source_file
-                            .diagnostics
-                            .insert(Diagnostic::typing(*expr_id, err));
+                        self.add_diagnostic(Diagnostic::typing(*expr_id, err));
                     }
                 }
             }

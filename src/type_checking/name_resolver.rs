@@ -5,6 +5,7 @@ use crate::NameResolved;
 use crate::SymbolID;
 use crate::SymbolKind;
 use crate::SymbolTable;
+use crate::compiling::compilation_session::SharedCompilationSession;
 use crate::diagnostic::Diagnostic;
 use crate::expr::Expr;
 use crate::expr::Expr::*;
@@ -42,10 +43,12 @@ pub struct NameResolver {
     func_stack: Vec<(ExprID /* func expr id */, usize /* scope depth */)>,
 
     scope_tree_ids: Vec<ScopeId>,
+
+    session: SharedCompilationSession,
 }
 
 impl NameResolver {
-    pub fn new(symbol_table: &mut SymbolTable) -> Self {
+    pub fn new(symbol_table: &mut SymbolTable, session: SharedCompilationSession) -> Self {
         let initial_scope = symbol_table.build_name_scope();
 
         NameResolver {
@@ -53,6 +56,7 @@ impl NameResolver {
             type_symbol_stack: vec![],
             func_stack: vec![],
             scope_tree_ids: vec![],
+            session,
         }
     }
 
@@ -309,11 +313,11 @@ impl NameResolver {
                             if let Some(last_symbol) = self.type_symbol_stack.last() {
                                 Name::_Self(*last_symbol)
                             } else {
-                                source_file.diagnostics.insert(Diagnostic::resolve(
-                                    *node_id,
-                                    NameResolverError::InvalidSelf,
-                                ));
-
+                                #[allow(clippy::unwrap_used)]
+                                self.session.lock().unwrap().add_diagnostic(
+                                    source_file.path.clone(),
+                                    Diagnostic::resolve(*node_id, NameResolverError::InvalidSelf),
+                                );
                                 continue;
                             }
                         } else {
@@ -550,10 +554,11 @@ impl NameResolver {
         source_file: &mut SourceFile,
     ) {
         if !self.type_symbol_stack.is_empty() && name.is_none() {
-            source_file.diagnostics.insert(Diagnostic::resolve(
-                *node_id,
-                NameResolverError::MissingMethodName,
-            ));
+            #[allow(clippy::unwrap_used)]
+            self.session.lock().unwrap().add_diagnostic(
+                source_file.path.clone(),
+                Diagnostic::resolve(*node_id, NameResolverError::MissingMethodName),
+            );
 
             return;
         }
@@ -565,10 +570,14 @@ impl NameResolver {
 
         for param in params {
             let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
-                source_file.diagnostics.insert(Diagnostic::resolve(
-                    *node_id,
-                    NameResolverError::Unknown("Params must be variables".to_string()),
-                ));
+                #[allow(clippy::unwrap_used)]
+                self.session.lock().unwrap().add_diagnostic(
+                    source_file.path.clone(),
+                    Diagnostic::resolve(
+                        *node_id,
+                        NameResolverError::Unknown("Params must be variables".to_string()),
+                    ),
+                );
 
                 continue;
             };
@@ -998,6 +1007,16 @@ mod tests {
         driver.resolved_source_file(&PathBuf::from("-")).unwrap()
     }
 
+    fn resolve_with_session(
+        code: &'static str,
+    ) -> (SourceFile<NameResolved>, SharedCompilationSession) {
+        let mut driver = Driver::with_str(code);
+        (
+            driver.resolved_source_file(&PathBuf::from("-")).unwrap(),
+            driver.session,
+        )
+    }
+
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
         let mut driver = Driver::with_str(code);
         let file = driver.units[0]
@@ -1360,7 +1379,7 @@ mod tests {
 
     #[test]
     fn ensures_methods_have_names() {
-        let resolved = resolve(
+        let (_, session) = resolve_with_session(
             "
         enum Fizz {
             func() {
@@ -1370,7 +1389,15 @@ mod tests {
         ",
         );
 
-        assert!(!resolved.diagnostics().is_empty())
+        assert!(
+            !session
+                .lock()
+                .unwrap()
+                .diagnostics()
+                .get(&PathBuf::from("-"))
+                .unwrap()
+                .is_empty()
+        )
     }
 
     #[test]

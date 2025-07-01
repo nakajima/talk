@@ -504,7 +504,7 @@ mod tests {
             ],
         };
 
-        let monomorphized = Monomorphizer::new(&Environment::new()).run(module);
+        let monomorphized = Monomorphizer::new(&Environment::default()).run(module);
 
         assert_lowered_function!(
             monomorphized,
@@ -562,7 +562,7 @@ mod tests {
         );
 
         let module = driver.lower().into_iter().next().unwrap().module();
-        let monomorphed = Monomorphizer::new(&Environment::new()).run(module);
+        let monomorphed = Monomorphizer::new(&Environment::default()).run(module);
 
         assert_lowered_function!(
             monomorphed,

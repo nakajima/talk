@@ -309,7 +309,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.source_file.diagnostics().is_empty());
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(
             checked.type_for(&checked.root_ids()[0]).unwrap(),
             Ty::Pointer
@@ -326,7 +326,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.source_file.diagnostics().is_empty());
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(
             checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Pointer
@@ -344,9 +344,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            checked.source_file.diagnostics().is_empty(),
+            checked.diagnostics().is_empty(),
             "{:#?}",
-            checked.source_file.diagnostics()
+            checked.diagnostics()
         );
         assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Void);
     }
@@ -361,7 +361,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.source_file.diagnostics().is_empty());
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
     }
 }
