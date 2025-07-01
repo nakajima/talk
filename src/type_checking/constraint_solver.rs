@@ -217,7 +217,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
         }
 
-        // self.constraints.clear();
+        // We've applied these constraints, we don't need them anymore.. probably??
+        self.constraints.clear();
 
         substitutions
     }
