@@ -88,6 +88,10 @@ impl Eq for Ty {}
 
 impl Ty {
     pub fn optional(&self) -> Ty {
+        Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
+    }
+
+    pub fn some(&self) -> Ty {
         Ty::EnumVariant(SymbolID::OPTIONAL, vec![self.clone()])
     }
 

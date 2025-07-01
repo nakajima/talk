@@ -990,7 +990,7 @@ mod type_tests {
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
-        assert_eq!(x_ty, Ty::Int.optional());
+        assert_eq!(x_ty, Ty::Int.some());
         match x_ty {
             Ty::EnumVariant(symbol_id, generics) => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
@@ -1004,8 +1004,22 @@ mod type_tests {
         assert_eq!(match_ty, Ty::Int);
         assert_eq!(
             checker.type_for(&checker.root_ids()[3]).unwrap(),
-            Ty::Int.optional()
+            Ty::Int.some()
         );
+    }
+
+    #[test]
+    fn checks_builtin_optional_type_repr() {
+        let checker = check(
+            "
+        let x: Optional<Int> = .some(42)
+        x
+        ",
+        );
+
+        // x should be Optional<Int>
+        let x_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
+        assert_eq!(x_ty, Ty::Int.optional());
     }
 
     #[test]
