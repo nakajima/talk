@@ -313,11 +313,15 @@ impl NameResolver {
                             if let Some(last_symbol) = self.type_symbol_stack.last() {
                                 Name::_Self(*last_symbol)
                             } else {
-                                #[allow(clippy::unwrap_used)]
-                                self.session.lock().unwrap().add_diagnostic(
-                                    source_file.path.clone(),
-                                    Diagnostic::resolve(*node_id, NameResolverError::InvalidSelf),
-                                );
+                                if let Ok(mut lock) = self.session.lock() {
+                                    lock.add_diagnostic(
+                                        source_file.path.clone(),
+                                        Diagnostic::resolve(
+                                            *node_id,
+                                            NameResolverError::InvalidSelf,
+                                        ),
+                                    );
+                                }
                                 continue;
                             }
                         } else {
@@ -554,11 +558,12 @@ impl NameResolver {
         source_file: &mut SourceFile,
     ) {
         if !self.type_symbol_stack.is_empty() && name.is_none() {
-            #[allow(clippy::unwrap_used)]
-            self.session.lock().unwrap().add_diagnostic(
-                source_file.path.clone(),
-                Diagnostic::resolve(*node_id, NameResolverError::MissingMethodName),
-            );
+            if let Ok(mut lock) = self.session.lock() {
+                lock.add_diagnostic(
+                    source_file.path.clone(),
+                    Diagnostic::resolve(*node_id, NameResolverError::MissingMethodName),
+                );
+            }
 
             return;
         }
@@ -570,14 +575,15 @@ impl NameResolver {
 
         for param in params {
             let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
-                #[allow(clippy::unwrap_used)]
-                self.session.lock().unwrap().add_diagnostic(
-                    source_file.path.clone(),
-                    Diagnostic::resolve(
-                        *node_id,
-                        NameResolverError::Unknown("Params must be variables".to_string()),
-                    ),
-                );
+                if let Ok(mut lock) = self.session.lock() {
+                    lock.add_diagnostic(
+                        source_file.path.clone(),
+                        Diagnostic::resolve(
+                            *node_id,
+                            NameResolverError::Unknown("Params must be variables".to_string()),
+                        ),
+                    );
+                }
 
                 continue;
             };

@@ -229,9 +229,10 @@ impl LanguageServer for ServerState {
             });
         };
 
-        log::trace!("Getting diagnostics");
-
+        log::info!("Getting diagnostics for {path:?}");
+        self.driver.check();
         let diagnostics = self.driver.diagnostics(&path);
+        log::info!("Got {} diagnostics", diagnostics.len());
 
         Box::pin(async {
             Ok(DocumentDiagnosticReportResult::Report(
@@ -303,7 +304,7 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let mut env = Environment::default();
+        let mut env = Environment::new(self.driver.session.clone());
         let lexer = Lexer::new(&code);
         let mut parser = Parser::new(self.driver.session.clone(), lexer, path, &mut env);
         parser.parse();
@@ -339,6 +340,7 @@ impl LanguageServer for ServerState {
         }
 
         self.driver.update_file(&path, contents);
+        self.driver.check();
         self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }
@@ -352,6 +354,8 @@ impl LanguageServer for ServerState {
         if let Some(text) = params.text {
             self.driver.update_file(&path, text);
         }
+
+        self.driver.check();
         self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }

@@ -104,7 +104,7 @@ impl ParserError {
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(Default::default(), lexer, file_path, &mut env);
+    let mut parser = Parser::new(env.session.clone(), lexer, file_path, &mut env);
 
     parser.parse();
     parser.parse_tree
@@ -173,11 +173,9 @@ impl<'a> Parser<'a> {
     }
 
     fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
-        #[allow(clippy::unwrap_used)]
-        self.session
-            .lock()
-            .unwrap()
-            .add_diagnostic(self.parse_tree.path.clone(), diagnostic)
+        if let Ok(mut lock) = self.session.lock() {
+            lock.add_diagnostic(self.parse_tree.path.clone(), diagnostic)
+        }
     }
 
     fn recover(&mut self) {

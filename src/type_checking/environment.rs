@@ -46,9 +46,14 @@ pub struct Environment {
     next_id: i32,
 }
 
+#[cfg(test)]
 impl Default for Environment {
     fn default() -> Self {
-        Self::new(Default::default())
+        use crate::compiling::compilation_session::CompilationSession;
+
+        Environment::new(SharedCompilationSession::new(
+            CompilationSession::new().into(),
+        ))
     }
 }
 

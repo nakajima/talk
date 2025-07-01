@@ -8,7 +8,7 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use crate::{
     SourceFile, SymbolID, SymbolTable,
     compiling::{
-        compilation_session::SharedCompilationSession,
+        compilation_session::{CompilationSession, SharedCompilationSession},
         compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
     },
     environment::Environment,
@@ -24,11 +24,11 @@ pub struct DriverConfig {
 }
 
 impl DriverConfig {
-    pub fn new_environment(&self) -> Environment {
+    pub fn new_environment(&self, session: SharedCompilationSession) -> Environment {
         if self.include_prelude {
             compile_prelude().environment.clone()
         } else {
-            Environment::default()
+            Environment::new(session)
         }
     }
 }
@@ -58,14 +58,11 @@ impl Default for Driver {
 
 impl Driver {
     pub fn new(config: DriverConfig) -> Self {
-        let session = SharedCompilationSession::default();
+        let session = SharedCompilationSession::new(CompilationSession::new().into());
+        let environment = config.new_environment(session.clone());
 
         Self {
-            units: vec![CompilationUnit::new(
-                session.clone(),
-                vec![],
-                config.new_environment(),
-            )],
+            units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
             symbol_table: if config.include_prelude {
                 compile_prelude().symbols.clone()
             } else {
@@ -83,18 +80,14 @@ impl Driver {
     }
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
-        let config = DriverConfig::default();
-        let unit = CompilationUnit::new(Default::default(), files, config.new_environment());
-        Self {
-            units: vec![unit],
-            symbol_table: if config.include_prelude {
-                compile_prelude().symbols.clone()
-            } else {
-                SymbolTable::base()
-            },
-            config,
-            session: Default::default(),
+        let mut driver = Driver::default();
+
+        for file in files {
+            let contents = std::fs::read_to_string(&file).unwrap_or_default();
+            driver.update_file(&file, contents);
         }
+
+        driver
     }
 
     pub fn update_file(&mut self, path: &PathBuf, contents: String) {
@@ -203,11 +196,10 @@ impl Driver {
     ) -> Option<Vec<Diagnostic>> {
         let mut result = vec![];
         for unit in units {
-            log::info!("checking {unit:?} for diagnostics");
+            log::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
             {
-                log::info!("checking {:?} for diagnostics", source_file.path);
                 for diag in self
                     .session
                     .lock()

@@ -92,6 +92,11 @@ impl CompilationUnit<Raw> {
         let mut files = vec![];
 
         for path in self.input.clone() {
+            self.session
+                .lock()
+                .map(|mut t| t.clear_diagnostics_for(&path))
+                .unwrap_or_else(|e| log::error!("could not clear diagnostics: {e:?}"));
+
             let source = match self.read(&path) {
                 Ok(source) => source.to_string(),
                 Err(e) => {
@@ -225,7 +230,7 @@ impl CompilationUnit<Typed> {
     ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table, &mut self.env, Default::default())
+            let lowered = Lowerer::new(file, symbol_table, &mut self.env, self.session.clone())
                 .lower(&mut module, driver_config);
             files.push(lowered);
         }

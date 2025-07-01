@@ -1035,14 +1035,16 @@ mod tests {
 
 #[cfg(test)]
 mod pattern_parsing_tests {
+    use crate::compiling::compilation_session::SharedCompilationSession;
     use crate::{environment::Environment, expr::Pattern, lexer::Lexer, name::Name};
 
     use crate::parser::Parser;
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
+        let session = SharedCompilationSession::default();
         let mut env = Environment::default();
-        let mut parser = Parser::new(Default::default(), lexer, "-".into(), &mut env);
+        let mut parser = Parser::new(session, lexer, "-".into(), &mut env);
         parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()

@@ -157,9 +157,10 @@ impl<'a> TypeChecker<'a> {
         synthesize_inits(&mut source_file, self.symbol_table, env);
 
         // Just define names for all of the funcs, structs and enums
-        if let Err(e) = self.hoist(&root_ids, env, &mut source_file) {
-            #[allow(clippy::unwrap_used)]
-            self.session.lock().unwrap().add_diagnostic(
+        if let Err(e) = self.hoist(&root_ids, env, &mut source_file)
+            && let Ok(mut lock) = self.session.lock()
+        {
+            lock.add_diagnostic(
                 source_file.path.clone(),
                 Diagnostic::typing(*root_ids.first().unwrap_or(&0), e),
             );
@@ -170,11 +171,11 @@ impl<'a> TypeChecker<'a> {
             #[allow(clippy::unwrap_used)]
             match self.infer_node(id, env, &None, &mut source_file) {
                 Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
-                Err(e) => self
-                    .session
-                    .lock()
-                    .unwrap()
-                    .add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e)),
+                Err(e) => {
+                    if let Ok(mut lock) = self.session.lock() {
+                        lock.add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e))
+                    }
+                }
             }
         }
 
@@ -363,11 +364,12 @@ impl<'a> TypeChecker<'a> {
             }
             Err(e) => {
                 log::error!("error inferring {:?}: {:?}", source_file.get(id), e);
-                #[allow(clippy::unwrap_used)]
-                self.session
-                    .lock()
-                    .unwrap()
-                    .add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e.clone()));
+                if let Ok(mut lock) = self.session.lock() {
+                    lock.add_diagnostic(
+                        source_file.path.clone(),
+                        Diagnostic::typing(*id, e.clone()),
+                    );
+                }
                 ty = Err(TypeError::Handled);
             }
         }

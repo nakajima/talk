@@ -178,11 +178,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
     }
 
     fn add_diagnostic(&self, diagnostic: Diagnostic) {
-        #[allow(clippy::unwrap_used)]
-        self.session
-            .lock()
-            .unwrap()
-            .add_diagnostic(self.source_file.path.clone(), diagnostic)
+        if let Ok(mut lock) = self.session.lock() {
+            lock.add_diagnostic(self.source_file.path.clone(), diagnostic)
+        }
     }
 
     pub fn solve(&mut self) -> HashMap<TypeVarID, Ty> {

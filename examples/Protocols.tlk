@@ -3,6 +3,7 @@ protocol Foo {
 }
 
 struct Person: Foo {
+	func foo() { 123 }
 }
 
 func fizz<T: Foo>(t: T) {
@@ -10,5 +11,4 @@ func fizz<T: Foo>(t: T) {
 }
 
 fizz(Person())
-
 

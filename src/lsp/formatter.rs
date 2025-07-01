@@ -127,8 +127,9 @@ impl<'a> Formatter<'a> {
     }
 
     pub(crate) fn format_expr(&self, expr_id: ExprID) -> Doc {
-        #[allow(clippy::unwrap_used)]
-        let expr = self.source_file.get(&expr_id).unwrap();
+        let Some(expr) = self.source_file.get(&expr_id) else {
+            return Doc::Empty;
+        };
 
         match expr {
             Expr::LiteralArray(items) => self.format_array_literal(items),
@@ -268,7 +269,7 @@ impl<'a> Formatter<'a> {
         let op_text = match op {
             TokenKind::Minus => "-",
             TokenKind::Bang => "!",
-            _ => unreachable!("Unknown unary operator"),
+            _ => &format!("{op}"),
         };
 
         concat(text(op_text), self.format_expr(rhs))
@@ -289,7 +290,7 @@ impl<'a> Formatter<'a> {
             TokenKind::Caret => "^",
             TokenKind::Pipe => "|",
             TokenKind::PipePipe => "||",
-            _ => unreachable!("Unknown binary operator"),
+            _ => &format!("{op}"),
         };
 
         group(concat_space(

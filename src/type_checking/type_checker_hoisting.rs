@@ -492,7 +492,7 @@ impl<'a> TypeChecker<'a> {
 
             def.set_conformances(conformances);
             env.register(&def).map_err(|e| (0, e))?;
-
+            env.constraints.extend(conformance_constraints);
             env.selfs.pop();
         }
 

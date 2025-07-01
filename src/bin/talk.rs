@@ -29,8 +29,10 @@ async fn main() {
 
     let target = Box::new(File::create("log.txt").expect("Can't create file"));
     env_logger::builder()
-        .filter(None, log::LevelFilter::Trace)
+        .filter(None, log::LevelFilter::Info)
         .target(env_logger::Target::Pipe(target))
+        .format_timestamp(None)
+        .format_target(false)
         .try_init()
         .unwrap();
 
