@@ -204,9 +204,16 @@ impl Environment {
         self.constraints = new_constraints;
     }
 
-    pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) {
+    pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) -> Result<(), TypeError> {
         log::info!("Declare {symbol_id:?} -> {scheme:?}");
-        self.scopes.last_mut().unwrap().insert(symbol_id, scheme);
+        self.scopes
+            .last_mut()
+            .ok_or(TypeError::Unknown(format!(
+                "Unable to declare symbol {symbol_id:?} without scope"
+            )))?
+            .insert(symbol_id, scheme);
+
+        Ok(())
     }
 
     pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
@@ -390,7 +397,7 @@ impl Environment {
         self.type_var_id.clone()
     }
 
-    pub fn register(&mut self, def: &TypeDef) {
+    pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
         match def {
             TypeDef::Enum(def) => self.register_enum(def),
             TypeDef::Struct(def) => self.register_struct(def),
@@ -399,7 +406,7 @@ impl Environment {
     }
 
     // Helper methods for enum definitions
-    pub fn register_enum(&mut self, def: &EnumDef) {
+    pub fn register_enum(&mut self, def: &EnumDef) -> Result<(), TypeError> {
         log::info!("Registering {def:?}");
         self.declare(
             def.name.unwrap(),
@@ -407,12 +414,13 @@ impl Environment {
                 ty: Ty::Enum(def.name.unwrap(), def.canonical_type_parameters()),
                 unbound_vars: def.canonical_type_vars(),
             },
-        );
+        )?;
         self.types
             .insert(def.clone().name.unwrap(), TypeDef::Enum(def.clone()));
+        Ok(())
     }
 
-    pub fn register_struct(&mut self, def: &StructDef) {
+    pub fn register_struct(&mut self, def: &StructDef) -> Result<(), TypeError> {
         log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
@@ -420,12 +428,14 @@ impl Environment {
                 ty: Ty::Struct(def.symbol_id, def.canonical_type_parameters()),
                 unbound_vars: def.canonical_type_vars(),
             },
-        );
+        )?;
         self.types
             .insert(def.symbol_id, TypeDef::Struct(def.clone()));
+
+        Ok(())
     }
 
-    pub fn register_protocol(&mut self, def: &ProtocolDef) {
+    pub fn register_protocol(&mut self, def: &ProtocolDef) -> Result<(), TypeError> {
         log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
@@ -433,9 +443,11 @@ impl Environment {
                 ty: Ty::Protocol(def.symbol_id, def.canonical_associated_types()),
                 unbound_vars: def.canonical_associated_type_vars(),
             },
-        );
+        )?;
         self.types
             .insert(def.symbol_id, TypeDef::Protocol(def.clone()));
+
+        Ok(())
     }
 
     #[cfg_attr(debug_assertions, track_caller)]

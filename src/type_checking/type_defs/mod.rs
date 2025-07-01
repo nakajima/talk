@@ -73,7 +73,7 @@ impl TypeDef {
 
     pub fn find_property(&self, name: &str) -> Option<&Property> {
         match self {
-            Self::Enum(_) => unreachable!("enums do not have properties"),
+            Self::Enum(_) => None,
             Self::Struct(def) => def.properties.iter().find(|p| p.name == name),
             Self::Protocol(def) => def.properties.iter().find(|p| p.name == name),
         }
@@ -103,8 +103,8 @@ impl TypeDef {
             return;
         }
         match self {
-            Self::Enum(_) => unreachable!("enums do not have method requirements"),
-            Self::Struct(_) => unreachable!("structs do not have methods requirements"),
+            Self::Enum(_) => (),
+            Self::Struct(_) => (),
             Self::Protocol(def) => def.method_requirements = methods,
         }
     }
@@ -115,7 +115,7 @@ impl TypeDef {
         }
 
         match self {
-            Self::Enum(_) => unreachable!("enums don't have initializers"),
+            Self::Enum(_) => (),
             Self::Struct(def) => def.initializers = initializers,
             Self::Protocol(def) => def.initializers = initializers,
         }
@@ -126,7 +126,7 @@ impl TypeDef {
             return;
         }
         match self {
-            Self::Enum(_) => unreachable!("enums don't have properties"),
+            Self::Enum(_) => (),
             Self::Struct(def) => def.properties = properties,
             Self::Protocol(def) => def.properties = properties,
         }
@@ -138,8 +138,8 @@ impl TypeDef {
         }
         match self {
             Self::Enum(def) => def.variants = variants,
-            Self::Struct(_) => unreachable!("structs don't have variants"),
-            Self::Protocol(_) => unreachable!("protocols don't have variants"),
+            Self::Struct(_) => (),
+            Self::Protocol(_) => (),
         }
     }
 

@@ -459,7 +459,7 @@ impl<'a> TypeChecker<'a> {
 
         // Parameters are monomorphic inside the function body
         let scheme = Scheme::new(param_ty.clone(), vec![]);
-        env.declare(name.try_symbol_id(), scheme);
+        env.declare(name.try_symbol_id(), scheme)?;
 
         Ok(param_ty)
     }
@@ -619,21 +619,28 @@ impl<'a> TypeChecker<'a> {
             arg_tys.push(ty);
         }
 
-        match source_file.get(callee).cloned() {
+        let callee_expr = source_file.get(callee);
+        match &callee_expr {
             // Handle struct initialization
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
-                if env.is_struct_symbol(&symbol_id) =>
+                if env.is_struct_symbol(symbol_id) =>
             {
-                let struct_def = env.lookup_struct(&symbol_id).unwrap().clone();
+                let Some(struct_def) = env.lookup_struct(symbol_id).cloned() else {
+                    return Err(TypeError::Unknown(format!(
+                        "Could not resolve symbol {symbol_id:?}"
+                    )));
+                };
 
                 let placeholder =
-                    env.placeholder(callee, format!("init({symbol_id:?})"), &symbol_id, vec![]);
+                    env.placeholder(callee, format!("init({symbol_id:?})"), symbol_id, vec![]);
 
                 env.typed_exprs.insert(
                     *callee,
                     TypedExpr {
                         id: *callee,
-                        expr: source_file.get(callee).cloned().unwrap(),
+                        expr: callee_expr
+                            .expect("we're already in the Some() arm")
+                            .clone(),
                         ty: placeholder.clone(),
                     },
                 );
@@ -658,13 +665,13 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 ret_var = env.instantiate(&Scheme {
-                    ty: Ty::Struct(symbol_id, type_args),
+                    ty: Ty::Struct(*symbol_id, type_args),
                     unbound_vars: struct_def.canonical_type_vars(),
                 });
 
                 env.constraints.push(Constraint::InitializerCall {
                     expr_id: *callee,
-                    initializes_id: symbol_id,
+                    initializes_id: *symbol_id,
                     args: arg_tys.clone(),
                     func_ty: placeholder.clone(),
                     result_ty: ret_var.clone(),
@@ -740,7 +747,7 @@ impl<'a> TypeChecker<'a> {
                 unbound_vars,
             };
 
-            env.declare(symbol_id, scheme.clone());
+            env.declare(symbol_id, scheme.clone())?;
 
             return Ok(scheme.ty);
         }
@@ -750,8 +757,7 @@ impl<'a> TypeChecker<'a> {
             return Ok(env.ty_for_symbol(id, name.name_str(), &symbol_id, &[]));
         }
 
-        let ty_scheme = env.lookup_symbol(&symbol_id).unwrap().clone();
-
+        let ty_scheme = env.lookup_symbol(&symbol_id)?.clone();
         let mut substitutions = Substitutions::default();
         for (var, generic_id) in ty_scheme.unbound_vars.iter().zip(generics) {
             // Recursively get arg_ty
@@ -821,7 +827,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(Name::Resolved(symbol_id, _)) = name
             && let Ok(scheme) = env.lookup_symbol(symbol_id).cloned()
         {
-            env.declare(*symbol_id, scheme.clone());
+            env.declare(*symbol_id, scheme.clone())?;
         };
 
         let mut inferred_generics = vec![];
@@ -834,7 +840,7 @@ impl<'a> TypeChecker<'a> {
                 let ty = self.infer_node(generic, env, &None, source_file)?;
                 inferred_generics.push(ty.clone());
                 let scheme = Scheme::new(ty.clone(), vec![]);
-                env.declare(symbol_id, scheme);
+                env.declare(symbol_id, scheme)?;
             } else {
                 return Err(TypeError::Unresolved(
                     "could not resolve generic symbol".into(),
@@ -884,7 +890,7 @@ impl<'a> TypeChecker<'a> {
                     ty: inferred_ty.clone(),
                     unbound_vars: vec![],
                 },
-            );
+            )?;
         }
 
         Ok(inferred_ty)
@@ -907,14 +913,20 @@ impl<'a> TypeChecker<'a> {
         };
 
         let scheme = Scheme::new(rhs_ty.clone(), vec![]);
-        env.declare(symbol_id, scheme);
+        env.declare(symbol_id, scheme)?;
 
         Ok(rhs_ty)
     }
 
     fn infer_variable(&self, env: &mut Environment, name: &Name) -> Result<Ty, TypeError> {
         match name {
-            Name::_Self(_sym) => Ok(env.selfs.last().unwrap().clone()),
+            Name::_Self(_sym) => {
+                if let Some(self_) = env.selfs.last() {
+                    Ok(self_.clone())
+                } else {
+                    Err(TypeError::Unknown("No value found for `self`".into()))
+                }
+            }
             Name::Resolved(symbol_id, _) => {
                 let scheme = env.lookup_symbol(symbol_id)?.clone();
                 let ty = env.instantiate(&scheme);
@@ -1018,7 +1030,7 @@ impl<'a> TypeChecker<'a> {
                 for ret_ty in &ret_tys {
                     env.constrain_equality(
                         *item_id,
-                        block_return_ty.clone().unwrap(),
+                        block_return_ty.clone().unwrap_or(Ty::Void),
                         ret_ty.clone(),
                     );
                 }
@@ -1048,7 +1060,7 @@ impl<'a> TypeChecker<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // TODO: Make sure the return type is the same for all arms
-        let ret_ty = arms_ty.last().unwrap().clone();
+        let ret_ty = arms_ty.last().cloned().unwrap_or(Ty::Void);
 
         Ok(ret_ty)
     }
@@ -1158,7 +1170,7 @@ impl<'a> TypeChecker<'a> {
                         ty: expected.clone(),
                         unbound_vars: vec![],
                     };
-                    env.declare(*symbol_id, scheme);
+                    env.declare(*symbol_id, scheme)?;
                 }
             }
             Pattern::Wildcard => todo!(),
@@ -1170,7 +1182,11 @@ impl<'a> TypeChecker<'a> {
                 // The expected type should be an Enum type
                 match expected {
                     Ty::Enum(enum_id, type_args) => {
-                        let enum_def = env.lookup_enum(enum_id).unwrap().clone();
+                        let Some(enum_def) = env.lookup_enum(enum_id).cloned() else {
+                            return Err(TypeError::Unknown(format!(
+                                "Could not resolve enum with symbol: {enum_id:?}"
+                            )));
+                        };
                         // Find the variant by name
                         let Some(variant) = enum_def.variants.iter().find(|v| {
                             // Match variant name (comparing the raw string)
@@ -1212,7 +1228,7 @@ impl<'a> TypeChecker<'a> {
                                 &Some(field_ty.clone()),
                                 source_file,
                             )
-                            .unwrap();
+                            .unwrap_or(Ty::Void);
                         }
                     }
                     Ty::EnumVariant(_enum_id, values_types) => {
@@ -1224,7 +1240,7 @@ impl<'a> TypeChecker<'a> {
                                 &Some(field_ty.clone()),
                                 source_file,
                             )
-                            .unwrap();
+                            .unwrap_or(Ty::Void);
                         }
                     }
                     Ty::TypeVar(_) => {
@@ -1237,7 +1253,7 @@ impl<'a> TypeChecker<'a> {
                             ));
 
                             self.infer_node(field_pattern, env, &Some(field_ty), source_file)
-                                .unwrap();
+                                .unwrap_or(Ty::Void);
                         }
                     }
                     _ => panic!("Unhandled pattern variant: {pattern:?}, expected: {expected:?}"),

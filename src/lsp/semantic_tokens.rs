@@ -56,15 +56,16 @@ impl<'a> SemanticTokenCollector<'a> {
         }
     }
 
-    fn range_for(&self, expr_id: &ExprID) -> Range {
-        let range = self.source_file.meta.get(expr_id).unwrap().source_range();
+    fn range_for(&self, expr_id: &ExprID) -> Option<Range> {
+        let meta = self.source_file.meta.get(expr_id)?;
+        let range = meta.source_range();
 
         if let Some(start) = self.line_col_for(range.start)
             && let Some(end) = self.line_col_for(range.end)
         {
-            Range::new(start, end)
+            Some(Range::new(start, end))
         } else {
-            Range::new(Position::new(0, 0), Position::new(0, 0))
+            Some(Range::new(Position::new(0, 0), Position::new(0, 0)))
         }
     }
 
@@ -81,20 +82,24 @@ impl<'a> SemanticTokenCollector<'a> {
             return vec![];
         };
 
+        let Some(range) = self.range_for(expr_id) else {
+            return vec![];
+        };
+
         match expr {
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
-                result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
+                result.push((range, SemanticTokenType::NUMBER))
             }
             Expr::LiteralTrue | Expr::LiteralFalse => {
-                result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
+                result.push((range, SemanticTokenType::KEYWORD))
             }
             Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
             Expr::Binary(lhs, _token_kind, rhs) => {
                 result.extend(self.tokens_from_exprs(&[*lhs, *rhs]))
             }
             Expr::Tuple(items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::Break => result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD)),
+            Expr::Break => result.push((range, SemanticTokenType::KEYWORD)),
             Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Call {
                 callee,
@@ -107,16 +112,16 @@ impl<'a> SemanticTokenCollector<'a> {
             }
             Expr::Pattern(pattern) => match pattern {
                 crate::expr::Pattern::LiteralInt(_) => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
+                    result.push((range, SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralFloat(_) => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
+                    result.push((range, SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralTrue => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
+                    result.push((range, SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::LiteralFalse => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
+                    result.push((range, SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::Bind(_name) => {}
                 crate::expr::Pattern::Wildcard => {}

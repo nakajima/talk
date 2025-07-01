@@ -306,9 +306,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         let variant = self
                             .env
                             .lookup_enum(enum_id)
-                            .unwrap()
-                            .tag_with_variant_for(member_name)
-                            .1;
+                            .ok_or(TypeError::Unknown(format!(
+                                "Unable to resolve enum with id: {enum_id:?}"
+                            )))
+                            .map(|a| a.tag_with_variant_for(member_name).1)?;
+
                         self.unify(&result_ty, &variant.ty, substitutions)?;
                     }
                     // A variant with values
@@ -326,9 +328,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         let variant = self
                             .env
                             .lookup_enum(&enum_id)
-                            .unwrap()
-                            .tag_with_variant_for(member_name)
-                            .1;
+                            .ok_or(TypeError::Unknown(format!(
+                                "Unable to resolve enum with id: {enum_id:?}"
+                            )))
+                            .map(|a| a.tag_with_variant_for(member_name).1)?;
 
                         self.unify(&result_ty, &variant.ty, substitutions)?;
                     }
@@ -350,7 +353,13 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 let (member_ty, type_params, type_args) = match &receiver_ty {
                     Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
-                        let type_def = self.env.lookup_type(type_id).unwrap().clone();
+                        let type_def = self
+                            .env
+                            .lookup_type(type_id)
+                            .ok_or(TypeError::Unknown(format!(
+                                "Unable to resolve enum with id: {type_id:?}"
+                            )))?
+                            .clone();
                         let mut member_ty_search = type_def.member_ty(member_name).cloned();
 
                         if member_ty_search.is_none() {
@@ -392,7 +401,12 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         )
                     }
                     Ty::Enum(enum_id, generics) => {
-                        let enum_def = self.env.lookup_enum(enum_id).unwrap();
+                        let enum_def =
+                            self.env
+                                .lookup_enum(enum_id)
+                                .ok_or(TypeError::Unknown(format!(
+                                    "Unable to resolve enum with id: {enum_id:?}"
+                                )))?;
 
                         let Some(member_ty) = enum_def.member_ty(member_name) else {
                             return Err(TypeError::Unknown(format!(
