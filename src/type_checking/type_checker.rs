@@ -150,7 +150,9 @@ impl<'a> TypeChecker<'a> {
         synthesize_inits(&mut source_file, self.symbol_table, env);
 
         // Just define names for all of the funcs, structs and enums
-        self.hoist(&root_ids, env, &mut source_file).ok();
+        if let Err(e) = self.hoist(&root_ids, env, &mut source_file) {
+            source_file.diagnostics.insert(Diagnostic::hoisting(e));
+        }
 
         let mut typed_roots = vec![];
         for id in &root_ids {
