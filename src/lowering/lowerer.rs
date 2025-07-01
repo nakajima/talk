@@ -570,7 +570,7 @@ impl<'a> Lowerer<'a> {
             if let Some(TypedExpr {
                 expr: Expr::Func { .. },
                 ..
-            }) = self.source_file.typed_expr(&id, self.env).cloned()
+            }) = self.source_file.typed_expr(&id, self.env).clone()
             {
                 self.lower_method(&name.try_symbol_id(), &id, &name.name_str())?;
             }
@@ -579,7 +579,7 @@ impl<'a> Lowerer<'a> {
                 expr: Expr::FuncSignature { name, .. },
                 ty,
                 ..
-            }) = self.source_file.typed_expr(&id, self.env).cloned()
+            }) = self.source_file.typed_expr(&id, self.env).clone()
             {
                 self.lower_method_stub(
                     &ty,
