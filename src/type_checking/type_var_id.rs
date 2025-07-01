@@ -83,7 +83,7 @@ impl std::fmt::Debug for TypeVarID {
             }
             TypeVarKind::CanonicalTypeParameter(name) => {
                 write!(f, "T{}[{}']", self.id, name)
-            } //µ≤≥÷œ∑®†¥¨øπåß©˙∆˚¬…æ≈ç√¡™£¢∞§¶•ªº–≠
+            }
             TypeVarKind::Placeholder(name) => {
                 write!(f, "T{}[Placeholder {}{}]", self.id, name, constraints_str)
             }
