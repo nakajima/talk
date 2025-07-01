@@ -217,8 +217,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
         }
 
-        log::warn!("Remaining type variables: {remaining_type_vars:#?}");
-
         // self.constraints.clear();
 
         substitutions
@@ -450,10 +448,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                         )));
                                     };
 
-                                    log::error!(
-                                        "MEMBER CONFORMS CHECK: {protocol_def:?}\n{associated_types:?}\n{result_ty:?}\n{result_ty:?}"
-                                    );
-
                                     if let Some(ty) = protocol_def.member_ty(member_name) {
                                         result = Some((
                                             ty.clone(),
@@ -483,7 +477,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         //     Self::apply(&result_ty, substitutions, 0)
                         // );
                         if !is_retry && !matches!(constraint, Constraint::Retry(_)) {
-                            log::error!("Pushing retry {constraint:?}");
+                            log::warn!("Pushing retry {constraint:?}");
 
                             self.constraints
                                 .push(Constraint::Retry(constraint.clone().into()));

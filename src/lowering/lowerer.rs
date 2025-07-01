@@ -27,7 +27,9 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
+    type_constraint::TypeConstraint,
     type_defs::{TypeDef, struct_def::StructDef},
+    type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::TypedExpr,
 };
 
@@ -66,7 +68,7 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
-            Ty::Pointer => IRType::Pointer,
+            Ty::Pointer => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
@@ -80,12 +82,13 @@ impl Ty {
                 Box::new(ty.to_ir(lowerer)),
             ),
             Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.id)),
-            Ty::Enum(_symbol_id, generics) => {
-                IRType::Enum(generics.iter().map(|i| i.to_ir(lowerer)).collect())
-            }
-            Ty::EnumVariant(_enum_id, items) => {
+            Ty::Enum(symbol_id, generics) => IRType::Enum(
+                *symbol_id,
+                generics.iter().map(|i| i.to_ir(lowerer)).collect(),
+            ),
+            Ty::EnumVariant(enum_id, items) => {
                 // let enum_def = lowerer.env.lookup_enum(enum_id).unwrap();
-                IRType::Enum(items.iter().map(|t| t.to_ir(lowerer)).collect())
+                IRType::Enum(*enum_id, items.iter().map(|t| t.to_ir(lowerer)).collect())
             }
             Ty::Closure { func, .. } => func.to_ir(lowerer),
             Ty::Tuple(items) => IRType::Struct(
@@ -523,6 +526,12 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instr::Jump(*current_loop_exit));
                 None
             }
+            Expr::ProtocolDecl {
+                ref name,
+                ref associated_types,
+                ref body,
+                ref conformances,
+            } => self.lower_protocol(&typed_expr, name, associated_types, body, conformances),
             Expr::Tuple(items) => self.lower_tuple(expr_id, items),
             expr => {
                 self.source_file.diagnostics.insert(Diagnostic::lowering(
@@ -537,6 +546,50 @@ impl<'a> Lowerer<'a> {
         self.current_expr_ids.pop();
 
         res
+    }
+
+    fn lower_protocol(
+        &mut self,
+        _typed_expr: &TypedExpr,
+        name: &Name,
+        _associated_types: &[ExprID],
+        body: &ExprID,
+        _conformances: &[ExprID],
+    ) -> Option<Register> {
+        let Some(Expr::Block(ids)) = self.source_file.get(body).cloned() else {
+            unreachable!()
+        };
+
+        let protocol_def = self
+            .env
+            .lookup_protocol(&name.try_symbol_id())
+            .unwrap()
+            .clone();
+
+        for id in ids {
+            if let TypedExpr {
+                expr: Expr::Func { .. },
+                ..
+            } = self.source_file.typed_expr(&id, self.env).unwrap().clone()
+            {
+                self.lower_method(&name.try_symbol_id(), &id, &name.name_str())?;
+            }
+
+            if let TypedExpr {
+                expr: Expr::FuncSignature { name, .. },
+                ty,
+                ..
+            } = self.source_file.typed_expr(&id, self.env).unwrap().clone()
+            {
+                self.lower_method_stub(
+                    &ty,
+                    &Name::Resolved(protocol_def.symbol_id, protocol_def.name_str.clone()),
+                    &name,
+                )?;
+            }
+        }
+
+        None
     }
 
     fn lower_tuple(&mut self, expr_id: &ExprID, items: Vec<ExprID>) -> Option<Register> {
@@ -671,7 +724,7 @@ impl<'a> Lowerer<'a> {
             count: Some(count_reg),
         });
         self.push_instr(Instr::Store {
-            ty: IRType::Pointer,
+            ty: IRType::POINTER,
             val: storage_reg,
             location: storage_ptr_reg,
         });
@@ -939,6 +992,45 @@ impl<'a> Lowerer<'a> {
         None
     }
 
+    fn lower_method_stub(
+        &mut self,
+        ty: &Ty,
+        protocol_name: &Name,
+        name: &Name,
+    ) -> Option<Register> {
+        let Ty::Func(mut params, ret, generics) = ty.clone() else {
+            unreachable!()
+        };
+
+        let type_var = Ty::TypeVar(TypeVarID::new(
+            0,
+            TypeVarKind::SelfVar(name.try_symbol_id()),
+            vec![],
+        ));
+
+        // Insert the self env param
+        params.insert(0, type_var.clone());
+
+        let stub_function = IRFunction {
+            ty: Ty::Func(params, ret, generics).to_ir(self),
+            name: format!(
+                "@_{}_{}_{}",
+                protocol_name.try_symbol_id().0,
+                protocol_name.name_str(),
+                name.name_str()
+            ),
+            blocks: vec![],
+            env_ty: Some(type_var.to_ir(self)),
+            env_reg: None,
+            size: 0,
+            debug_info: Default::default(),
+        };
+
+        self.lowered_functions.push(stub_function);
+
+        None
+    }
+
     fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
         let typed_expr = self
             .env
@@ -1024,7 +1116,7 @@ impl<'a> Lowerer<'a> {
                     capture_registers.push(*register);
 
                     if capture == self_symbol {
-                        captured_ir_types.push(IRType::Pointer);
+                        captured_ir_types.push(IRType::POINTER);
                     } else {
                         let capture_ty = self
                             .env
@@ -1117,7 +1209,7 @@ impl<'a> Lowerer<'a> {
             if i == body_exprs.len() - 1 {
                 let ty = if matches!(ret.0, IRType::Func(_, _)) {
                     // we don't pass around functions, we pass around pointers (closures)
-                    IRType::Pointer
+                    IRType::POINTER
                 } else {
                     ret.0
                 };
@@ -1983,7 +2075,7 @@ impl<'a> Lowerer<'a> {
             arg_registers.insert(
                 0,
                 TypedRegister {
-                    ty: IRType::Pointer,
+                    ty: IRType::POINTER,
                     register: env_ptr,
                 },
             );
@@ -2033,14 +2125,14 @@ impl<'a> Lowerer<'a> {
             });
             self.push_instr(Instr::Load {
                 dest: env_reg,
-                ty: IRType::Pointer,
+                ty: IRType::POINTER,
                 addr: env_ptr,
             });
 
             arg_registers.insert(
                 0,
                 TypedRegister {
-                    ty: IRType::Pointer,
+                    ty: IRType::POINTER,
                     register: env_reg,
                 },
             );
@@ -2082,7 +2174,7 @@ impl<'a> Lowerer<'a> {
         arg_registers.insert(
             0,
             TypedRegister {
-                ty: IRType::Pointer,
+                ty: IRType::POINTER,
                 register: struct_instance_reg,
             },
         );
@@ -2130,22 +2222,59 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
+        let type_var_id = if let IRType::TypeVar(type_var) = &receiver_ty.ty.to_ir(self) {
+            Some(type_var.clone())
+        } else {
+            None
+        };
+
         arg_registers.insert(
             0,
             TypedRegister {
-                ty: IRType::Pointer,
+                ty: IRType::Pointer { hint: type_var_id },
                 register: receiver,
             },
         );
 
-        let callee_name = match receiver_ty.ty {
+        let callee_name = match &receiver_ty.ty {
             Ty::Struct(struct_id, _) => {
-                let struct_def = self.env.lookup_struct(&struct_id)?;
+                let struct_def = self.env.lookup_struct(struct_id)?;
                 let method = struct_def.methods.iter().find(|m| m.name == name)?;
                 Some(format!(
                     "@_{}_{}_{}",
                     struct_id.0, struct_def.name_str, method.name
                 ))
+            }
+            Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
+                let mut result = None;
+                for constraint in &type_var.constraints {
+                    let TypeConstraint::Conforms { protocol_id, .. } = constraint else {
+                        continue;
+                    };
+
+                    let protocol_def = self.env.lookup_protocol(protocol_id).unwrap();
+                    if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
+                        result = Some(format!(
+                            "@_{}_{}_{}",
+                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
+                        ));
+
+                        break;
+                    } else if let Some(method) = protocol_def
+                        .method_requirements
+                        .iter()
+                        .find(|m| m.name == name)
+                    {
+                        result = Some(format!(
+                            "@_{}_{}_{}",
+                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
+                        ));
+
+                        break;
+                    }
+                }
+
+                result
             }
             _ => None,
         };
@@ -2233,12 +2362,12 @@ impl<'a> Lowerer<'a> {
 
         // Store the environment and function pointers
         self.push_instr(Instr::Store {
-            ty: IRType::Pointer,
+            ty: IRType::POINTER,
             val: env_dest_ptr,
             location: env_ptr,
         });
         self.push_instr(Instr::Store {
-            ty: IRType::Pointer,
+            ty: IRType::POINTER,
             val: func_ref_reg,
             location: fn_ptr,
         });

@@ -10,13 +10,12 @@ use crate::{
         lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList},
         register::Register,
     },
-    transforms::monomorphizer::Monomorphizer,
 };
 
 #[derive(Debug)]
 pub enum InterpreterError {
     NoMainFunc,
-    CalleeNotFound,
+    CalleeNotFound(String),
     PredecessorNotFound,
     TypeError(Value, Value),
     UnreachableReached,
@@ -56,7 +55,6 @@ impl IRInterpreter {
 
     pub fn run(mut self) -> Result<Value, InterpreterError> {
         log::info!("Monomorphizing module");
-        self.program = Monomorphizer::new().run(self.program.clone());
 
         if std::env::var("IR").is_ok() {
             println!("{}", crate::lowering::ir_printer::print(&self.program));
@@ -246,7 +244,7 @@ impl IRInterpreter {
                         };
 
                         let Some(function_to_call) = self.load_function(callee_id) else {
-                            return Err(InterpreterError::CalleeNotFound);
+                            return Err(InterpreterError::CalleeNotFound(format!("[{callee_id}]")));
                         };
 
                         function_to_call
@@ -255,7 +253,7 @@ impl IRInterpreter {
                         let Some(function_to_call) =
                             self.program.functions.iter().find(|f| f.name == name)
                         else {
-                            return Err(InterpreterError::CalleeNotFound);
+                            return Err(InterpreterError::CalleeNotFound(name));
                         };
 
                         function_to_call.clone()
@@ -514,6 +512,7 @@ mod tests {
             interpreter::{IRInterpreter, InterpreterError},
             value::Value,
         },
+        transforms::monomorphizer::Monomorphizer,
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
@@ -524,7 +523,9 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let module = unit.module();
 
-        IRInterpreter::new(module).run()
+        let mono = Monomorphizer::new(&unit.env).run(module);
+
+        IRInterpreter::new(mono).run()
     }
 
     #[test]
@@ -751,5 +752,31 @@ mod tests {
             .unwrap(),
             Value::Int(123),
         )
+    }
+
+    #[test]
+    fn interprets_protocol_method_call() {
+        assert_eq!(
+            interpret(
+                "
+            protocol Aged {
+                func getAge() -> Int
+            }
+
+            struct Person: Aged {
+                func getAge() {
+                    123
+                }
+            }
+
+            func get<T: Aged>(t: T) {
+                t.getAge()
+            }
+
+            get(Person())"
+            )
+            .unwrap(),
+            Value::Int(123)
+        );
     }
 }

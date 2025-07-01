@@ -503,7 +503,7 @@ mod array_tests {
                             count: Some(Register(1))
                         },
                         Instr::Store {
-                            ty: IRType::Pointer,
+                            ty: IRType::POINTER,
                             val: Register(6),
                             location: Register(5)
                         },
@@ -614,7 +614,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(1)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(0).into()))
+                        Instr::Ret(IRType::POINTER, Some(Register(0).into()))
                     ],
                 }],
                 env_ty: None,
@@ -657,7 +657,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(3)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(2).into()))
+                        Instr::Ret(IRType::POINTER, Some(Register(2).into()))
                     ],
                 }],
                 env_ty: None,

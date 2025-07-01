@@ -346,7 +346,7 @@ impl<'a> Parser<'a> {
                 }
                 Tokind::Ptr => {
                     self.advance();
-                    IRType::Pointer
+                    IRType::POINTER
                 }
                 Tokind::LeftParen => {
                     let params = self.parameters()?.into_iter().map(|p| p.1).collect();

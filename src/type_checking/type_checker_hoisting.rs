@@ -460,8 +460,6 @@ impl<'a> TypeChecker<'a> {
                     continue;
                 };
 
-                println!("ASSOCIATEDDDDDD TYPES: {associated_types:?}");
-
                 let conformance = Conformance::new(symbol_id, associated_types);
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
