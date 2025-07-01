@@ -567,19 +567,19 @@ impl<'a> Lowerer<'a> {
             .clone();
 
         for id in ids {
-            if let TypedExpr {
+            if let Some(TypedExpr {
                 expr: Expr::Func { .. },
                 ..
-            } = self.source_file.typed_expr(&id, self.env).unwrap().clone()
+            }) = self.source_file.typed_expr(&id, self.env).cloned()
             {
                 self.lower_method(&name.try_symbol_id(), &id, &name.name_str())?;
             }
 
-            if let TypedExpr {
+            if let Some(TypedExpr {
                 expr: Expr::FuncSignature { name, .. },
                 ty,
                 ..
-            } = self.source_file.typed_expr(&id, self.env).unwrap().clone()
+            }) = self.source_file.typed_expr(&id, self.env).cloned()
             {
                 self.lower_method_stub(
                     &ty,
