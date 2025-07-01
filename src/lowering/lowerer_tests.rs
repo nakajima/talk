@@ -1659,19 +1659,17 @@ mod protocol_lowering_tests {
         lowering::{
             instr::{Callee, Instr},
             ir_function::IRFunction,
-            ir_printer::print,
             ir_type::IRType,
             ir_value::IRValue,
             lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList, TypedRegister},
             lowerer_tests::helpers::lower_without_prelude_with_env,
             register::Register,
         },
-        transforms::monomorphizer::Monomorphizer,
     };
 
     #[test]
     fn lowers_protocol_method_call() {
-        let (lowered, env) = lower_without_prelude_with_env(
+        let (lowered, _) = lower_without_prelude_with_env(
             "
             protocol Aged {
                 func getAge() -> Int
@@ -1771,7 +1769,5 @@ mod protocol_lowering_tests {
                 size: 7,
             }
         );
-
-        let mono = Monomorphizer::new(&env).run(lowered);
     }
 }
