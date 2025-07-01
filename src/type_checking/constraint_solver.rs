@@ -406,7 +406,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             ));
                         };
 
-                        log::warn!(
+                        log::trace!(
                             "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
                         );
 
@@ -431,7 +431,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             )));
                         };
 
-                        log::warn!(
+                        log::trace!(
                             "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
                         );
 
@@ -773,7 +773,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     [v1.constraints.clone(), v2.constraints.clone()].concat();
 
                 if !combined_constraints.is_empty() {
-                    log::warn!("Combined constraints: {combined_constraints:?}");
+                    log::trace!(
+                        "Combined constraints: {v1:?} <> {v2:?} = {combined_constraints:?}"
+                    );
                 };
 
                 // When unifying two type variables, pick one consistently
