@@ -176,8 +176,6 @@ impl<'a> Monomorphizer<'a> {
             return mangled_name;
         }
 
-        println!("-> {mangled_name}");
-
         log::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
@@ -319,60 +317,6 @@ impl<'a> Monomorphizer<'a> {
                         .clone();
                     *callee = Callee::Name(name);
                 }
-
-                // let applied_args: Vec<TypedRegister> = args
-                //     .0
-                //     .iter()
-                //     .map(|a| TypedRegister::new(Self::apply_type(&a.ty, substitutions), a.register))
-                //     .collect();
-
-                // *ty = Self::apply_type(ty, substitutions);
-                // *args = RegisterList(applied_args.clone());
-
-                // // We want to monomorphize all the way down
-                // if let Callee::Name(name) = callee
-                //     && let Some(func) = self
-                //         .generic_functions
-                //         .iter()
-                //         .find(|f| f.name == *name)
-                //         .cloned()
-                // {
-                //     if func.blocks.is_empty() {
-                //         if let Some(IRType::Pointer { hint: Some(hint) }) =
-                //             applied_args.first().map(|a| &a.ty)
-                //         {
-                //             let concrete =
-                //                 Self::find_concrete_type(hint, substitutions, self.env).unwrap();
-                //             let name_parts = name.clone();
-                //             let member_name = name_parts.split("_").nth(3).unwrap();
-                //             *name = format!(
-                //                 "@_{}_{}_{}",
-                //                 concrete.symbol_id().0,
-                //                 concrete.name(),
-                //                 member_name
-                //             );
-
-                //             *callee = Callee::Name(name.clone());
-                //         } else {
-                //             println!("didn't get hint: {:?}", applied_args.first().map(|a| &a.ty));
-                //         }
-
-                //         // it's a protocol stub, let's find the receiver
-                //         println!(
-                //             "-------------------oh boy we need to monomorphize here:\n{ty:?}\n{args:?}\n{applied_args:?}\n------------------------"
-                //         );
-                //     } else {
-                //         let new_callee = self.monomorphize_function(
-                //             &func,
-                //             applied_args.iter().map(|a| a.ty.clone()).collect(),
-                //             ty,
-                //             substitutions,
-                //             module,
-                //         );
-
-                //         *callee = Callee::Name(new_callee);
-                //     }
-                // }
             }
             Instr::GetEnumTag(_, _) => todo!(),
             Instr::GetEnumValue(_, ty, _, _, _) => *ty = Self::apply_type(ty, substitutions),

@@ -87,7 +87,7 @@ impl IRInterpreter {
                 }
             }
             Err(err) => {
-                println!("{err:?}");
+                log::error!("{err:?}");
                 self.dump();
                 return Err(err);
             }

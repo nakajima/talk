@@ -1773,6 +1773,5 @@ mod protocol_lowering_tests {
         );
 
         let mono = Monomorphizer::new(&env).run(lowered);
-        println!("{}", print(&mono));
     }
 }

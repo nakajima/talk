@@ -582,32 +582,8 @@ pub fn free_type_vars_in_env(
             if symbol_id == &ignoring {
                 continue;
             }
-            //     // If its self, then only return explicit type parameters
-            //     let items: Vec<TypeVarID> = match scheme.ty.clone() {
-            //         Ty::Enum(_, vars)
-            //         | Ty::Struct(_, vars)
-            //         | Ty::Protocol(_, vars)
-            //         | Ty::Func(_, _, vars) => vars,
-            //         _ => vec![],
-            //     }
-            //     .iter()
-            //     .filter_map(|t| {
-            //         if let Ty::TypeVar(id) = t {
-            //             Some(id.clone())
-            //         } else {
-            //             None
-            //         }
-            //     })
-            //     .collect();
 
-            //     println!("gathering free vars from t: {scheme:?} {items:?}");
-
-            //     let mut set = HashSet::new();
-            //     set.extend(items);
-            //     set
-            // } else {
             let mut ftv = free_type_vars(&scheme.ty);
-            // };
 
             // remove those vars that the scheme already quantifies
             for q in &scheme.unbound_vars {
