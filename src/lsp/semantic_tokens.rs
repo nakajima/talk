@@ -246,8 +246,21 @@ impl<'a> SemanticTokenCollector<'a> {
 
                 result.extend(self.tokens_from_expr(value));
             }
-            Expr::ProtocolDecl { .. } => todo!(),
-            Expr::FuncSignature { .. } => todo!(),
+            Expr::ProtocolDecl {
+                associated_types,
+                body,
+                conformances,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(associated_types));
+                result.extend(self.tokens_from_expr(body));
+                result.extend(self.tokens_from_exprs(conformances));
+            }
+            Expr::FuncSignature { params, generics, ret, .. } => {
+                result.extend(self.tokens_from_exprs(params));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_expr(ret));
+            },
         };
 
         result

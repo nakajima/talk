@@ -1,3 +1,7 @@
 protocol Foo {
-	func foo()  
+	func foo() -> Int
+}
+
+struct Person: Foo {
+	
 }
