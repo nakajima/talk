@@ -313,7 +313,7 @@ impl LanguageServer for ServerState {
         Box::pin(async move {
             let formatted = format(&source_file, 80);
             let last_line = code.lines().count() as u32;
-            let last_char = code.lines().last().map(|line| line.len() - 1);
+            let last_char = code.lines().last().map(|line| line.len().saturating_sub(1));
 
             Ok(Some(vec![TextEdit::new(
                 Range::new(
