@@ -343,12 +343,23 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 }
             }
             Constraint::Satisfies {
-                ty, constraints, ..
+                expr_id,
+                ty,
+                constraints,
+                ..
             } => {
                 let checker = SatisfiesChecker::new(self.env, ty, constraints);
-                let unifications = checker.check()?;
-                for (lhs, rhs) in unifications {
-                    self.unify(&lhs, &rhs, substitutions)?;
+                match checker.check() {
+                    Ok(unifications) => {
+                        for (lhs, rhs) in unifications {
+                            self.unify(&lhs, &rhs, substitutions)?;
+                        }
+                    }
+                    Err(err) => {
+                        self.source_file
+                            .diagnostics
+                            .insert(Diagnostic::typing(*expr_id, err));
+                    }
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {

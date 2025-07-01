@@ -5,4 +5,10 @@ protocol Foo {
 struct Person: Foo {
 }
 
+func fizz<T: Foo>(t: T) {
+	t.foo()
+}
+
+fizz(Person())
+
 
