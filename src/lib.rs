@@ -1,11 +1,11 @@
 #![feature(box_patterns)]
 #![feature(associated_type_defaults)]
 #![feature(assert_matches)]
-#![warn(clippy::unwrap_used)]
-#![warn(clippy::expect_used)]
-#![warn(clippy::panic)]
-#![warn(clippy::todo)]
-#![warn(clippy::unimplemented)]
+#![cfg_attr(not(test), warn(clippy::unwrap_used))]
+#![cfg_attr(not(test), warn(clippy::expect_used))]
+#![cfg_attr(not(test), warn(clippy::panic))]
+#![cfg_attr(not(test), warn(clippy::todo))]
+#![cfg_attr(not(test), warn(clippy::unimplemented))]
 
 pub mod builtins;
 pub use builtins::*;

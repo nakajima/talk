@@ -22,6 +22,7 @@ pub mod type_var_id;
 pub mod typed_expr;
 
 #[cfg(test)]
+#[derive(Debug)]
 pub struct CheckResult {
     pub source_file: SourceFile<Typed>,
     pub env: Environment,

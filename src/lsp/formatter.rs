@@ -127,6 +127,7 @@ impl<'a> Formatter<'a> {
     }
 
     pub(crate) fn format_expr(&self, expr_id: ExprID) -> Doc {
+        #[allow(clippy::unwrap_used)]
         let expr = self.source_file.get(&expr_id).unwrap();
 
         match expr {
@@ -928,6 +929,7 @@ impl<'a> Formatter<'a> {
         let mut queue = vec![doc];
 
         while width >= 0 && !queue.is_empty() {
+            #[allow(clippy::unwrap_used)]
             match queue.pop().unwrap() {
                 Doc::Empty => continue,
                 Doc::Text(s) => width -= s.len() as isize,

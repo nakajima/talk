@@ -86,6 +86,7 @@ pub fn synthesize_inits(
                 ExprMeta::generated(),
             );
 
+            #[allow(clippy::expect_used)]
             let struct_info = symbol_table
                 .get(&sym)
                 .cloned()

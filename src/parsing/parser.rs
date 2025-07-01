@@ -202,11 +202,16 @@ impl<'a> Parser<'a> {
         let token = self
             .previous_before_newline
             .clone()
-            .unwrap_or_else(|| self.previous.clone().unwrap());
+            .or_else(|| self.previous.clone())
+            .ok_or(ParserError::UnknownError(
+                "unbalanced source location stack.".into(),
+            ))?;
         let start = self
             .source_location_stack
             .pop()
-            .unwrap_or_else(|| panic!("unbalanced source location stack. current: {token:?}"));
+            .ok_or(ParserError::UnknownError(format!(
+                "unbalanced source location stack. current: {token:?}"
+            )))?;
 
         let expr_meta = ExprMeta {
             start: start.token,
@@ -229,6 +234,7 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
+        #[allow(clippy::unwrap_used)]
         let meta = &self.parse_tree.meta.get(&lhs).unwrap();
         let start = SourceLocationStart {
             token: meta.start.clone(),
@@ -241,6 +247,7 @@ impl<'a> Parser<'a> {
     #[must_use]
     fn push_source_location(&mut self) -> LocToken {
         log::trace!("push_source_location: {:?}", self.current);
+        #[allow(clippy::unwrap_used)]
         let start = SourceLocationStart {
             token: self.current.clone().unwrap(),
             identifiers: vec![],
@@ -432,7 +439,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Enum)?;
         self.skip_newlines();
 
-        let (name, _) = self.try_identifier().unwrap();
+        let name = self.identifier()?;
         let generics = self.type_reprs()?;
         let conformances = self.conformances()?;
 
@@ -581,7 +588,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
-        let (name, _) = self.try_identifier().unwrap();
+        let name = self.identifier()?;
 
         let member = self.add_expr(Member(None, name), tok)?;
         if let Some(call_id) = self.check_call(member, can_assign)? {
@@ -603,9 +610,10 @@ impl<'a> Parser<'a> {
             Ok(name) => name,
             Err(e) => {
                 // Add an empty member name so name resolution can  but still emit the error
-                self.parse_tree
-                    .diagnostics
-                    .insert(Diagnostic::parser(self.current.clone().unwrap(), e));
+                self.parse_tree.diagnostics.insert(Diagnostic::parser(
+                    self.current.clone().unwrap_or(Token::EOF),
+                    e,
+                ));
                 "".into()
             }
         };
@@ -735,12 +743,13 @@ impl<'a> Parser<'a> {
 
         self.advance();
 
-        match &self
+        let prev = &self
             .previous
             .as_ref()
-            .expect("got into #literal without having a token")
-            .kind
-        {
+            .map(|p| p.kind.clone())
+            .ok_or(ParserError::UnexpectedEndOfInput(None))?;
+
+        match prev {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::Func => self.func(),
@@ -925,7 +934,7 @@ impl<'a> Parser<'a> {
             if self.did_match(TokenKind::Case)? {
                 while {
                     let tok = self.push_source_location();
-                    let (name, _) = self.try_identifier().expect("did not get enum case name");
+                    let name = self.identifier()?;
                     let mut types = vec![];
 
                     if self.did_match(TokenKind::LeftParen)? {
@@ -1208,9 +1217,16 @@ impl<'a> Parser<'a> {
         callee: ExprID,
         can_assign: bool,
     ) -> Result<Option<ExprID>, ParserError> {
-        if self.peek_is(TokenKind::Less)
-            && self.previous.as_ref().unwrap().end == self.current.as_ref().unwrap().start
-        {
+        let prev = self
+            .previous
+            .as_ref()
+            .ok_or(ParserError::UnexpectedEndOfInput(None))?;
+        let cur = self
+            .current
+            .as_ref()
+            .ok_or(ParserError::UnexpectedEndOfInput(None))?;
+
+        if self.peek_is(TokenKind::Less) && prev.end == cur.start {
             self.consume(TokenKind::Less)?;
             let mut generics = vec![];
             while !self.did_match(TokenKind::Greater)? {

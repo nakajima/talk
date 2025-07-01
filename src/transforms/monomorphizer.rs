@@ -100,10 +100,17 @@ impl<'a> Monomorphizer<'a> {
                     {
                         // it's a protocol method, we need to specialize it
                         log::info!("Detected protocol method, specializing: {args:?}");
-                        let concrete =
-                            Self::find_concrete_type(first_arg, substitutions, self.env).unwrap();
+                        let Some(concrete) =
+                            Self::find_concrete_type(first_arg, substitutions, self.env)
+                        else {
+                            continue;
+                        };
+
                         let name_parts = callee.clone();
-                        let member_name = name_parts.split("_").nth(3).unwrap();
+                        let Some(member_name) = name_parts.split("_").nth(3) else {
+                            continue;
+                        };
+
                         let monomorphized_name = format!(
                             "@_{}_{}_{}",
                             concrete.symbol_id().0,
@@ -113,12 +120,11 @@ impl<'a> Monomorphizer<'a> {
 
                         renames.insert(callee.clone(), monomorphized_name.clone());
 
-                        let callee_function = module
-                            .functions
-                            .iter()
-                            .find(|f| &f.name == callee)
-                            .unwrap()
-                            .clone();
+                        let Some(callee_function) =
+                            module.functions.iter().find(|f| &f.name == callee).cloned()
+                        else {
+                            continue;
+                        };
 
                         self.detect_monomorphizations_in(callee_function, module, substitutions);
                     } else if Self::is_generic(&callee_function) {
@@ -318,7 +324,7 @@ impl<'a> Monomorphizer<'a> {
                     *callee = Callee::Name(name);
                 }
             }
-            Instr::GetEnumTag(_, _) => todo!(),
+            Instr::GetEnumTag(_, _) => (),
             Instr::GetEnumValue(_, ty, _, _, _) => *ty = Self::apply_type(ty, substitutions),
             Instr::TagVariant(_, ty, _, __list) => *ty = Self::apply_type(ty, substitutions),
             Instr::Ret(ty, _) => *ty = Self::apply_type(ty, substitutions),

@@ -22,7 +22,7 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
             return Ok(());
         }
 
-        let (_self_reg, property_pointers) = self.get_property_pointers(func);
+        let (_self_reg, property_pointers) = self.get_property_pointers(func)?;
 
         let mut out_sets: HashMap<BasicBlockID, HashSet<Property>> = HashMap::new();
 
@@ -107,7 +107,10 @@ impl DefiniteInitizationPass {
 
     // Identifies which property a register points to.
     // A register points to a property if it's the result of a gep on self.
-    fn get_property_pointers(&self, func: &IRFunction) -> (Register, HashMap<Register, Property>) {
+    fn get_property_pointers(
+        &self,
+        func: &IRFunction,
+    ) -> Result<(Register, HashMap<Register, Property>), IRError> {
         let mut property_pointers = HashMap::new();
         // The 'self' parameter is the first argument to an init method.
         let self_reg = func.env_reg;
@@ -124,7 +127,11 @@ impl DefiniteInitizationPass {
 
                     let index = match index {
                         IRValue::ImmediateInt(index) => index,
-                        IRValue::Register(_register) => todo!(),
+                        IRValue::Register(_register) => {
+                            return Err(IRError::Unknown(
+                                "Unable to determine property index for register IRValue".into(),
+                            ));
+                        }
                     };
 
                     if let Some(property) = self.struct_def.properties.get(*index as usize) {
@@ -133,10 +140,12 @@ impl DefiniteInitizationPass {
                 }
             }
         }
-        (
-            self_reg.expect("Didn't get self register for property pointers"),
+        Ok((
+            self_reg.ok_or(IRError::Unknown(
+                "Did not get self register for property pointers".into(),
+            ))?,
             property_pointers,
-        )
+        ))
     }
 }
 

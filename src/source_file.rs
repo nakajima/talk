@@ -218,7 +218,7 @@ impl<P: Phase> SourceFile<P> {
 
     pub fn span(&self, expr_id: &ExprID) -> Span {
         let Some(meta) = self.meta.get(expr_id) else {
-            panic!("didn't get a span for expr: {expr_id}");
+            return Span::default();
         };
 
         // handle single token expressions

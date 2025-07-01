@@ -34,11 +34,14 @@ pub enum CompilationError {
 impl<Stage: StageTrait> CompilationUnit<Stage> {
     fn read(&mut self, path: &PathBuf) -> Result<&str, CompilationError> {
         if self.src_cache.contains_key(path) {
+            #[allow(clippy::unwrap_used)]
             return Ok(self.src_cache.get(path).unwrap());
         }
 
         let src = std::fs::read_to_string(path).map_err(CompilationError::IOError)?;
         self.src_cache.insert(path.clone(), src);
+
+        #[allow(clippy::expect_used)]
         Ok(self.src_cache.get(path).expect("src cache bad").as_str())
     }
 

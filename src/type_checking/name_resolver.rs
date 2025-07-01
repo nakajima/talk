@@ -18,12 +18,16 @@ use crate::span::Span;
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub enum NameResolverError {
     InvalidSelf,
+    MissingMethodName,
+    Unknown(String),
 }
 
 impl NameResolverError {
     pub fn message(&self) -> String {
         match self {
             Self::InvalidSelf => "`self` can't be used outside type".to_string(),
+            Self::MissingMethodName => "Missing method name".to_string(),
+            Self::Unknown(string) => string.to_string(),
         }
     }
 }
@@ -58,15 +62,13 @@ impl NameResolver {
         symbol_table: &mut SymbolTable,
     ) -> SourceFile<NameResolved> {
         // Create the root scope for the file
-        if !source_file.roots().is_empty() {
-            let first_root = &source_file
+        #[allow(clippy::unwrap_used)]
+        if !source_file.roots().is_empty()
+            && let Some(first_root) = &source_file
                 .meta
                 .get(source_file.root_ids().first().unwrap())
-                .unwrap();
-            let last_root = &source_file
-                .meta
-                .get(source_file.root_ids().last().unwrap())
-                .unwrap();
+            && let Some(last_root) = &source_file.meta.get(source_file.root_ids().last().unwrap())
+        {
             let root_scope_id = source_file.scope_tree.new_scope(
                 None,
                 Span {
@@ -97,7 +99,9 @@ impl NameResolver {
         self.hoise_structs(node_ids, source_file, symbol_table);
 
         for node_id in node_ids {
-            let expr = &mut source_file.get_mut(node_id).unwrap();
+            let Some(expr) = &mut source_file.get_mut(node_id) else {
+                continue;
+            };
             log::trace!("Resolving: {expr:?}");
             match expr.clone() {
                 LiteralInt(_) => continue,
@@ -310,7 +314,7 @@ impl NameResolver {
                                     NameResolverError::InvalidSelf,
                                 ));
 
-                                panic!("Did not get type symbol for self");
+                                continue;
                             }
                         } else {
                             let (symbol_id, depth) = self.lookup(&name_str);
@@ -323,6 +327,7 @@ impl NameResolver {
                                 && &depth < func_depth
                                 && symbol_id.0 > 0
                             {
+                                #[allow(clippy::unwrap_used)]
                                 let Func { name, captures, .. } =
                                     source_file.get_mut(func_id).unwrap()
                                 else {
@@ -445,11 +450,12 @@ impl NameResolver {
                 EnumVariant(name, values) => {
                     if let Name::Raw(name_str) = name {
                         self.resolve_nodes(&values, source_file, symbol_table);
+                        let Some(type_sym) = self.type_symbol_stack.last() else {
+                            continue;
+                        };
                         let sym = self.declare(
                             name_str.clone(),
-                            SymbolKind::EnumVariant(SymbolID(
-                                self.type_symbol_stack.last().unwrap().0,
-                            )),
+                            SymbolKind::EnumVariant(SymbolID(type_sym.0)),
                             node_id,
                             source_file,
                             symbol_table,
@@ -479,7 +485,7 @@ impl NameResolver {
                         self.resolve_pattern(&pattern, source_file, symbol_table, node_id);
                     source_file.nodes.insert(*node_id, Pattern(pattern));
                 }
-                PatternVariant(_, _, _items) => todo!(),
+                PatternVariant(_, _, _items) => (),
                 FuncSignature {
                     name,
                     params,
@@ -544,7 +550,12 @@ impl NameResolver {
         source_file: &mut SourceFile,
     ) {
         if !self.type_symbol_stack.is_empty() && name.is_none() {
-            panic!("missing method name");
+            source_file.diagnostics.insert(Diagnostic::resolve(
+                *node_id,
+                NameResolverError::MissingMethodName,
+            ));
+
+            return;
         }
 
         self.func_stack.push((*node_id, self.scopes.len()));
@@ -554,7 +565,12 @@ impl NameResolver {
 
         for param in params {
             let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
-                panic!("got a non variable param")
+                source_file.diagnostics.insert(Diagnostic::resolve(
+                    *node_id,
+                    NameResolverError::Unknown("Params must be variables".to_string()),
+                ));
+
+                continue;
             };
 
             self.declare(
@@ -592,14 +608,14 @@ impl NameResolver {
         symbol_table: &mut SymbolTable,
     ) {
         for id in node_ids {
-            if let Func {
+            if let Some(Func {
                 name: Some(Name::Raw(name)),
                 generics,
                 params,
                 body,
                 ret,
                 captures,
-            } = source_file.get(id).unwrap().clone()
+            }) = source_file.get(id).cloned()
             {
                 let symbol_id = self.declare(
                     name.clone(),
@@ -622,12 +638,12 @@ impl NameResolver {
                 );
             }
 
-            if let FuncSignature {
+            if let Some(FuncSignature {
                 name: Name::Raw(name),
                 generics,
                 params,
                 ret,
-            } = source_file.get(id).unwrap().clone()
+            }) = source_file.get(id).cloned()
             {
                 let symbol_id = self.declare(
                     name.clone(),
@@ -863,12 +879,14 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {
-        let Block(items) = source_file.get(body_expr_id).unwrap().clone() else {
-            unreachable!("Expected Block for enum body");
+        let Some(Block(items)) = source_file.get(body_expr_id).cloned() else {
+            return;
         };
 
         for variant_id in &items {
-            let variant_expr = source_file.get(variant_id).unwrap().clone();
+            let Some(variant_expr) = source_file.get(variant_id).cloned() else {
+                continue;
+            };
 
             if let EnumVariant(Name::Raw(variant_name), field_types) = variant_expr {
                 self.resolve_nodes(&field_types, source_file, symbol_table);
@@ -908,7 +926,10 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) -> SymbolID {
-        let meta = &source_file.meta.get(expr_id).unwrap();
+        let Some(meta) = source_file.meta.get(expr_id) else {
+            return SymbolID(0);
+        };
+
         let definition = Definition {
             path: source_file.path.clone(),
             line: meta.start.line,
@@ -926,7 +947,10 @@ impl NameResolver {
                 .add_symbol_to_scope(*scope_id, symbol_id);
         }
 
-        self.scopes.last_mut().unwrap().insert(name, symbol_id);
+        let Some(scope) = self.scopes.last_mut() else {
+            return SymbolID(0);
+        };
+        scope.insert(name, symbol_id);
         symbol_table.add_map(source_file, expr_id, &symbol_id);
         symbol_id
     }
@@ -1335,9 +1359,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn ensures_methods_have_names() {
-        resolve(
+        let resolved = resolve(
             "
         enum Fizz {
             func() {
@@ -1346,6 +1369,8 @@ mod tests {
         }
         ",
         );
+
+        assert!(!resolved.diagnostics().is_empty())
     }
 
     #[test]

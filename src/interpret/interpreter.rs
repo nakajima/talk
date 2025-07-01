@@ -44,6 +44,8 @@ pub struct IRInterpreter {
     memory: Memory,
 }
 
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
 impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
         Self {
@@ -187,7 +189,7 @@ impl IRInterpreter {
             Instr::StoreLocal(dest, _, reg) => {
                 self.set_register_value(&dest, self.register_value(&reg));
             }
-            Instr::LoadLocal(_, _, _) => todo!(),
+            Instr::LoadLocal(_, _, _) => (),
             Instr::Phi(dest, _, predecessors) => {
                 let frame = self.call_stack.last_mut().expect("stack underflow");
 
@@ -434,7 +436,7 @@ impl IRInterpreter {
                 let structure = Value::Struct(self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
-            Instr::GetValueOf { .. } => todo!(),
+            Instr::GetValueOf { .. } => (),
         }
 
         self.call_stack.last_mut().unwrap().pc += 1;

@@ -10,6 +10,14 @@ pub struct Token {
 }
 
 impl Token {
+    pub const EOF: Token = Token {
+        kind: TokenKind::EOF,
+        start: 0,
+        end: 0,
+        line: 0,
+        col: 0,
+    };
+
     pub const GENERATED: Token = Token {
         kind: TokenKind::Generated,
         start: 0,

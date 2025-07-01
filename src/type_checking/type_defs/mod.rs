@@ -33,7 +33,7 @@ impl TypeDef {
 
     pub fn symbol_id(&self) -> SymbolID {
         match self {
-            Self::Enum(def) => def.name.unwrap(),
+            Self::Enum(def) => def.symbol_id,
             Self::Struct(def) => def.symbol_id,
             Self::Protocol(def) => def.symbol_id,
         }

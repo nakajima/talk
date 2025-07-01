@@ -104,6 +104,7 @@ impl Memory {
 
     pub fn load(&self, pointer: &Pointer, ty: &IRType) -> Value {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
+        #[allow(clippy::unwrap_used)]
         match ty {
             IRType::Struct(_, _, _) => Value::Struct(
                 self.storage[range]
@@ -132,6 +133,7 @@ impl Memory {
         }
     }
 
+    #[allow(clippy::panic)]
     fn mem_size(ty: &IRType) -> usize {
         match ty {
             IRType::TypeVar(var) => panic!("cannot determine size of type variable: {var:?}"),

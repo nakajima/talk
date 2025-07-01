@@ -150,12 +150,14 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        #[allow(clippy::unwrap_used)]
         let start_idx = self
             .code
             .char_indices()
             .nth(starting_at as usize)
             .unwrap()
             .0;
+        #[allow(clippy::unwrap_used)]
         let end_idx = self
             .code
             .char_indices()
@@ -209,12 +211,14 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        #[allow(clippy::unwrap_used)]
         let start_idx = self
             .code
             .char_indices()
             .nth(starting_at as usize)
             .unwrap()
             .0;
+        #[allow(clippy::unwrap_used)]
         let end_idx = self
             .code
             .char_indices()

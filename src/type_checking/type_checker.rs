@@ -64,7 +64,9 @@ impl TypeError {
             Self::MemberNotFound(name, receiver) => {
                 format!("Cannot find member named {name} for {receiver}")
             }
-            Self::ConformanceError(_err) => todo!(),
+            Self::ConformanceError(err) => {
+                format!("{err:?}")
+            }
         }
     }
 }
@@ -151,11 +153,14 @@ impl<'a> TypeChecker<'a> {
 
         // Just define names for all of the funcs, structs and enums
         if let Err(e) = self.hoist(&root_ids, env, &mut source_file) {
-            source_file.diagnostics.insert(Diagnostic::hoisting(e));
+            source_file
+                .diagnostics
+                .insert(Diagnostic::typing(*root_ids.first().unwrap_or(&0), e));
         }
 
         let mut typed_roots = vec![];
         for id in &root_ids {
+            #[allow(clippy::unwrap_used)]
             match self.infer_node(id, env, &None, &mut source_file) {
                 Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
                 Err(e) => {
@@ -195,15 +200,10 @@ impl<'a> TypeChecker<'a> {
             return Ok(typed_expr.ty.clone());
         }
 
-        let expr = source_file.get(id).unwrap().clone();
-        // indented_println!(
-        //     env,
-        //     "Infer node {}: {:?} {}:{}",
-        //     id,
-        //     expr,
-        //     std::panic::Location::caller().file(),
-        //     std::panic::Location::caller().line()
-        // );
+        let Some(expr) = source_file.get(id).cloned() else {
+            return Err(TypeError::Unknown(format!("No expr found with id {id}")));
+        };
+
         log::trace!("Infer node [{id}]: {expr:?}");
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
@@ -640,6 +640,7 @@ impl<'a> TypeChecker<'a> {
                     *callee,
                     TypedExpr {
                         id: *callee,
+                        #[allow(clippy::expect_used)]
                         expr: callee_expr
                             .expect("we're already in the Some() arm")
                             .clone(),
@@ -1016,7 +1017,9 @@ impl<'a> TypeChecker<'a> {
         let mut ret_tys = vec![];
 
         for (i, item_id) in items.iter().enumerate() {
-            let item_expr = source_file.get(item_id).cloned().unwrap();
+            let Some(item_expr) = source_file.get(item_id).cloned() else {
+                continue;
+            };
 
             if let Expr::Return(_) = item_expr {
                 // Explicit returns count as a return value (duh)
@@ -1083,7 +1086,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_pattern_variant(&self, _id: &ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+        Ok(Ty::Void)
     }
 
     fn infer_member(
@@ -1175,7 +1178,7 @@ impl<'a> TypeChecker<'a> {
                     env.declare(*symbol_id, scheme)?;
                 }
             }
-            Pattern::Wildcard => todo!(),
+            Pattern::Wildcard => (),
             Pattern::Variant {
                 variant_name,
                 fields,
@@ -1194,7 +1197,9 @@ impl<'a> TypeChecker<'a> {
                             // Match variant name (comparing the raw string)
                             v.name == *variant_name
                         }) else {
-                            panic!("didn't find variant: {enum_def:?}");
+                            return Err(TypeError::UnknownVariant(Name::Raw(
+                                variant_name.to_string(),
+                            )));
                         };
                         let Ty::EnumVariant(_, values) = &variant.ty else {
                             unreachable!()
@@ -1258,7 +1263,9 @@ impl<'a> TypeChecker<'a> {
                                 .unwrap_or(Ty::Void);
                         }
                     }
-                    _ => panic!("Unhandled pattern variant: {pattern:?}, expected: {expected:?}"),
+                    _ => log::error!(
+                        "Unhandled pattern variant: {pattern:?}, expected: {expected:?}"
+                    ),
                 }
             }
         }

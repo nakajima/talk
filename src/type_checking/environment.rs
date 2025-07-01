@@ -409,14 +409,14 @@ impl Environment {
     pub fn register_enum(&mut self, def: &EnumDef) -> Result<(), TypeError> {
         log::info!("Registering {def:?}");
         self.declare(
-            def.name.unwrap(),
+            def.symbol_id,
             Scheme {
-                ty: Ty::Enum(def.name.unwrap(), def.canonical_type_parameters()),
+                ty: Ty::Enum(def.symbol_id, def.canonical_type_parameters()),
                 unbound_vars: def.canonical_type_vars(),
             },
         )?;
         self.types
-            .insert(def.clone().name.unwrap(), TypeDef::Enum(def.clone()));
+            .insert(def.clone().symbol_id, TypeDef::Enum(def.clone()));
         Ok(())
     }
 

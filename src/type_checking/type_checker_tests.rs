@@ -860,9 +860,8 @@ mod type_tests {
     #[test]
     fn checks_match_type_mismatch_error() {
         // This should fail due to inconsistent return types in match arms
-        let result = std::panic::catch_unwind(|| {
-            check(
-                "
+        let result = check_without_prelude(
+            "
                 enum Bool {
                     case true, false  
                 }
@@ -873,11 +872,11 @@ mod type_tests {
                     }
                 }
                 ",
-            )
-        });
+        )
+        .unwrap();
 
         // Should fail type checking
-        assert!(result.is_err());
+        assert!(!result.diagnostics().is_empty());
     }
 
     #[test]

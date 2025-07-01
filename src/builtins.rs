@@ -278,7 +278,7 @@ pub fn match_builtin(name: &Name) -> Option<Ty> {
                     return Some(builtin.ty);
                 }
             }
-            _ => todo!(),
+            _ => return None,
         }
     }
 
@@ -296,6 +296,7 @@ pub fn is_builtin_func(symbol_id: &SymbolID) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::{check, ty::Ty};
 

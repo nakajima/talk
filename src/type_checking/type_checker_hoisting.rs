@@ -98,7 +98,10 @@ impl<'a> TypeChecker<'a> {
         let mut placeholders = vec![];
 
         for id in root_ids {
-            let expr = source_file.get(id).unwrap().clone();
+            let Some(expr) = source_file.get(id).cloned() else {
+                continue;
+            };
+
             let Some(expr_ids) = self.predeclarable_type(&expr) else {
                 continue;
             };
@@ -173,7 +176,9 @@ impl<'a> TypeChecker<'a> {
             };
 
             for body_id in body_ids {
-                let expr = &source_file.get(&body_id).cloned().unwrap();
+                let Some(expr) = &source_file.get(&body_id).cloned() else {
+                    continue;
+                };
 
                 match &expr {
                     Expr::Property {
@@ -312,7 +317,7 @@ impl<'a> TypeChecker<'a> {
 
             let type_def = match expr_ids.kind {
                 PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
-                    name: Some(symbol_id),
+                    symbol_id,
                     name_str,
                     type_parameters: type_params,
                     variants: Default::default(),

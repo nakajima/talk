@@ -21,7 +21,7 @@ pub struct EnumVariant {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumDef {
-    pub name: Option<SymbolID>,
+    pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub variants: Vec<EnumVariant>,
@@ -58,13 +58,13 @@ impl EnumDef {
         None
     }
 
-    pub(crate) fn tag_with_variant_for(&self, name: &str) -> (u16, &EnumVariant) {
+    pub(crate) fn tag_with_variant_for(&self, name: &str) -> Option<(u16, &EnumVariant)> {
         for (i, variant) in self.variants.iter().enumerate() {
             if variant.name == name {
-                return (i as u16, variant);
+                return Some((i as u16, variant));
             }
         }
 
-        panic!("no variant named {:?} for {:?}", name, self.name)
+        None
     }
 }

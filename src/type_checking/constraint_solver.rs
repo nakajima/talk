@@ -309,9 +309,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .ok_or(TypeError::Unknown(format!(
                                 "Unable to resolve enum with id: {enum_id:?}"
                             )))
-                            .map(|a| a.tag_with_variant_for(member_name).1)?;
+                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1))?;
 
-                        self.unify(&result_ty, &variant.ty, substitutions)?;
+                        if let Some(variant) = variant {
+                            self.unify(&result_ty, &variant.ty, substitutions)?;
+                        }
                     }
                     // A variant with values
                     Ty::Func(_args, ret, _generics) => {
@@ -331,9 +333,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .ok_or(TypeError::Unknown(format!(
                                 "Unable to resolve enum with id: {enum_id:?}"
                             )))
-                            .map(|a| a.tag_with_variant_for(member_name).1)?;
+                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1))?;
 
-                        self.unify(&result_ty, &variant.ty, substitutions)?;
+                        if let Some(variant) = variant {
+                            self.unify(&result_ty, &variant.ty, substitutions)?;
+                        }
                     }
                     _ => (),
                 }
@@ -434,10 +438,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                     symbol_id,
                                     associated_types,
                                 } => {
-                                    let type_def = self
-                                        .env
-                                        .lookup_type(symbol_id)
-                                        .expect("did not get type def from symbol for member");
+                                    let Some(type_def) = self.env.lookup_type(symbol_id) else {
+                                        continue;
+                                    };
                                     let Some(ty) = type_def.member_ty(member_name) else {
                                         return Err(TypeError::MemberNotFound(
                                             member_name.to_string(),
@@ -472,7 +475,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                         break;
                                     }
                                 }
-                                TypeConstraint::Equals { .. } => todo!(),
+                                TypeConstraint::Equals { .. } => (),
                             }
                         }
 

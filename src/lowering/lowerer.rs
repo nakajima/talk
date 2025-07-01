@@ -96,7 +96,9 @@ impl Ty {
                 items.iter().map(|i| i.to_ir(lowerer)).collect(),
                 vec![],
             ),
-            Ty::Array(_) => todo!(),
+            Ty::Array(el) => IRType::Array {
+                element: el.to_ir(lowerer).into(),
+            },
             Ty::Struct(symbol_id, generics) => {
                 let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
                     log::error!("Unable to determine definition of struct: {symbol_id:?}");
@@ -113,7 +115,7 @@ impl Ty {
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
-            Ty::Protocol(_, _) => todo!(),
+            Ty::Protocol(_, _) => IRType::Void,
         }
     }
 }
@@ -147,7 +149,7 @@ impl FromStr for BasicBlockID {
         if s == "entry" {
             Ok(BasicBlockID(0))
         } else {
-            Ok(BasicBlockID(str::parse(&s[1..]).unwrap()))
+            Ok(BasicBlockID(str::parse(&s[1..]).unwrap_or(u32::MAX)))
         }
     }
 }
@@ -311,9 +313,16 @@ impl CurrentFunction {
         &mut self.blocks[self.current_block_idx]
     }
 
-    fn set_current_block(&mut self, id: BasicBlockID) {
-        let index = self.blocks.iter().position(|blk| blk.id == id).unwrap();
+    fn set_current_block(&mut self, id: BasicBlockID) -> Result<(), IRError> {
+        let Some(index) = self.blocks.iter().position(|blk| blk.id == id) else {
+            return Err(IRError::Unknown(format!(
+                "Current function has no block with id {id}"
+            )));
+        };
+
         self.current_block_idx = index;
+
+        Ok(())
     }
 
     #[track_caller]
@@ -509,9 +518,15 @@ impl<'a> Lowerer<'a> {
                 body,
                 ..
             } => self.lower_struct(expr_id, struct_id, &body),
-            Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id.unwrap(), &func_id),
+            Expr::Init(symbol_id, func_id) => symbol_id
+                .map(|symbol_id| self.lower_init(&symbol_id, &func_id))
+                .unwrap_or_else(|| {
+                    self.push_err(format!("No symbol for ID {func_id}").as_str(), func_id);
+
+                    None
+                }),
             Expr::TypeRepr { .. } => None, // these are just for the type system
-            Expr::LiteralArray(items) => self.lower_array(typed_expr.ty, items),
+            Expr::LiteralArray(items) => self.lower_array(expr_id, typed_expr.ty, items),
             Expr::Loop(cond, body) => self.lower_loop(&cond, &body),
             Expr::Break => {
                 let Some(current_loop_exit) = self.loop_exits.last() else {
@@ -560,11 +575,10 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        let protocol_def = self
-            .env
-            .lookup_protocol(&name.try_symbol_id())
-            .unwrap()
-            .clone();
+        let Some(protocol_def) = self.env.lookup_protocol(&name.try_symbol_id()).cloned() else {
+            self.push_err("No Protocol found", *body);
+            return None;
+        };
 
         for id in ids {
             if let Some(TypedExpr {
@@ -593,12 +607,19 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_tuple(&mut self, expr_id: &ExprID, items: Vec<ExprID>) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id, self.env).unwrap();
+        let Some(typed_expr) = self.source_file.typed_expr(expr_id, self.env) else {
+            self.push_err("Did not find typed expr", *expr_id);
+            return None;
+        };
+
         let mut member_registers = vec![];
         let mut member_types = vec![];
 
         for item_id in items {
-            let item_expr = self.source_file.typed_expr(&item_id, self.env).unwrap();
+            let Some(item_expr) = self.source_file.typed_expr(&item_id, self.env) else {
+                self.push_err("Did not find typed expr", *expr_id);
+                continue;
+            };
             if let Some(reg) = self.lower_expr(&item_id) {
                 let ir_type = item_expr.ty.to_ir(self);
                 member_registers.push(TypedRegister::new(ir_type.clone(), reg));
@@ -621,7 +642,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_loop(&mut self, cond: &Option<ExprID>, body: &ExprID) -> Option<Register> {
-        let current_block = self.current_block_mut().id;
+        let current_block = self.current_block_mut()?.id;
         let loop_entry = self.new_basic_block();
         let loop_exit = self.new_basic_block();
         let loop_cond = if let Some(cond) = cond {
@@ -661,9 +682,9 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_array(&mut self, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
+    fn lower_array(&mut self, expr_id: &ExprID, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
         let Ty::Struct(SymbolID::ARRAY, els) = ty else {
-            self.push_err("Invalid array type", *self.current_expr_ids.last().unwrap());
+            self.push_err("Invalid array type", *expr_id);
             return None;
         };
 
@@ -857,7 +878,11 @@ impl<'a> Lowerer<'a> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(symbol_id).cloned() else {
             unreachable!()
         };
-        let typed_func = self.source_file.typed_expr(func_id, self.env).unwrap();
+
+        let Some(typed_func) = self.source_file.typed_expr(func_id, self.env) else {
+            unreachable!()
+        };
+
         let Expr::Func { params, body, .. } = &typed_func.expr else {
             unreachable!()
         };
@@ -883,19 +908,19 @@ impl<'a> Lowerer<'a> {
 
         // Define our env
         let env = self.allocate_register();
-        self.current_func_mut()
+        self.current_func_mut()?
             .register_symbol(*symbol_id, SymbolValue::Register(env));
 
         for param in params {
-            let Expr::Parameter(Name::Resolved(symbol, _), _) =
-                self.source_file.get(param).unwrap().clone()
+            let Some(Expr::Parameter(Name::Resolved(symbol, _), _)) =
+                self.source_file.get(param).cloned()
             else {
                 self.push_err("Did not get parameter", *param);
                 return None;
             };
 
             let register = self.allocate_register();
-            self.current_func_mut()
+            self.current_func_mut()?
                 .register_symbol(symbol, SymbolValue::Register(register));
         }
 
@@ -1032,12 +1057,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self
-            .env
-            .typed_exprs
-            .get(expr_id)
-            .cloned()
-            .expect("Did not get typed expr");
+        let Some(typed_expr) = self.env.typed_exprs.get(expr_id).cloned() else {
+            self.push_err("Did not get typed expr", *expr_id);
+            return None;
+        };
 
         let Expr::Func {
             ref name,
@@ -1048,10 +1071,8 @@ impl<'a> Lowerer<'a> {
             ..
         } = typed_expr.expr
         else {
-            panic!(
-                "Attempted to lower non-function: {:?}",
-                self.source_file.get(expr_id)
-            );
+            self.push_err("Did not get typed expr", *expr_id);
+            return None;
         };
 
         let name = self.resolve_name(name.clone());
@@ -1088,7 +1109,7 @@ impl<'a> Lowerer<'a> {
             });
 
             if let Name::Resolved(symbol, _) = name {
-                self.current_func_mut()
+                self.current_func_mut()?
                     .register_symbol(symbol, SymbolValue::Register(closure_ptr));
             }
 
@@ -1107,11 +1128,10 @@ impl<'a> Lowerer<'a> {
                 let mut capture_registers = vec![];
                 let mut captured_ir_types = vec![];
                 for (i, capture) in captures.iter().enumerate() {
-                    let SymbolValue::Register(register) = self
-                        .lookup_register(capture)
-                        .expect("could not find register for capture")
+                    let Some(SymbolValue::Register(register)) = self.lookup_register(capture)
                     else {
-                        todo!("don't know how to handle captured captures yet")
+                        self.push_err("don't know how to handle captured captures yet", *expr_id);
+                        return None;
                     };
                     capture_registers.push(*register);
 
@@ -1124,11 +1144,21 @@ impl<'a> Lowerer<'a> {
                             .cloned()
                             .unwrap_or_else(|_| {
                                 let sym = capture_types[i];
-                                let info = self.symbol_table.get(&sym).unwrap();
-                                let typed_expr = self
-                                    .source_file
-                                    .typed_expr(&info.expr_id, self.env)
-                                    .unwrap();
+                                let Some(info) = self.symbol_table.get(&sym) else {
+                                    return Scheme {
+                                        ty: Ty::Void,
+                                        unbound_vars: vec![],
+                                    };
+                                };
+                                let Some(typed_expr) =
+                                    self.source_file.typed_expr(&info.expr_id, self.env)
+                                else {
+                                    return Scheme {
+                                        ty: Ty::Void,
+                                        unbound_vars: vec![],
+                                    };
+                                };
+
                                 Scheme {
                                     ty: typed_expr.ty,
                                     unbound_vars: vec![],
@@ -1162,7 +1192,7 @@ impl<'a> Lowerer<'a> {
 
             // Now that we're in the block, register the captures
             for (i, capture) in captures.iter().enumerate() {
-                self.current_func_mut()
+                self.current_func_mut()?
                     .register_symbol(*capture, SymbolValue::Capture(i, capture_types[i].clone()));
             }
 
@@ -1172,7 +1202,8 @@ impl<'a> Lowerer<'a> {
         log::trace!("lowering {name:?}");
 
         let Some(Expr::Block(body_exprs)) = self.source_file.get(body).cloned() else {
-            panic!("did not get body")
+            self.push_err("Did not get body", *body);
+            return None;
         };
 
         let env_reg = if captures.is_empty() {
@@ -1182,25 +1213,25 @@ impl<'a> Lowerer<'a> {
         };
 
         for param in params {
-            let Expr::Parameter(Name::Resolved(symbol, _), _) =
-                self.source_file.get(param).unwrap().clone()
+            let Some(Expr::Parameter(Name::Resolved(symbol, _), _)) =
+                self.source_file.get(param).cloned()
             else {
-                panic!("didn't get parameter")
+                self.push_err("didn't get parameter", *param);
+                return None;
             };
 
-            let register = self.current_func_mut().registers.allocate();
-            self.current_func_mut()
+            let register = self.current_func_mut()?.registers.allocate();
+            self.current_func_mut()?
                 .register_symbol(symbol, SymbolValue::Register(register));
         }
 
         for (i, id) in body_exprs.iter().enumerate() {
-            let ret = if let Some(reg) = self.lower_expr(id) {
-                let ty = self
+            let ret = if let Some(reg) = self.lower_expr(id)
+                && let Some(ty) = self
                     .source_file
                     .typed_expr(id, self.env)
-                    .unwrap()
-                    .ty
-                    .to_ir(self);
+                    .map(|t| t.ty.to_ir(self))
+            {
                 (ty, Some(reg.into()))
             } else {
                 (IRType::Void, None)
@@ -1233,7 +1264,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_match(&mut self, scrutinee: &ExprID, arms: &[ExprID], ty: &Ty) -> Option<Register> {
-        let scrutinee_reg = self.lower_expr(scrutinee).unwrap();
+        let scrutinee_reg = self.lower_expr(scrutinee)?;
         let merge_block_id = self.new_basic_block();
 
         // Pre-allocate all the blocks where we will check the condition for each arm.
@@ -1277,9 +1308,14 @@ impl<'a> Lowerer<'a> {
         cond_block_id: BasicBlockID,
         else_block_id: BasicBlockID,
     ) -> (Register, BasicBlockID) {
-        let typed_arm = self.source_file.typed_expr(expr_id, self.env).unwrap();
+        let Some(typed_arm) = self.source_file.typed_expr(expr_id, self.env) else {
+            self.push_err("Did not get typed arm", *expr_id);
+            return (Register(0), BasicBlockID(u32::MAX));
+        };
+
         let Expr::MatchArm(pattern_id, body_id) = typed_arm.expr else {
-            panic!("Didn't get match arm: {typed_arm:?}");
+            self.push_err("Did not get match arm", *expr_id);
+            return (Register(0), BasicBlockID(u32::MAX));
         };
 
         let then_block_id = self.new_basic_block();
@@ -1292,7 +1328,10 @@ impl<'a> Lowerer<'a> {
             else_block_id,
         );
         self.set_current_block(then_block_id);
-        let body_ret_reg = self.lower_expr(&body_id).unwrap();
+        let Some(body_ret_reg) = self.lower_expr(&body_id) else {
+            self.push_err("Did not get body return", body_id);
+            return (Register(0), BasicBlockID(u32::MAX));
+        };
 
         // After evaluating body, jump to the merge
         self.push_instr(Instr::Jump(merge_block_id));
@@ -1307,10 +1346,10 @@ impl<'a> Lowerer<'a> {
         cond_block_id: BasicBlockID,
         then_block_id: BasicBlockID,
         else_block_id: BasicBlockID,
-    ) {
-        let pattern_typed_expr = self.source_file.typed_expr(pattern_id, self.env).unwrap();
+    ) -> Option<()> {
+        let pattern_typed_expr = self.source_file.typed_expr(pattern_id, self.env)?;
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
-            panic!("Expected a pattern expression");
+            return None;
         };
 
         self.set_current_block(cond_block_id);
@@ -1334,19 +1373,24 @@ impl<'a> Lowerer<'a> {
                         generics = Some(params);
                     }
 
-                    (
-                        id.expect("did not get enum"),
-                        generics.expect("did not get enum generics"),
-                    )
+                    (id, generics)
                 };
 
-                let TypeDef::Enum(type_def) = self.env.lookup_type(enum_id).cloned().unwrap()
-                else {
-                    unreachable!()
+                let (Some(enum_id), Some(enum_generics)) = (enum_id, enum_generics) else {
+                    self.push_err("Could not determine enum generics", cond_block_id.0 as i32);
+                    return None;
+                };
+
+                let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(enum_id).cloned() else {
+                    self.push_err("Could not determine enum", cond_block_id.0 as i32);
+                    return None;
                 };
 
                 /* ... find variant by name in type_def ... */
-                let (tag, variant_def) = type_def.tag_with_variant_for(&variant_name);
+                let Some((tag, variant_def)) = type_def.tag_with_variant_for(&variant_name) else {
+                    self.push_err("message", *pattern_id);
+                    return None;
+                };
 
                 // 2. Get the tag of the scrutinee.
                 let tag_reg = self.allocate_register();
@@ -1370,10 +1414,9 @@ impl<'a> Lowerer<'a> {
 
                 self.set_current_block(then_block_id);
 
-                // 5. Extract values and bind them.
                 for (i, field_pattern_id) in fields.iter().enumerate() {
-                    if let Expr::Pattern(Pattern::Bind(Name::Resolved(symbol_id, _))) =
-                        self.source_file.get(field_pattern_id).unwrap().clone()
+                    if let Some(Expr::Pattern(Pattern::Bind(Name::Resolved(symbol_id, _)))) =
+                        self.source_file.get(field_pattern_id).cloned()
                     {
                         let value_reg = self.allocate_register();
 
@@ -1389,7 +1432,13 @@ impl<'a> Lowerer<'a> {
                                     .position(|t| t.type_var == var)
                                 // t == var.0)
                                 else {
-                                    panic!("unable to determine enum generic: {var:?}")
+                                    self.push_err(
+                                        format!("unable to determine enum generic: {var:?}")
+                                            .as_str(),
+                                        *field_pattern_id,
+                                    );
+
+                                    return None;
                                 };
 
                                 enum_generics[generic_pos].clone()
@@ -1404,7 +1453,7 @@ impl<'a> Lowerer<'a> {
                             tag,
                             i as u16,
                         ));
-                        self.current_func_mut()
+                        self.current_func_mut()?
                             .register_symbol(symbol_id, SymbolValue::Register(value_reg));
                     }
                     // Handle nested patterns recursively here.
@@ -1412,7 +1461,7 @@ impl<'a> Lowerer<'a> {
             }
             Pattern::LiteralInt(val) => {
                 let literal_reg = self.allocate_register();
-                self.push_instr(Instr::ConstantInt(literal_reg, val.parse().unwrap()));
+                self.push_instr(Instr::ConstantInt(literal_reg, val.parse().unwrap_or(0)));
                 let is_eq_reg = self.allocate_register();
                 self.push_instr(Instr::Eq(
                     is_eq_reg,
@@ -1427,80 +1476,91 @@ impl<'a> Lowerer<'a> {
                     false_target: else_block_id,
                 });
             }
-            Pattern::LiteralFloat(_) => todo!(),
-            Pattern::LiteralTrue => todo!(),
-            Pattern::LiteralFalse => todo!(),
-            Pattern::Bind(_name) => todo!(),
-            Pattern::Wildcard => todo!(),
+            Pattern::LiteralFloat(_) => (),
+            Pattern::LiteralTrue => (),
+            Pattern::LiteralFalse => (),
+            Pattern::Bind(_name) => (),
+            Pattern::Wildcard => (),
         }
+
+        Some(())
     }
 
-    fn _lower_pattern(&mut self, pattern_id: &ExprID) -> Register {
-        let pattern_typed_expr = self.source_file.typed_expr(pattern_id, self.env).unwrap();
+    fn _lower_pattern(&mut self, pattern_id: &ExprID) -> Option<Register> {
+        let pattern_typed_expr = self.source_file.typed_expr(pattern_id, self.env)?;
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
-            panic!("Didn't get pattern for match arm: {pattern_typed_expr:?}")
+            self.push_err(
+                "Didn't get pattern for match arm: {pattern_typed_expr:?}",
+                *pattern_id,
+            );
+            return None;
         };
 
         match pattern {
-            Pattern::Bind(_) => todo!(),
+            Pattern::Bind(_) => None,
             Pattern::LiteralInt(val) => {
                 let reg = self.allocate_register();
-                self.push_instr(Instr::ConstantInt(reg, str::parse(&val).unwrap()));
-                reg
+                self.push_instr(Instr::ConstantInt(reg, str::parse(&val).ok()?));
+                Some(reg)
             }
             Pattern::LiteralFloat(val) => {
                 let reg = self.allocate_register();
-                self.push_instr(Instr::ConstantFloat(reg, str::parse(&val).unwrap()));
-                reg
+                self.push_instr(Instr::ConstantFloat(reg, str::parse(&val).ok()?));
+                Some(reg)
             }
             Pattern::LiteralTrue => {
                 let reg = self.allocate_register();
                 self.push_instr(Instr::ConstantBool(reg, true));
-                reg
+                Some(reg)
             }
             Pattern::LiteralFalse => {
                 let reg = self.allocate_register();
                 self.push_instr(Instr::ConstantBool(reg, false));
-                reg
+                Some(reg)
             }
-            Pattern::Wildcard => todo!(),
+            Pattern::Wildcard => None,
             Pattern::Variant {
                 variant_name,
                 fields,
                 ..
             } => {
                 let Ty::Enum(enum_id, _) = pattern_typed_expr.ty else {
-                    panic!("didn't get pattern type: {:?}", pattern_typed_expr.ty)
+                    self.push_err(
+                        format!("didn't get pattern type: {:?}", pattern_typed_expr.ty).as_str(),
+                        *pattern_id,
+                    );
+                    return None;
                 };
                 let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
-                    panic!("didn't get type def for {enum_id:?}");
+                    self.push_err(
+                        format!("didn't get type def for {enum_id:?}").as_str(),
+                        *pattern_id,
+                    );
+                    return None;
                 };
 
-                let (tag, variant) = type_def
-                    .variants
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, v)| {
-                        if v.name == variant_name {
-                            Some((i, v))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap();
+                let (tag, variant) = type_def.variants.iter().enumerate().find_map(|(i, v)| {
+                    if v.name == variant_name {
+                        Some((i, v))
+                    } else {
+                        None
+                    }
+                })?;
 
                 let dest = self.allocate_register();
                 let Ty::EnumVariant(_, values) = &variant.ty else {
                     self.push_err("did not get enum variant values", *pattern_id);
-                    return dest;
+                    return Some(dest);
                 };
                 let args = RegisterList(
                     fields
                         .iter()
                         .zip(values)
-                        .map(|(f, ty)| TypedRegister {
-                            ty: ty.to_ir(self),
-                            register: self._lower_pattern(f),
+                        .filter_map(|(f, ty)| {
+                            Some(TypedRegister {
+                                ty: ty.to_ir(self),
+                                register: self._lower_pattern(f)?,
+                            })
                         })
                         .collect(),
                 );
@@ -1511,7 +1571,7 @@ impl<'a> Lowerer<'a> {
                     args,
                 ));
 
-                dest
+                Some(dest)
             } // _ => todo!("{:?}", pattern),
         }
     }
@@ -1526,11 +1586,11 @@ impl<'a> Lowerer<'a> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         if let Ty::Enum(sym, _generics) = &typed_expr.ty {
-            return self.lower_enum_construction(*sym, name, &typed_expr.ty, &[]);
+            return self.lower_enum_construction(*expr_id, *sym, name, &typed_expr.ty, &[]);
         }
 
         if let Ty::EnumVariant(sym, _generics) = &typed_expr.ty {
-            return self.lower_enum_construction(*sym, name, &typed_expr.ty, &[]);
+            return self.lower_enum_construction(*expr_id, *sym, name, &typed_expr.ty, &[]);
         }
 
         let Some(receiver_id) = receiver_id else {
@@ -1597,19 +1657,27 @@ impl<'a> Lowerer<'a> {
 
                 None
             }
-            _ => todo!("lower_member unhandled: {:?}", receiver_typed),
+            _ => {
+                self.push_err(format!("Member not lowered {name}").as_str(), *expr_id);
+                None
+            }
         }
     }
 
     fn lower_enum_construction(
         &mut self,
+        expr_id: ExprID,
         enum_id: SymbolID,
         variant_name: &str,
         ty: &Ty,
         args: &[TypedRegister],
     ) -> Option<Register> {
         let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
-            panic!("didn't get type def for {enum_id:?}");
+            self.push_err(
+                format!("didn't get type def for {enum_id:?}").as_str(),
+                expr_id,
+            );
+            return None;
         };
 
         let mut tag: Option<u16> = None;
@@ -1623,7 +1691,8 @@ impl<'a> Lowerer<'a> {
         }
 
         let Some(tag) = tag else {
-            panic!("did not find variant for tag")
+            self.push_err("did not find variant for tag", expr_id);
+            return None;
         };
 
         let dest = self.allocate_register();
@@ -1638,7 +1707,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_return(&mut self, expr_id: &ExprID, rhs: &Option<ExprID>) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id, self.env).unwrap();
+        let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         if let Some(rhs) = rhs {
             let register = self.lower_expr(rhs)?;
@@ -1653,13 +1722,13 @@ impl<'a> Lowerer<'a> {
 
     fn lower_literal(&mut self, expr_id: &ExprID) -> Option<Register> {
         let register = self.allocate_register();
-        match self.source_file.get(expr_id).unwrap().clone() {
+        match self.source_file.get(expr_id)?.clone() {
             Expr::LiteralInt(val) => {
-                self.push_instr(Instr::ConstantInt(register, str::parse(&val).unwrap()));
+                self.push_instr(Instr::ConstantInt(register, str::parse(&val).ok()?));
                 Some(register)
             }
             Expr::LiteralFloat(val) => {
-                self.push_instr(Instr::ConstantFloat(register, str::parse(&val).unwrap()));
+                self.push_instr(Instr::ConstantFloat(register, str::parse(&val).ok()?));
                 Some(register)
             }
             Expr::LiteralFalse => {
@@ -1678,15 +1747,14 @@ impl<'a> Lowerer<'a> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         let Expr::Binary(lhs, op, rhs) = typed_expr.expr else {
-            panic!("Did not get binary expr");
+            self.push_err("did get binary expr", *expr_id);
+            return None;
         };
 
         let operand_ty = self.source_file.type_for(lhs, self.env);
 
-        let operand_1 = self
-            .lower_expr(&lhs)
-            .unwrap_or_else(|| panic!("could not get lhs: {:?}", self.source_file.get(&lhs)));
-        let operand_2 = self.lower_expr(&rhs).unwrap();
+        let operand_1 = self.lower_expr(&lhs)?;
+        let operand_2 = self.lower_expr(&rhs)?;
         let return_reg = self.allocate_register();
 
         use TokenKind::*;
@@ -1744,7 +1812,13 @@ impl<'a> Lowerer<'a> {
                 operand_1,
                 operand_2,
             ),
-            _ => panic!("Cannot lower binary operation: {op:?}"),
+            _ => {
+                self.push_err(
+                    format!("Cannot lower binary operation: {op:?}").as_str(),
+                    *expr_id,
+                );
+                return None;
+            }
         };
 
         self.push_instr(instr);
@@ -1754,23 +1828,16 @@ impl<'a> Lowerer<'a> {
 
     fn lower_assignment(&mut self, lhs_id: &ExprID, rhs_id: &ExprID) -> Option<Register> {
         let rhs = self.lower_expr(rhs_id)?;
-        let lhs = self
-            .source_file
-            .typed_expr(lhs_id, self.env)
-            .unwrap()
-            .clone();
+        let lhs = self.source_file.typed_expr(lhs_id, self.env)?.clone();
 
         match &lhs.expr {
             Expr::Let(Name::Resolved(symbol_id, _), _) => {
-                self.current_func_mut()
+                self.current_func_mut()?
                     .register_symbol(*symbol_id, rhs.into());
                 Some(rhs)
             }
             Expr::Variable(Name::Resolved(symbol, _), _) => {
-                let value = self
-                    .lookup_register(symbol)
-                    .expect("didn't get lhs for assignment")
-                    .clone();
+                let value = self.lookup_register(symbol)?.clone();
 
                 match value {
                     SymbolValue::Register(reg) => {
@@ -1780,11 +1847,11 @@ impl<'a> Lowerer<'a> {
                     }
                     SymbolValue::Capture(idx, ty) => {
                         let capture_ptr = self.allocate_register();
-                        let env_ty = self.current_func().env_ty.clone();
+                        let env_ty = self.current_func()?.env_ty.clone();
                         self.push_instr(Instr::GetElementPointer {
                             dest: capture_ptr,
                             base: Register(0),
-                            ty: env_ty.expect("didn't get environment type for capture"),
+                            ty: env_ty?,
                             index: IRValue::ImmediateInt(idx as i64),
                         });
                         self.push_instr(Instr::Store {
@@ -1815,12 +1882,18 @@ impl<'a> Lowerer<'a> {
                     None
                 }
             }
-            _ => todo!("don't know how to lower: {:?}", lhs),
+            _ => {
+                self.push_err(
+                    format!("don't know how to lower: {lhs:?}").as_str(),
+                    *lhs_id,
+                );
+                None
+            }
         }
     }
 
     fn lower_block(&mut self, block_id: &ExprID) -> Option<Register> {
-        let Expr::Block(exprs) = self.source_file.get(block_id).unwrap().clone() else {
+        let Expr::Block(exprs) = self.source_file.get(block_id)?.clone() else {
             unreachable!()
         };
 
@@ -1840,9 +1913,12 @@ impl<'a> Lowerer<'a> {
 
     fn lower_variable(&mut self, expr_id: &ExprID, name: &Name) -> Option<Register> {
         let (Name::Resolved(symbol_id, _) | Name::_Self(symbol_id)) = name else {
-            let expr = self.source_file.get(expr_id).unwrap();
-
-            panic!("Unresolved variable: {name:?} {expr:?}")
+            let expr = self.source_file.get(expr_id)?;
+            self.push_err(
+                format!("Unresolved variable: {name:?} {expr:?}").as_str(),
+                *expr_id,
+            );
+            return None;
         };
 
         let value = self.lookup_register(symbol_id)?;
@@ -1866,19 +1942,20 @@ impl<'a> Lowerer<'a> {
 
                 Some(reg)
             }
-            _ => todo!("unable to lower: {:?}", value),
+            _ => {
+                self.push_err(format!("unable to lower: {value:?}").as_str(), *expr_id);
+                None
+            }
         }
     }
 
     fn lower_if(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let typed_expr = self.source_file.typed_expr(expr_id, self.env).unwrap();
+        let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
         let Expr::If(cond, conseq, alt) = typed_expr.expr else {
             unreachable!()
         };
 
-        let cond_reg = self
-            .lower_expr(&cond)
-            .expect("Condition for if expression did not produce a value");
+        let cond_reg = self.lower_expr(&cond)?;
 
         let then_id = self.new_basic_block();
 
@@ -1901,12 +1978,12 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::Jump(merge_id));
 
         if let Some(alt) = alt {
-            self.set_current_block(else_id.unwrap());
+            self.set_current_block(else_id?);
             else_reg = self.lower_expr(&alt);
             self.push_instr(Instr::Jump(merge_id));
         }
 
-        self.current_func_mut().set_current_block(merge_id);
+        self.current_func_mut()?.set_current_block(merge_id).ok()?;
 
         let phi_dest_reg = self.allocate_register();
         let ir_type = typed_expr.ty.to_ir(self);
@@ -1978,25 +2055,40 @@ impl<'a> Lowerer<'a> {
                 });
             } else {
                 self.push_err("Argument expression did not produce a value for call", *arg);
+                continue;
             }
         }
 
         // Handle enum variant construction
         if let Ty::Enum(enum_id, _) = &ty {
             let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
-                panic!("didn't get member expr for enum call")
+                self.push_err("didn't get member expr for enum call", callee);
+                return None;
             };
 
-            return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
+            return self.lower_enum_construction(
+                callee,
+                *enum_id,
+                variant_name,
+                &ty,
+                &arg_registers,
+            );
         }
 
         // Handle enum variant construction
         if let Ty::EnumVariant(enum_id, _) = &ty {
             let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
-                panic!("didn't get member expr for enum call")
+                self.push_err("didn't get member expr for enum call", callee);
+                return None;
             };
 
-            return self.lower_enum_construction(*enum_id, variant_name, &ty, &arg_registers);
+            return self.lower_enum_construction(
+                callee,
+                *enum_id,
+                variant_name,
+                &ty,
+                &arg_registers,
+            );
         }
 
         // Handle struct construction
@@ -2252,7 +2344,7 @@ impl<'a> Lowerer<'a> {
                         continue;
                     };
 
-                    let protocol_def = self.env.lookup_protocol(protocol_id).unwrap();
+                    let protocol_def = self.env.lookup_protocol(protocol_id)?;
                     if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
                         result = Some(format!(
                             "@_{}_{}_{}",
@@ -2375,13 +2467,16 @@ impl<'a> Lowerer<'a> {
 
     pub(super) fn push_instr(&mut self, instr: Instr) {
         let expr_id = self.current_expr_ids.last().copied();
+        #[allow(clippy::unwrap_used)]
         self.current_block_mut()
+            .unwrap()
             .instructions
             .push(InstructionWithExpr { instr, expr_id });
     }
 
     pub(super) fn allocate_register(&mut self) -> Register {
-        self.current_func_mut().registers.allocate()
+        #[allow(clippy::unwrap_used)]
+        self.current_func_mut().unwrap().registers.allocate()
     }
 
     fn lookup_register(&self, symbol_id: &SymbolID) -> Option<&SymbolValue> {
@@ -2404,36 +2499,40 @@ impl<'a> Lowerer<'a> {
         self.globals.insert(*symbol_id, value);
     }
 
-    fn current_func_mut(&mut self) -> &mut CurrentFunction {
-        self.current_functions.last_mut().unwrap()
+    fn current_func_mut(&mut self) -> Option<&mut CurrentFunction> {
+        self.current_functions.last_mut()
     }
 
-    fn current_func(&mut self) -> &CurrentFunction {
-        self.current_functions.last().unwrap()
+    fn current_func(&mut self) -> Option<&CurrentFunction> {
+        self.current_functions.last()
     }
 
-    fn current_block_mut(&mut self) -> &mut CurrentBasicBlock {
-        self.current_func_mut().current_block_mut()
+    fn current_block_mut(&mut self) -> Option<&mut CurrentBasicBlock> {
+        Some(self.current_func_mut()?.current_block_mut())
     }
 
-    fn set_current_block(&mut self, id: BasicBlockID) {
-        self.current_func_mut().set_current_block(id);
+    fn set_current_block(&mut self, id: BasicBlockID) -> Option<()> {
+        self.current_func_mut()?.set_current_block(id).ok();
+
+        Some(())
     }
 
     fn new_basic_block(&mut self) -> BasicBlockID {
-        let id = self.current_func_mut().next_block_id();
+        #[allow(clippy::unwrap_used)]
+        let id = self.current_func_mut().unwrap().next_block_id();
         let block = CurrentBasicBlock {
             id,
             instructions: Vec::new(),
         };
 
-        self.current_func_mut().add_block(block);
+        #[allow(clippy::unwrap_used)]
+        self.current_func_mut().unwrap().add_block(block);
         id
     }
 
     fn resolve_name(&mut self, name: Option<Name>) -> Name {
         match name {
-            Some(Name::Resolved(_, _)) => name.unwrap(),
+            Some(name @ Name::Resolved(_, _)) => name,
             None => {
                 let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
                 let symbol = self
@@ -2441,7 +2540,7 @@ impl<'a> Lowerer<'a> {
                     .add(&name_str, SymbolKind::CustomType, 12345, None);
                 Name::Resolved(symbol, name_str)
             }
-            _ => todo!(),
+            _ => Name::Raw("<undefined>".into()),
         }
     }
 

@@ -184,6 +184,7 @@ impl<'a, P: Phase> Filler<'a, P> {
     }
 
     pub fn fill(&self, expr_id: ExprID) -> &'a FullExpr<'a> {
+        #[allow(clippy::unwrap_used)]
         let expr = self.source.get(&expr_id).unwrap();
 
         let full_expr = match expr {

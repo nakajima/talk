@@ -34,25 +34,28 @@ impl<'a> SatisfiesChecker<'a> {
             }
         };
 
-        let type_def = self.env.lookup_type(type_id).expect("didn't find type");
+        let Some(type_def) = self.env.lookup_type(type_id) else {
+            return Err(TypeError::Unknown(format!(
+                "Did not resolve type with id: {type_id:?}"
+            )));
+        };
 
         let mut unifications = vec![];
         let mut errors = vec![];
 
         for constraint in self.constraints.iter() {
             match constraint {
-                TypeConstraint::Equals { .. } => todo!(),
-                TypeConstraint::InstanceOf { .. } => todo!(),
+                TypeConstraint::Equals { .. } => (),
+                TypeConstraint::InstanceOf { .. } => (),
                 TypeConstraint::Conforms {
                     protocol_id,
                     associated_types,
                 } => {
                     log::trace!("= Checking {:?} satisfies {constraint:?}", self.ty);
 
-                    let protocol_def = self
-                        .env
-                        .lookup_protocol(protocol_id)
-                        .expect("did not get protocol definition (should be impossible)");
+                    let Some(protocol_def) = self.env.lookup_protocol(protocol_id).cloned() else {
+                        continue;
+                    };
 
                     if type_args.len() != associated_types.len() {
                         errors.push(ConformanceError::TypeDoesNotConform(
