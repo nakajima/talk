@@ -35,10 +35,24 @@ impl IRPrinter {
         self.buffer.push_str(line);
         self.buffer.push('\n');
     }
+
+    fn print(&mut self, line: &str) {
+        for _ in 0..self.indent_level {
+            self.buffer.push_str("  ");
+        }
+        self.buffer.push_str(line);
+    }
 }
 
 fn print_func(func: &IRFunction, printer: &mut IRPrinter) {
-    printer.puts(&print_func_def(func));
+    printer.print(&print_func_def(func));
+
+    if func.blocks.is_empty() {
+        printer.puts(";");
+    } else {
+        printer.puts("");
+    }
+
     printer.indent_level += 1;
     for block in &func.blocks {
         print_basic_block(block, printer)

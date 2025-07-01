@@ -29,8 +29,10 @@ async fn main() {
 
     let target = Box::new(File::create("log.txt").expect("Can't create file"));
     env_logger::builder()
-        .filter(None, log::LevelFilter::Trace)
+        .filter(None, log::LevelFilter::Info)
         .target(env_logger::Target::Pipe(target))
+        .format_timestamp(None)
+        .format_target(false)
         .try_init()
         .unwrap();
 
@@ -55,12 +57,14 @@ async fn main() {
             let mut driver = Driver::with_files(vec![filename.clone()]);
             let lowered = driver.lower();
 
-            use talk::interpreter::interpreter::IRInterpreter;
+            use talk::interpret::interpreter::IRInterpreter;
+            use talk::transforms::monomorphizer::Monomorphizer;
 
             // let contents = std::fs::read_to_string(filename).expect("Could not read file");
             // let lowered = lower(&contents);
             for lowered in lowered {
-                let interpreter = IRInterpreter::new(lowered.stage.module);
+                let monomorphized = Monomorphizer::new(&lowered.env).run(lowered.module());
+                let interpreter = IRInterpreter::new(monomorphized);
                 println!("{:?}", interpreter.run());
             }
         }

@@ -1,6 +1,11 @@
 #![feature(box_patterns)]
 #![feature(associated_type_defaults)]
 #![feature(assert_matches)]
+#![cfg_attr(not(test), warn(clippy::unwrap_used))]
+#![cfg_attr(not(test), warn(clippy::expect_used))]
+#![cfg_attr(not(test), warn(clippy::panic))]
+#![cfg_attr(not(test), warn(clippy::todo))]
+#![cfg_attr(not(test), warn(clippy::unimplemented))]
 
 pub mod builtins;
 pub use builtins::*;
@@ -17,7 +22,7 @@ pub use parsing::*;
 pub mod analysis;
 pub mod compiling;
 pub mod diagnostic;
-pub mod interpreter;
+pub mod interpret;
 pub mod lowering;
 pub mod transforms;
 
@@ -29,7 +34,11 @@ pub mod prelude;
 #[ctor::ctor]
 fn init_logger() {
     // .is_test(true) silences the “already initialized” panic
-    let _ = env_logger::builder().is_test(true).try_init();
+    let _ = env_logger::builder()
+        .format_timestamp(None)
+        .format_target(false)
+        .is_test(true)
+        .try_init();
 }
 
 pub mod test_utils;

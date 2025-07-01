@@ -1,6 +1,6 @@
 use std::ops::Add;
 
-use crate::{interpreter::value::Value, lowering::ir_type::IRType};
+use crate::{interpret::value::Value, lowering::ir_type::IRType};
 
 pub const MEM_SIZE: usize = 2048;
 
@@ -83,7 +83,6 @@ impl Memory {
         match val {
             Value::Struct(vals) => {
                 let vals: Vec<Option<Value>> = vals.iter().cloned().map(Option::Some).collect();
-                println!("----- storing struct vals {vals:?} at {range:?}");
                 self.storage[range].clone_from_slice(&vals)
             }
             // Value::Enum { tag, values } => {
@@ -105,6 +104,7 @@ impl Memory {
 
     pub fn load(&self, pointer: &Pointer, ty: &IRType) -> Value {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
+        #[allow(clippy::unwrap_used)]
         match ty {
             IRType::Struct(_, _, _) => Value::Struct(
                 self.storage[range]
@@ -133,6 +133,7 @@ impl Memory {
         }
     }
 
+    #[allow(clippy::panic)]
     fn mem_size(ty: &IRType) -> usize {
         match ty {
             IRType::TypeVar(var) => panic!("cannot determine size of type variable: {var:?}"),

@@ -23,6 +23,7 @@ pub enum ParserError {
     UnexpectedToken(Vec<Tokind>, Tokind),
     UnexpectedEOF,
     Instruction(String),
+    Unknown(String),
 }
 
 impl From<ParseIntError> for ParserError {
@@ -151,8 +152,8 @@ impl<'a> Parser<'a> {
                 vec![
                     self.current
                         .clone()
-                        .expect("Could not get expected token")
-                        .kind,
+                        .map(|c| c.kind)
+                        .ok_or(ParserError::UnexpectedEOF)?,
                 ],
                 Tokind::Identifier("_".into()),
             ));
@@ -197,10 +198,13 @@ impl<'a> Parser<'a> {
             else {
                 return Err(ParserError::UnexpectedToken(
                     vec![Tokind::ConstInt("".into())],
-                    self.current.clone().unwrap().kind,
+                    self.current
+                        .clone()
+                        .map(|c| c.kind)
+                        .ok_or(ParserError::UnexpectedEOF)?,
                 ));
             };
-            str::parse(&val).unwrap()
+            str::parse(&val).map_err(|_| ParserError::UnexpectedEOF)?
         };
 
         self.consume(Tokind::Colon)?;
@@ -232,7 +236,12 @@ impl<'a> Parser<'a> {
     }
 
     fn instruction(&mut self) -> Result<Option<Instr>, ParserError> {
-        let start_pos = self.current.clone().unwrap().start - 1;
+        let start_pos = self
+            .current
+            .clone()
+            .ok_or(ParserError::UnexpectedEOF)?
+            .start
+            .saturating_sub(1);
         while !(self.peek_matches(Tokind::Semicolon) || self.peek_matches(Tokind::EOF)) {
             self.advance();
         }
@@ -281,7 +290,7 @@ impl<'a> Parser<'a> {
 
         self.advance();
 
-        Ok(str::parse(val).expect("Could not parse integer"))
+        str::parse(val).map_err(|_| ParserError::Unknown("Could not parse int".to_string()))
     }
 
     fn skip_newlines(&mut self) {
@@ -346,7 +355,7 @@ impl<'a> Parser<'a> {
                 }
                 Tokind::Ptr => {
                     self.advance();
-                    IRType::Pointer
+                    IRType::POINTER
                 }
                 Tokind::LeftParen => {
                     let params = self.parameters()?.into_iter().map(|p| p.1).collect();
@@ -367,7 +376,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                     IRType::TypeVar(name.clone())
                 }
-                _ => todo!("{:?}", tok.kind),
+                _ => return Err(ParserError::Unknown(format!("{:?}", tok.kind))),
             },
             _ => {
                 return Err(ParserError::UnexpectedToken(
@@ -405,8 +414,8 @@ impl<'a> Parser<'a> {
             vec![expected],
             self.current
                 .clone()
-                .expect("Could not get current token")
-                .kind,
+                .map(|c| c.kind)
+                .ok_or(ParserError::UnexpectedEOF)?,
         ))
     }
 }

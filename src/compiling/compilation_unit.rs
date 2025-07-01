@@ -1,8 +1,11 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     NameResolved, SourceFile, SymbolTable,
-    compiling::driver::DriverConfig,
+    compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     constraint_solver::ConstraintSolver,
     environment::Environment,
     lexer::{Lexer, LexerError},
@@ -15,7 +18,7 @@ use crate::{
 
 pub trait StageTrait: std::fmt::Debug {
     type SourceFilePhase: source_file::Phase;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<Self::SourceFilePhase>>;
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<Self::SourceFilePhase>>;
 }
 
 #[derive(Debug)]
@@ -31,15 +34,18 @@ pub enum CompilationError {
 impl<Stage: StageTrait> CompilationUnit<Stage> {
     fn read(&mut self, path: &PathBuf) -> Result<&str, CompilationError> {
         if self.src_cache.contains_key(path) {
+            #[allow(clippy::unwrap_used)]
             return Ok(self.src_cache.get(path).unwrap());
         }
 
         let src = std::fs::read_to_string(path).map_err(CompilationError::IOError)?;
         self.src_cache.insert(path.clone(), src);
+
+        #[allow(clippy::expect_used)]
         Ok(self.src_cache.get(path).expect("src cache bad").as_str())
     }
 
-    pub fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<Stage::SourceFilePhase>> {
+    pub fn source_file(&self, path: &Path) -> Option<&SourceFile<Stage::SourceFilePhase>> {
         self.stage.source_file(path)
     }
 }
@@ -48,7 +54,7 @@ impl<Stage: StageTrait> CompilationUnit<Stage> {
 pub struct Raw {}
 impl StageTrait for Raw {
     type SourceFilePhase = source_file::Parsed;
-    fn source_file(&self, _path: &PathBuf) -> Option<&SourceFile> {
+    fn source_file(&self, _path: &Path) -> Option<&SourceFile> {
         None
     }
 }
@@ -62,6 +68,7 @@ where
     pub input: Vec<PathBuf>,
     pub stage: Stage,
     pub env: Environment,
+    pub session: SharedCompilationSession,
 }
 
 impl<S: StageTrait> CompilationUnit<S> {
@@ -71,12 +78,13 @@ impl<S: StageTrait> CompilationUnit<S> {
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(input: Vec<PathBuf>, env: Environment) -> Self {
+    pub fn new(session: SharedCompilationSession, input: Vec<PathBuf>, env: Environment) -> Self {
         Self {
             src_cache: Default::default(),
             input,
             stage: Raw {},
             env,
+            session,
         }
     }
 
@@ -84,6 +92,11 @@ impl CompilationUnit<Raw> {
         let mut files = vec![];
 
         for path in self.input.clone() {
+            self.session
+                .lock()
+                .map(|mut t| t.clear_diagnostics_for(&path))
+                .unwrap_or_else(|e| log::error!("could not clear diagnostics: {e:?}"));
+
             let source = match self.read(&path) {
                 Ok(source) => source.to_string(),
                 Err(e) => {
@@ -93,7 +106,7 @@ impl CompilationUnit<Raw> {
             };
 
             let lexer = Lexer::new(&source);
-            let mut parser = Parser::new(lexer, path, &mut self.env);
+            let mut parser = Parser::new(self.session.clone(), lexer, path, &mut self.env);
             parser.parse();
             files.push(parser.parse_tree);
         }
@@ -103,6 +116,7 @@ impl CompilationUnit<Raw> {
             input: self.input,
             stage: Parsed { files },
             env: self.env,
+            session: self.session,
         }
     }
 
@@ -126,7 +140,7 @@ pub struct Parsed {
 
 impl StageTrait for Parsed {
     type SourceFilePhase = source_file::Parsed;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Parsed>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Parsed>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }
@@ -135,7 +149,8 @@ impl CompilationUnit<Parsed> {
     pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
         let mut files = vec![];
         for file in self.stage.files {
-            let resolved = NameResolver::new(symbol_table).resolve(file, symbol_table);
+            let resolved =
+                NameResolver::new(symbol_table, self.session.clone()).resolve(file, symbol_table);
             files.push(resolved);
         }
 
@@ -144,6 +159,7 @@ impl CompilationUnit<Parsed> {
             input: self.input,
             stage: Resolved { files },
             env: self.env,
+            session: self.session,
         }
     }
 }
@@ -154,7 +170,7 @@ pub struct Resolved {
 }
 impl StageTrait for Resolved {
     type SourceFilePhase = source_file::NameResolved;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::NameResolved>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::NameResolved>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }
@@ -169,11 +185,17 @@ impl CompilationUnit<Resolved> {
 
         for file in self.stage.files {
             let mut typed = if driver_config.include_prelude {
-                TypeChecker.infer(file, symbol_table, &mut self.env)
+                TypeChecker::new(self.session.clone(), symbol_table).infer(file, &mut self.env)
             } else {
-                TypeChecker.infer_without_prelude(&mut self.env, file, symbol_table)
+                TypeChecker::new(self.session.clone(), symbol_table)
+                    .infer_without_prelude(&mut self.env, file)
             };
-            let mut solver = ConstraintSolver::new(&mut typed, &mut self.env, symbol_table);
+            let mut solver = ConstraintSolver::new(
+                self.session.clone(),
+                &mut typed,
+                &mut self.env,
+                symbol_table,
+            );
             solver.solve();
             files.push(typed);
         }
@@ -183,6 +205,7 @@ impl CompilationUnit<Resolved> {
             input: self.input,
             stage: Typed { files },
             env: self.env,
+            session: self.session,
         }
     }
 }
@@ -193,7 +216,7 @@ pub struct Typed {
 }
 impl StageTrait for Typed {
     type SourceFilePhase = source_file::Typed;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Typed>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Typed>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }
@@ -207,8 +230,8 @@ impl CompilationUnit<Typed> {
     ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered =
-                Lowerer::new(file, symbol_table, &mut self.env).lower(&mut module, driver_config);
+            let lowered = Lowerer::new(file, symbol_table, &mut self.env, self.session.clone())
+                .lower(&mut module, driver_config);
             files.push(lowered);
         }
 
@@ -220,6 +243,7 @@ impl CompilationUnit<Typed> {
                 files,
             },
             env: self.env,
+            session: self.session,
         }
     }
 }
@@ -232,7 +256,7 @@ pub struct Lowered {
 
 impl StageTrait for Lowered {
     type SourceFilePhase = source_file::Lowered;
-    fn source_file(&self, path: &PathBuf) -> Option<&SourceFile<source_file::Lowered>> {
+    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Lowered>> {
         self.files.iter().find(|f| f.path == *path)
     }
 }

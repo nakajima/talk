@@ -1,4 +1,8 @@
 {
-  "rust-analyzer.runnables.extraTestBinaryArgs": ["--show-output", "--nocapture"],
-  "rust-analyzer.testExplorer": true
+  "rust-analyzer.runnables.extraTestBinaryArgs": [
+    "--show-output",
+    "--nocapture"
+  ],
+  "rust-analyzer.testExplorer": true,
+  "rust-analyzer.check.command": "clippy"
 }

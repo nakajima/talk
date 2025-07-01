@@ -10,7 +10,7 @@ pub enum Name {
 impl Name {
     pub fn mangled(&self, _ty: &Ty) -> String {
         match self {
-            Name::Raw(_) => panic!("Cannot mangle unresolved Name"),
+            Name::Raw(_) => "Cannot mangle unresolved Name".into(),
             Name::Resolved(symbol_id, name_str) => {
                 if name_str == "main" {
                     "@main".into()
@@ -18,9 +18,7 @@ impl Name {
                     format!("@_{:?}_{}", symbol_id.0, name_str)
                 }
             }
-            Name::_Self(_) => {
-                todo!()
-            }
+            Name::_Self(symbol) => format!("self{symbol:?}"),
         }
     }
 
@@ -28,14 +26,13 @@ impl Name {
         match self {
             Name::Raw(name_str) => name_str.into(),
             Name::Resolved(_symbol_id, name_str) => name_str.into(),
-            Name::_Self(_) => {
-                todo!()
-            }
+            Name::_Self(_) => "self".into(),
         }
     }
 
     pub fn try_symbol_id(&self) -> SymbolID {
         match self {
+            #[allow(clippy::panic)]
             Name::Raw(name_str) => panic!("Cannot get symbol ID from unresolved {name_str:?}"),
             Name::Resolved(symbol_id, _) => *symbol_id,
             Name::_Self(symbol_id) => *symbol_id,
@@ -56,6 +53,7 @@ impl From<&str> for Name {
 }
 
 impl From<Name> for SymbolID {
+    #[allow(clippy::panic)]
     fn from(value: Name) -> Self {
         let Name::Resolved(id, _) = value else {
             panic!("Tried to convert non-resolved name to symbol")

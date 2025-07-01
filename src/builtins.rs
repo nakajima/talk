@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
-    environment::TypeDef,
     name::Name,
     ty::Ty,
-    type_checker::{Scheme, TypeVarID, TypeVarKind},
+    type_checker::Scheme,
+    type_defs::TypeDef,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 struct Builtin {
@@ -82,9 +83,17 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::Int /* capacity */],
                 Ty::Pointer.into(),
-                vec![Ty::TypeVar(TypeVarID(-5, TypeVarKind::Element))],
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -5,
+                    kind: TypeVarKind::Element,
+                    constraints: vec![],
+                })],
             ),
-            unbound_vars: vec![TypeVarID(-5, TypeVarKind::Element)],
+            unbound_vars: vec![TypeVarID {
+                id: -5,
+                kind: TypeVarKind::Element,
+                constraints: vec![],
+            }],
             type_def: None,
         },
         Builtin {
@@ -99,9 +108,17 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::Pointer, Ty::Int],
                 Ty::Pointer.into(),
-                vec![Ty::TypeVar(TypeVarID(-4, TypeVarKind::Element))],
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -4,
+                    kind: TypeVarKind::Element,
+                    constraints: vec![],
+                })],
             ),
-            unbound_vars: vec![TypeVarID(-4, TypeVarKind::Element)],
+            unbound_vars: vec![TypeVarID {
+                id: -4,
+                kind: TypeVarKind::Element,
+                constraints: vec![],
+            }],
             type_def: None,
         },
         Builtin {
@@ -130,12 +147,24 @@ fn builtins() -> Vec<Builtin> {
                 vec![
                     Ty::Pointer,
                     Ty::Int,
-                    Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element)),
+                    Ty::TypeVar(TypeVarID {
+                        id: -8,
+                        kind: TypeVarKind::Element,
+                        constraints: vec![],
+                    }),
                 ],
                 Ty::Void.into(),
-                vec![Ty::TypeVar(TypeVarID(-8, TypeVarKind::Element))],
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -8,
+                    kind: TypeVarKind::Element,
+                    constraints: vec![],
+                })],
             ),
-            unbound_vars: vec![TypeVarID(-8, TypeVarKind::Element)],
+            unbound_vars: vec![TypeVarID {
+                id: -8,
+                kind: TypeVarKind::Element,
+                constraints: vec![],
+            }],
             type_def: None,
         },
         Builtin {
@@ -149,10 +178,23 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Func(
                 vec![Ty::Pointer, Ty::Int],
-                Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element)).into(),
-                vec![Ty::TypeVar(TypeVarID(-9, TypeVarKind::Element))],
+                Ty::TypeVar(TypeVarID {
+                    id: -9,
+                    kind: TypeVarKind::Element,
+                    constraints: vec![],
+                })
+                .into(),
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -9,
+                    kind: TypeVarKind::Element,
+                    constraints: vec![],
+                })],
             ),
-            unbound_vars: vec![TypeVarID(-9, TypeVarKind::Element)],
+            unbound_vars: vec![TypeVarID {
+                id: -9,
+                kind: TypeVarKind::Element,
+                constraints: vec![],
+            }],
             type_def: None,
         },
         // Reserve -10 for tuple symbol
@@ -166,11 +208,23 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::TypeVar(TypeVarID(-11, TypeVarKind::FuncParam))],
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -11,
+                    kind: TypeVarKind::FuncParam("printable".into()),
+                    constraints: vec![],
+                })],
                 Ty::Void.into(),
-                vec![Ty::TypeVar(TypeVarID(-11, TypeVarKind::FuncParam))],
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -11,
+                    kind: TypeVarKind::FuncParam("printable".into()),
+                    constraints: vec![],
+                })],
             ),
-            unbound_vars: vec![TypeVarID(-11, TypeVarKind::FuncParam)],
+            unbound_vars: vec![TypeVarID {
+                id: -11,
+                kind: TypeVarKind::FuncParam("printable".into()),
+                constraints: vec![],
+            }],
             type_def: None,
         },
     ]
@@ -224,7 +278,7 @@ pub fn match_builtin(name: &Name) -> Option<Ty> {
                     return Some(builtin.ty);
                 }
             }
-            _ => todo!(),
+            _ => return None,
         }
     }
 
@@ -242,6 +296,7 @@ pub fn is_builtin_func(symbol_id: &SymbolID) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use crate::{check, ty::Ty};
 
@@ -254,7 +309,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.source_file.diagnostics().is_empty());
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(
             checked.type_for(&checked.root_ids()[0]).unwrap(),
             Ty::Pointer
@@ -271,7 +326,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.source_file.diagnostics().is_empty());
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(
             checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Pointer
@@ -289,9 +344,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            checked.source_file.diagnostics().is_empty(),
+            checked.diagnostics().is_empty(),
             "{:#?}",
-            checked.source_file.diagnostics()
+            checked.diagnostics()
         );
         assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Void);
     }
@@ -306,7 +361,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(checked.source_file.diagnostics().is_empty());
+        assert!(checked.diagnostics().is_empty());
         assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
     }
 }
@@ -324,12 +379,22 @@ mod optional_tests {
 
         assert_eq!(
             *parsed.get(ty).unwrap(),
-            Expr::TypeRepr("Optional".into(), vec![0], false)
+            Expr::TypeRepr {
+                name: "Optional".into(),
+                generics: vec![0],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 }
@@ -439,7 +504,7 @@ mod array_tests {
                             count: Some(Register(1))
                         },
                         Instr::Store {
-                            ty: IRType::Pointer,
+                            ty: IRType::POINTER,
                             val: Register(6),
                             location: Register(5)
                         },
@@ -550,7 +615,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(1)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(0).into()))
+                        Instr::Ret(IRType::POINTER, Some(Register(0).into()))
                     ],
                 }],
                 env_ty: None,
@@ -593,7 +658,7 @@ mod stdlib_tests {
                             ty: IRType::Int,
                             count: Some(Register(3)),
                         },
-                        Instr::Ret(IRType::Pointer, Some(Register(2).into()))
+                        Instr::Ret(IRType::POINTER, Some(Register(2).into()))
                     ],
                 }],
                 env_ty: None,
@@ -691,7 +756,7 @@ mod stdlib_tests {
                         },
                         Instr::Load {
                             dest: Register(2),
-                            ty: IRType::Int.into(),
+                            ty: IRType::Int,
                             addr: Register(4)
                         },
                         Instr::Ret(IRType::Int, Some(Register(2).into()))

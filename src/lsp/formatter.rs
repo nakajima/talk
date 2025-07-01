@@ -127,7 +127,9 @@ impl<'a> Formatter<'a> {
     }
 
     pub(crate) fn format_expr(&self, expr_id: ExprID) -> Doc {
-        let expr = self.source_file.get(&expr_id).unwrap();
+        let Some(expr) = self.source_file.get(&expr_id) else {
+            return Doc::Empty;
+        };
 
         match expr {
             Expr::LiteralArray(items) => self.format_array_literal(items),
@@ -147,13 +149,23 @@ impl<'a> Formatter<'a> {
             } => self.format_call(*callee, type_args, args),
             Expr::Pattern(pattern) => self.format_pattern(pattern),
             Expr::Return(value) => self.format_return(value.as_ref()),
-            Expr::Struct(name, generics, body) => self.format_struct(name, generics, *body),
+            Expr::Struct {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.format_struct(name, generics, conformances, *body),
             Expr::Property {
                 name,
                 type_repr,
                 default_value,
             } => self.format_property(name, type_repr.as_ref(), default_value.as_ref()),
-            Expr::TypeRepr(name, generics, _) => self.format_type_repr(name, generics),
+            Expr::TypeRepr {
+                name,
+                generics,
+                conformances,
+                ..
+            } => self.format_type_repr(name, generics, conformances),
             Expr::FuncTypeRepr(args, ret, _) => self.format_func_type_repr(args, *ret),
             Expr::TupleTypeRepr(types, _) => self.format_tuple_type_repr(types),
             Expr::Member(receiver, property) => self.format_member(receiver.as_ref(), property),
@@ -173,7 +185,12 @@ impl<'a> Formatter<'a> {
                 self.format_if(*cond, *then_block, else_block.as_ref())
             }
             Expr::Loop(cond, body) => self.format_loop(cond.as_ref(), *body),
-            Expr::EnumDecl(name, generics, body) => self.format_enum_decl(name, generics, *body),
+            Expr::EnumDecl {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.format_enum_decl(name, generics, conformances, *body),
             Expr::EnumVariant(name, types) => self.format_enum_variant(name, types),
             Expr::Match(target, arms) => self.format_match(*target, arms),
             Expr::MatchArm(pattern, body) => self.format_match_arm(*pattern, *body),
@@ -199,8 +216,9 @@ impl<'a> Formatter<'a> {
             Expr::ProtocolDecl {
                 name,
                 associated_types,
+                conformances,
                 body,
-            } => self.format_protocol(name, associated_types, *body),
+            } => self.format_protocol(name, associated_types, conformances, *body),
             Expr::FuncSignature {
                 name,
                 params,
@@ -251,7 +269,7 @@ impl<'a> Formatter<'a> {
         let op_text = match op {
             TokenKind::Minus => "-",
             TokenKind::Bang => "!",
-            _ => unreachable!("Unknown unary operator"),
+            _ => &format!("{op}"),
         };
 
         concat(text(op_text), self.format_expr(rhs))
@@ -272,7 +290,7 @@ impl<'a> Formatter<'a> {
             TokenKind::Caret => "^",
             TokenKind::Pipe => "|",
             TokenKind::PipePipe => "||",
-            _ => unreachable!("Unknown binary operator"),
+            _ => &format!("{op}"),
         };
 
         group(concat_space(
@@ -424,7 +442,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_struct(&self, name: &Name, generics: &[ExprID], body: ExprID) -> Doc {
+    fn format_struct(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -439,10 +463,27 @@ impl<'a> Formatter<'a> {
             );
         }
 
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
+            );
+        }
+
         concat_space(result, self.format_expr(body))
     }
 
-    fn format_protocol(&self, name: &Name, associated_types: &[ExprID], body: ExprID) -> Doc {
+    fn format_protocol(
+        &self,
+        name: &Name,
+        associated_types: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("protocol"), self.format_name(name));
 
         if !associated_types.is_empty() {
@@ -460,6 +501,17 @@ impl<'a> Formatter<'a> {
                         text(">"),
                     ),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -485,7 +537,7 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_type_repr(&self, name: &Name, generics: &[ExprID]) -> Doc {
+    fn format_type_repr(&self, name: &Name, generics: &[ExprID], conformances: &[ExprID]) -> Doc {
         let mut result = self.format_name(name);
 
         if !generics.is_empty() {
@@ -497,6 +549,17 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -652,7 +715,13 @@ impl<'a> Formatter<'a> {
         concat_space(result, self.format_expr(body))
     }
 
-    fn format_enum_decl(&self, name: &Name, generics: &[ExprID], body: ExprID) -> Doc {
+    fn format_enum_decl(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
         let mut result = concat_space(text("enum"), self.format_name(name));
 
         if !generics.is_empty() {
@@ -664,6 +733,17 @@ impl<'a> Formatter<'a> {
                     text("<"),
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
             );
         }
 
@@ -850,6 +930,7 @@ impl<'a> Formatter<'a> {
         let mut queue = vec![doc];
 
         while width >= 0 && !queue.is_empty() {
+            #[allow(clippy::unwrap_used)]
             match queue.pop().unwrap() {
                 Doc::Empty => continue,
                 Doc::Text(s) => width -= s.len() as isize,
@@ -1185,7 +1266,7 @@ mod formatter_tests {
         let long_function = "func long_name(param: Int) {}";
         let formatted = format_code(long_function, 40);
         // The exact formatting might vary, but it should be reasonable
-        assert!(formatted.len() > 0);
+        assert!(!formatted.is_empty());
     }
 
     #[test]

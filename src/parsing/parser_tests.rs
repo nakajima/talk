@@ -338,7 +338,12 @@ mod tests {
         assert_eq!(*parsed.get(&4).unwrap(), Expr::Block(vec![3]));
         assert_eq!(
             *parsed.get(&2).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -355,7 +360,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -430,7 +440,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -498,7 +513,12 @@ mod tests {
         assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(0)));
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -513,11 +533,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Bool".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Bool".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -612,7 +642,12 @@ mod tests {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("Fizz".into(), vec![], 0)
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 0
+            }
         );
     }
 
@@ -652,16 +687,34 @@ mod tests {
         );
         let expr = parsed.roots()[0].unwrap();
 
-        assert_eq!(*expr, Expr::EnumDecl("Fizz".into(), vec![0, 1], 6));
+        assert_eq!(
+            *expr,
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![0, 1],
+                conformances: vec![],
+                body: 6
+            }
+        );
 
         // Check the enum generics
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], true)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: true
+            }
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], true)
+            Expr::TypeRepr {
+                name: "Y".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: true
+            }
         );
 
         // Check the body
@@ -672,11 +725,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&2).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&3).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Y".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -690,7 +753,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("Fizz".into(), vec![], 3)
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 3
+            }
         );
 
         let Expr::Block(exprs) = parsed.get(&3).unwrap() else {
@@ -721,7 +789,12 @@ mod tests {
         );
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("Fizz".into(), vec![], 6)
+            Expr::EnumDecl {
+                name: "Fizz".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 6
+            }
         );
 
         let Expr::Block(exprs) = parsed.get(&6).unwrap() else {
@@ -735,11 +808,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Float".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Float".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
@@ -748,11 +831,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&3).unwrap(),
-            Expr::TypeRepr("Float".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Float".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&4).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -827,12 +920,22 @@ mod tests {
 
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("T".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "T".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            Expr::TypeRepr("Y".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Y".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -858,11 +961,21 @@ mod tests {
         );
         assert_eq!(
             *parsed.get(&1).unwrap(),
-            TypeRepr("Optional".into(), vec![0], false)
+            Expr::TypeRepr {
+                name: "Optional".into(),
+                generics: vec![0],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
     }
 
@@ -882,7 +995,12 @@ mod tests {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::EnumDecl("MyEnum".into(), vec![], 6)
+            Expr::EnumDecl {
+                name: "MyEnum".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 6
+            }
         );
 
         let Expr::Block(exprs) = parsed.get(&6).unwrap() else {
@@ -917,14 +1035,16 @@ mod tests {
 
 #[cfg(test)]
 mod pattern_parsing_tests {
+    use crate::compiling::compilation_session::SharedCompilationSession;
     use crate::{environment::Environment, expr::Pattern, lexer::Lexer, name::Name};
 
     use crate::parser::Parser;
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let mut env = Environment::new();
-        let mut parser = Parser::new(lexer, "-".into(), &mut env);
+        let session = SharedCompilationSession::default();
+        let mut env = Environment::default();
+        let mut parser = Parser::new(session, lexer, "-".into(), &mut env);
         parser.advance();
         parser.advance();
         parser.parse_match_pattern().unwrap()
@@ -1022,7 +1142,12 @@ mod structs {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Struct(Name::Raw("Person".into()), vec![], 0)
+            Expr::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 0
+            }
         );
     }
 
@@ -1041,7 +1166,12 @@ mod structs {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Struct(Name::Raw("Person".into()), vec![], 7)
+            Expr::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 7
+            }
         );
         assert_eq!(*parsed.get(&7).unwrap(), Expr::Block(vec![1, 4, 6]));
         assert_eq!(
@@ -1054,7 +1184,12 @@ mod structs {
         );
         assert_eq!(
             *parsed.get(&0).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
 
         assert_eq!(
@@ -1067,7 +1202,12 @@ mod structs {
         );
         assert_eq!(
             *parsed.get(&2).unwrap(),
-            Expr::TypeRepr("Int".into(), vec![], false)
+            Expr::TypeRepr {
+                name: "Int".into(),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            }
         );
         assert_eq!(*parsed.get(&3).unwrap(), Expr::LiteralInt("123".into()));
 
@@ -1099,7 +1239,12 @@ mod structs {
 
         assert_eq!(
             *parsed.roots()[0].unwrap(),
-            Expr::Struct("Person".into(), vec![], 11)
+            Expr::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 11
+            }
         );
 
         let Some(Expr::Block(items)) = parsed.get(&11) else {
@@ -1133,16 +1278,27 @@ mod structs {
 
 #[cfg(test)]
 mod error_handling_tests {
+    use std::path::PathBuf;
+
+    use typed_arena::Arena;
+
     use crate::{
-        diagnostic::Diagnostic, expr::Expr, name::Name, parser::parse, token::Token,
+        diagnostic::Diagnostic,
+        expr::Expr,
+        filler::{Filler, FullExpr},
+        name::Name,
+        parser::{parse, parse_with_session},
+        token::Token,
         token_kind::TokenKind,
     };
 
     #[test]
     fn handles_unclosed_paren() {
-        let parsed = parse("(", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1);
-        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+        let (_, session) = parse_with_session("(", "-".into());
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics.contains(&Diagnostic::parser(
             Token {
                 kind: TokenKind::LeftParen,
                 col: 1,
@@ -1156,10 +1312,12 @@ mod error_handling_tests {
 
     #[test]
     fn handles_unclosed_brace() {
-        let parsed = parse("func foo() {", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1);
+        let (_, session) = parse_with_session("func foo() {", "-".into());
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        assert_eq!(diagnostics.len(), 1);
         assert!(
-            parsed.diagnostics.contains(&Diagnostic::parser(
+            diagnostics.contains(&Diagnostic::parser(
                 Token {
                     kind: TokenKind::Func,
                     col: 4,
@@ -1170,15 +1328,17 @@ mod error_handling_tests {
                 crate::parser::ParserError::UnexpectedEndOfInput(None)
             )),
             "{:?}",
-            parsed.diagnostics
+            session.diagnostics()
         )
     }
 
     #[test]
     fn recovers() {
-        let parsed = parse("func foo() {\n\nfunc fizz() {}", "-".into());
-        assert_eq!(parsed.diagnostics.len(), 1, "{:?}", parsed);
-        assert!(parsed.diagnostics.contains(&Diagnostic::parser(
+        let (parsed, session) = parse_with_session("func foo() {\n\nfunc fizz() {}", "-".into());
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics.contains(&Diagnostic::parser(
             Token {
                 kind: TokenKind::Func,
                 col: 4,
@@ -1206,7 +1366,7 @@ mod error_handling_tests {
     fn parses_protocol() {
         let parsed = parse(
             "
-        protocol Aged<T> {
+        protocol Aged<T>: X {
           let age: Int
           func getAge() -> Int
         }
@@ -1218,6 +1378,7 @@ mod error_handling_tests {
             name,
             associated_types,
             body,
+            conformances,
         } = parsed.get(&parsed.root_ids()[0]).unwrap()
         else {
             panic!("didn't get protocol");
@@ -1225,13 +1386,30 @@ mod error_handling_tests {
 
         assert_eq!(*name, Name::Raw("Aged".into()));
 
-        let Expr::TypeRepr(t_name, _, true) = parsed.get(&associated_types[0]).unwrap() else {
+        let Expr::TypeRepr {
+            name: t_name,
+            introduces_type: true,
+            ..
+        } = parsed.get(&associated_types[0]).unwrap()
+        else {
             panic!(
                 "Didn't get type repr: {:?}",
                 parsed.get(&associated_types[0]).unwrap()
             );
         };
         assert_eq!(*t_name, Name::Raw("T".into()));
+
+        let Expr::TypeRepr {
+            name: Name::Raw(x_name),
+            ..
+        } = parsed.get(&conformances[0]).unwrap()
+        else {
+            panic!(
+                "didn't get conformance: {:?}",
+                parsed.get(&conformances[0]).unwrap()
+            );
+        };
+        assert_eq!(x_name, "X");
 
         let Expr::Block(ids) = parsed.get(body).unwrap() else {
             panic!("didn't get body")
@@ -1257,8 +1435,75 @@ mod error_handling_tests {
         assert!(params.is_empty());
         assert!(generics.is_empty());
         assert_eq!(
-            *parsed.get(&ret).unwrap(),
-            Expr::TypeRepr(Name::Raw("Int".into()), vec![], false),
+            *parsed.get(ret).unwrap(),
+            Expr::TypeRepr {
+                name: Name::Raw("Int".into()),
+                generics: vec![],
+                conformances: vec![],
+                introduces_type: false
+            },
+        );
+    }
+
+    #[test]
+    fn parses_protocol_conformance() {
+        let parsed = parse(
+            "
+        struct Person: Aged {}
+    ",
+            "-".into(),
+        );
+
+        let Some(Expr::Struct {
+            name: Name::Raw(name),
+            ..
+        }) = parsed.get(&parsed.root_ids()[0])
+        else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(name, "Person");
+    }
+
+    #[test]
+    fn parses_type_repr_conformance() {
+        let parsed = parse(
+            "
+        func foo<T: Fizz>(x) -> T { x }
+    ",
+            "-".into(),
+        );
+
+        let arena = Arena::new();
+        let filler = Filler::new(&parsed, &arena);
+        let filled = filler.fill_root();
+
+        use FullExpr::*;
+        assert_eq!(
+            filled[0],
+            &Func {
+                name: &Some(Name::Raw("foo".into())),
+                generics: vec![&TypeRepr {
+                    name: &Name::Raw("T".into()),
+                    conformances: vec![&TypeRepr {
+                        name: &Name::Raw("Fizz".into()),
+                        generics: vec![],
+                        conformances: vec![],
+                        introduces_type: false
+                    }],
+                    generics: vec![],
+                    introduces_type: true
+                }],
+                params: vec![&Parameter(&Name::Raw("x".into()), None)],
+                body: &Block(vec![&Variable(&Name::Raw("x".into()), None)]),
+                ret: Some(&TypeRepr {
+                    name: &Name::Raw("T".into()),
+                    conformances: vec![],
+                    generics: vec![],
+                    introduces_type: false
+                }),
+                captures: &vec![]
+            }
         );
     }
 }

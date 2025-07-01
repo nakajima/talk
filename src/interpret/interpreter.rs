@@ -1,7 +1,5 @@
-use std::usize;
-
 use crate::{
-    interpreter::{memory::Memory, value::Value},
+    interpret::{memory::Memory, value::Value},
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -12,13 +10,12 @@ use crate::{
         lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList},
         register::Register,
     },
-    transforms::monomorphizer::Monomorphizer,
 };
 
 #[derive(Debug)]
 pub enum InterpreterError {
     NoMainFunc,
-    CalleeNotFound,
+    CalleeNotFound(String),
     PredecessorNotFound,
     TypeError(Value, Value),
     UnreachableReached,
@@ -47,6 +44,8 @@ pub struct IRInterpreter {
     memory: Memory,
 }
 
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
 impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
         Self {
@@ -58,7 +57,6 @@ impl IRInterpreter {
 
     pub fn run(mut self) -> Result<Value, InterpreterError> {
         log::info!("Monomorphizing module");
-        self.program = Monomorphizer::new().run(self.program.clone());
 
         if std::env::var("IR").is_ok() {
             println!("{}", crate::lowering::ir_printer::print(&self.program));
@@ -91,7 +89,7 @@ impl IRInterpreter {
                 }
             }
             Err(err) => {
-                println!("{err:?}");
+                log::error!("{err:?}");
                 self.dump();
                 return Err(err);
             }
@@ -191,7 +189,7 @@ impl IRInterpreter {
             Instr::StoreLocal(dest, _, reg) => {
                 self.set_register_value(&dest, self.register_value(&reg));
             }
-            Instr::LoadLocal(_, _, _) => todo!(),
+            Instr::LoadLocal(_, _, _) => (),
             Instr::Phi(dest, _, predecessors) => {
                 let frame = self.call_stack.last_mut().expect("stack underflow");
 
@@ -248,7 +246,7 @@ impl IRInterpreter {
                         };
 
                         let Some(function_to_call) = self.load_function(callee_id) else {
-                            return Err(InterpreterError::CalleeNotFound);
+                            return Err(InterpreterError::CalleeNotFound(format!("[{callee_id}]")));
                         };
 
                         function_to_call
@@ -257,7 +255,7 @@ impl IRInterpreter {
                         let Some(function_to_call) =
                             self.program.functions.iter().find(|f| f.name == name)
                         else {
-                            return Err(InterpreterError::CalleeNotFound);
+                            return Err(InterpreterError::CalleeNotFound(name));
                         };
 
                         function_to_call.clone()
@@ -425,10 +423,10 @@ impl IRInterpreter {
                 };
 
                 let Value::Pointer(base) = self.register_value(&base) else {
-                    panic!(
+                    return Err(InterpreterError::Unknown(format!(
                         "did not get base pointer for GEP: {:?}",
                         self.register_value(&base)
-                    );
+                    )));
                 };
 
                 let pointer = base + index as usize;
@@ -438,7 +436,7 @@ impl IRInterpreter {
                 let structure = Value::Struct(self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
-            Instr::GetValueOf { .. } => todo!(),
+            Instr::GetValueOf { .. } => (),
         }
 
         self.call_stack.last_mut().unwrap().pc += 1;
@@ -512,21 +510,24 @@ mod tests {
 
     use crate::{
         compiling::driver::Driver,
-        interpreter::{
+        interpret::{
             interpreter::{IRInterpreter, InterpreterError},
             value::Value,
         },
+        transforms::monomorphizer::Monomorphizer,
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
         let mut driver = Driver::with_str(code);
         let unit = driver.lower().into_iter().next().unwrap();
 
-        let diagnostics = unit.source_file(&PathBuf::from("-")).unwrap().diagnostics();
+        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let module = unit.module();
 
-        IRInterpreter::new(module).run()
+        let mono = Monomorphizer::new(&unit.env).run(module);
+
+        IRInterpreter::new(mono).run()
     }
 
     #[test]
@@ -685,7 +686,7 @@ mod tests {
             Value::Int(3),
             interpret(
                 "
-    func makeCounter() {
+        func makeCounter() {
 			let count = 0
 
 			return func() {
@@ -696,8 +697,8 @@ mod tests {
 
 		let counter = makeCounter()
 		counter()
-    counter()
-    counter()
+        counter()
+        counter()
         "
             )
             .unwrap()
@@ -732,5 +733,52 @@ mod tests {
             .unwrap(),
             Value::Struct(vec![Value::Int(3), Value::Int(2)]),
         )
+    }
+
+    #[test]
+    fn interprets_struct_init() {
+        assert_eq!(
+            interpret(
+                "
+            struct Person {
+                let age: Int
+
+                init(age: Int) {
+                    self.age = age
+                }
+            }
+
+            Person(age: 123).age
+        "
+            )
+            .unwrap(),
+            Value::Int(123),
+        )
+    }
+
+    #[test]
+    fn interprets_protocol_method_call() {
+        assert_eq!(
+            interpret(
+                "
+            protocol Aged {
+                func getAge() -> Int
+            }
+
+            struct Person: Aged {
+                func getAge() {
+                    123
+                }
+            }
+
+            func get<T: Aged>(t: T) {
+                t.getAge()
+            }
+
+            get(Person())"
+            )
+            .unwrap(),
+            Value::Int(123)
+        );
     }
 }

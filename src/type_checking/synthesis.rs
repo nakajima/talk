@@ -58,6 +58,14 @@ pub fn synthesize_inits(
                 ));
             }
 
+            // Make sure the func always returns self
+            let self_ret = source_file.add(
+                env.next_id(),
+                Expr::Variable(Name::_Self(sym), None),
+                ExprMeta::generated(),
+            );
+            body_exprs.push(self_ret);
+
             let body = source_file.add(
                 env.next_id(),
                 Expr::Block(body_exprs),
@@ -78,6 +86,7 @@ pub fn synthesize_inits(
                 ExprMeta::generated(),
             );
 
+            #[allow(clippy::expect_used)]
             let struct_info = symbol_table
                 .get(&sym)
                 .cloned()
@@ -109,7 +118,7 @@ pub fn synthesize_inits(
                 },
             );
 
-            let Some(Expr::Struct(_, _, body)) = source_file.get(&struct_info.expr_id).cloned()
+            let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
             else {
                 log::error!(
                     "didn't get struct from expr id: {:?}",
@@ -166,7 +175,7 @@ mod tests {
 
         synthesize_inits(&mut resolved, &mut symbol_table, &mut env);
 
-        let Some(Expr::Struct(_, _, body)) = resolved.get(&resolved.root_ids()[0]) else {
+        let Some(Expr::Struct { body, .. }) = resolved.get(&resolved.root_ids()[0]) else {
             panic!("didn't get struct: {:?}", resolved.roots()[0]);
         };
 
@@ -203,7 +212,7 @@ mod tests {
             panic!("didn't get body")
         };
 
-        assert_eq!(body_ids.len(), 1);
+        assert_eq!(body_ids.len(), 2);
         let Some(&Expr::Assignment(lhs, rhs)) = resolved.get(&body_ids[0]) else {
             panic!("didn't get assignment");
         };

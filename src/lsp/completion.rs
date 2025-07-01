@@ -2,8 +2,8 @@ use crate::SourceFile;
 use crate::Typed;
 use crate::compiling::driver::Driver;
 use crate::environment::Environment;
-use crate::environment::TypeDef;
 use crate::symbol_table::SymbolKind;
+use crate::type_defs::TypeDef;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
 use async_lsp::lsp_types::Position;
@@ -62,8 +62,8 @@ impl<'a> CompletionContext<'a> {
             match type_def {
                 TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
-                    completions.extend(enum_def.methods.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(enum_def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));
@@ -78,12 +78,26 @@ impl<'a> CompletionContext<'a> {
                 }
                 TypeDef::Struct(struct_def) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.keys().map(|label| CompletionItem {
-                        label: label.clone(),
+                    completions.extend(struct_def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
                         ..Default::default()
                     }));
                     completions.extend(struct_def.properties.iter().map(|prop| CompletionItem {
+                        label: prop.name.clone(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        ..Default::default()
+                    }));
+                    completions
+                }
+                TypeDef::Protocol(def) => {
+                    let mut completions = vec![];
+                    completions.extend(def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        ..Default::default()
+                    }));
+                    completions.extend(def.properties.iter().map(|prop| CompletionItem {
                         label: prop.name.clone(),
                         kind: Some(CompletionItemKind::PROPERTY),
                         ..Default::default()
@@ -147,6 +161,8 @@ impl<'a> CompletionContext<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use async_lsp::lsp_types::{CompletionItem, Position};
     use indoc::formatdoc;
 
@@ -159,12 +175,12 @@ mod tests {
     ) -> Vec<CompletionItem> {
         let mut driver = Driver::new(Default::default());
         for (i, file) in files.iter().enumerate() {
-            driver.update_file(&(&format!("./file-{}.tlk", i)).into(), file.to_string());
+            driver.update_file(&(&format!("./file-{i}.tlk")).into(), file.to_string());
         }
 
         let checked = driver.check();
-        let checked_unit = checked.iter().next().unwrap();
-        let source_file = checked_unit.source_file(&"./file-0.tlk".into()).unwrap();
+        let checked_unit = checked.first().unwrap();
+        let source_file = checked_unit.source_file(Path::new("./file-0.tlk")).unwrap();
         let env = &checked_unit.env.clone();
 
         CompletionContext {

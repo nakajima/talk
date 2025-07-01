@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     analysis::{cfg::ControlFlowGraph, function_analysis_pass::FunctionAnalysisPass},
-    environment::{Property, StructDef},
     lowering::{
         instr::Instr, ir_error::IRError, ir_function::IRFunction, ir_value::IRValue,
         lowerer::BasicBlockID, register::Register,
     },
+    type_defs::struct_def::{Property, StructDef},
 };
 
 pub struct DefiniteInitizationPass {
@@ -22,7 +22,7 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
             return Ok(());
         }
 
-        let (_self_reg, property_pointers) = self.get_property_pointers(func);
+        let (_self_reg, property_pointers) = self.get_property_pointers(func)?;
 
         let mut out_sets: HashMap<BasicBlockID, HashSet<Property>> = HashMap::new();
 
@@ -107,7 +107,10 @@ impl DefiniteInitizationPass {
 
     // Identifies which property a register points to.
     // A register points to a property if it's the result of a gep on self.
-    fn get_property_pointers(&self, func: &IRFunction) -> (Register, HashMap<Register, Property>) {
+    fn get_property_pointers(
+        &self,
+        func: &IRFunction,
+    ) -> Result<(Register, HashMap<Register, Property>), IRError> {
         let mut property_pointers = HashMap::new();
         // The 'self' parameter is the first argument to an init method.
         let self_reg = func.env_reg;
@@ -124,7 +127,11 @@ impl DefiniteInitizationPass {
 
                     let index = match index {
                         IRValue::ImmediateInt(index) => index,
-                        IRValue::Register(_register) => todo!(),
+                        IRValue::Register(_register) => {
+                            return Err(IRError::Unknown(
+                                "Unable to determine property index for register IRValue".into(),
+                            ));
+                        }
                     };
 
                     if let Some(property) = self.struct_def.properties.get(*index as usize) {
@@ -133,31 +140,31 @@ impl DefiniteInitizationPass {
                 }
             }
         }
-        (
-            self_reg.expect("Didn't get self register for property pointers"),
+        Ok((
+            self_reg.ok_or(IRError::Unknown(
+                "Did not get self register for property pointers".into(),
+            ))?,
             property_pointers,
-        )
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     use crate::{
-        SourceFile, SymbolID,
-        compiling::driver::Driver,
-        environment::{Environment, Property, TypeDef},
-        lowering::ir_module::IRModule,
-        source_file,
-        ty::Ty,
+        SourceFile, SymbolID, compiling::driver::Driver, environment::Environment,
+        lowering::ir_module::IRModule, source_file, ty::Ty, type_defs::TypeDef,
     };
 
     fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>, Environment) {
         let mut driver = Driver::with_str(code);
 
         let lowered = driver.lower().into_iter().next().unwrap();
-        let file = lowered.source_file(&"-".into()).unwrap().clone();
+        let file = lowered.source_file(Path::new("-")).unwrap().clone();
         let env = lowered.env.clone();
         let module = lowered.module();
         (module, file, env)
@@ -188,7 +195,7 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert!(
             DefiniteInitizationPass::new(struct_def.clone())
@@ -220,15 +227,15 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert_eq!(
             Err(IRError::PartialInitialization(
                 format!("@_{}_Person_init", person_id.0),
                 vec![Property {
                     name: "age".into(),
-                    ty: Ty::Int,
-                    symbol: SymbolID::resolved(2)
+                    expr_id: 165,
+                    ty: Ty::Int
                 }]
             )),
             DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)
@@ -262,15 +269,15 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert_eq!(
             Err(IRError::PartialInitialization(
                 format!("@_{}_Person_init", person_id.0),
                 vec![Property {
                     name: "age".into(),
-                    ty: Ty::Int,
-                    symbol: SymbolID::resolved(2)
+                    expr_id: 165,
+                    ty: Ty::Int
                 }]
             )),
             DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)
@@ -306,7 +313,7 @@ mod tests {
             panic!("didn't get struct def");
         };
 
-        let cfg = ControlFlowGraph::new(&function);
+        let cfg = ControlFlowGraph::new(function);
 
         assert_eq!(
             Ok(()),

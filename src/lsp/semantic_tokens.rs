@@ -56,15 +56,16 @@ impl<'a> SemanticTokenCollector<'a> {
         }
     }
 
-    fn range_for(&self, expr_id: &ExprID) -> Range {
-        let range = self.source_file.meta.get(expr_id).unwrap().source_range();
+    fn range_for(&self, expr_id: &ExprID) -> Option<Range> {
+        let meta = self.source_file.meta.get(expr_id)?;
+        let range = meta.source_range();
 
         if let Some(start) = self.line_col_for(range.start)
             && let Some(end) = self.line_col_for(range.end)
         {
-            Range::new(start, end)
+            Some(Range::new(start, end))
         } else {
-            Range::new(Position::new(0, 0), Position::new(0, 0))
+            Some(Range::new(Position::new(0, 0), Position::new(0, 0)))
         }
     }
 
@@ -81,20 +82,24 @@ impl<'a> SemanticTokenCollector<'a> {
             return vec![];
         };
 
+        let Some(range) = self.range_for(expr_id) else {
+            return vec![];
+        };
+
         match expr {
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
-                result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
+                result.push((range, SemanticTokenType::NUMBER))
             }
             Expr::LiteralTrue | Expr::LiteralFalse => {
-                result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
+                result.push((range, SemanticTokenType::KEYWORD))
             }
             Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
             Expr::Binary(lhs, _token_kind, rhs) => {
                 result.extend(self.tokens_from_exprs(&[*lhs, *rhs]))
             }
             Expr::Tuple(items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::Break => result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD)),
+            Expr::Break => result.push((range, SemanticTokenType::KEYWORD)),
             Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Call {
                 callee,
@@ -107,16 +112,16 @@ impl<'a> SemanticTokenCollector<'a> {
             }
             Expr::Pattern(pattern) => match pattern {
                 crate::expr::Pattern::LiteralInt(_) => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
+                    result.push((range, SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralFloat(_) => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::NUMBER))
+                    result.push((range, SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralTrue => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
+                    result.push((range, SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::LiteralFalse => {
-                    result.push((self.range_for(expr_id), SemanticTokenType::KEYWORD))
+                    result.push((range, SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::Bind(_name) => {}
                 crate::expr::Pattern::Wildcard => {}
@@ -129,8 +134,14 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(rhs))
                 }
             }
-            Expr::Struct(_name, items, body) => {
-                result.extend(self.tokens_from_exprs(items));
+            Expr::Struct {
+                generics,
+                conformances,
+                body,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
                 result.extend(self.tokens_from_expr(body));
             }
             Expr::Property {
@@ -145,7 +156,11 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(self.tokens_from_expr(default_value));
                 }
             }
-            Expr::TypeRepr(_name, items, _) => {
+            Expr::TypeRepr {
+                generics,
+                conformances,
+                ..
+            } => {
                 if let Some(meta) = self.source_file.meta.get(expr_id) {
                     result.extend(
                         meta.identifiers
@@ -153,7 +168,8 @@ impl<'a> SemanticTokenCollector<'a> {
                             .map(|i| (self.range_from_token(i), SemanticTokenType::TYPE_PARAMETER)),
                     )
                 }
-                result.extend(self.tokens_from_exprs(items))
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
             }
             Expr::FuncTypeRepr(items, ret, _) => {
                 result.extend(self.tokens_from_exprs(items));
@@ -207,8 +223,8 @@ impl<'a> SemanticTokenCollector<'a> {
                 }
                 result.extend(self.tokens_from_expr(body));
             }
-            Expr::EnumDecl(_name, items, body) => {
-                result.extend(self.tokens_from_exprs(items));
+            Expr::EnumDecl { generics, body, .. } => {
+                result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_expr(body));
             }
             Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(items)),
@@ -230,8 +246,21 @@ impl<'a> SemanticTokenCollector<'a> {
 
                 result.extend(self.tokens_from_expr(value));
             }
-            Expr::ProtocolDecl { .. } => todo!(),
-            Expr::FuncSignature { .. } => todo!(),
+            Expr::ProtocolDecl {
+                associated_types,
+                body,
+                conformances,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(associated_types));
+                result.extend(self.tokens_from_expr(body));
+                result.extend(self.tokens_from_exprs(conformances));
+            }
+            Expr::FuncSignature { params, generics, ret, .. } => {
+                result.extend(self.tokens_from_exprs(params));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_expr(ret));
+            },
         };
 
         result

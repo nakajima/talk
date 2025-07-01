@@ -171,7 +171,9 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        #[allow(clippy::unwrap_used)]
         let start_idx = self.code.char_indices().nth(starting_at).unwrap().0;
+        #[allow(clippy::unwrap_used)]
         let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
         match &self.code[start_idx..=end_idx] {
@@ -217,7 +219,9 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        #[allow(clippy::unwrap_used)]
         let start_idx = self.code.char_indices().nth(starting_at).unwrap().0;
+        #[allow(clippy::unwrap_used)]
         let end_idx = self.code.char_indices().nth(self.current - 1).unwrap().0;
 
         if is_float {

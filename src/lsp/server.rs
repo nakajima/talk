@@ -229,9 +229,10 @@ impl LanguageServer for ServerState {
             });
         };
 
-        log::trace!("Getting diagnostics");
-
+        log::info!("Getting diagnostics for {path:?}");
+        self.driver.check();
         let diagnostics = self.driver.diagnostics(&path);
+        log::info!("Got {} diagnostics", diagnostics.len());
 
         Box::pin(async {
             Ok(DocumentDiagnosticReportResult::Report(
@@ -303,16 +304,16 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let mut env = Environment::new();
+        let mut env = Environment::new(self.driver.session.clone());
         let lexer = Lexer::new(&code);
-        let mut parser = Parser::new(lexer, path, &mut env);
+        let mut parser = Parser::new(self.driver.session.clone(), lexer, path, &mut env);
         parser.parse();
         let source_file = parser.parse_tree;
 
         Box::pin(async move {
             let formatted = format(&source_file, 80);
             let last_line = code.lines().count() as u32;
-            let last_char = code.lines().last().map(|line| line.len() - 1);
+            let last_char = code.lines().last().map(|line| line.len().saturating_sub(1));
 
             Ok(Some(vec![TextEdit::new(
                 Range::new(
@@ -339,6 +340,7 @@ impl LanguageServer for ServerState {
         }
 
         self.driver.update_file(&path, contents);
+        self.driver.check();
         self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }
@@ -352,6 +354,8 @@ impl LanguageServer for ServerState {
         if let Some(text) = params.text {
             self.driver.update_file(&path, text);
         }
+
+        self.driver.check();
         self.refresh_semantic_tokens();
         ControlFlow::Continue(())
     }
@@ -453,6 +457,7 @@ pub async fn start() {
 
     // Prefer truly asynchronous piped stdin/stdout without blocking tasks.
     #[cfg(unix)]
+    #[allow(clippy::unwrap_used)]
     let (stdin, stdout) = (
         async_lsp::stdio::PipeStdin::lock_tokio().unwrap(),
         async_lsp::stdio::PipeStdout::lock_tokio().unwrap(),

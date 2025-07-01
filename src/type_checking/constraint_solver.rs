@@ -1,24 +1,61 @@
 use std::collections::HashMap;
 
 use crate::{
-    SourceFile, SymbolID, SymbolTable, Typed,
+    NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
+    compiling::compilation_session::SharedCompilationSession,
+    conformance_checker::ConformanceChecker,
     diagnostic::Diagnostic,
-    environment::{Environment, TypeDef},
+    environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
     parser::ExprID,
+    satisfies_checker::SatisfiesChecker,
     ty::Ty,
-    type_checker::TypeError,
+    type_checker::{Scheme, TypeError},
+    type_constraint::TypeConstraint,
+    type_defs::{TypeDef, protocol_def::Conformance},
+    type_var_id::{TypeVarID, TypeVarKind},
 };
-
-use super::{environment::EnumVariant, type_checker::TypeVarID};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
     UnqualifiedMember(ExprID, String, Ty), // member name, expected type
+    InitializerCall {
+        expr_id: ExprID,
+        initializes_id: SymbolID,
+        args: Vec<Ty>,
+        func_ty: Ty,
+        result_ty: Ty,
+    },
+    VariantMatch {
+        expr_id: ExprID,
+        scrutinee_ty: Ty, // The type of the value being matched (the `expected` type)
+        variant_name: String,
+        // The list of fresh TypeVars created for each field in the pattern.
+        field_tys: Vec<Ty>,
+    },
+    InstanceOf {
+        scheme: Scheme,
+        expr_id: ExprID,
+        ty: Ty,
+        symbol_id: SymbolID,
+    },
+    ConformsTo {
+        expr_id: ExprID,
+        type_def: SymbolID,
+        conformance: Conformance,
+    },
+    Satisfies {
+        expr_id: ExprID,
+        ty: Ty,
+        constraints: Vec<TypeConstraint>,
+    },
+    Retry(Box<Constraint>),
 }
+
+pub type Substitutions = HashMap<TypeVarID, Ty>;
 
 impl Constraint {
     fn expr_id(&self) -> &ExprID {
@@ -26,20 +63,108 @@ impl Constraint {
             Self::Equality(id, _, _) => id,
             Self::MemberAccess(id, _, _, _) => id,
             Self::UnqualifiedMember(id, _, _) => id,
+            Self::InitializerCall { expr_id, .. } => expr_id,
+            Self::VariantMatch { expr_id, .. } => expr_id,
+            Self::InstanceOf { expr_id, .. } => expr_id,
+            Self::ConformsTo { expr_id, .. } => expr_id,
+            Self::Satisfies { expr_id, .. } => expr_id,
+            Self::Retry(c) => c.expr_id(),
+        }
+    }
+
+    pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
+        match self {
+            Constraint::Equality(id, ty, ty1) => Constraint::Equality(
+                *id,
+                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
+            ),
+            Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
+                *id,
+                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                name.clone(),
+                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
+            ),
+            Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
+                *id,
+                name.clone(),
+                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+            ),
+            Constraint::InitializerCall {
+                expr_id,
+                initializes_id,
+                args,
+                func_ty,
+                result_ty,
+            } => Constraint::InitializerCall {
+                expr_id: *expr_id,
+                initializes_id: *initializes_id,
+                args: args
+                    .iter()
+                    .map(|a| ConstraintSolver::<NameResolved>::apply(a, substitutions, 0))
+                    .collect(),
+                func_ty: ConstraintSolver::<NameResolved>::apply(func_ty, substitutions, 0),
+                result_ty: ConstraintSolver::<NameResolved>::apply(result_ty, substitutions, 0),
+            },
+            Constraint::VariantMatch {
+                expr_id,
+                scrutinee_ty,
+                variant_name,
+                field_tys,
+            } => Constraint::VariantMatch {
+                expr_id: *expr_id,
+                scrutinee_ty: ConstraintSolver::<NameResolved>::apply(
+                    scrutinee_ty,
+                    substitutions,
+                    0,
+                ),
+                variant_name: variant_name.clone(),
+                field_tys: field_tys
+                    .iter()
+                    .map(|ty| ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0))
+                    .collect(),
+            },
+            Constraint::InstanceOf {
+                expr_id,
+                ty,
+                symbol_id,
+                scheme,
+            } => Constraint::InstanceOf {
+                expr_id: *expr_id,
+                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                symbol_id: *symbol_id,
+                scheme: Scheme {
+                    ty: ConstraintSolver::<NameResolved>::apply(&scheme.ty, substitutions, 0),
+                    unbound_vars: scheme.unbound_vars.clone(),
+                },
+            },
+            constraint @ Constraint::ConformsTo { .. } => constraint.clone(),
+            Constraint::Satisfies {
+                expr_id,
+                ty,
+                constraints,
+            } => Constraint::Satisfies {
+                expr_id: *expr_id,
+                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                constraints: constraints.clone(),
+            },
+            Constraint::Retry(c) => c.replacing(substitutions).clone(),
         }
     }
 }
 
-pub struct ConstraintSolver<'a> {
-    source_file: &'a mut SourceFile<Typed>,
+pub struct ConstraintSolver<'a, P: Phase = NameResolved> {
+    source_file: &'a mut SourceFile<P>,
     env: &'a mut Environment,
     symbol_table: &'a mut SymbolTable,
     constraints: Vec<Constraint>,
+    session: SharedCompilationSession,
 }
 
-impl<'a> ConstraintSolver<'a> {
+impl<'a, P: Phase> ConstraintSolver<'a, P> {
     pub fn new(
-        source_file: &'a mut SourceFile<Typed>,
+        session: SharedCompilationSession,
+        source_file: &'a mut SourceFile<P>,
         env: &'a mut Environment,
         symbol_table: &'a mut SymbolTable,
     ) -> Self {
@@ -48,25 +173,36 @@ impl<'a> ConstraintSolver<'a> {
             env,
             source_file,
             symbol_table,
+            session,
         }
     }
 
-    pub fn solve(&mut self) {
+    fn add_diagnostic(&self, diagnostic: Diagnostic) {
+        if let Ok(mut lock) = self.session.lock() {
+            lock.add_diagnostic(self.source_file.path.clone(), diagnostic)
+        }
+    }
+
+    pub fn solve(&mut self) -> HashMap<TypeVarID, Ty> {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
 
         while let Some(constraint) = self.constraints.pop() {
-            match self.solve_constraint(&constraint, &mut substitutions) {
+            match self.solve_constraint(&constraint, &mut substitutions, false) {
                 Ok(_) => (),
                 Err(err) => {
-                    self.source_file
-                        .diagnostics
-                        .insert(Diagnostic::typing(*constraint.expr_id(), err));
+                    self.add_diagnostic(Diagnostic::typing(*constraint.expr_id(), err));
                 }
             }
         }
 
+        let mut remaining_type_vars = vec![];
+
         for (_id, typed_expr) in &mut self.env.typed_exprs.iter_mut() {
             typed_expr.ty = Self::apply(&typed_expr.ty, &substitutions, 0);
+
+            if let Ty::TypeVar(var) = &typed_expr.ty {
+                remaining_type_vars.push(var.clone());
+            }
 
             // Try to fill in the symbol ID of types of variables
             let this_symbol = match typed_expr.expr {
@@ -84,271 +220,422 @@ impl<'a> ConstraintSolver<'a> {
                 continue;
             };
 
-            symbol_info
-                .definition
-                .as_mut()
-                .map(|d| d.sym = Some(def_symbol));
+            if let Some(definition) = symbol_info.definition.as_mut() {
+                definition.sym = Some(def_symbol);
+            }
         }
+
+        // We've applied these constraints, we don't need them anymore.. probably??
+        self.constraints.clear();
+
+        substitutions
     }
 
     fn solve_constraint(
         &mut self,
         constraint: &Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
+        is_retry: bool,
     ) -> Result<(), TypeError> {
-        match &constraint {
-            Constraint::Equality(node_id, lhs, rhs) => {
+        log::info!(
+            "Solving constraint: {:?}",
+            constraint.replacing(substitutions)
+        );
+        match &constraint.replacing(substitutions) {
+            Constraint::Retry(c) => {
+                self.solve_constraint(c, substitutions, true)?;
+            }
+            Constraint::ConformsTo {
+                expr_id,
+                type_def,
+                conformance,
+            } => {
+                let Some(type_def) = self.env.lookup_type(type_def) else {
+                    return Err(TypeError::Unknown(format!(
+                        "could not find type: {type_def:?}"
+                    )));
+                };
+
+                let Some(TypeDef::Protocol(protocol)) =
+                    self.env.lookup_type(&conformance.protocol_id)
+                else {
+                    return Err(TypeError::Unknown(format!(
+                        "could not find protocol: {conformance:?}"
+                    )));
+                };
+
+                let conformance_checker = ConformanceChecker::new(type_def, protocol);
+                match conformance_checker.check() {
+                    Ok(unifications) => {
+                        for (lhs, rhs) in unifications {
+                            self.unify(&lhs, &rhs, substitutions)?;
+                        }
+                        Self::normalize_substitutions(substitutions);
+                    }
+                    Err(err) => {
+                        self.add_diagnostic(Diagnostic::typing(*expr_id, err));
+                    }
+                }
+            }
+            Constraint::Equality(_node_id, lhs, rhs) => {
                 let lhs = Self::apply(lhs, substitutions, 0);
                 let rhs = Self::apply(rhs, substitutions, 0);
 
-                Self::unify(&lhs, &rhs, substitutions).map_err(|err| {
+                self.unify(&lhs, &rhs, substitutions).map_err(|err| {
                     log::error!("{err:?}");
                     err
                 })?;
 
-                log::trace!("defining {node_id:?} = {lhs:?}");
-                self.env
-                    .typed_exprs
-                    .get_mut(node_id)
-                    .map(|expr| expr.ty = lhs);
+                Self::normalize_substitutions(substitutions);
             }
-            Constraint::UnqualifiedMember(node_id, member_name, result_ty) => {
-                let result_ty = Self::apply(result_ty, substitutions, 0);
-
-                // Look for matching constructors based on the result_ty
-                match &result_ty {
-                    Ty::Func(_arg_tys, ret_ty, _generics) => {
-                        // This is a constructor call like .some(123)
-                        // Look for enum constructors named member_name that take arg_tys and return
-                        // something compatible with ret_ty
-                        if let Ty::Enum(enum_id, ret_generics) = ret_ty.as_ref() {
-                            // Look up the enum and find the variant
-                            if let Some(variant_info) = self.find_variant(enum_id, member_name) {
-                                // Create the constructor type for this variant
-                                let constructor_ty = self.create_variant_constructor_type(
-                                    enum_id,
-                                    ret_generics, // We'll create fresh generics
-                                    &variant_info,
-                                    substitutions,
-                                );
-
-                                // Unify the constructor type with result_ty
-                                Self::unify(&constructor_ty, &result_ty, substitutions)?;
-                                Self::normalize_substitutions(substitutions);
-
-                                // self.source_file.register_direct_callable(
-                                //     *node_id,
-                                //     variant_info.constructor_symbol,
-                                // );
-
-                                self.source_file.define(*node_id, constructor_ty, self.env);
-                            }
-                        }
-                    }
-                    Ty::Enum(enum_id, _) => {
-                        // This is a valueless constructor like .none
-                        if let Some(variant_info) = self.find_variant(enum_id, member_name)
-                            && variant_info.values.is_empty()
-                        {
-                            // This is a valueless variant, unify with the enum type directly
-                            self.source_file
-                                .define(*node_id, result_ty.clone(), self.env);
-                        }
-                    }
-                    _ => {
-                        // Unknown result type, leave as type variable for now
-                    }
+            Constraint::InstanceOf { scheme, ty, .. } => {
+                let mut mapping = HashMap::new();
+                for unbound_var in &scheme.unbound_vars {
+                    mapping.insert(
+                        unbound_var.clone(),
+                        Ty::TypeVar(self.env.new_type_variable(
+                            TypeVarKind::Unbound,
+                            unbound_var.constraints.clone(),
+                        )),
+                    );
                 }
+                let instantiated_ty = Self::substitute_ty_with_map(ty, &mapping);
+
+                self.unify(ty, &instantiated_ty, substitutions)?;
+                Self::normalize_substitutions(substitutions);
             }
-            Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
-                let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
+            Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
-                match &receiver_ty {
-                    Ty::Struct(struct_id, generics) => {
-                        let Some(TypeDef::Struct(struct_def)) =
-                            self.env.lookup_type(struct_id).cloned()
+                match &result_ty {
+                    // A variant with no values
+                    Ty::Enum(enum_id, _generics) => {
+                        let variant = self
+                            .env
+                            .lookup_enum(enum_id)
+                            .ok_or(TypeError::Unknown(format!(
+                                "Unable to resolve enum with id: {enum_id:?}"
+                            )))
+                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1))?;
+
+                        if let Some(variant) = variant {
+                            self.unify(&result_ty, &variant.ty, substitutions)?;
+                        }
+                    }
+                    // A variant with values
+                    Ty::Func(_args, ret, _generics) => {
+                        let Ty::Enum(enum_id, _generics) = Self::apply(ret, substitutions, 0)
                         else {
-                            log::info!("For now, just unify with the result type");
-                            self.source_file.define(*node_id, result_ty, self.env);
+                            println!(
+                                "did not get enum type: {:?}",
+                                Self::apply(ret, substitutions, 0)
+                            );
                             return Ok(());
                         };
 
-                        log::info!("receiver_ty: {receiver_ty:?}");
+                        // let variant = Ty::EnumVariant(enum_id, args.clone());
+                        let variant = self
+                            .env
+                            .lookup_enum(&enum_id)
+                            .ok_or(TypeError::Unknown(format!(
+                                "Unable to resolve enum with id: {enum_id:?}"
+                            )))
+                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1))?;
 
-                        if let Some(method) = struct_def.methods.get(member_name) {
-                            // Create a substitution map from the struct's generic parameters to the concrete types.
-                            let mut substitution_map = HashMap::new();
-                            for (param_ty, arg_ty) in
-                                struct_def.type_parameters.iter().zip(generics.iter())
-                            {
-                                if let Ty::TypeVar(param_id) = param_ty {
-                                    substitution_map.insert(param_id.clone(), arg_ty.clone());
-                                }
-                            }
-
-                            // Specialize the method's type.
-                            let specialized_method_ty = self
-                                .env
-                                .substitute_ty_with_map(method.ty.clone(), &substitution_map);
-
-                            // IMPORTANT: Do NOT instantiate here - we want to use the same type variables
-                            // that are already in the struct instance's generics
-                            log::info!("specialized_method_ty: {specialized_method_ty:?}");
-
-                            // Unify with the specialized type directly (no instantiation)
-                            Self::unify(&specialized_method_ty, &result_ty, substitutions)?;
-
-                            // Apply the substitutions to get the final type
-                            let final_ty = Self::apply(&specialized_method_ty, substitutions, 0);
-                            log::info!("Set type for member access {node_id:?}: {final_ty:?}");
-                            self.source_file.define(*node_id, final_ty, self.env);
-                        }
-
-                        if let Some(property) = struct_def
-                            .properties
-                            .iter()
-                            .find(|p| &p.name == member_name)
-                        {
-                            // Also specialize property types.
-                            let mut substitution_map = HashMap::new();
-                            for (param_ty, arg_ty) in
-                                struct_def.type_parameters.iter().zip(generics.iter())
-                            {
-                                if let Ty::TypeVar(param_id) = param_ty {
-                                    substitution_map.insert(param_id.clone(), arg_ty.clone());
-                                }
-                            }
-                            let specialized_property_ty = self
-                                .env
-                                .substitute_ty_with_map(property.ty.clone(), &substitution_map);
-                            Self::unify(&specialized_property_ty, &result_ty, substitutions)?;
-
-                            let final_ty = Self::apply(&specialized_property_ty, substitutions, 0);
-                            self.source_file.define(*node_id, final_ty, self.env);
+                        if let Some(variant) = variant {
+                            self.unify(&result_ty, &variant.ty, substitutions)?;
                         }
                     }
-                    Ty::Enum(enum_id, generics) => {
-                        // Look up the enum definition
-                        if let Some(enum_info) = self.env.lookup_enum(enum_id) {
-                            // Check if this is a variant constructor
-                            log::debug!("Enum info: {enum_info:?}");
-                            if let Some(variant_info) = self.find_variant(enum_id, member_name) {
-                                // Create the constructor type
-                                log::debug!("Variant info: {variant_info:?}");
-
-                                let variant_ty = self.create_variant_constructor_type(
-                                    enum_id,
-                                    generics,
-                                    &variant_info,
-                                    substitutions,
-                                );
-
-                                // Unify with the result type
-                                Self::unify(&variant_ty, &result_ty, substitutions)?;
-                                Self::normalize_substitutions(substitutions);
-                                self.source_file.define(*node_id, variant_ty, self.env);
-                            } else {
-                                log::error!("Could not find variant named {member_name:?}");
-                            }
-                            // Future: Check for methods, fields, etc.
-                        } else {
-                            panic!("Could not find type from symbol: {enum_id:?}");
+                    _ => (),
+                }
+            }
+            Constraint::Satisfies {
+                expr_id,
+                ty,
+                constraints,
+                ..
+            } => {
+                let checker = SatisfiesChecker::new(self.env, ty, constraints);
+                match checker.check() {
+                    Ok(unifications) => {
+                        for (lhs, rhs) in unifications {
+                            self.unify(&lhs, &rhs, substitutions)?;
                         }
                     }
-                    // Future: Handle other receiver types (structs, etc.)
-                    _ => {
-                        log::warn!(
-                            "For now just unify with the result type: {node_id:?}, {result_ty:?}"
-                        );
-                        // For now, just unify with the result type
-                        self.source_file.define(*node_id, result_ty, self.env);
+                    Err(err) => {
+                        self.add_diagnostic(Diagnostic::typing(*expr_id, err));
                     }
                 }
+            }
+            Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
+                let receiver_ty = Self::apply(receiver_ty, substitutions, 0);
+                let result_ty = Self::apply(result_ty, substitutions, 0);
+
+                let (member_ty, type_params, type_args) = match &receiver_ty {
+                    Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
+                        let type_def = self
+                            .env
+                            .lookup_type(type_id)
+                            .ok_or(TypeError::Unknown(format!(
+                                "Unable to resolve enum with id: {type_id:?}"
+                            )))?
+                            .clone();
+                        let mut member_ty_search = type_def.member_ty(member_name).cloned();
+
+                        if member_ty_search.is_none() {
+                            for conformance in type_def.conformances() {
+                                if let Some(TypeDef::Protocol(protocol_def)) =
+                                    self.env.lookup_type(&conformance.protocol_id).cloned()
+                                    && let Some(ty) = protocol_def.member_ty(member_name)
+                                {
+                                    let mut subst = HashMap::new();
+                                    for (param, arg) in protocol_def
+                                        .associated_types
+                                        .iter()
+                                        .zip(&conformance.associated_types)
+                                    {
+                                        subst.insert(param.type_var.clone(), arg.clone());
+                                    }
+                                    member_ty_search =
+                                        Some(Self::substitute_ty_with_map(ty, &subst));
+                                    break;
+                                }
+                            }
+                        }
+
+                        let Some(member_ty) = member_ty_search else {
+                            return Err(TypeError::MemberNotFound(
+                                member_name.to_string(),
+                                type_def.name().to_string(),
+                            ));
+                        };
+
+                        log::trace!(
+                            "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
+                        );
+
+                        (
+                            member_ty.clone(),
+                            type_def.type_parameters().clone(),
+                            generics,
+                        )
+                    }
+                    Ty::Enum(enum_id, generics) => {
+                        let enum_def =
+                            self.env
+                                .lookup_enum(enum_id)
+                                .ok_or(TypeError::Unknown(format!(
+                                    "Unable to resolve enum with id: {enum_id:?}"
+                                )))?;
+
+                        let Some(member_ty) = enum_def.member_ty(member_name) else {
+                            return Err(TypeError::Unknown(format!(
+                                "Member not found for enum {}: {}",
+                                enum_def.name_str, member_name
+                            )));
+                        };
+
+                        log::trace!(
+                            "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
+                        );
+
+                        (
+                            member_ty.clone(),
+                            enum_def.type_parameters.clone(),
+                            generics,
+                        )
+                    }
+                    Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
+                        let mut result: Option<(Ty, Vec<TypeParameter>, &Vec<Ty>)> = None;
+
+                        for constraint in type_var.constraints.iter() {
+                            match constraint {
+                                TypeConstraint::InstanceOf {
+                                    symbol_id,
+                                    associated_types,
+                                } => {
+                                    let Some(type_def) = self.env.lookup_type(symbol_id) else {
+                                        continue;
+                                    };
+                                    let Some(ty) = type_def.member_ty(member_name) else {
+                                        return Err(TypeError::MemberNotFound(
+                                            member_name.to_string(),
+                                            type_def.name().to_string(),
+                                        ));
+                                    };
+                                    result = Some((
+                                        ty.clone(),
+                                        type_def.type_parameters().clone(),
+                                        associated_types,
+                                    ));
+                                }
+                                TypeConstraint::Conforms {
+                                    protocol_id,
+                                    associated_types,
+                                } => {
+                                    let Some(TypeDef::Protocol(protocol_def)) =
+                                        self.env.lookup_type(protocol_id).cloned()
+                                    else {
+                                        return Err(TypeError::Unknown(format!(
+                                            "did not find protocol with ID: {protocol_id:?}",
+                                        )));
+                                    };
+
+                                    if let Some(ty) = protocol_def.member_ty(member_name) {
+                                        result = Some((
+                                            ty.clone(),
+                                            protocol_def.associated_types,
+                                            associated_types,
+                                        ));
+
+                                        break;
+                                    }
+                                }
+                                TypeConstraint::Equals { .. } => (),
+                            }
+                        }
+
+                        if let Some(result) = result {
+                            result
+                        } else {
+                            return Err(TypeError::Unknown(format!(
+                                "Did not find member {member_name} for {receiver_ty:?}"
+                            )));
+                        }
+                    }
+                    _ => {
+                        // todo!(
+                        //     "{:?} {:?}",
+                        //     Self::apply(&receiver_ty, substitutions, 0),
+                        //     Self::apply(&result_ty, substitutions, 0)
+                        // );
+                        if !is_retry && !matches!(constraint, Constraint::Retry(_)) {
+                            log::warn!("Pushing retry {constraint:?}");
+
+                            self.constraints
+                                .push(Constraint::Retry(constraint.clone().into()));
+                            return Ok(());
+                        } else {
+                            log::error!("Retry failed for {constraint:?}");
+                            return Err(TypeError::Unknown(format!(
+                                "Retry failed for: {constraint:?}",
+                            )));
+                        }
+                    }
+                };
+
+                let mut member_substitutions = substitutions.clone();
+                for (type_param, type_arg) in type_params.iter().zip(type_args) {
+                    member_substitutions.insert(type_param.type_var.clone(), type_arg.clone());
+                }
+
+                let specialized_ty =
+                    Self::substitute_ty_with_map(&member_ty, &member_substitutions);
+                self.unify(&result_ty, &specialized_ty, substitutions)?;
+                Self::normalize_substitutions(substitutions);
+            }
+            Constraint::InitializerCall {
+                initializes_id,
+                args,
+                func_ty,
+                result_ty,
+                ..
+            } => {
+                let Some(struct_def) = self.env.lookup_struct(initializes_id) else {
+                    return Err(TypeError::Unresolved(
+                        "did not find struct def for initialization".into(),
+                    ));
+                };
+
+                // TODO: Support multiple initializers
+                let initializer = &struct_def.initializers[0];
+                let Ty::Init(_, params) = &initializer.ty else {
+                    unreachable!();
+                };
+
+                if args.len() != params.len() {
+                    return Err(TypeError::ArgumentError(format!(
+                        "Expected {} arguments, got {}",
+                        params.len(),
+                        args.len()
+                    )));
+                }
+
+                for (param, arg) in params.iter().zip(args) {
+                    self.unify(param, arg, substitutions)?;
+                }
+
+                self.unify(&initializer.ty, func_ty, substitutions)?;
+
+                let struct_with_generics =
+                    Ty::Struct(*initializes_id, struct_def.canonical_type_parameters());
+
+                let specialized_struct = Self::apply(&struct_with_generics, substitutions, 0);
+
+                self.unify(result_ty, &specialized_struct, substitutions)?;
+
+                Self::normalize_substitutions(substitutions);
+            }
+            Constraint::VariantMatch {
+                scrutinee_ty,
+                variant_name,
+                field_tys,
+                ..
+            } => {
+                let scrutinee_ty = Self::apply(scrutinee_ty, substitutions, 0);
+
+                let Ty::Enum(enum_id, concrete_type_args) = &scrutinee_ty else {
+                    return Err(TypeError::Unknown(format!(
+                        "VariantMatch expected an enum, but got {scrutinee_ty:?}"
+                    )));
+                };
+
+                let Some(enum_def) = self.env.lookup_enum(enum_id) else {
+                    unreachable!("Enum definition not found for a typed enum.");
+                };
+
+                let Some(variant_def) = enum_def.variants.iter().find(|v| v.name == *variant_name)
+                else {
+                    return Err(TypeError::UnknownVariant(Name::Raw(variant_name.clone())));
+                };
+
+                // Extract the generic field types from the variant's definition (e.g., `[T]` for `some(T)`).
+                let Ty::EnumVariant(_, generic_field_tys) = &variant_def.ty else {
+                    unreachable!("Variant's type is not an EnumVariant.");
+                };
+
+                // Create a substitution map to specialize the variant's types.
+                // This maps the enum's generic parameters (e.g., T) to the scrutinee's concrete types (e.g., Int).
+                let mut local_substitutions = HashMap::new();
+                for (type_param, concrete_arg) in
+                    enum_def.type_parameters.iter().zip(concrete_type_args)
+                {
+                    local_substitutions.insert(type_param.type_var.clone(), concrete_arg.clone());
+                }
+
+                // Specialize the variant's generic field types using the local map.
+                // This turns `[T]` into `[Int]`.
+                let specialized_field_tys = generic_field_tys
+                    .iter()
+                    .map(|ty| Self::substitute_ty_with_map(ty, &local_substitutions))
+                    .collect::<Vec<_>>();
+
+                // Now, unify the specialized, concrete field types with the types from the pattern.
+                if specialized_field_tys.len() != field_tys.len() {
+                    return Err(TypeError::Unknown(
+                        "Variant pattern has incorrect number of fields.".into(),
+                    ));
+                }
+
+                for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
+                    self.unify(specialized_ty, pattern_ty, substitutions)?;
+                }
+
+                Self::normalize_substitutions(substitutions);
             }
         };
 
         Ok(())
-    }
-
-    fn create_variant_constructor_type(
-        &mut self,
-        enum_id: &SymbolID,
-        // `instance_generics` are the type arguments for this specific instance of the enum,
-        // so like for Option<Int>, this would be [TypeVar(that_will_become_Int)].
-        // These are ALREADY FRESHLY INSTANTIATED from the enum's scheme by the caller (TypeChecker).
-        instance_generics: &[Ty],
-        variant_info: &EnumVariant, // variant_info.values refers to original enum type params (e.g. T from Option<T>)
-        substitutions: &mut HashMap<TypeVarID, Ty>, // Global substitutions being built by the solver
-    ) -> Ty {
-        // These formal parameters are the Ty::TypeVar created during `hoist_enums`.
-        let enum_def = match self.env.lookup_type(enum_id) {
-            Some(TypeDef::Enum(ed)) => ed,
-            _ => panic!("EnumDef not found for {enum_id:?} during variant constructor creation"),
-        };
-
-        let mut local_param_to_arg_subst = HashMap::new();
-        for (formal_param_ty, actual_instance_arg_ty) in enum_def
-            .type_parameters
-            .iter()
-            .zip(instance_generics.iter())
-        {
-            if let Ty::TypeVar(formal_param_id) = formal_param_ty {
-                // `actual_instance_arg_ty` is the specific type (often a fresh TypeVar) for this instance.
-                local_param_to_arg_subst
-                    .insert(formal_param_id.clone(), actual_instance_arg_ty.clone());
-            } else {
-                // This indicates an issue with how EnumDef.type_parameters were stored, they should be TypeVars.
-                log::error!(
-                    "Formal type parameter in EnumDef was not a TypeVar: {formal_param_ty:?}"
-                );
-            }
-        }
-
-        // Instantiate the variant's value types (constructor arguments) using this local substitution first,
-        // then apply the global substitutions.
-        let constructor_arg_tys: Vec<Ty> = variant_info
-            .values
-            .iter()
-            .map(|formal_val_ty| {
-                let local_subst = Self::apply(formal_val_ty, &local_param_to_arg_subst, 0);
-                Self::apply(&local_subst, substitutions, 0)
-            })
-            .map(|instantiated_val_ty| {
-                // Step 3b: Apply global solver substitutions
-                Self::apply(&instantiated_val_ty, substitutions, 0)
-            })
-            .collect();
-
-        // The return type of the constructor is the enum type itself, with its actual instance generics.
-        let constructor_return_ty = Ty::Enum(
-            *enum_id,
-            instance_generics
-                .iter()
-                .map(|g_ty| Self::apply(g_ty, substitutions, 0))
-                .collect(),
-        );
-
-        if variant_info.values.is_empty() {
-            // If no values, it's not a function, it's just the enum type itself (fully substituted).
-            constructor_return_ty
-        } else {
-            Ty::Func(constructor_arg_tys, Box::new(constructor_return_ty), vec![])
-        }
-    }
-
-    fn find_variant(&mut self, enum_id: &SymbolID, name: &String) -> Option<EnumVariant> {
-        let Some(TypeDef::Enum(enum_def)) = self.env.lookup_type(enum_id) else {
-            return None;
-        };
-        log::debug!("Variants: {:?}", enum_def.variants);
-        for variant in enum_def.variants.iter() {
-            log::debug!("Checking variant: {variant:?}");
-            if variant.name == *name {
-                return Some(variant.clone());
-            }
-        }
-        None
     }
 
     fn apply_multiple(types: &[Ty], substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Vec<Ty> {
@@ -358,10 +645,13 @@ impl<'a> ConstraintSolver<'a> {
             .collect()
     }
 
-    fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
-        if depth > 100 {
+    pub fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
+        if depth > 20 {
+            log::error!("Hit 100 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
         }
+
+        // log::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
 
         match ty {
             Ty::Pointer => ty.clone(),
@@ -369,15 +659,36 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
             Ty::Func(params, returning, generics) => {
-                let applied_params = Self::apply_multiple(params, substitutions, depth);
+                let applied_params = Self::apply_multiple(params, substitutions, depth + 1);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
-                let applied_generics = Self::apply_multiple(generics, substitutions, depth);
+                let applied_generics = Self::apply_multiple(generics, substitutions, depth + 1);
 
                 Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }
             Ty::TypeVar(type_var) => {
                 if let Some(ty) = substitutions.get(type_var) {
                     Self::apply(ty, substitutions, depth + 1)
+                } else if let TypeVarID {
+                    kind: TypeVarKind::Instantiated(i),
+                    ..
+                } = type_var
+                {
+                    let parent_type_var = TypeVarID::new(
+                        *i,
+                        TypeVarKind::Canonicalized(type_var.id),
+                        type_var.constraints.clone(),
+                    );
+                    Self::apply(&Ty::TypeVar(parent_type_var), substitutions, depth + 1)
+                } else if let TypeVarID {
+                    kind: TypeVarKind::Canonicalized(i),
+                    ..
+                } = type_var
+                {
+                    Ty::TypeVar(TypeVarID::new(
+                        *i,
+                        TypeVarKind::Instantiated(type_var.id),
+                        type_var.constraints.clone(),
+                    ))
                 } else {
                     ty.clone()
                 }
@@ -402,23 +713,23 @@ impl<'a> ConstraintSolver<'a> {
             ),
             Ty::Closure { func, captures } => {
                 let func = Self::apply(func, substitutions, depth + 1).into();
-                let captures = captures
-                    .iter()
-                    .map(|c| Self::apply(c, substitutions, depth + 1))
-                    .collect();
-                Ty::Closure { func, captures }
+                Ty::Closure {
+                    func,
+                    captures: captures.clone(),
+                }
             }
             Ty::Array(ty) => Ty::Array(Self::apply(ty, substitutions, depth + 1).into()),
             Ty::Struct(sym, generics) => Ty::Struct(
                 *sym,
                 Self::apply_multiple(generics, substitutions, depth + 1),
             ),
+            Ty::Protocol(sym, generics) => Ty::Protocol(
+                *sym,
+                Self::apply_multiple(generics, substitutions, depth + 1),
+            ),
             Ty::Init(struct_id, params) => Ty::Init(
                 *struct_id,
-                params
-                    .iter()
-                    .map(|p| Self::apply(p, substitutions, depth + 1))
-                    .collect(),
+                Self::apply_multiple(params, substitutions, depth + 1),
             ),
             Ty::Void => ty.clone(),
         }
@@ -444,14 +755,17 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    fn unify(
+    pub fn unify(
+        &self,
         lhs: &Ty,
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
-        log::trace!("Unifying: {lhs:?} and {rhs:?}");
+        if lhs == rhs {
+            return Ok(());
+        }
 
-        match (
+        let res = match (
             Self::apply(lhs, substitutions, 0),
             Self::apply(rhs, substitutions, 0),
         ) {
@@ -459,11 +773,22 @@ impl<'a> ConstraintSolver<'a> {
             (a, b) if a == b => Ok(()),
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
+                let combined_constraints =
+                    [v1.constraints.clone(), v2.constraints.clone()].concat();
+
+                if !combined_constraints.is_empty() {
+                    log::trace!(
+                        "Combined constraints: {v1:?} <> {v2:?} = {combined_constraints:?}"
+                    );
+                };
+
                 // When unifying two type variables, pick one consistently
-                if v1.0 < v2.0 {
-                    substitutions.insert(v2.clone(), Ty::TypeVar(v1.clone()));
+                if v1.id < v2.id {
+                    let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
+                    substitutions.insert(v2.clone(), Ty::TypeVar(id));
                 } else {
-                    substitutions.insert(v1.clone(), Ty::TypeVar(v2.clone()));
+                    let id = TypeVarID::new(v2.id, v2.kind, combined_constraints);
+                    substitutions.insert(v1.clone(), Ty::TypeVar(id));
                 }
                 Self::normalize_substitutions(substitutions);
                 Ok(())
@@ -473,6 +798,15 @@ impl<'a> ConstraintSolver<'a> {
                 if Self::occurs_check(&v, &ty, substitutions) {
                     Err(TypeError::OccursConflict)
                 } else {
+                    // Having this here is icky.
+                    if !v.constraints.is_empty() {
+                        let checker = SatisfiesChecker::new(self.env, &ty, &v.constraints);
+                        let unifications = checker.check()?;
+                        for (lhs, rhs) in unifications {
+                            self.unify(&lhs, &rhs, substitutions)?;
+                        }
+                    }
+
                     substitutions.insert(v.clone(), ty.clone());
                     Self::normalize_substitutions(substitutions);
                     Ok(())
@@ -483,37 +817,20 @@ impl<'a> ConstraintSolver<'a> {
                 Ty::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                 }
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                 }
 
-                if let (Ty::TypeVar(ret_var), concrete_ret) =
-                    (lhs_returning.as_ref(), rhs_returning.as_ref())
-                {
-                    // If we're unifying a function with a TypeVar return against a function with a concrete return,
-                    // record that the TypeVar should be the concrete type
-                    if !matches!(concrete_ret, Ty::TypeVar(_)) {
-                        substitutions.insert(ret_var.clone(), concrete_ret.clone());
-                    }
-                }
-
-                if let (concrete_ret, Ty::TypeVar(ret_var)) =
-                    (lhs_returning.as_ref(), rhs_returning.as_ref())
-                    && !matches!(concrete_ret, Ty::TypeVar(_))
-                {
-                    substitutions.insert(ret_var.clone(), concrete_ret.clone());
-                }
-
-                Self::unify(&lhs_returning, &rhs_returning, substitutions)?;
+                self.unify(&lhs_returning, &rhs_returning, substitutions)?;
                 Self::normalize_substitutions(substitutions);
 
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                Self::unify(&lhs_func, &rhs_func, substitutions)?;
+                self.unify(&lhs_func, &rhs_func, substitutions)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -521,7 +838,7 @@ impl<'a> ConstraintSolver<'a> {
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
-                Self::unify(&func, &closure, substitutions)?;
+                self.unify(&func, &closure, substitutions)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -529,25 +846,82 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
+                }
+
+                Ok(())
+            }
+            (Ty::Enum(_, enum_types), Ty::EnumVariant(_, variant_types))
+            | (Ty::EnumVariant(_, variant_types), Ty::Enum(_, enum_types)) => {
+                for (e_ty, v_ty) in enum_types.iter().zip(variant_types) {
+                    self.unify(e_ty, &v_ty, substitutions)?;
                 }
 
                 Ok(())
             }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
                 for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    Self::unify(lhs, &rhs, substitutions)?;
+                    self.unify(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
                 }
 
                 Ok(())
             }
-            _ => Err(TypeError::Mismatch(
-                Self::apply(lhs, substitutions, 0),
-                Self::apply(rhs, substitutions, 0),
-            )),
-        }
+            (Ty::Func(func_args, ret, generics), Ty::EnumVariant(enum_id, variant_args))
+            | (Ty::EnumVariant(enum_id, variant_args), Ty::Func(func_args, ret, generics))
+                if func_args.len() == variant_args.len() =>
+            {
+                // We always want the return value to be the enum
+                let Some(enum_def) = self.env.lookup_enum(&enum_id) else {
+                    return Err(TypeError::Unknown(
+                        "Didn't find enum def for {enum_id:?}".into(),
+                    ));
+                };
+
+                let mut member_substitutions = substitutions.clone();
+                for (type_param, type_arg) in enum_def.type_parameters.iter().zip(generics) {
+                    log::trace!("Member substitution: {type_param:?} -> {type_arg:?}");
+                    member_substitutions.insert(type_param.type_var.clone(), type_arg.clone());
+                }
+                let specialized_ty = Self::substitute_ty_with_map(
+                    &Ty::EnumVariant(enum_id, func_args),
+                    substitutions,
+                );
+
+                self.unify(&ret, &specialized_ty, substitutions)?;
+
+                // Inference treats all callees as funcs, even if it's an enum constructor.
+                // for (func_arg, variant_arg) in func_args.iter().zip(variant_args) {
+                //     self.unify(func_arg, &variant_arg, substitutions)?;
+                // }
+
+                Self::normalize_substitutions(substitutions);
+
+                Ok(())
+            }
+            _ => {
+                log::error!(
+                    "Mismatch: {:?} and {:?}",
+                    Self::apply(lhs, substitutions, 0),
+                    Self::apply(rhs, substitutions, 0)
+                );
+                Err(TypeError::Mismatch(
+                    Self::apply(lhs, substitutions, 0).to_string(),
+                    Self::apply(rhs, substitutions, 0).to_string(),
+                ))
+            }
+        };
+
+        log::debug!(
+            "∪ {:?} <> {:?} = {:?} <> {:?}",
+            lhs,
+            rhs,
+            Self::apply(lhs, substitutions, 0),
+            Self::apply(rhs, substitutions, 0)
+        );
+
+        res
     }
 
     /// Returns true if `v` occurs inside `ty`
@@ -555,7 +929,11 @@ impl<'a> ConstraintSolver<'a> {
         let ty = Self::apply(ty, substitutions, 0);
         match &ty {
             Ty::TypeVar(tv) => tv == v,
-            Ty::Func(params, returning, generics) => {
+            Ty::Func(params, returning, generics)
+            | Ty::Closure {
+                func: box Ty::Func(params, returning, generics),
+                ..
+            } => {
                 // check each parameter and the return type
                 let oh = params
                     .iter()
@@ -577,6 +955,85 @@ impl<'a> ConstraintSolver<'a> {
                 .iter()
                 .any(|value| Self::occurs_check(v, value, substitutions)),
             _ => false,
+        }
+    }
+
+    /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
+    pub fn substitute_ty_with_map(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
+        match ty {
+            Ty::TypeVar(type_var_id) => {
+                if let Some(substituted_ty) = substitutions.get(type_var_id) {
+                    substituted_ty.clone()
+                } else {
+                    ty.clone() // Not in this substitution map, return as is.
+                }
+            }
+            Ty::Init(struct_id, params) => {
+                let applied_params = params
+                    .iter()
+                    .map(|param| Self::substitute_ty_with_map(param, substitutions))
+                    .collect();
+
+                Ty::Init(*struct_id, applied_params)
+            }
+            Ty::Func(params, returning, generics) => {
+                let applied_params = params
+                    .iter()
+                    .map(|param| Self::substitute_ty_with_map(param, substitutions))
+                    .collect();
+                let applied_return = Self::substitute_ty_with_map(returning, substitutions);
+                let applied_generics = generics
+                    .iter()
+                    .map(|g| Self::substitute_ty_with_map(g, substitutions))
+                    .collect();
+                Ty::Func(applied_params, Box::new(applied_return), applied_generics)
+            }
+            Ty::Closure { func, captures } => {
+                let func = Self::substitute_ty_with_map(func, substitutions)
+                    .clone()
+                    .into();
+
+                Ty::Closure {
+                    func,
+                    captures: captures.clone(),
+                }
+            }
+            Ty::Enum(name, generics) => {
+                let applied_generics = generics
+                    .iter()
+                    .map(|g| Self::substitute_ty_with_map(g, substitutions))
+                    .collect();
+                Ty::Enum(*name, applied_generics)
+            }
+            Ty::EnumVariant(enum_id, values) => {
+                let applied_values = values
+                    .iter()
+                    .map(|v| Self::substitute_ty_with_map(v, substitutions))
+                    .collect();
+                Ty::EnumVariant(*enum_id, applied_values)
+            }
+            Ty::Tuple(types) => Ty::Tuple(
+                types
+                    .iter()
+                    .map(|param| Self::substitute_ty_with_map(param, substitutions))
+                    .collect(),
+            ),
+            Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
+            Ty::Struct(sym, generics) => Ty::Struct(
+                *sym,
+                generics
+                    .iter()
+                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
+                    .collect(),
+            ),
+            Ty::Protocol(sym, generics) => Ty::Protocol(
+                *sym,
+                generics
+                    .iter()
+                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
+                    .collect(),
+            ),
+            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
         }
     }
 }

@@ -2,10 +2,11 @@ use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
+    compiling::compilation_session::SharedCompilationSession,
+    conformance_checker::ConformanceError,
+    constraint_solver::{Constraint, ConstraintSolver, Substitutions},
     diagnostic::Diagnostic,
-    environment::{EnumVariant, Method, Property, StructDef, free_type_vars},
     expr::{Expr, Pattern},
-    match_builtin,
     name::Name,
     name_resolver::NameResolverError,
     parser::ExprID,
@@ -13,36 +14,16 @@ use crate::{
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
+    type_constraint::TypeConstraint,
+    type_defs::TypeDef,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
-use super::{
-    environment::{EnumDef, Environment, TypeDef},
-    typed_expr::TypedExpr,
-};
+use super::{environment::Environment, typed_expr::TypedExpr};
 
 pub type TypeDefs = HashMap<SymbolID, TypeDef>;
 pub type FuncParams = Vec<Ty>;
 pub type FuncReturning = Box<Ty>;
-
-#[derive(Clone, PartialEq, Debug, Eq, Hash)]
-pub struct TypeVarID(pub i32, pub TypeVarKind);
-
-#[derive(Clone, PartialEq, Debug, Eq, Hash)]
-pub enum TypeVarKind {
-    Blank,
-    CallArg,
-    CallReturn,
-    FuncParam,
-    FuncType,
-    FuncNameVar(SymbolID),
-    FuncBody,
-    Let,
-    TypeRepr(Name),
-    Member,
-    Element,
-    VariantValue,
-    PatternBind(Name),
-}
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum TypeError {
@@ -51,10 +32,14 @@ pub enum TypeError {
     UnknownEnum(Name),
     UnknownVariant(Name),
     Unknown(String),
-    UnexpectedType(Ty, Ty),
-    Mismatch(Ty, Ty),
+    UnexpectedType(String, String),
+    Mismatch(String, String),
+    ArgumentError(String),
     Handled, // If we've already reported it
     OccursConflict,
+    ConformanceError(Vec<ConformanceError>),
+    Nonconformance(String, String),
+    MemberNotFound(String, String),
 }
 
 impl TypeError {
@@ -73,6 +58,16 @@ impl TypeError {
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),
+            Self::ArgumentError(message) => message.to_string(),
+            Self::Nonconformance(protocol, structname) => {
+                format!("{structname} does not conform to the {protocol} protocol")
+            }
+            Self::MemberNotFound(name, receiver) => {
+                format!("Cannot find member named {name} for {receiver}")
+            }
+            Self::ConformanceError(err) => {
+                format!("{err:?}")
+            }
         }
     }
 }
@@ -90,7 +85,34 @@ impl Scheme {
 }
 
 #[derive(Debug)]
-pub struct TypeChecker;
+pub struct TypeChecker<'a> {
+    pub(crate) symbol_table: &'a mut SymbolTable,
+    session: SharedCompilationSession,
+}
+
+#[allow(unused)]
+macro_rules! indented_println {
+    // Matcher:
+    // - $env: An expression that evaluates to your environment struct.
+    // - $fmt: The literal format string.
+    // - $($args:expr)*: A repeating sequence of zero or more comma-separated expressions
+    //   for the arguments.
+    ($env:expr, $fmt:literal $(, $args:expr)*) => {
+        // Expander:
+        // This is the code that will be generated.
+        println!(
+            // `concat!` joins the initial indent placeholder "{}" with your format string.
+            // e.g., concat!("{}", "Infer node {}: {:?}") -> "{}Infer node {}: {:?}"
+            concat!("{}", $fmt),
+
+            // The first argument is always the calculated whitespace string.
+            (0..$env.scopes.len()).map(|_| "  ").collect::<String>(),
+
+            // The subsequent, user-provided arguments are passed along.
+            $($args),*
+        );
+    };
+}
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
     if let Some(expected) = expected {
@@ -98,7 +120,10 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
             (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => (),
             (typ, expected) => {
                 if typ != expected {
-                    return Err(TypeError::UnexpectedType(expected.clone(), actual.clone()));
+                    return Err(TypeError::UnexpectedType(
+                        expected.to_string(),
+                        actual.to_string(),
+                    ));
                 }
             }
         }
@@ -107,50 +132,49 @@ fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> 
     Ok(actual)
 }
 
-impl TypeChecker {
-    pub fn infer(
-        &self,
-        source_file: SourceFile<NameResolved>,
-        symbol_table: &mut SymbolTable,
-        env: &mut Environment,
-    ) -> SourceFile<Typed> {
-        self.infer_without_prelude(env, source_file, symbol_table)
+impl<'a> TypeChecker<'a> {
+    pub fn new(session: SharedCompilationSession, symbol_table: &'a mut SymbolTable) -> Self {
+        Self {
+            session,
+            symbol_table,
+        }
     }
 
-    pub fn hoist(
-        &self,
-        items: &[ExprID],
+    pub fn infer(
+        &mut self,
+        source_file: SourceFile<NameResolved>,
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-        symbol_table: &mut SymbolTable,
-    ) {
-        if let Err((id, err)) = self.hoist_structs(items, env, source_file, symbol_table) {
-            source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        }
-
-        if let Err((id, err)) = self.hoist_enums(items, env, source_file, symbol_table) {
-            source_file.diagnostics.insert(Diagnostic::typing(id, err));
-        }
-
-        self.hoist_functions(items, env, source_file);
+    ) -> SourceFile<Typed> {
+        self.infer_without_prelude(env, source_file)
     }
 
     pub fn infer_without_prelude(
-        &self,
+        &mut self,
         env: &mut Environment,
         mut source_file: SourceFile<NameResolved>,
-        symbol_table: &mut SymbolTable,
     ) -> SourceFile<Typed> {
         let root_ids = source_file.root_ids();
-        synthesize_inits(&mut source_file, symbol_table, env);
-        self.hoist(&root_ids, env, &mut source_file, symbol_table);
+        synthesize_inits(&mut source_file, self.symbol_table, env);
+
+        // Just define names for all of the funcs, structs and enums
+        if let Err(e) = self.hoist(&root_ids, env, &mut source_file)
+            && let Ok(mut lock) = self.session.lock()
+        {
+            lock.add_diagnostic(
+                source_file.path.clone(),
+                Diagnostic::typing(*root_ids.first().unwrap_or(&0), e),
+            );
+        }
 
         let mut typed_roots = vec![];
         for id in &root_ids {
+            #[allow(clippy::unwrap_used)]
             match self.infer_node(id, env, &None, &mut source_file) {
                 Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
                 Err(e) => {
-                    source_file.diagnostics.insert(Diagnostic::typing(*id, e));
+                    if let Ok(mut lock) = self.session.lock() {
+                        lock.add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e))
+                    }
                 }
             }
         }
@@ -158,14 +182,39 @@ impl TypeChecker {
         source_file.to_typed()
     }
 
+    pub fn infer_nodes(
+        &mut self,
+        ids: &[ExprID],
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Vec<Ty>, TypeError> {
+        let mut result = vec![];
+        for id in ids {
+            result.push(self.infer_node(id, env, &None, source_file)?);
+        }
+        Ok(result)
+    }
+
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn infer_node(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let expr = source_file.get(id).unwrap().clone();
+        if let Some(typed_expr) = env.typed_exprs.get(id)
+            && expected.is_none()
+        {
+            log::trace!("Already inferred {typed_expr:?}, returning from cache");
+            return Ok(typed_expr.ty.clone());
+        }
+
+        let Some(expr) = source_file.get(id).cloned() else {
+            return Err(TypeError::Unknown(format!("No expr found with id {id}")));
+        };
+
+        log::trace!("Infer node [{id}]: {expr:?}");
         let mut ty = match &expr {
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
@@ -185,9 +234,20 @@ impl TypeChecker {
             Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
             Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
-            Expr::TypeRepr(name, generics, is_type_parameter) => {
-                self.infer_type_repr(env, name, generics, is_type_parameter, source_file)
-            }
+            Expr::TypeRepr {
+                name,
+                generics,
+                conformances,
+                introduces_type,
+            } => self.infer_type_repr(
+                id,
+                env,
+                name,
+                generics,
+                conformances,
+                introduces_type,
+                source_file,
+            ),
             Expr::FuncTypeRepr(args, ret, _is_type_parameter) => {
                 self.infer_func_type_repr(env, args, ret, expected, source_file)
             }
@@ -203,7 +263,6 @@ impl TypeChecker {
                 captures,
                 ..
             } => self.infer_func(
-                id,
                 env,
                 name,
                 generics,
@@ -211,17 +270,14 @@ impl TypeChecker {
                 captures,
                 body,
                 ret,
-                expected,
                 source_file,
             ),
             Expr::Let(Name::Resolved(symbol_id, _), rhs) => {
                 self.infer_let(env, *symbol_id, rhs, expected, source_file)
             }
-            Expr::Variable(Name::Resolved(symbol_id, name), _) => {
-                self.infer_variable(env, *symbol_id, name)
-            }
-            Expr::Parameter(_, _) => {
-                panic!("unresolved parameter: {:?}", source_file.get(id).unwrap())
+            Expr::Variable(name, _) => self.infer_variable(env, name),
+            Expr::Parameter(name @ Name::Resolved(_, _), param_ty) => {
+                self.infer_parameter(name, param_ty, env, source_file)
             }
             Expr::Tuple(types) => self.infer_tuple(types, env, source_file),
             Expr::Unary(_token_kind, rhs) => self.infer_unary(rhs, expected, env, source_file),
@@ -229,29 +285,68 @@ impl TypeChecker {
                 self.infer_binary(id, lhs, rhs, op, expected, env, source_file)
             }
             Expr::Block(_) => self.infer_block(id, env, expected, source_file),
-            Expr::EnumDecl(_, _generics, _body) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
-            Expr::EnumVariant(_, _) => Ok(env.typed_exprs.get(id).unwrap().clone().ty),
+            Expr::EnumDecl {
+                name: Name::Resolved(symbol_id, _),
+                body,
+                ..
+            } => self.infer_enum_decl(symbol_id, body, env, source_file),
+            Expr::EnumVariant(name, values) => {
+                self.infer_enum_variant(name, values, expected, env, source_file)
+            }
             Expr::Match(pattern, items) => self.infer_match(env, pattern, items, source_file),
             Expr::MatchArm(pattern, body) => {
                 self.infer_match_arm(env, pattern, body, expected, source_file)
             }
             Expr::PatternVariant(_, _, _items) => self.infer_pattern_variant(id, env),
             Expr::Member(receiver, member_name) => {
-                self.infer_member(id, env, receiver, member_name, source_file)
+                self.infer_member(id, env, receiver, member_name, expected, source_file)
             }
-            Expr::Pattern(pattern) => self.infer_pattern_expr(env, pattern, expected, source_file),
-            Expr::Variable(Name::Raw(name_str), _) => Err(TypeError::Unresolved(name_str.clone())),
-            Expr::Variable(Name::_Self(sym), _) => env.instantiate_symbol(*sym),
+            Expr::Pattern(pattern) => {
+                self.infer_pattern_expr(id, env, pattern, expected, source_file)
+            }
             Expr::Return(rhs) => self.infer_return(rhs, env, expected, source_file),
             Expr::LiteralArray(items) => self.infer_array(items, env, expected, source_file),
-            Expr::Struct(name, generics, body) => {
-                self.infer_struct(name, generics, body, env, expected, source_file)
-            }
+            Expr::Struct {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.infer_struct(
+                name,
+                generics,
+                conformances,
+                body,
+                env,
+                expected,
+                source_file,
+            ),
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             Expr::Init(Some(struct_id), func_id) => {
-                self.infer_init(struct_id, func_id, env, source_file)
+                self.infer_init(struct_id, func_id, expected, env, source_file)
             }
+            Expr::Property {
+                name,
+                type_repr,
+                default_value,
+            } => self.infer_property(id, name, type_repr, default_value, env, source_file),
             Expr::Break => Ok(Ty::Void),
+            Expr::ProtocolDecl {
+                name,
+                associated_types,
+                conformances,
+                ..
+            } => self.infer_protocol(name, associated_types, conformances, env, source_file),
+            Expr::FuncSignature {
+                params,
+                generics,
+                ret,
+                ..
+            } => {
+                let params = self.infer_nodes(params, env, source_file)?;
+                let generics = self.infer_nodes(generics, env, source_file)?;
+                let ret = self.infer_node(ret, env, &None, source_file)?;
+                Ok(Ty::Func(params, ret.into(), generics))
+            }
             _ => Err(TypeError::Unknown(format!(
                 "Don't know how to type check {expr:?}"
             ))),
@@ -268,24 +363,131 @@ impl TypeChecker {
                 env.typed_exprs.insert(*id, typed_expr);
             }
             Err(e) => {
-                source_file
-                    .diagnostics
-                    .insert(Diagnostic::typing(*id, e.clone()));
-                ty = Err(TypeError::Handled)
+                log::error!("error inferring {:?}: {:?}", source_file.get(id), e);
+                if let Ok(mut lock) = self.session.lock() {
+                    lock.add_diagnostic(
+                        source_file.path.clone(),
+                        Diagnostic::typing(*id, e.clone()),
+                    );
+                }
+                ty = Err(TypeError::Handled);
             }
         }
 
         ty
     }
 
-    fn infer_init(
-        &self,
-        struct_id: &SymbolID,
-        func_id: &ExprID,
+    fn infer_protocol(
+        &mut self,
+        name: &Name,
+        associated_types: &[ExprID],
+        conformances: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let inferred = self.infer_node(func_id, env, &None, source_file)?;
+        let mut inferred_associated_types: Vec<Ty> = vec![];
+        for generic in associated_types {
+            inferred_associated_types
+                .push(self.infer_node(generic, env, &None, source_file)?.clone());
+        }
+
+        for id in conformances {
+            self.infer_node(id, env, &None, source_file)?;
+        }
+
+        let Name::Resolved(symbol_id, _) = name else {
+            return Err(TypeError::Unresolved(name.name_str()));
+        };
+
+        Ok(Ty::Protocol(*symbol_id, inferred_associated_types))
+    }
+
+    fn infer_property(
+        &mut self,
+        expr_id: &ExprID,
+        name: &Name,
+        type_repr: &Option<ExprID>,
+        default_value: &Option<ExprID>,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let type_repr = type_repr
+            .map(|id| self.infer_node(&id, env, &None, source_file))
+            .transpose()?;
+        let default_value = default_value
+            .map(|id| self.infer_node(&id, env, &None, source_file))
+            .transpose()?;
+
+        let ty = match (type_repr, default_value) {
+            (Some(type_repr), Some(default_value)) => {
+                env.constrain_equality(*expr_id, type_repr.clone(), default_value);
+                type_repr
+            }
+            (None, Some(default_value)) => default_value,
+            (Some(type_repr), None) => type_repr,
+            (None, None) => {
+                env.placeholder(expr_id, name.name_str(), &name.try_symbol_id(), vec![])
+            }
+        };
+
+        Ok(ty)
+    }
+
+    fn infer_enum_decl(
+        &self,
+        enum_id: &SymbolID,
+        _body: &ExprID,
+        env: &mut Environment,
+        _source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let scheme = env.lookup_symbol(enum_id)?;
+        Ok(scheme.ty.clone())
+    }
+
+    fn infer_enum_variant(
+        &mut self,
+        _name: &Name,
+        values: &[ExprID],
+        expected: &Option<Ty>,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let Some(Ty::Enum(enum_id, _)) = expected else {
+            unreachable!("should always be called with expected = Enum");
+        };
+        let values = self.infer_nodes(values, env, source_file)?;
+        Ok(Ty::EnumVariant(*enum_id, values))
+    }
+
+    fn infer_parameter(
+        &mut self,
+        name: &Name,
+        param_ty: &Option<ExprID>,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let param_ty = if let Some(param_ty) = &param_ty {
+            self.infer_node(param_ty, env, &None, source_file)?
+        } else {
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), vec![]))
+        };
+
+        // Parameters are monomorphic inside the function body
+        let scheme = Scheme::new(param_ty.clone(), vec![]);
+        env.declare(name.try_symbol_id(), scheme)?;
+
+        Ok(param_ty)
+    }
+
+    fn infer_init(
+        &mut self,
+        struct_id: &SymbolID,
+        func_id: &ExprID,
+        expected: &Option<Ty>,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let inferred = self.infer_node(func_id, env, expected, source_file)?;
         let params = match inferred {
             Ty::Func(params, _, _) => params,
             Ty::Closure {
@@ -302,11 +504,13 @@ impl TypeChecker {
         Ok(Ty::Init(*struct_id, params))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_struct(
-        &self,
+        &mut self,
         name: &Name,
         generics: &[ExprID],
-        body: &ExprID,
+        conformances: &[ExprID],
+        _body: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
@@ -319,28 +523,19 @@ impl TypeChecker {
             );
         }
 
+        for id in conformances {
+            self.infer_node(id, env, expected, source_file)?;
+        }
+
         let Name::Resolved(symbol_id, _) = name else {
             return Err(TypeError::Unresolved(name.name_str()));
         };
-
-        let Some(Expr::Block(items)) = source_file.get(body).cloned() else {
-            unreachable!()
-        };
-
-        for item in items {
-            match source_file.get(&item) {
-                Some(Expr::Property { .. }) => continue, // Properties are handled by the hoisting
-                _ => {
-                    self.infer_node(&item, env, expected, source_file)?;
-                }
-            }
-        }
 
         Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
 
     fn infer_array(
-        &self,
+        &mut self,
         items: &[ExprID],
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -355,27 +550,27 @@ impl TypeChecker {
         let ty = tys
             .into_iter()
             .last()
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element, vec![])));
 
         Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
 
     fn infer_return(
-        &self,
+        &mut self,
         rhs: &Option<ExprID>,
         env: &mut Environment,
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        if let Some(rhs) = rhs {
-            self.infer_node(rhs, env, expected, source_file)
+        if let Some(rhs_id) = rhs {
+            self.infer_node(rhs_id, env, expected, source_file)
         } else {
             Ok(Ty::Void)
         }
     }
 
     fn infer_loop(
-        &self,
+        &mut self,
         cond: &Option<ExprID>,
         body: &ExprID,
         env: &mut Environment,
@@ -391,7 +586,7 @@ impl TypeChecker {
     }
 
     fn infer_if(
-        &self,
+        &mut self,
         condition: &ExprID,
         consequence: &ExprID,
         alternative: &Option<ExprID>,
@@ -409,9 +604,10 @@ impl TypeChecker {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_call(
-        &self,
-        _id: &ExprID,
+        &mut self,
+        id: &ExprID,
         env: &mut Environment,
         callee: &ExprID,
         type_args: &[ExprID],
@@ -419,12 +615,11 @@ impl TypeChecker {
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        log::info!("infer call");
         let mut ret_var = if let Some(expected) = expected {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn);
+            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn, vec![]);
             Ty::TypeVar(call_return_var)
         };
 
@@ -439,52 +634,64 @@ impl TypeChecker {
             arg_tys.push(ty);
         }
 
-        match source_file.get(callee).cloned() {
+        let callee_expr = source_file.get(callee);
+        match &callee_expr {
             // Handle struct initialization
             Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
-                if env.is_struct_symbol(&symbol_id) =>
+                if env.is_struct_symbol(symbol_id) =>
             {
-                let struct_def = env.lookup_struct(&symbol_id).unwrap();
-
-                // TODO: Handle multiple initializers
-                // TODO: Handle multiple initializers
-                log::info!("looking up initializer for struct: {struct_def:?}");
-                let Some(Expr::Init(_, func_id)) =
-                    source_file.get(&struct_def.initializers[0].1).cloned()
-                else {
-                    return Err(TypeError::Unknown(
-                        "Unable to determine initializer for struct".into(),
-                    ));
+                let Some(struct_def) = env.lookup_struct(symbol_id).cloned() else {
+                    return Err(TypeError::Unknown(format!(
+                        "Could not resolve symbol {symbol_id:?}"
+                    )));
                 };
 
-                // Instantiate the struct type to get fresh type variables for its generics
-                let instantiated = env.instantiate_symbol(symbol_id)?;
+                let placeholder =
+                    env.placeholder(callee, format!("init({symbol_id:?})"), symbol_id, vec![]);
 
-                // Infer the init function type
-                let init_func_ty = self.infer_node(&func_id, env, expected, source_file)?;
-
-                let Ty::Func(params, _, _) = init_func_ty else {
-                    return Err(TypeError::Unknown("Could not get init func".into()));
-                };
-
-                // Create the Init type with the instantiated struct's symbol and the function's params
-                let init_ty = Ty::Init(symbol_id, params.clone());
-
-                // Insert the typed expression for the callee (the struct name being called)
                 env.typed_exprs.insert(
                     *callee,
                     TypedExpr {
                         id: *callee,
-                        expr: source_file.get(callee).cloned().unwrap(),
-                        ty: init_ty.clone(),
+                        #[allow(clippy::expect_used)]
+                        expr: callee_expr
+                            .expect("we're already in the Some() arm")
+                            .clone(),
+                        ty: placeholder.clone(),
                     },
                 );
 
-                // Constrain the Init type parameters to match the provided arguments
-                env.constrain_equality(*callee, Ty::Init(symbol_id, arg_tys), init_ty);
+                // If there aren't explicit type params specified, create some placeholders. I guess for now
+                // if there are _some_ we'll just use positional values?
+                let mut type_args = vec![];
 
-                // The return type is the instantiated struct type
-                ret_var = instantiated;
+                if !struct_def.type_parameters.is_empty() {
+                    for (i, type_arg) in struct_def.type_parameters.iter().enumerate() {
+                        type_args.push(if inferred_type_args.len().saturating_sub(1) > i {
+                            inferred_type_args[i].clone()
+                        } else {
+                            env.placeholder(
+                                id,
+                                format!("Call Placeholder {type_arg:?}"),
+                                &type_arg.id,
+                                vec![],
+                            )
+                        });
+                    }
+                }
+
+                ret_var = env.instantiate(&Scheme {
+                    ty: Ty::Struct(*symbol_id, type_args),
+                    unbound_vars: struct_def.canonical_type_vars(),
+                });
+
+                env.constraints.push(Constraint::InitializerCall {
+                    expr_id: *callee,
+                    initializes_id: *symbol_id,
+                    args: arg_tys.clone(),
+                    func_ty: placeholder.clone(),
+                    result_ty: ret_var.clone(),
+                });
             }
             _ => {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
@@ -498,7 +705,7 @@ impl TypeChecker {
     }
 
     fn infer_assignment(
-        &self,
+        &mut self,
         env: &mut Environment,
         lhs: &ExprID,
         rhs: &ExprID,
@@ -514,98 +721,81 @@ impl TypeChecker {
         Ok(rhs_ty)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_type_repr(
-        &self,
+        &mut self,
+        id: &ExprID,
         env: &mut Environment,
         name: &Name,
         generics: &[ExprID],
+        conformances: &[ExprID],
         is_type_parameter: &bool,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let name = name.clone();
-
-        let ty = match &name {
-            Name::Raw(raw_name) => {
-                if let Some(builtin_ty) = match_builtin(&Name::Raw(raw_name.clone())) {
-                    builtin_ty
-                } else {
-                    // Raw name that is not a builtin.
-                    // If it's a type parameter declaration, create a new type variable.
-                    // Otherwise, it's an unresolved type name (error) or needs other handling.
-                    // For now, to allow forward enum declarations, we might make it a TypeVar.
-                    // This part might need more robust error handling for unknown types.
-                    if *is_type_parameter {
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
-                    } else {
-                        // Attempting to use an unresolved raw name as a type.
-                        // This should ideally be an error or a placeholder needing resolution.
-                        // For now, create a type variable, similar to previous behavior.
-                        log::warn!("Encountered unresolved raw type name in usage: {raw_name:?}");
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
-                    }
-                }
-            }
-            Name::Resolved(symbol_id, name_str) => {
-                if let Some(builtin_ty) =
-                    match_builtin(&Name::Resolved(*symbol_id, name_str.clone()))
-                {
-                    builtin_ty
-                } else if *is_type_parameter {
-                    // Declaration site of a type parameter (e.g., T in `enum Option<T>`).
-                    // Create a new type variable for it.
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::TypeRepr(name.clone())))
-                } else {
-                    // Usage of a resolved type name (e.g., T in `case some(T)` or `Int`).
-                    // Instantiate its scheme from the environment.
-                    env.instantiate_symbol(*symbol_id)?
-                }
-            }
-            Name::_Self(symbol_id) => env.instantiate_symbol(*symbol_id)?,
-        };
-
-        // For explicit lists of generic types like <Int> in Option<Int>, we need to handle the generics
-        if !generics.is_empty() && !is_type_parameter {
-            // First, infer all the generic arguments
-            let mut generic_types = Vec::new();
-            for generic_id in generics {
-                let generic_ty = self.infer_node(generic_id, env, &None, source_file)?;
-                generic_types.push(generic_ty);
-            }
-
-            // Now when we have a resolved symbol for a generic type
-            if let Name::Resolved(symbol_id, _) = name {
-                let ty = match env.lookup_type(&symbol_id) {
-                    Some(TypeDef::Enum(_)) => Ty::Enum(symbol_id, generic_types),
-                    Some(TypeDef::Struct(def)) => def.type_repr(&generic_types),
-                    _ => panic!(
-                        "Didn't get type for symbol {:?} {:?}",
-                        symbol_id,
-                        env.lookup_enum(&symbol_id)
-                    ),
-                };
-
-                // Instead of just instantiating, we need to build the concrete type
-                // For enums, this means Ty::Enum(symbol_id, generic_types)
-                return Ok(ty);
-            }
-        }
+        let symbol_id = name.try_symbol_id();
 
         if *is_type_parameter {
-            // This is for the T in `enum Option<T>`. Name should be resolved by name_resolver.
-            let Name::Resolved(symbol_id, _) = name else {
-                panic!("Type parameter name {name:?} was not resolved during its declaration")
+            let mut unbound_vars = vec![];
+            let mut type_constraints = vec![];
+
+            for id in conformances {
+                let ty = self.infer_node(id, env, &None, source_file)?;
+                let Ty::Protocol(protocol_id, associated_types) = ty.clone() else {
+                    return Err(TypeError::Unknown(format!("{ty:?} is not a protocol",)));
+                };
+
+                unbound_vars.extend(associated_types.iter().filter_map(|t| {
+                    if let Ty::TypeVar(var) = t {
+                        Some(var.clone())
+                    } else {
+                        None
+                    }
+                }));
+
+                type_constraints.push(TypeConstraint::Conforms {
+                    protocol_id,
+                    associated_types: associated_types.clone(),
+                });
+            }
+
+            let scheme = Scheme {
+                ty: env.placeholder(id, name.name_str(), &symbol_id, type_constraints),
+                unbound_vars,
             };
-            log::debug!("Declaring type parameter {symbol_id:?} ({name:?}) with ty {ty:?}");
-            // Type parameters are monomorphic within their defining generic scope.
-            // So, references to this type parameter within this scope refer to this 'ty'.
-            env.declare(symbol_id, Scheme::new(ty.clone(), vec![]));
+
+            env.declare(symbol_id, scheme.clone())?;
+
+            return Ok(scheme.ty);
         }
 
-        Ok(ty)
+        // If there are no generic arguments (`let x: Int`), we are done.
+        if generics.is_empty() {
+            return Ok(env.ty_for_symbol(id, name.name_str(), &symbol_id, &[]));
+        }
+
+        let ty_scheme = env.lookup_symbol(&symbol_id)?.clone();
+        let mut substitutions = Substitutions::default();
+        for (var, generic_id) in ty_scheme.unbound_vars.iter().zip(generics) {
+            // Recursively get arg_ty
+            let arg_ty = self.infer_node(generic_id, env, &None, source_file)?;
+            substitutions.insert(var.clone(), arg_ty);
+        }
+
+        let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
+
+        // indented_println!(
+        //     env,
+        //     "type repr {:?} -> {:?} {:?}",
+        //     name,
+        //     instantiated,
+        //     substitutions
+        // );
+
+        Ok(instantiated)
     }
 
     fn infer_func_type_repr(
-        &self,
+        &mut self,
         env: &mut Environment,
         args: &[ExprID],
         ret: &ExprID,
@@ -618,13 +808,12 @@ impl TypeChecker {
         }
 
         let inferred_ret = self.infer_node(ret, env, expected, source_file)?;
-
         let ty = Ty::Func(inferred_args, Box::new(inferred_ret), vec![]);
         Ok(ty)
     }
 
     fn infer_tuple_type_repr(
-        &self,
+        &mut self,
         env: &mut Environment,
         types: &Vec<ExprID>,
         expected: &Option<Ty>,
@@ -639,8 +828,7 @@ impl TypeChecker {
 
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
-        &self,
-        id: &ExprID,
+        &mut self,
         env: &mut Environment,
         name: &Option<Name>,
         generics: &[ExprID],
@@ -648,122 +836,84 @@ impl TypeChecker {
         captures: &[SymbolID],
         body: &ExprID,
         ret: &Option<ExprID>,
-        expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let mut func_var = None;
-
-        if let Some(Name::Resolved(symbol_id, _)) = name {
-            let type_var = env.new_type_variable(TypeVarKind::FuncNameVar(*symbol_id));
-            func_var = Some(type_var.clone());
-            let scheme = env.generalize(&Ty::TypeVar(type_var));
-            log::debug!("Declared scheme for named func {symbol_id:?} {scheme:?}");
-            env.declare(*symbol_id, scheme);
-        }
-
         env.start_scope();
+
+        if let Some(Name::Resolved(symbol_id, _)) = name
+            && let Ok(scheme) = env.lookup_symbol(symbol_id).cloned()
+        {
+            env.declare(*symbol_id, scheme.clone())?;
+        };
 
         let mut inferred_generics = vec![];
         for generic in generics {
-            inferred_generics.push(self.infer_node(generic, env, expected, source_file)?);
-        }
-
-        // Infer generic type parameters
-        let mut generic_vars = vec![];
-        for generic_id in generics {
-            let ty = self.infer_node(generic_id, env, &None, source_file)?;
-            generic_vars.push(ty);
-
-            // If this is a type parameter declaration, we need to declare it in the environment
-            if let Expr::TypeRepr(Name::Resolved(symbol_id, _), _, true) =
-                source_file.get(generic_id).unwrap()
+            if let Some(Expr::TypeRepr {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            }) = source_file.get(generic).cloned()
             {
-                // The type was already created by infer_node, so we just need to get it
-                if let Some(typed_expr) = env.typed_exprs.get(generic_id) {
-                    env.declare(*symbol_id, Scheme::new(typed_expr.ty.clone(), vec![]));
-                }
+                let ty = self.infer_node(generic, env, &None, source_file)?;
+                inferred_generics.push(ty.clone());
+                let scheme = Scheme::new(ty.clone(), vec![]);
+                env.declare(symbol_id, scheme)?;
+            } else {
+                return Err(TypeError::Unresolved(
+                    "could not resolve generic symbol".into(),
+                ));
             }
         }
 
-        let expected_body_ty = if let Some(ret) = ret {
+        let expected_ret_ty = if let Some(ret) = ret {
             Some(self.infer_node(ret, env, &None, source_file)?)
         } else {
             None
         };
 
-        let ret_ty: Option<Ty> = ret
-            .as_ref()
-            .map(|repr| self.infer_node(repr, env, &None, source_file))
-            .transpose()
-            .unwrap_or(None);
-
         let mut param_vars: Vec<Ty> = vec![];
         for param in params.iter() {
-            let expr = source_file.get(param).cloned();
-            if let Some(Expr::Parameter(Name::Resolved(symbol_id, _), ty)) = expr {
-                let var_ty = if let Some(ty_id) = &ty {
-                    self.infer_node(ty_id, env, expected, source_file)?
-                } else {
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam))
-                };
-
-                // Parameters are monomorphic inside the function body
-                let scheme = Scheme::new(var_ty.clone(), vec![]);
-                env.declare(symbol_id, scheme);
-                param_vars.push(var_ty.clone());
-                env.typed_exprs.insert(
-                    *param,
-                    TypedExpr {
-                        id: *param,
-                        expr: expr.unwrap(),
-                        ty: var_ty,
-                    },
-                );
-            }
+            let param_ty = self.infer_node(param, env, &None, source_file)?;
+            param_vars.push(param_ty);
         }
 
-        let body_ty = self.infer_node(body, env, &expected_body_ty, source_file)?;
+        let body_ty = self.infer_node(body, env, &expected_ret_ty, source_file)?;
+        let mut ret_ty = body_ty.clone();
 
-        if let Some(ret_type) = ret_ty {
-            env.constrain_equality(ret.unwrap(), body_ty.clone(), ret_type);
+        if let Some(ret_type) = expected_ret_ty
+            && let Some(ret_id) = ret
+        {
+            ret_ty = ret_type.clone();
+            env.constrain_equality(*ret_id, body_ty.clone(), ret_type.clone());
         }
 
         env.end_scope();
 
-        let func_ty = Ty::Func(param_vars.clone(), Box::new(body_ty), inferred_generics);
+        let func_ty = Ty::Func(param_vars.clone(), Box::new(ret_ty), inferred_generics);
         let inferred_ty = if captures.is_empty() {
             func_ty
         } else {
-            let capture_tys = captures
-                .iter()
-                .map(|c| env.instantiate_symbol(*c))
-                .filter_map(|c| c.ok())
-                .collect();
-
             Ty::Closure {
                 func: func_ty.into(),
-                captures: capture_tys,
+                captures: captures.to_vec(),
             }
         };
 
-        if let Some(func_var) = func_var {
-            env.constrain_equality(*id, Ty::TypeVar(func_var), inferred_ty.clone());
-
-            if let Some(Name::Resolved(symbol_id, _)) = name {
-                let scheme = if env.scopes.len() > 1 {
-                    Scheme::new(inferred_ty.clone(), vec![])
-                } else {
-                    env.generalize(&inferred_ty)
-                };
-                env.scopes.last_mut().unwrap().insert(*symbol_id, scheme);
-            }
+        if let Some(Name::Resolved(symbol_id, _)) = name {
+            // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
+            env.declare(
+                *symbol_id,
+                Scheme {
+                    ty: inferred_ty.clone(),
+                    unbound_vars: vec![],
+                },
+            )?;
         }
 
         Ok(inferred_ty)
     }
 
     fn infer_let(
-        &self,
+        &mut self,
         env: &mut Environment,
         symbol_id: SymbolID,
         rhs: &Option<ExprID>,
@@ -775,40 +925,35 @@ impl TypeChecker {
         } else if let Some(expected) = expected {
             expected.clone()
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
         };
 
-        let scheme = if rhs.is_some() {
-            env.generalize(&rhs_ty)
-        } else {
-            // no init ⇒ treat as a single hole, not a forall
-            Scheme {
-                unbound_vars: vec![],
-                ty: rhs_ty.clone(),
-            }
-        };
-
-        env.scopes
-            .last_mut()
-            .unwrap()
-            .insert(symbol_id, scheme.clone());
+        let scheme = Scheme::new(rhs_ty.clone(), vec![]);
+        env.declare(symbol_id, scheme)?;
 
         Ok(rhs_ty)
     }
 
-    fn infer_variable(
-        &self,
-        env: &mut Environment,
-        symbol_id: SymbolID,
-        name: &str,
-    ) -> Result<Ty, TypeError> {
-        let ty = env.instantiate_symbol(symbol_id);
-        log::trace!("instantiated {symbol_id:?} ({name:?}) with {ty:?}");
-        ty
+    fn infer_variable(&self, env: &mut Environment, name: &Name) -> Result<Ty, TypeError> {
+        match name {
+            Name::_Self(_sym) => {
+                if let Some(self_) = env.selfs.last() {
+                    Ok(self_.clone())
+                } else {
+                    Err(TypeError::Unknown("No value found for `self`".into()))
+                }
+            }
+            Name::Resolved(symbol_id, _) => {
+                let scheme = env.lookup_symbol(symbol_id)?.clone();
+                let ty = env.instantiate(&scheme);
+                Ok(ty)
+            }
+            Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
+        }
     }
 
     fn infer_tuple(
-        &self,
+        &mut self,
         types: &[ExprID],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
@@ -826,7 +971,7 @@ impl TypeChecker {
     }
 
     fn infer_unary(
-        &self,
+        &mut self,
         rhs: &ExprID,
         expected: &Option<Ty>,
         env: &mut Environment,
@@ -837,7 +982,7 @@ impl TypeChecker {
 
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
-        &self,
+        &mut self,
         _id: &ExprID,
         lhs_id: &ExprID,
         rhs_id: &ExprID,
@@ -868,7 +1013,7 @@ impl TypeChecker {
     }
 
     fn infer_block(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         expected: &Option<Ty>,
@@ -879,51 +1024,48 @@ impl TypeChecker {
         };
 
         env.start_scope();
-        self.hoist_functions(&items, env, source_file);
+        // self.hoist(&items, env, source_file)?;
 
-        let mut return_exprs: Vec<(ExprID, Ty)> = vec![];
+        let mut block_return_ty = expected.clone();
+        let mut ret_tys = vec![];
 
-        let return_ty: Ty = {
-            let mut return_ty: Ty = Ty::Void;
+        for (i, item_id) in items.iter().enumerate() {
+            let Some(item_expr) = source_file.get(item_id).cloned() else {
+                continue;
+            };
 
-            for (i, item) in items.iter().enumerate() {
-                let ty = if i == items.len() - 1 {
-                    return_ty = self.infer_node(item, env, expected, source_file)?;
-                    return_ty.clone()
-                } else {
-                    self.infer_node(item, env, &None, source_file)?
-                };
+            if let Expr::Return(_) = item_expr {
+                // Explicit returns count as a return value (duh)
+                let ty = self.infer_node(item_id, env, expected, source_file)?;
+                ret_tys.push(ty.clone());
+                block_return_ty = Some(ty);
+            } else if i == items.len() - 1 {
+                // The last item counts as a return value
+                let ty = self.infer_node(item_id, env, expected, source_file)?;
+                block_return_ty = Some(ty);
 
-                if let Some(Expr::Return(_)) = source_file.get(item) {
-                    return_exprs.push((*item, ty));
+                // If we have any explicit returns, we need to constrain equality of this with them
+                for ret_ty in &ret_tys {
+                    env.constrain_equality(
+                        *item_id,
+                        block_return_ty.clone().unwrap_or(Ty::Void),
+                        ret_ty.clone(),
+                    );
                 }
+            } else {
+                block_return_ty = Some(self.infer_node(item_id, env, &None, source_file)?);
             }
-
-            return_ty
-        };
-
-        let return_ty = if let Some(expected) = expected {
-            if return_ty != *expected {
-                env.constrain_equality(*id, return_ty, expected.clone());
-            }
-
-            expected.clone()
-        } else {
-            return_ty.clone()
-        };
-
-        // Make sure all return exprs agree
-        for (id, ty) in return_exprs {
-            env.constrain_equality(id, ty, return_ty.clone());
         }
 
         env.end_scope();
 
-        Ok(return_ty)
+        log::warn!("infer_block: {block_return_ty:?}");
+
+        Ok(block_return_ty.unwrap_or(Ty::Void))
     }
 
     fn infer_match(
-        &self,
+        &mut self,
         env: &mut Environment,
         pattern: &ExprID,
         arms: &[ExprID],
@@ -936,13 +1078,13 @@ impl TypeChecker {
             .collect::<Result<Vec<_>, _>>()?;
 
         // TODO: Make sure the return type is the same for all arms
-        let ret_ty = arms_ty.last().unwrap().clone();
+        let ret_ty = arms_ty.last().cloned().unwrap_or(Ty::Void);
 
         Ok(ret_ty)
     }
 
     fn infer_match_arm(
-        &self,
+        &mut self,
         env: &mut Environment,
         pattern: &ExprID,
         body: &ExprID,
@@ -957,46 +1099,41 @@ impl TypeChecker {
     }
 
     fn infer_pattern_variant(&self, _id: &ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
-        todo!()
+        Ok(Ty::Void)
     }
 
     fn infer_member(
-        &self,
+        &mut self,
         id: &ExprID,
         env: &mut Environment,
         receiver: &Option<ExprID>,
         member_name: &str,
+        expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         match receiver {
             None => {
                 // Unqualified: .some
                 // Create a type variable that will be constrained later
-                let member_var = env.new_type_variable(TypeVarKind::Member);
+                let ret = if let Some(expected) = expected {
+                    expected.clone()
+                } else {
+                    let member_var =
+                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]);
+                    Ty::TypeVar(member_var.clone())
+                };
 
-                env.constrain_unqualified_member(
-                    *id,
-                    member_name.to_string(),
-                    Ty::TypeVar(member_var.clone()),
-                );
+                env.constrain_unqualified_member(*id, member_name.to_string(), ret.clone());
 
-                Ok(Ty::TypeVar(member_var))
+                Ok(ret)
             }
             Some(receiver_id) => {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
-                let member_var = match receiver_ty {
-                    Ty::Struct(struct_id, _) => env
-                        .lookup_struct(&struct_id)
-                        .and_then(|s| s.member_ty(member_name))
-                        .cloned(),
-                    _ => None,
-                }
-                .clone();
-
-                let member_var =
-                    member_var.unwrap_or(Ty::TypeVar(env.new_type_variable(TypeVarKind::Member)));
+                let member_var = Ty::TypeVar(
+                    env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
+                );
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain_member(
@@ -1012,7 +1149,8 @@ impl TypeChecker {
     }
 
     fn infer_pattern_expr(
-        &self,
+        &mut self,
+        id: &ExprID,
         env: &mut Environment,
         pattern: &Pattern,
         expected: &Option<Ty>,
@@ -1024,17 +1162,18 @@ impl TypeChecker {
             ));
         };
 
-        self.infer_pattern(pattern, env, expected, source_file);
+        self.infer_pattern(id, pattern, env, expected, source_file)?;
         Ok(expected.clone())
     }
 
     fn infer_pattern(
-        &self,
+        &mut self,
+        _id: &ExprID,
         pattern: &Pattern,
         env: &mut Environment,
         expected: &Ty,
         source_file: &mut SourceFile<NameResolved>,
-    ) {
+    ) -> Result<(), TypeError> {
         log::trace!("Inferring pattern: {pattern:?}");
         match pattern {
             Pattern::LiteralInt(_) => (),
@@ -1045,11 +1184,14 @@ impl TypeChecker {
                 log::info!("inferring bind pattern: {name:?}");
                 if let Name::Resolved(symbol_id, _) = name {
                     // Use the expected type for this binding
-                    let scheme = env.generalize(expected);
-                    env.declare(*symbol_id, scheme);
+                    let scheme = Scheme {
+                        ty: expected.clone(),
+                        unbound_vars: vec![],
+                    };
+                    env.declare(*symbol_id, scheme)?;
                 }
             }
-            Pattern::Wildcard => todo!(),
+            Pattern::Wildcard => (),
             Pattern::Variant {
                 variant_name,
                 fields,
@@ -1058,48 +1200,67 @@ impl TypeChecker {
                 // The expected type should be an Enum type
                 match expected {
                     Ty::Enum(enum_id, type_args) => {
-                        // Look up the enum definition to find this variant
-                        if let Some(TypeDef::Enum(enum_def)) = env.types.get(enum_id) {
-                            // Find the variant by name
-                            if let Some(variant) = enum_def.variants.iter().find(|v| {
-                                // Match variant name (comparing the raw string)
-                                v.name == *variant_name
-                            }) {
-                                // Now we have the variant definition and the concrete type arguments
-                                // We need to substitute the enum's type parameters with the actual type args
+                        let Some(enum_def) = env.lookup_enum(enum_id).cloned() else {
+                            return Err(TypeError::Unknown(format!(
+                                "Could not resolve enum with symbol: {enum_id:?}"
+                            )));
+                        };
+                        // Find the variant by name
+                        let Some(variant) = enum_def.variants.iter().find(|v| {
+                            // Match variant name (comparing the raw string)
+                            v.name == *variant_name
+                        }) else {
+                            return Err(TypeError::UnknownVariant(Name::Raw(
+                                variant_name.to_string(),
+                            )));
+                        };
+                        let Ty::EnumVariant(_, values) = &variant.ty else {
+                            unreachable!()
+                        };
+                        // Now we have the variant definition and the concrete type arguments
+                        // We need to substitute the enum's type parameters with the actual type args
 
-                                // Create substitution map: enum type param -> concrete type arg
-                                let mut substitutions = HashMap::new();
-                                for (param_ty, arg_ty) in
-                                    enum_def.type_parameters.iter().zip(type_args.iter())
-                                {
-                                    if let Ty::TypeVar(param_id) = param_ty {
-                                        substitutions.insert(param_id.clone(), arg_ty.clone());
-                                    }
-                                }
+                        // Create substitution map: enum type param -> concrete type arg
+                        let mut substitutions: HashMap<TypeVarID, Ty> = HashMap::new();
+                        for (param, arg_ty) in enum_def.type_parameters.iter().zip(type_args.iter())
+                        {
+                            substitutions.insert(param.type_var.clone(), arg_ty.clone());
+                        }
 
-                                // Apply substitutions to get concrete field types
-                                let concrete_field_types: Vec<Ty> = variant
-                                    .values
-                                    .iter()
-                                    .map(|field_ty| {
-                                        env.substitute_ty_with_map(field_ty.clone(), &substitutions)
-                                    })
-                                    .collect();
+                        // Apply substitutions to get concrete field types
+                        let concrete_field_types: Vec<Ty> = values
+                            .iter()
+                            .map(|field_ty| {
+                                ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                                    field_ty,
+                                    &substitutions,
+                                )
+                            })
+                            .collect();
 
-                                // Now match field patterns with their concrete types
-                                for (field_pattern, field_ty) in
-                                    fields.iter().zip(concrete_field_types.iter())
-                                {
-                                    self.infer_node(
-                                        field_pattern,
-                                        env,
-                                        &Some(field_ty.clone()),
-                                        source_file,
-                                    )
-                                    .unwrap();
-                                }
-                            }
+                        // Now match field patterns with their concrete types
+                        for (field_pattern, field_ty) in
+                            fields.iter().zip(concrete_field_types.iter())
+                        {
+                            self.infer_node(
+                                field_pattern,
+                                env,
+                                &Some(field_ty.clone()),
+                                source_file,
+                            )
+                            .unwrap_or(Ty::Void);
+                        }
+                    }
+                    Ty::EnumVariant(_enum_id, values_types) => {
+                        // Now match field patterns with their concrete types
+                        for (field_pattern, field_ty) in fields.iter().zip(values_types.iter()) {
+                            self.infer_node(
+                                field_pattern,
+                                env,
+                                &Some(field_ty.clone()),
+                                source_file,
+                            )
+                            .unwrap_or(Ty::Void);
                         }
                     }
                     Ty::TypeVar(_) => {
@@ -1108,328 +1269,20 @@ impl TypeChecker {
                         for field_pattern in fields {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
+                                vec![],
                             ));
 
                             self.infer_node(field_pattern, env, &Some(field_ty), source_file)
-                                .unwrap();
+                                .unwrap_or(Ty::Void);
                         }
                     }
-                    _ => panic!("Unhandled pattern variant: {pattern:?}"),
+                    _ => log::error!(
+                        "Unhandled pattern variant: {pattern:?}, expected: {expected:?}"
+                    ),
                 }
-            }
-        }
-    }
-
-    fn hoist_structs(
-        &self,
-        root_ids: &[ExprID],
-        env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-        symbol_table: &mut SymbolTable,
-    ) -> Result<(), (ExprID, TypeError)> {
-        for id in root_ids {
-            let expr = source_file.get(id).unwrap().clone();
-            let Expr::Struct(name, generics, body) = expr else {
-                continue;
-            };
-
-            let Name::Resolved(symbol_id, name_str) = name else {
-                return Err((*id, TypeError::Unresolved(name.name_str())));
-            };
-
-            let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
-                unreachable!()
-            };
-
-            let mut methods: HashMap<String, Method> = Default::default();
-            let mut properties: Vec<Property> = Default::default();
-            let mut type_parameters = vec![];
-            let default_initializers = vec![];
-            let initializers = symbol_table
-                .initializers_for(&symbol_id)
-                .unwrap_or(&default_initializers);
-
-            for id in generics {
-                match self.infer_node(&id, env, &None, source_file) {
-                    Ok(ty) => type_parameters.push(ty),
-                    Err(e) => {
-                        source_file.diagnostics.insert(Diagnostic::typing(id, e));
-                    }
-                }
-            }
-
-            // Manually create the scheme with the type parameters as unbound variables
-            let unbound_vars: Vec<TypeVarID> = type_parameters
-                .iter()
-                .filter_map(|ty| {
-                    if let Ty::TypeVar(var) = ty {
-                        Some(var.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let scheme = Scheme::new(
-                Ty::Struct(symbol_id, type_parameters.clone()),
-                unbound_vars.clone(),
-            );
-            env.declare(symbol_id, scheme.clone());
-
-            // Define a placeholder for `self` references
-            env.register_struct(StructDef::new(
-                symbol_id,
-                name_str.clone(),
-                type_parameters.clone(),
-                properties.clone(),
-                methods.clone(),
-                initializers
-                    .iter()
-                    .map(|i| (source_file.path.clone(), *i))
-                    .collect(),
-            ));
-
-            for expr_id in expr_ids {
-                match &source_file.get(&expr_id).cloned().unwrap() {
-                    Expr::Property {
-                        name,
-                        type_repr,
-                        default_value,
-                    } => {
-                        let mut ty = None;
-                        if let Some(type_repr) = type_repr {
-                            ty = Some(
-                                self.infer_node(type_repr, env, &None, source_file)
-                                    .map_err(|e| (expr_id, e))?,
-                            )
-                        }
-                        if let Some(default_value) = default_value {
-                            ty = Some(
-                                self.infer_node(default_value, env, &None, source_file)
-                                    .map_err(|e| (expr_id, e))?,
-                            );
-                        }
-                        if ty.is_none() {
-                            return Err((expr_id, TypeError::Unknown("No type for method".into())));
-                        }
-
-                        let (symbol, name) = match name.clone() {
-                            Name::Resolved(symbol, name_str) => (symbol, name_str),
-                            _ => unreachable!(),
-                        };
-
-                        log::trace!("Defining property {name:?} {ty:?}");
-                        properties.push(Property::new(name.to_string(), ty.unwrap(), symbol));
-                    }
-                    Expr::Init(_, func_id) => {
-                        self.infer_node(func_id, env, &None, source_file).ok();
-                    }
-                    Expr::Func { name, .. } => {
-                        let name = match name.clone() {
-                            Some(Name::Raw(name_str)) => name_str,
-                            Some(Name::Resolved(_, name_str)) => name_str,
-                            _ => unreachable!(),
-                        };
-
-                        let ty = self
-                            .infer_node(&expr_id, env, &None, source_file)
-                            .map_err(|e| (expr_id, e))?;
-                        log::trace!("Defining property {name:?} {ty:?}");
-                        methods.insert(name.to_string(), Method::new(name.to_string(), ty));
-                    }
-                    _ => {
-                        return {
-                            log::error!("Unhandled property: {:?}", source_file.get(&expr_id));
-                            Err((
-                                *id,
-                                TypeError::Unknown(format!(
-                                    "Unhandled property: {:?}",
-                                    source_file.get(&expr_id)
-                                )),
-                            ))
-                        };
-                    }
-                }
-            }
-
-            let struct_def = StructDef::new(
-                symbol_id,
-                name_str,
-                type_parameters.clone(),
-                properties,
-                methods,
-                initializers
-                    .iter()
-                    .map(|i| (source_file.path.clone(), *i))
-                    .collect(),
-            );
-
-            // Register updated definition
-            env.register_struct(struct_def);
-        }
-
-        Ok(())
-    }
-
-    fn hoist_enums(
-        &self,
-        root_ids: &[ExprID],
-        env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
-        symbol_table: &mut SymbolTable,
-    ) -> Result<(), (ExprID, TypeError)> {
-        for id in root_ids {
-            let expr = source_file.get(id).unwrap().clone();
-
-            if let Expr::EnumDecl(Name::Resolved(enum_id, _), generics, body) = expr.clone() {
-                let Some(Expr::Block(expr_ids)) = source_file.get(&body).cloned() else {
-                    unreachable!()
-                };
-
-                env.start_scope();
-                let mut generic_vars = vec![];
-                for generic_id in generics {
-                    let ty = self
-                        .infer_node(&generic_id, env, &None, source_file)
-                        .map_err(|e| (generic_id, e))?;
-                    generic_vars.push(ty);
-                }
-
-                let enum_ty = Ty::Enum(enum_id, generic_vars.clone());
-                let scheme = env.generalize(&enum_ty);
-                log::trace!("enum scheme: {scheme:?}");
-                env.declare_in_parent(enum_id, scheme);
-
-                let mut methods: HashMap<String, Method> = Default::default();
-                let mut variants: Vec<Ty> = vec![];
-                let mut variant_defs: Vec<EnumVariant> = vec![];
-
-                // Register a placeholder
-                env.register_enum(EnumDef {
-                    name: Some(enum_id),
-                    variants: variant_defs.clone(),
-                    type_parameters: generic_vars.clone(),
-                    methods: methods.clone(),
-                });
-
-                log::debug!("Generic vars: {generic_vars:?}");
-                for expr_id in expr_ids.clone() {
-                    let expr = source_file.get(&expr_id).cloned().unwrap();
-
-                    if let Expr::Func { name, .. } = &expr {
-                        let ty = self
-                            .infer_node(&expr_id, env, &None, source_file)
-                            .map_err(|e| (expr_id, e))?;
-                        let name_str = name.clone().unwrap().name_str();
-                        methods.insert(name_str.clone(), Method::new(name_str, ty));
-                    }
-
-                    if let Expr::EnumVariant(Name::Raw(name_str), values) =
-                        source_file.get(&expr_id).cloned().unwrap()
-                    {
-                        let values: Vec<Ty> = values
-                            .iter()
-                            .map(|id| self.infer_node(id, env, &None, source_file).unwrap())
-                            .collect();
-                        let ty = Ty::EnumVariant(enum_id, values.clone());
-
-                        let constructor_symbol = symbol_table.add(
-                            &name_str,
-                            crate::SymbolKind::VariantConstructor,
-                            expr_id,
-                            symbol_table
-                                .get(&enum_id)
-                                .map(|s| s.definition.clone())
-                                .unwrap(),
-                        );
-
-                        let enum_ty = Ty::Enum(enum_id, generic_vars.clone()); // e.g., Option<TypeVar_for_T>
-                        let mut enum_type_unbound_vars = Vec::new();
-                        let ftv_in_enum_ty = free_type_vars(&enum_ty); // Should contain TypeVar_for_T
-
-                        for enum_tp_var_instance in &generic_vars {
-                            // Iterate over [TypeVar_for_T]
-                            if let Ty::TypeVar(tv_id) = enum_tp_var_instance
-                                && ftv_in_enum_ty.contains(tv_id)
-                            {
-                                // Check if T is actually in Option<T> (it is)
-                                if !enum_type_unbound_vars.contains(tv_id) {
-                                    enum_type_unbound_vars.push(tv_id.clone());
-                                }
-                            }
-                        }
-
-                        let scheme_for_enum_type =
-                            Scheme::new(enum_ty.clone(), enum_type_unbound_vars.clone()); // Use the collected unbound_vars
-
-                        if env.scopes.len() > 1 && !env.scopes.last().unwrap().is_empty() {
-                            env.declare_in_parent(enum_id, scheme_for_enum_type);
-                        } else {
-                            env.declare(enum_id, scheme_for_enum_type);
-                        }
-
-                        env.typed_exprs.insert(
-                            expr_id,
-                            TypedExpr {
-                                id: expr_id,
-                                expr: expr.clone(),
-                                ty: ty.clone(),
-                            },
-                        );
-
-                        variants.push(ty);
-                        variant_defs.push(EnumVariant {
-                            name: name_str.to_string(),
-                            values,
-                            constructor_symbol,
-                        });
-                    } else {
-                        log::debug!("Non-raw expr: {:?}", source_file.get(&expr_id).unwrap());
-                    }
-                }
-                env.end_scope();
-
-                log::debug!("Registering enum {enum_id:?}, variants: {variant_defs:?}");
-                env.register_enum(EnumDef {
-                    name: Some(enum_id),
-                    variants: variant_defs,
-                    type_parameters: generic_vars,
-                    methods,
-                });
-
-                let typed_expr = TypedExpr::new(*id, expr.clone(), enum_ty.clone());
-                env.typed_exprs.insert(*id, typed_expr);
             }
         }
 
         Ok(())
-    }
-
-    fn hoist_functions(
-        &self,
-        root_ids: &[ExprID],
-        env: &mut Environment,
-        source_file: &SourceFile<NameResolved>,
-    ) {
-        for id in root_ids.iter() {
-            let expr = source_file.get(id).unwrap().clone();
-
-            if let Expr::Func {
-                name: Some(Name::Resolved(symbol_id, _)),
-                ..
-            } = expr
-            {
-                let fn_var =
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncNameVar(symbol_id)));
-
-                let typed_expr = TypedExpr::new(*id, expr, fn_var.clone());
-                env.typed_exprs.insert(*id, typed_expr);
-
-                let scheme = env.generalize(&fn_var);
-                env.declare(symbol_id, scheme);
-            } else {
-                log::warn!("not a func {expr:?}");
-            }
-        }
     }
 }

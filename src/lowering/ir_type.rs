@@ -10,7 +10,7 @@ pub enum IRType {
     Bool,
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
-    Enum(Vec<IRType>),
+    Enum(SymbolID, Vec<IRType>),
     Struct(
         SymbolID,
         Vec<IRType>, /* properties */
@@ -22,16 +22,21 @@ pub enum IRType {
     Tuple {
         elements: Vec<IRType>,
     },
-    Pointer,
+    Pointer {
+        hint: Option<String>,
+    },
 }
 
 impl IRType {
     pub const EMPTY_STRUCT: IRType = IRType::Struct(SymbolID(0), vec![], vec![]);
 
+    // Make it easier to get a pointer with no type hint
+    pub const POINTER: IRType = IRType::Pointer { hint: None };
+
     pub fn array(t: IRType) -> IRType {
         IRType::Struct(
             SymbolID::ARRAY,
-            vec![IRType::Int, IRType::Int, IRType::Pointer],
+            vec![IRType::Int, IRType::Int, IRType::POINTER],
             vec![t],
         )
     }
@@ -39,7 +44,7 @@ impl IRType {
     pub fn closure() -> IRType {
         IRType::Struct(
             SymbolID::GENERATED_MAIN,
-            vec![IRType::Pointer, IRType::Pointer],
+            vec![IRType::POINTER, IRType::POINTER],
             vec![],
         )
     }
@@ -52,12 +57,15 @@ impl IRType {
             IRType::Float => 8,
             IRType::Bool => 1,
             IRType::Func(_, _) => 8, // "pointer" that's just an index into module.functions
-            IRType::TypeVar(var) => todo!("Cannot determine size of type variable {}", var),
-            IRType::Enum(irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
+            #[allow(clippy::todo)]
+            IRType::TypeVar(var) => {
+                todo!("Cannot determine size of type variable {}", var)
+            }
+            IRType::Enum(_, irtypes) => irtypes.iter().map(|t| t.mem_size()).max().unwrap_or(0),
             IRType::Struct(_, irtypes, _) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
-            IRType::Pointer => 8,
+            IRType::Pointer { .. } => 8,
             IRType::Tuple { elements } => elements.iter().map(IRType::mem_size).sum::<usize>(),
-            IRType::Array { .. } => IRType::Pointer.mem_size(),
+            IRType::Array { .. } => IRType::POINTER.mem_size(),
         }
     }
 }
@@ -112,8 +120,8 @@ impl FromStr for IRType {
                 "int" => Ok(IRType::Int),
                 "float" => Ok(IRType::Float),
                 "bool" => Ok(IRType::Bool),
-                "ptr" => Ok(IRType::Pointer),
-                "enum" => Ok(IRType::Enum(vec![])), // Basic enum
+                "ptr" => Ok(IRType::POINTER),
+                "enum" => Ok(IRType::Enum(SymbolID(0), vec![])), // Basic enum
                 _ if s.starts_with('T') => Ok(IRType::TypeVar(s.to_string())),
                 _ => Err(ParserError::UnexpectedToken(
                     vec![],
@@ -152,17 +160,24 @@ impl std::fmt::Display for IRType {
                 )
             }
             Self::TypeVar(name) => f.write_str(name),
-            Self::Enum(_generics) => f.write_str("enum"),
-            Self::Struct(_, types, _) => write!(
+            Self::Enum(_, _generics) => f.write_str("enum"),
+            Self::Struct(id, types, _) => write!(
                 f,
-                "{{{}}}",
+                "{:?}{{{}}}",
+                id,
                 types
                     .iter()
                     .map(|t| format!("{t}"))
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            IRType::Pointer => write!(f, "ptr"),
+            IRType::Pointer { hint } => {
+                if let Some(hint) = hint {
+                    write!(f, "ptr({hint:?})")
+                } else {
+                    write!(f, "ptr")
+                }
+            }
             IRType::Array { element } => write!(f, "[{element}]"),
         }
     }

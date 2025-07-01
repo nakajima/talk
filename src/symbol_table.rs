@@ -2,15 +2,21 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
+
+impl std::fmt::Debug for SymbolID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{}", self.0)
+    }
+}
 
 impl SymbolID {
     // These are special because they have syntactic sugar that gets handled
     // by the compiler.
     pub const INT: SymbolID = SymbolID(-1);
     pub const OPTIONAL: SymbolID = SymbolID(1);
-    pub const ARRAY: SymbolID = SymbolID(3);
+    pub const ARRAY: SymbolID = SymbolID(5);
     pub const TUPLE: SymbolID = SymbolID(-10);
 
     // These are special for the lowering phase
@@ -28,7 +34,7 @@ impl SymbolID {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolKind {
     FuncDef,
     Param,
@@ -47,7 +53,7 @@ pub enum SymbolKind {
     Protocol,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     pub path: PathBuf,
     pub line: u32,
@@ -62,7 +68,7 @@ pub struct PropertyInfo {
     pub default_value_id: Option<ExprID>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
@@ -77,7 +83,7 @@ pub struct TypeTable {
     pub initializers: Vec<ExprID>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolTable {
     symbols: HashMap<SymbolID, SymbolInfo>,
     next_id: i32,

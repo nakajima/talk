@@ -1,0 +1,14 @@
+protocol Foo {
+	func foo() -> Int
+}
+
+struct Person: Foo {
+	func foo() { 123 }
+}
+
+func fizz<T: Foo>(t: T) {
+	t.foo()
+}
+
+fizz(Person())
+

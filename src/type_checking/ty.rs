@@ -2,7 +2,8 @@ use std::fmt::Display;
 
 use crate::{
     SymbolID,
-    type_checker::{FuncParams, FuncReturning, TypeVarID},
+    type_checker::{FuncParams, FuncReturning},
+    type_var_id::TypeVarID,
 };
 
 #[derive(Clone, PartialEq, Debug)]
@@ -11,7 +12,7 @@ pub enum Ty {
     Int,
     Bool,
     Float,
-    Init(SymbolID, FuncParams),
+    Init(SymbolID, Vec<Ty> /* params */),
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
@@ -19,7 +20,7 @@ pub enum Ty {
     ),
     Closure {
         func: Box<Ty>, // the func
-        captures: Vec<Ty>,
+        captures: Vec<SymbolID>,
     },
     TypeVar(TypeVarID),
     Enum(SymbolID, Vec<Ty>), // enum name + type arguments
@@ -27,6 +28,7 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
+    Protocol(SymbolID, Vec<Ty> /* generics */),
     Pointer,
 }
 
@@ -71,6 +73,7 @@ impl Display for Ty {
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
             Ty::Struct(_, _) => write!(f, "struct"),
             Ty::Pointer => write!(f, "pointer"),
+            Ty::Protocol(_, _) => write!(f, "protocol"),
         }
     }
 }
@@ -86,5 +89,13 @@ impl Eq for Ty {}
 impl Ty {
     pub fn optional(&self) -> Ty {
         Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
+    }
+
+    pub fn some(&self) -> Ty {
+        Ty::EnumVariant(SymbolID::OPTIONAL, vec![self.clone()])
+    }
+
+    pub fn is_concrete(&self) -> bool {
+        !matches!(self, Ty::TypeVar(_))
     }
 }

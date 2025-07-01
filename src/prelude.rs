@@ -31,9 +31,11 @@ pub fn _compile_prelude() -> Prelude {
         PathBuf::from("./core/Optional.tlk"),
         PathBuf::from("./core/Array.tlk"),
     ] {
+        #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
     }
 
+    #[allow(clippy::unwrap_used)]
     let unit = driver.lower().into_iter().next().unwrap();
     let environment = unit.env.clone();
     let module = unit.module();

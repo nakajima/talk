@@ -73,11 +73,12 @@ pub enum Expr {
     Pattern(Pattern),
     Return(Option<ExprID>),
     Break,
-    Struct(
-        Name,        /* name */
-        Vec<ExprID>, /* generics */
-        ExprID,      /* body */
-    ),
+    Struct {
+        name: Name,            /* name */
+        generics: Vec<ExprID>, /* generics */
+        conformances: Vec<ExprID>,
+        body: ExprID, /* body */
+    },
     Property {
         name: Name,
         type_repr: Option<ExprID>,
@@ -85,11 +86,12 @@ pub enum Expr {
     },
 
     // A type annotation
-    TypeRepr(
-        Name,
-        Vec<ExprID>, /* generics */
-        bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
-    ),
+    TypeRepr {
+        name: Name,
+        generics: Vec<ExprID>, /* generics */
+        conformances: Vec<ExprID>,
+        introduces_type: bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
+    },
 
     FuncTypeRepr(
         Vec<ExprID>, /* [TypeRepr] args */
@@ -145,11 +147,12 @@ pub enum Expr {
     Loop(Option<ExprID> /* condition */, ExprID /* body */),
 
     // Enum declaration
-    EnumDecl(
-        Name,        // TypeRepr name: Option
-        Vec<ExprID>, // Generics TypeParams <T>
-        ExprID,      // Body
-    ),
+    EnumDecl {
+        name: Name, // TypeRepr name: Option
+        conformances: Vec<ExprID>,
+        generics: Vec<ExprID>, // Generics TypeParams <T>
+        body: ExprID,          // Body
+    },
 
     // Individual enum variant in declaration
     EnumVariant(
@@ -180,6 +183,7 @@ pub enum Expr {
         name: Name,
         associated_types: Vec<ExprID>, // Associated types
         body: ExprID,                  // Body ID
+        conformances: Vec<ExprID>,
     },
 
     FuncSignature {
@@ -188,4 +192,49 @@ pub enum Expr {
         generics: Vec<ExprID>,
         ret: ExprID,
     },
+}
+
+impl Expr {
+    pub fn symbol_id(&self) -> Option<SymbolID> {
+        match self {
+            Expr::Struct {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::Property {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::TypeRepr {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::Init(symbol_id, _) => *symbol_id,
+            Expr::Func {
+                name: Some(Name::Resolved(symbol_id, _)),
+                ..
+            } => Some(*symbol_id),
+            Expr::Parameter(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::CallArg {
+                label: Some(Name::Resolved(symbol_id, _)),
+                ..
+            } => Some(*symbol_id),
+            Expr::Let(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::Variable(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::EnumDecl {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::EnumVariant(Name::Resolved(symbol_id, _), _) => Some(*symbol_id),
+            Expr::ProtocolDecl {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            Expr::FuncSignature {
+                name: Name::Resolved(symbol_id, _),
+                ..
+            } => Some(*symbol_id),
+            _ => None,
+        }
+    }
 }

@@ -1,10 +1,16 @@
-use std::path::PathBuf;
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::{
     SourceFile, SymbolID, SymbolTable,
-    compiling::compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+    compiling::{
+        compilation_session::{CompilationSession, SharedCompilationSession},
+        compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+    },
     environment::Environment,
     lowering::ir_module::IRModule,
     prelude::compile_prelude,
@@ -18,11 +24,11 @@ pub struct DriverConfig {
 }
 
 impl DriverConfig {
-    pub fn new_environment(&self) -> Environment {
+    pub fn new_environment(&self, session: SharedCompilationSession) -> Environment {
         if self.include_prelude {
             compile_prelude().environment.clone()
         } else {
-            Environment::new()
+            Environment::new(session)
         }
     }
 }
@@ -41,6 +47,7 @@ pub struct Driver {
     pub units: Vec<CompilationUnit>,
     pub symbol_table: SymbolTable,
     pub config: DriverConfig,
+    pub session: SharedCompilationSession,
 }
 
 impl Default for Driver {
@@ -51,14 +58,18 @@ impl Default for Driver {
 
 impl Driver {
     pub fn new(config: DriverConfig) -> Self {
+        let session = SharedCompilationSession::new(CompilationSession::new().into());
+        let environment = config.new_environment(session.clone());
+
         Self {
-            units: vec![CompilationUnit::new(vec![], config.new_environment())],
+            units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
             symbol_table: if config.include_prelude {
                 compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
             },
             config,
+            session,
         }
     }
 
@@ -69,17 +80,14 @@ impl Driver {
     }
 
     pub fn with_files(files: Vec<PathBuf>) -> Self {
-        let config = DriverConfig::default();
-        let unit = CompilationUnit::new(files, config.new_environment());
-        Self {
-            units: vec![unit],
-            symbol_table: if config.include_prelude {
-                compile_prelude().symbols.clone()
-            } else {
-                SymbolTable::base()
-            },
-            config,
+        let mut driver = Driver::default();
+
+        for file in files {
+            let contents = std::fs::read_to_string(&file).unwrap_or_default();
+            driver.update_file(&file, contents);
         }
+
+        driver
     }
 
     pub fn update_file(&mut self, path: &PathBuf, contents: String) {
@@ -161,17 +169,17 @@ impl Driver {
                 0 => {
                     let parsed = self.parse();
                     round += 1;
-                    self.diagnostics_from(path, parsed)
+                    self.diagnostics_from(path, parsed).unwrap_or_default()
                 }
                 1 => {
                     let checked = self.check();
                     round += 1;
-                    self.diagnostics_from(path, checked)
+                    self.diagnostics_from(path, checked).unwrap_or_default()
                 }
                 _ => {
                     let lowered = self.lower();
                     round += 1;
-                    self.diagnostics_from(path, lowered)
+                    self.diagnostics_from(path, lowered).unwrap_or_default()
                 }
             };
 
@@ -185,15 +193,21 @@ impl Driver {
         &self,
         path: &PathBuf,
         units: Vec<CompilationUnit<S>>,
-    ) -> Vec<Diagnostic> {
+    ) -> Option<Vec<Diagnostic>> {
         let mut result = vec![];
         for unit in units {
-            log::info!("checking {unit:?} for diagnostics");
+            log::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
             {
-                log::info!("checking {:?} for diagnostics", source_file.path);
-                for diag in &source_file.diagnostics() {
+                for diag in self
+                    .session
+                    .lock()
+                    .ok()?
+                    .diagnostics()
+                    .get(path)
+                    .unwrap_or(&HashSet::default())
+                {
                     let diag_range = diag.range(source_file);
                     let range = Range::new(
                         Position::new(diag_range.0.line, diag_range.0.col),
@@ -211,7 +225,8 @@ impl Driver {
                 }
             }
         }
-        result
+
+        Some(result)
     }
 
     pub fn has_file(&self, path: &PathBuf) -> bool {
@@ -254,11 +269,11 @@ impl Driver {
 
     pub fn resolved_source_file(
         &mut self,
-        path: &PathBuf,
+        path: &Path,
     ) -> Option<SourceFile<source_file::NameResolved>> {
         for unit in self.units.clone() {
             let typed = unit.parse().resolved(&mut self.symbol_table);
-            if let Some(file) = typed.source_file(path) {
+            if let Some(file) = typed.source_file(&PathBuf::from(path)) {
                 return Some(file.clone());
             }
         }

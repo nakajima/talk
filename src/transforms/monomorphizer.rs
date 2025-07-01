@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::lowering::{
-    instr::{Callee, Instr},
-    ir_function::IRFunction,
-    ir_module::IRModule,
-    ir_type::IRType,
-    lowerer::{BasicBlock, RegisterList, TypedRegister},
+use crate::{
+    environment::Environment,
+    lowering::{
+        instr::{Callee, Instr},
+        ir_function::IRFunction,
+        ir_module::IRModule,
+        ir_type::IRType,
+        lowerer::{BasicBlock, RefKind, RegisterList, TypedRegister},
+    },
+    type_defs::TypeDef,
 };
 
 // The Monomorphizer monomorphizes. So it takes a func like this:
@@ -18,58 +22,61 @@ use crate::lowering::{
 //
 // and it'll generate a version of identity that lowers to (Int) -> Int.
 // It'll also update calls to the generic form to the specialized form.
-#[derive(Default)]
-pub struct Monomorphizer {
+pub struct Monomorphizer<'a> {
+    env: &'a Environment,
     cache: HashSet<String>,
     generic_functions: Vec<IRFunction>,
 }
 
-impl Monomorphizer {
-    pub fn new() -> Self {
+impl<'a> Monomorphizer<'a> {
+    pub fn new(env: &'a Environment) -> Self {
         Self {
+            env,
             cache: Default::default(),
             generic_functions: Default::default(),
         }
     }
 
-    pub fn run(mut self, module: IRModule) -> IRModule {
-        let mut module = module;
-
-        let (generic_templates, concrete_funcs): (Vec<_>, Vec<_>) =
-            module.functions.into_iter().partition(|f| {
-                log::warn!("is generic: {} {:?}", is_generic(f), f.name);
-                is_generic(f)
-            });
-
-        self.generic_functions = generic_templates;
+    pub fn run(mut self, mut module: IRModule) -> IRModule {
+        let mut concrete_funcs = vec![];
+        // self.module.functions.iter().partition(|f|Self::is_generic(f));
+        for func in module.functions.iter().cloned() {
+            if Self::is_generic(&func) || func.blocks.is_empty() {
+                self.generic_functions.push(func)
+            } else {
+                concrete_funcs.push(func)
+            }
+        }
 
         let mut final_functions = Vec::new();
 
         for func in concrete_funcs {
-            final_functions.push(self.detect_monomorphizations_in(func));
+            let func = self.detect_monomorphizations_in(func, &module, &mut HashMap::default());
+            final_functions.push(func);
         }
 
-        let instantiated_functions = self.generic_functions;
-
-        for f in instantiated_functions.iter() {
-            log::info!(
-                "-> instantiated function: {:?} {:?} {:?}",
-                f.name.clone(),
-                f.env_ty,
-                is_generic(f)
-            );
-        }
         final_functions.extend(
-            instantiated_functions
+            self.generic_functions
                 .into_iter()
-                .filter(|f| !is_generic(f)),
+                .filter_map(|f| if Self::is_generic(&f) { None } else { Some(f) }),
         );
 
         module.functions = final_functions;
         module
     }
 
-    fn detect_monomorphizations_in(&mut self, mut function: IRFunction) -> IRFunction {
+    fn detect_monomorphizations_in(
+        &mut self,
+        mut function: IRFunction,
+        module: &IRModule,
+        substitutions: &mut HashMap<IRType, IRType>,
+    ) -> IRFunction {
+        log::trace!(
+            "Detecting monomorphization opportunities in {:?}",
+            function.name
+        );
+        let mut renames = HashMap::new();
+
         for block in function.blocks.iter_mut() {
             for instruction in block.instructions.iter_mut() {
                 if let Instr::Call {
@@ -85,20 +92,75 @@ impl Monomorphizer {
                         .find(|f| f.name == *callee)
                         .cloned()
                     else {
-                        log::info!("Did not find callee function: {callee}");
-                        return function;
+                        continue;
                     };
 
-                    if is_generic(&callee_function) {
+                    if callee_function.blocks.is_empty()
+                        && let Some(first_arg) = &args.0.first()
+                    {
+                        // it's a protocol method, we need to specialize it
+                        log::info!("Detected protocol method, specializing: {args:?}");
+                        let Some(concrete) =
+                            Self::find_concrete_type(first_arg, substitutions, self.env)
+                        else {
+                            continue;
+                        };
+
+                        let name_parts = callee.clone();
+                        let Some(member_name) = name_parts.split("_").nth(3) else {
+                            continue;
+                        };
+
+                        let monomorphized_name = format!(
+                            "@_{}_{}_{}",
+                            concrete.symbol_id().0,
+                            concrete.name(),
+                            member_name
+                        );
+
+                        renames.insert(callee.clone(), monomorphized_name.clone());
+
+                        let Some(callee_function) =
+                            module.functions.iter().find(|f| &f.name == callee).cloned()
+                        else {
+                            continue;
+                        };
+
+                        self.detect_monomorphizations_in(callee_function, module, substitutions);
+                    } else if Self::is_generic(&callee_function) {
                         let monomorphized_name = self.monomorphize_function(
                             &callee_function,
                             args.0.iter().map(|a| a.ty.clone()).collect(),
                             ty,
-                            &mut HashMap::new(),
+                            substitutions,
+                            module,
                         );
 
-                        *callee = monomorphized_name;
+                        *callee = monomorphized_name.clone();
+                        renames.insert(callee.clone(), monomorphized_name.clone());
                     }
+                }
+            }
+        }
+
+        // Replace polymorphic func names with new monomorphized ones
+        for block in function.blocks.iter_mut() {
+            for instruction in block.instructions.iter_mut() {
+                match instruction {
+                    Instr::Call {
+                        callee: Callee::Name(name),
+                        ..
+                    } => {
+                        if let Some(new_name) = renames.get(name) {
+                            *name = new_name.clone()
+                        }
+                    }
+                    Instr::Ref(_, _, RefKind::Func(name)) => {
+                        if let Some(new_name) = renames.get(name) {
+                            *name = new_name.clone()
+                        }
+                    }
+                    _ => (),
                 }
             }
         }
@@ -112,6 +174,7 @@ impl Monomorphizer {
         args: Vec<IRType>,
         expected_ret: &IRType,
         substitutions: &mut HashMap<IRType, IRType>,
+        module: &IRModule,
     ) -> String {
         let mangled_name = self.mangle_name(&function.name, &args);
 
@@ -125,17 +188,50 @@ impl Monomorphizer {
             unreachable!()
         };
 
-        substitutions.insert(*ret.clone(), expected_ret.clone());
+        if !contains_type_var(expected_ret) {
+            substitutions.insert(*ret.clone(), expected_ret.clone());
+        }
 
         for (param, concrete_arg) in params.iter().zip(&args) {
-            if contains_type_var(param) {
+            if contains_type_var(param) && !contains_type_var(concrete_arg) {
                 substitutions.insert(param.clone(), concrete_arg.clone());
             }
         }
 
-        let mut monomorphized_function = IRFunction {
+        let mut monomorphized_function =
+            self.apply_function(&mangled_name, params, ret, function, substitutions, module);
+
+        monomorphized_function.ty = Self::apply_type(&monomorphized_function.ty, substitutions);
+
+        log::info!(
+            "monomorphized {} ({}): {:?}, {:#?}",
+            mangled_name,
+            Self::is_generic(&monomorphized_function),
+            Self::apply_type(monomorphized_function.ret(), substitutions),
+            substitutions
+        );
+
+        self.cache.insert(mangled_name.clone());
+
+        monomorphized_function =
+            self.detect_monomorphizations_in(monomorphized_function.clone(), module, substitutions);
+        self.generic_functions.push(monomorphized_function);
+
+        mangled_name
+    }
+
+    fn apply_function(
+        &mut self,
+        mangled_name: &str,
+        params: &[IRType],
+        ret: &IRType,
+        function: &IRFunction,
+        substitutions: &mut HashMap<IRType, IRType>,
+        module: &IRModule,
+    ) -> IRFunction {
+        IRFunction {
             debug_info: Default::default(),
-            name: mangled_name.clone(),
+            name: mangled_name.to_string(),
             ty: IRType::Func(
                 params
                     .iter()
@@ -146,7 +242,7 @@ impl Monomorphizer {
             blocks: function
                 .blocks
                 .iter()
-                .map(|block| self.apply_block(block, substitutions))
+                .map(|block| self.apply_block(block, substitutions, module))
                 .collect(),
             env_reg: function.env_reg,
             env_ty: function
@@ -154,35 +250,21 @@ impl Monomorphizer {
                 .as_ref()
                 .map(|ty| Self::apply_type(ty, substitutions)),
             size: function.size,
-        };
-
-        monomorphized_function.ty = Self::apply_type(&monomorphized_function.ty, substitutions);
-
-        log::info!(
-            "monomorphized {} ({}): {:?}, {:#?}",
-            mangled_name,
-            is_generic(&monomorphized_function),
-            Self::apply_type(monomorphized_function.ret(), substitutions),
-            substitutions
-        );
-
-        self.cache.insert(mangled_name.clone());
-        self.generic_functions.push(monomorphized_function);
-
-        mangled_name
+        }
     }
 
     fn apply_block(
         &mut self,
         block: &BasicBlock,
         substitutions: &mut HashMap<IRType, IRType>,
+        module: &IRModule,
     ) -> BasicBlock {
         BasicBlock {
             id: block.id,
             instructions: block
                 .instructions
                 .iter()
-                .map(|i| self.apply_instruction(i, substitutions))
+                .map(|i| self.apply_instruction(i, substitutions, module))
                 .collect(),
         }
     }
@@ -191,6 +273,7 @@ impl Monomorphizer {
         &mut self,
         instr: &Instr,
         substitutions: &mut HashMap<IRType, IRType>,
+        module: &IRModule,
     ) -> Instr {
         let mut applied_instruction = instr.clone();
         match &mut applied_instruction {
@@ -225,18 +308,7 @@ impl Monomorphizer {
                 );
             }
             Instr::GetValueOf { ty, .. } => *ty = Self::apply_type(ty, substitutions),
-            Instr::Call {
-                ty, args, callee, ..
-            } => {
-                let applied_args: Vec<TypedRegister> = args
-                    .0
-                    .iter()
-                    .map(|a| TypedRegister::new(Self::apply_type(&a.ty, substitutions), a.register))
-                    .collect();
-
-                *ty = Self::apply_type(ty, substitutions);
-                *args = RegisterList(applied_args.clone());
-
+            Instr::Call { callee, .. } => {
                 // We want to monomorphize all the way down
                 if let Callee::Name(name) = callee
                     && let Some(func) = self
@@ -245,17 +317,14 @@ impl Monomorphizer {
                         .find(|f| f.name == *name)
                         .cloned()
                 {
-                    let new_callee = self.monomorphize_function(
-                        &func,
-                        applied_args.iter().map(|a| a.ty.clone()).collect(),
-                        ty,
-                        substitutions,
-                    );
-
-                    *callee = Callee::Name(new_callee);
+                    let name = self
+                        .detect_monomorphizations_in(func, module, substitutions)
+                        .name
+                        .clone();
+                    *callee = Callee::Name(name);
                 }
             }
-            Instr::GetEnumTag(_, _) => todo!(),
+            Instr::GetEnumTag(_, _) => (),
             Instr::GetEnumValue(_, ty, _, _, _) => *ty = Self::apply_type(ty, substitutions),
             Instr::TagVariant(_, ty, _, __list) => *ty = Self::apply_type(ty, substitutions),
             Instr::Ret(ty, _) => *ty = Self::apply_type(ty, substitutions),
@@ -272,10 +341,7 @@ impl Monomorphizer {
 
     fn apply_type(ty: &IRType, substitutions: &HashMap<IRType, IRType>) -> IRType {
         match ty {
-            IRType::TypeVar(_) => {
-                log::debug!("substitute: {:?} -> {:?}", ty, substitutions.get(ty));
-                substitutions.get(ty).cloned().unwrap_or(ty.clone())
-            }
+            IRType::TypeVar(_) => substitutions.get(ty).cloned().unwrap_or(ty.clone()),
             IRType::Func(params, ret) => IRType::Func(
                 params
                     .iter()
@@ -284,7 +350,8 @@ impl Monomorphizer {
                 Self::apply_type(ret, substitutions).into(),
             ),
 
-            IRType::Enum(generics) => IRType::Enum(
+            IRType::Enum(enum_id, generics) => IRType::Enum(
+                *enum_id,
                 generics
                     .iter()
                     .map(|g| Self::apply_type(g, substitutions))
@@ -292,7 +359,10 @@ impl Monomorphizer {
             ),
             IRType::Struct(symbol_id, properties, generics) => IRType::Struct(
                 *symbol_id,
-                properties.clone(),
+                properties
+                    .iter()
+                    .map(|g| Self::apply_type(g, substitutions))
+                    .collect(),
                 generics
                     .iter()
                     .map(|g| Self::apply_type(g, substitutions))
@@ -303,6 +373,31 @@ impl Monomorphizer {
             },
             _ => ty.clone(),
         }
+    }
+
+    fn find_concrete_type(
+        name: &TypedRegister,
+        substitutions: &HashMap<IRType, IRType>,
+        env: &'a Environment,
+    ) -> Option<&'a TypeDef> {
+        if let IRType::Struct(type_id, _, _) | IRType::Enum(type_id, _) =
+            substitutions.get(&name.ty).unwrap_or(&name.ty)
+        {
+            return env.lookup_type(type_id);
+        }
+
+        if let IRType::Pointer { hint: Some(hint) } =
+            substitutions.get(&name.ty).unwrap_or(&name.ty)
+        {
+            let type_var = IRType::TypeVar(hint.to_string());
+            let replaced = substitutions.get(&type_var)?;
+
+            if let IRType::Struct(type_id, _, _) | IRType::Enum(type_id, _) = replaced {
+                return env.lookup_type(type_id);
+            }
+        }
+
+        None
     }
 
     fn mangle_name(&self, callee_name: &str, args: &[IRType]) -> String {
@@ -319,13 +414,13 @@ impl Monomorphizer {
         mangled.push('>');
         mangled
     }
-}
 
-fn is_generic(func: &IRFunction) -> bool {
-    if let Some(env_ty) = &func.env_ty {
-        contains_type_var(env_ty) || contains_type_var(&func.ty)
-    } else {
-        contains_type_var(&func.ty)
+    fn is_generic(func: &IRFunction) -> bool {
+        if let Some(env_ty) = &func.env_ty {
+            contains_type_var(env_ty) || contains_type_var(&func.ty)
+        } else {
+            contains_type_var(&func.ty)
+        }
     }
 }
 
@@ -336,7 +431,7 @@ fn contains_type_var(ty: &IRType) -> bool {
         IRType::Struct(_, params, generics) => {
             params.iter().any(contains_type_var) || generics.iter().any(contains_type_var)
         }
-        IRType::Enum(params) => params.iter().any(contains_type_var),
+        IRType::Enum(_, params) => params.iter().any(contains_type_var),
         IRType::Array { element } => contains_type_var(element),
         _ => false,
     }
@@ -347,13 +442,15 @@ mod tests {
     use crate::{
         SymbolID, assert_lowered_function,
         compiling::driver::Driver,
+        environment::Environment,
         lowering::{
             instr::{Callee, Instr},
             ir_function::IRFunction,
             ir_module::IRModule,
             ir_type::IRType,
             ir_value::IRValue,
-            lowerer::{BasicBlock, BasicBlockID, RegisterList, TypedRegister},
+            lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList, TypedRegister},
+            lowerer_tests::helpers::lower_without_prelude_with_env,
             register::Register,
         },
         transforms::monomorphizer::Monomorphizer,
@@ -407,7 +504,7 @@ mod tests {
             ],
         };
 
-        let monomorphized = Monomorphizer::new().run(module);
+        let monomorphized = Monomorphizer::new(&Environment::default()).run(module);
 
         assert_lowered_function!(
             monomorphized,
@@ -465,14 +562,14 @@ mod tests {
         );
 
         let module = driver.lower().into_iter().next().unwrap().module();
-        let monomorphed = Monomorphizer::new().run(module);
+        let monomorphed = Monomorphizer::new(&Environment::default()).run(module);
 
         assert_lowered_function!(
             monomorphed,
-            "@_3_Array_get<ptr int>",
+            format!("@_{}_Array_get<ptr int>", SymbolID::ARRAY.0),
             IRFunction {
                 debug_info: Default::default(),
-                name: "@_3_Array_get<ptr int>".into(),
+                name: format!("@_{}_Array_get<ptr int>", SymbolID::ARRAY.0),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
@@ -480,12 +577,12 @@ mod tests {
                         Instr::GetElementPointer {
                             dest: Register(3),
                             base: Register(0),
-                            ty: IRType::array(IRType::TypeVar("T91".into())),
+                            ty: IRType::array(IRType::Int),
                             index: IRValue::ImmediateInt(2)
                         },
                         Instr::Load {
                             dest: Register(4),
-                            ty: IRType::Pointer,
+                            ty: IRType::POINTER,
                             addr: Register(3)
                         },
                         Instr::GetElementPointer {
@@ -498,7 +595,7 @@ mod tests {
                         },
                         Instr::Load {
                             dest: Register(2),
-                            ty: IRType::Int.into(),
+                            ty: IRType::Int,
                             addr: Register(5)
                         },
                         Instr::Ret(IRType::Int, Some(Register(2).into()))
@@ -506,12 +603,148 @@ mod tests {
                 }],
                 env_ty: Some(IRType::Struct(
                     SymbolID::ARRAY,
-                    vec![IRType::Int, IRType::Int, IRType::Pointer],
+                    vec![IRType::Int, IRType::Int, IRType::POINTER],
                     vec![IRType::Int]
                 )),
                 env_reg: Some(Register(0)),
                 size: 6,
             }
         );
+    }
+
+    #[test]
+    fn monomorphs_protocol_functions() {
+        let (lowered, env) = lower_without_prelude_with_env(
+            "
+            protocol Aged {
+                func getAge() -> Int
+            }
+
+            struct Person: Aged {
+                func getAge() {
+                    123
+                }
+            }
+
+            struct Cat: Aged {
+                func getAge() {
+                    123
+                }
+            }
+
+            func get<T: Aged>(t: T) {
+                t.getAge()
+            }
+
+            get(Person())
+            get(Cat())
+        ",
+        )
+        .unwrap();
+
+        let mono = Monomorphizer::new(&env).run(lowered);
+
+        let person_struct = IRType::Struct(SymbolID(4), vec![], vec![]);
+        let cat_struct = IRType::Struct(SymbolID(6), vec![], vec![]);
+
+        assert_lowered_function!(
+            mono,
+            "@main",
+            IRFunction {
+                debug_info: Default::default(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID::ENTRY,
+                    instructions: vec![
+                        Instr::Ref(
+                            Register(0),
+                            IRType::Func(vec![IRType::TypeVar("T7".into())], IRType::Int.into()),
+                            RefKind::Func("@_3_get".into())
+                        ),
+                        Instr::Alloc {
+                            dest: Register(1),
+                            ty: person_struct.clone(),
+                            count: None
+                        },
+                        Instr::Call {
+                            dest_reg: Register(2),
+                            ty: person_struct.clone(),
+                            callee: Callee::Name("@_4_Person_init".into()),
+                            args: RegisterList(vec![TypedRegister::new(
+                                IRType::POINTER,
+                                Register(1)
+                            )])
+                        },
+                        Instr::Call {
+                            dest_reg: Register(3),
+                            ty: IRType::Int,
+                            callee: Callee::Name("@_3_get<@4{}>".into()),
+                            args: RegisterList(vec![TypedRegister::new(
+                                person_struct.clone(),
+                                Register(1)
+                            )])
+                        },
+                        Instr::Alloc {
+                            dest: Register(4),
+                            ty: cat_struct.clone(),
+                            count: None
+                        },
+                        Instr::Call {
+                            dest_reg: Register(5),
+                            ty: cat_struct.clone(),
+                            callee: Callee::Name("@_6_Cat_init".into()),
+                            args: RegisterList(vec![TypedRegister::new(
+                                IRType::POINTER,
+                                Register(4)
+                            )])
+                        },
+                        Instr::Call {
+                            dest_reg: Register(6),
+                            ty: IRType::Int,
+                            callee: Callee::Name("@_3_get<@6{}>".into()),
+                            args: RegisterList(vec![TypedRegister::new(
+                                cat_struct.clone(),
+                                Register(4)
+                            )])
+                        },
+                        Instr::Ret(IRType::Int, Some(IRValue::Register(Register(6))))
+                    ]
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 7,
+            }
+        );
+
+        assert_lowered_function!(
+            mono,
+            "@_3_get<@4{}>",
+            IRFunction {
+                ty: IRType::Func(vec![person_struct.clone()], IRType::Int.into()),
+                name: "@_3_get<@4{}>".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID::ENTRY,
+                    instructions: vec![
+                        Instr::Call {
+                            dest_reg: Register(1),
+                            ty: IRType::Int,
+                            callee: Callee::Name("@_4_Person_getAge".into()),
+                            args: RegisterList(vec![TypedRegister::new(
+                                IRType::Pointer {
+                                    hint: Some("T7".into())
+                                },
+                                Register(0)
+                            )])
+                        },
+                        Instr::Ret(IRType::Int, Some(IRValue::Register(Register(1))))
+                    ]
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 2,
+                debug_info: Default::default()
+            }
+        )
     }
 }
