@@ -176,16 +176,20 @@ impl<'a> Monomorphizer<'a> {
             return mangled_name;
         }
 
+        println!("-> {mangled_name}");
+
         log::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
         };
 
-        substitutions.insert(*ret.clone(), expected_ret.clone());
+        if !contains_type_var(expected_ret) {
+            substitutions.insert(*ret.clone(), expected_ret.clone());
+        }
 
         for (param, concrete_arg) in params.iter().zip(&args) {
-            if contains_type_var(param) {
+            if contains_type_var(param) && !contains_type_var(concrete_arg) {
                 substitutions.insert(param.clone(), concrete_arg.clone());
             }
         }
