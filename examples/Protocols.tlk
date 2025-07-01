@@ -3,5 +3,6 @@ protocol Foo {
 }
 
 struct Person: Foo {
-	
 }
+
+
