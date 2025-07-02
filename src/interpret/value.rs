@@ -13,6 +13,7 @@ pub enum Value {
     Struct(Vec<Value>),
     Pointer(Pointer),
     Func(usize),
+    RawBuffer(Vec<u8>),
     Buffer {
         elements: Vec<Value>,
         count: usize,

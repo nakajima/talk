@@ -52,7 +52,7 @@ pub mod lowering_tests {
             instr::{Callee, Instr},
             ir_error::IRError,
             ir_function::IRFunction,
-            ir_module::IRModule,
+            ir_module::{IRConstantData, IRModule},
             ir_type::IRType,
             ir_value::IRValue,
             lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList, TypedRegister},
@@ -1107,7 +1107,7 @@ pub mod lowering_tests {
                             ty: env_struct_type.clone()
                         },
                         Instr::Store {
-                            val: Register(2),
+                            val: Register(2).into(),
                             location: Register(3),
                             ty: env_struct_type.clone()
                         },
@@ -1129,12 +1129,12 @@ pub mod lowering_tests {
                             ty: IRType::closure()
                         },
                         Instr::Store {
-                            val: Register(3),
+                            val: Register(3).into(),
                             location: Register(5),
                             ty: IRType::POINTER
                         },
                         Instr::Store {
-                            val: Register(4),
+                            val: Register(4).into(),
                             location: Register(6),
                             ty: IRType::POINTER
                         },
@@ -1168,6 +1168,83 @@ pub mod lowering_tests {
                 size: 10
             }
         );
+    }
+
+    #[test]
+    fn lowers_strings() {
+        let lowered = lower("\"sup\"").unwrap();
+
+        assert_eq!(lowered.constants.len(), 1);
+        assert_eq!(
+            lowered.constants[0],
+            IRConstantData::RawBuffer("sup".as_bytes().to_vec())
+        );
+
+        assert_lowered_function!(
+            lowered,
+            "@main",
+            IRFunction {
+                debug_info: Default::default(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        // Allocate the String struct
+                        Instr::Alloc {
+                            dest: Register(0),
+                            ty: IRType::string(),
+                            count: None
+                        },
+                        // Set the length
+                        Instr::GetElementPointer {
+                            dest: Register(1),
+                            base: Register(0),
+                            ty: IRType::string(),
+                            index: 0.into(),
+                        },
+                        Instr::Store {
+                            ty: IRType::Int,
+                            val: IRValue::ImmediateInt(3),
+                            location: Register(1)
+                        },
+                        // Set the capacity
+                        Instr::GetElementPointer {
+                            dest: Register(2),
+                            base: Register(0),
+                            ty: IRType::string(),
+                            index: 1.into(),
+                        },
+                        Instr::Store {
+                            ty: IRType::Int,
+                            val: IRValue::ImmediateInt(3),
+                            location: Register(2)
+                        },
+                        // Set the storage
+                        Instr::GetElementPointer {
+                            dest: Register(3),
+                            base: Register(0),
+                            ty: IRType::string(),
+                            index: 2.into(),
+                        },
+                        Instr::Const {
+                            dest: Register(4),
+                            ty: IRType::RawBuffer,
+                            val: IRValue::ImmediateInt(0)
+                        },
+                        Instr::Store {
+                            ty: IRType::POINTER,
+                            val: Register(4).into(),
+                            location: Register(3)
+                        },
+                        Instr::Ret(IRType::string(), Some(Register(0).into())),
+                    ],
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 5
+            }
+        )
     }
 
     #[test]
@@ -1206,7 +1283,7 @@ pub mod lowering_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(1), // age is in register 1
+                            val: Register(1).into(), // age is in register 1
                             location: Register(2)
                         },
                         Instr::Load {
@@ -1306,7 +1383,7 @@ pub mod lowering_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(1), // age is in register 1
+                            val: Register(1).into(), // age is in register 1
                             location: Register(2)
                         },
                         Instr::Load {
@@ -1415,7 +1492,7 @@ pub mod lowering_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(1), // age is in register 1
+                            val: Register(1).into(), // age is in register 1
                             location: Register(2)
                         },
                         Instr::Load {

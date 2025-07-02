@@ -2,7 +2,8 @@ use crate::{
     SymbolID,
     expr::Expr,
     lowering::{
-        instr::Instr, ir_error::IRError, ir_type::IRType, lowerer::Lowerer, register::Register,
+        instr::Instr, ir_error::IRError, ir_type::IRType, ir_value::IRValue, lowerer::Lowerer,
+        register::Register,
     },
     parser::ExprID,
     ty::Ty,
@@ -78,7 +79,7 @@ fn lower_alloc(
     lowerer.push_instr(Instr::Alloc {
         dest,
         ty: type_params[0].to_ir(lowerer),
-        count: register,
+        count: register.map(IRValue::Register),
     });
 
     Ok(Some(dest))
@@ -117,7 +118,7 @@ fn lower_realloc(
     lowerer.push_instr(Instr::Alloc {
         dest,
         ty: type_params[0].to_ir(lowerer),
-        count: new_capacity,
+        count: new_capacity.map(IRValue::Register),
     });
 
     Ok(Some(dest))
@@ -170,7 +171,7 @@ fn lower_store(
     lowerer.push_instr(Instr::GetElementPointer {
         dest: location,
         base: ptr,
-        ty: IRType::Array {
+        ty: IRType::TypedBuffer {
             element: type_params[0].to_ir(lowerer).into(),
         },
         index: offset.into(),
@@ -178,7 +179,7 @@ fn lower_store(
 
     lowerer.push_instr(Instr::Store {
         ty: type_params[0].to_ir(lowerer),
-        val: value,
+        val: value.into(),
         location,
     });
 
@@ -217,7 +218,7 @@ fn lower_load(
     lowerer.push_instr(Instr::GetElementPointer {
         dest: location,
         base: ptr,
-        ty: IRType::Array {
+        ty: IRType::TypedBuffer {
             element: type_params[0].to_ir(lowerer).into(),
         },
         index: offset.into(),

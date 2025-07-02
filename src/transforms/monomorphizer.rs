@@ -294,6 +294,7 @@ impl<'a> Monomorphizer<'a> {
             Instr::Alloc { ty, .. } => *ty = Self::apply_type(ty, substitutions),
             Instr::Store { ty, .. } => *ty = Self::apply_type(ty, substitutions),
             Instr::Load { ty, .. } => *ty = Self::apply_type(ty, substitutions),
+            Instr::Const { ty, .. } => *ty = Self::apply_type(ty, substitutions),
             Instr::GetElementPointer { ty, .. } => *ty = Self::apply_type(ty, substitutions),
             Instr::MakeStruct { ty, values, .. } => {
                 *ty = Self::apply_type(ty, substitutions);
@@ -368,7 +369,7 @@ impl<'a> Monomorphizer<'a> {
                     .map(|g| Self::apply_type(g, substitutions))
                     .collect(),
             ),
-            IRType::Array { element } => IRType::Array {
+            IRType::TypedBuffer { element } => IRType::TypedBuffer {
                 element: Self::apply_type(element, substitutions).clone().into(),
             },
             _ => ty.clone(),
@@ -432,7 +433,7 @@ fn contains_type_var(ty: &IRType) -> bool {
             params.iter().any(contains_type_var) || generics.iter().any(contains_type_var)
         }
         IRType::Enum(_, params) => params.iter().any(contains_type_var),
-        IRType::Array { element } => contains_type_var(element),
+        IRType::TypedBuffer { element } => contains_type_var(element),
         _ => false,
     }
 }
@@ -459,6 +460,7 @@ mod tests {
     #[test]
     fn monomorphizes_generic_func() {
         let module = IRModule {
+            constants: vec![],
             functions: vec![
                 IRFunction {
                     debug_info: Default::default(),
@@ -588,7 +590,7 @@ mod tests {
                         Instr::GetElementPointer {
                             dest: Register(5),
                             base: Register(4),
-                            ty: IRType::Array {
+                            ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: IRValue::Register(Register(1))

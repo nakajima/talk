@@ -88,7 +88,7 @@ impl Eq for Ty {}
 
 impl Ty {
     pub fn string() -> Ty {
-        Ty::Struct(SymbolID::STRING, vec![Ty::Int, Ty::Int, Ty::Pointer])
+        Ty::Struct(SymbolID::STRING, vec![])
     }
 
     pub fn optional(&self) -> Ty {

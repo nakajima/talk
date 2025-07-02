@@ -1,10 +1,11 @@
 use std::ops::Add;
 
-use crate::{interpret::value::Value, lowering::ir_type::IRType};
+use crate::{
+    interpret::value::Value,
+    lowering::{ir_module::IRConstantData, ir_type::IRType},
+};
 
 pub const MEM_SIZE: usize = 2048;
-
-// pub static mut MEMORY: [Option<Value>; MEM_SIZE] = [const { None }; MEM_SIZE];
 
 // Simulate memory, kinda. Compound types (like structs or buffers) are laid out inline.
 // The first 1024 slots are for stack, the second 1024 slots are for heap.
@@ -37,17 +38,28 @@ impl Pointer {
 
 impl Default for Memory {
     fn default() -> Self {
-        Self::new()
+        Self::new(&vec![])
     }
 }
 
 impl Memory {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(static_memory: &Vec<IRConstantData>) -> Self {
+        let mut memory = Self {
             storage: [const { None }; MEM_SIZE],
             next_stack_addr: 0,
             next_heap_addr: 1024,
+        };
+
+        memory.next_stack_addr = static_memory.len();
+        memory.next_heap_addr = static_memory.len() + 1024;
+
+        for (i, val) in static_memory.into_iter().enumerate() {
+            memory.storage[i] = match val {
+                IRConstantData::RawBuffer(buf) => Some(Value::RawBuffer(buf.clone())),
+            }
         }
+
+        memory
     }
 
     pub fn range_mut(&mut self, start: usize, length: usize) -> &mut [Option<Value>] {
@@ -118,7 +130,7 @@ impl Memory {
             //     vals.resize(range.into_iter().len() + 1, None);
             //     self.storage[range].clone_from_slice(&vals)
             // }
-            IRType::Array { .. } => {
+            IRType::TypedBuffer { .. } => {
                 let elements: Vec<Value> = self.storage[range]
                     .iter()
                     .map(|c| c.clone().unwrap())
@@ -139,7 +151,7 @@ impl Memory {
             IRType::TypeVar(var) => panic!("cannot determine size of type variable: {var:?}"),
             // IRType::Enum(vars) => vars.iter().map(|t| Self::mem_size(&t)).max().unwrap_or(0),
             IRType::Struct(_, values, _) => values.len(),
-            IRType::Array { element } => Self::mem_size(element),
+            IRType::TypedBuffer { element } => Self::mem_size(element),
             _ => 1,
         }
     }

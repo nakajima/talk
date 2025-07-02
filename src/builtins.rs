@@ -409,6 +409,7 @@ mod array_tests {
             instr::Instr,
             ir_function::IRFunction,
             ir_type::IRType,
+            ir_value::IRValue,
             lowerer::{BasicBlock, BasicBlockID},
             register::Register,
         },
@@ -475,7 +476,7 @@ mod array_tests {
                         Instr::Store {
                             location: Register(2),
                             ty: IRType::Int,
-                            val: Register(1)
+                            val: Register(1).into()
                         },
                         // Set the array's capacity
                         Instr::ConstantInt(Register(3), 3),
@@ -488,7 +489,7 @@ mod array_tests {
                         Instr::Store {
                             location: Register(4),
                             ty: IRType::Int,
-                            val: Register(3)
+                            val: Register(3).into()
                         },
                         // Get array's storage pointer
                         Instr::GetElementPointer {
@@ -501,11 +502,11 @@ mod array_tests {
                         Instr::Alloc {
                             dest: Register(6),
                             ty: IRType::Int,
-                            count: Some(Register(1))
+                            count: Some(IRValue::Register(Register(1)))
                         },
                         Instr::Store {
                             ty: IRType::POINTER,
-                            val: Register(6),
+                            val: Register(6).into(),
                             location: Register(5)
                         },
                         // Store first element
@@ -513,14 +514,14 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(8),
                             base: Register(6),
-                            ty: IRType::Array {
+                            ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: 0.into(),
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(7),
+                            val: Register(7).into(),
                             location: Register(8)
                         },
                         // Store second element
@@ -528,14 +529,14 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(10),
                             base: Register(6),
-                            ty: IRType::Array {
+                            ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: 1.into(),
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(9),
+                            val: Register(9).into(),
                             location: Register(10)
                         },
                         // Store third element
@@ -543,14 +544,14 @@ mod array_tests {
                         Instr::GetElementPointer {
                             dest: Register(12),
                             base: Register(6),
-                            ty: IRType::Array {
+                            ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: 2.into(),
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: Register(11),
+                            val: Register(11).into(),
                             location: Register(12)
                         },
                         // Instr::Load {
@@ -590,6 +591,7 @@ mod stdlib_tests {
             instr::Instr,
             ir_function::IRFunction,
             ir_type::IRType,
+            ir_value::IRValue,
             lowerer::{BasicBlock, BasicBlockID},
             register::Register,
         },
@@ -613,7 +615,7 @@ mod stdlib_tests {
                         Instr::Alloc {
                             dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(1)),
+                            count: Some(IRValue::Register(Register(1))),
                         },
                         Instr::Ret(IRType::POINTER, Some(Register(0).into()))
                     ],
@@ -649,14 +651,14 @@ mod stdlib_tests {
                         Instr::Alloc {
                             dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(1)),
+                            count: Some(IRValue::Register(Register(1))),
                         },
                         // Realloc
                         Instr::ConstantInt(Register(3), 4),
                         Instr::Alloc {
                             dest: Register(2),
                             ty: IRType::Int,
-                            count: Some(Register(3)),
+                            count: Some(IRValue::Register(Register(3))),
                         },
                         Instr::Ret(IRType::POINTER, Some(Register(2).into()))
                     ],
@@ -692,20 +694,20 @@ mod stdlib_tests {
                         Instr::Alloc {
                             dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(1)),
+                            count: Some(IRValue::Register(Register(1))),
                         },
                         Instr::ConstantInt(Register(2), 1),
                         Instr::ConstantInt(Register(3), 123),
                         Instr::GetElementPointer {
                             dest: Register(4),
                             base: Register(0),
-                            ty: IRType::Array {
+                            ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: Register(2).into(),
                         },
                         Instr::Store {
-                            val: Register(3),
+                            val: Register(3).into(),
                             ty: IRType::Int,
                             location: Register(4)
                         },
@@ -743,13 +745,13 @@ mod stdlib_tests {
                         Instr::Alloc {
                             dest: Register(0),
                             ty: IRType::Int,
-                            count: Some(Register(1)),
+                            count: Some(IRValue::Register(Register(1))),
                         },
                         Instr::ConstantInt(Register(3), 1),
                         Instr::GetElementPointer {
                             dest: Register(4),
                             base: Register(0),
-                            ty: IRType::Array {
+                            ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: Register(3).into()
