@@ -8,4 +8,4 @@ struct Person {
 	}
 }
 
-let person = Person(age: 123, count: 1)
+let person = Person(age: 123)

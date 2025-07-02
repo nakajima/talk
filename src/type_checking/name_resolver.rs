@@ -110,6 +110,7 @@ impl NameResolver {
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
+                LiteralString(_) => continue,
                 LiteralArray(items) => {
                     self.resolve_nodes(&items, source_file, symbol_table);
                 }

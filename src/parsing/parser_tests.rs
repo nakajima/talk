@@ -23,11 +23,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_string_literal() {
+        let parsed = parse("\"hello world\"");
+        let expr = parsed.roots()[0].unwrap();
+        assert_eq!(*expr, LiteralString("hello world".into()));
+    }
+
+    #[test]
     fn handles_semicolons() {
         let parsed = parse("123 ; 456");
 
         assert_eq!(*parsed.roots()[0].unwrap(), LiteralInt("123".into()));
         assert_eq!(*parsed.roots()[1].unwrap(), LiteralInt("456".into()));
+    }
+
+    #[test]
+    fn handles_semicolon_in_body() {
+        let parsed = parse("struct Person { ; }");
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: 0
+            }
+        );
     }
 
     #[test]

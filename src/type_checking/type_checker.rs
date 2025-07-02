@@ -233,6 +233,7 @@ impl<'a> TypeChecker<'a> {
             } => self.infer_call(id, env, callee, type_args, args, expected, source_file),
             Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
             Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
+            Expr::LiteralString(_) => Ok(Ty::string()),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
             Expr::TypeRepr {
                 name,

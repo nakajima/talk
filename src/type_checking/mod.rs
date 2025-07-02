@@ -33,6 +33,10 @@ pub struct CheckResult {
 
 #[cfg(test)]
 impl CheckResult {
+    pub fn first(&self) -> Option<Ty> {
+        self.type_for(&self.root_ids()[0])
+    }
+
     pub fn type_for(&self, id: &ExprID) -> Option<Ty> {
         self.source_file.type_for(*id, &self.env)
     }

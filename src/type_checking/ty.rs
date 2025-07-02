@@ -87,6 +87,10 @@ impl std::hash::Hash for Ty {
 impl Eq for Ty {}
 
 impl Ty {
+    pub fn string() -> Ty {
+        Ty::Struct(SymbolID::STRING, vec![Ty::Int, Ty::Int, Ty::Pointer])
+    }
+
     pub fn optional(&self) -> Ty {
         Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
     }

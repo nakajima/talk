@@ -183,8 +183,10 @@ mod tests {
 mod type_tests {
     use crate::{
         SymbolID, check_without_prelude,
+        diagnostic::{Diagnostic, DiagnosticKind},
         expr::Expr,
         ty::Ty,
+        type_checker::TypeError,
         type_checking::CheckResult,
         type_constraint::TypeConstraint,
         type_defs::TypeDef,
@@ -205,6 +207,12 @@ mod type_tests {
     fn checks_a_float() {
         let checker = check("123.");
         assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Float);
+    }
+
+    #[test]
+    fn checks_a_string() {
+        let checker = check("\"hello world\"");
+        assert_eq!(checker.first().unwrap(), Ty::string())
     }
 
     #[test]
@@ -1244,25 +1252,9 @@ mod type_tests {
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Float])
         );
     }
-}
-
-#[cfg(test)]
-mod pending {
-    use crate::{
-        check_without_prelude,
-        diagnostic::{Diagnostic, DiagnosticKind},
-        ty::Ty,
-        type_checker::TypeError,
-        type_checking::CheckResult,
-    };
 
     fn check_err(code: &'static str) -> Result<CheckResult, TypeError> {
         check_without_prelude(code)
-    }
-
-    fn check(code: &'static str) -> Ty {
-        let typed = check_without_prelude(code).unwrap();
-        typed.type_for(&typed.root_ids()[0]).unwrap()
     }
 
     #[test]
@@ -1290,22 +1282,22 @@ mod pending {
 
     #[test]
     fn checks_literal_true() {
-        assert_eq!(check("true"), Ty::Bool);
+        assert_eq!(check("true").first().unwrap(), Ty::Bool);
     }
 
     #[test]
     fn checks_literal_false() {
-        assert_eq!(check("false"), Ty::Bool);
+        assert_eq!(check("false").first().unwrap(), Ty::Bool);
     }
 
     #[test]
     fn checks_if_expression() {
-        assert_eq!(check("if true { 1 } else { 0 }"), Ty::Int);
+        assert_eq!(check("if true { 1 } else { 0 }").first().unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_if_expression_without_else() {
-        assert_eq!(check("if true { 1 }"), Ty::Int.optional());
+        assert_eq!(check("if true { 1 }").first().unwrap(), Ty::Int.optional());
     }
 
     #[test]
@@ -1324,12 +1316,12 @@ mod pending {
 
     #[test]
     fn checks_loop_expression() {
-        assert_eq!(check("loop { 1 }"), Ty::Void);
+        assert_eq!(check("loop { 1 }").first().unwrap(), Ty::Void);
     }
 
     #[test]
     fn checks_loop_expression_with_condition() {
-        assert_eq!(check("loop true { 1 }"), Ty::Void);
+        assert_eq!(check("loop true { 1 }").first().unwrap(), Ty::Void);
     }
 
     #[test]
@@ -1348,12 +1340,15 @@ mod pending {
 
     #[test]
     fn checks_tuple_expression() {
-        assert_eq!(check("(1, true)"), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+        assert_eq!(
+            check("(1, true)").first().unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+        );
     }
 
     #[test]
     fn checks_unit_tuple_expression() {
-        assert_eq!(check("()"), Ty::Tuple(vec![]));
+        assert_eq!(check("()").first().unwrap(), Ty::Tuple(vec![]));
     }
 
     #[test]
@@ -1370,18 +1365,18 @@ mod pending {
 
     #[test]
     fn checks_grouping_expression() {
-        assert_eq!(check("(1)"), Ty::Int);
+        assert_eq!(check("(1)").first().unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_unary_expression() {
-        assert_eq!(check("-1"), Ty::Int);
+        assert_eq!(check("-1").first().unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_binary_expression() {
-        assert_eq!(check("1 + 2"), Ty::Int);
-        assert_eq!(check("1.1 + 2.1"), Ty::Float);
+        assert_eq!(check("1 + 2").first().unwrap(), Ty::Int);
+        assert_eq!(check("1.1 + 2.1").first().unwrap(), Ty::Float);
     }
 
     #[test]
@@ -1391,7 +1386,9 @@ mod pending {
                 "func foo() {
             return
         }()"
-            ),
+            )
+            .first()
+            .unwrap(),
             Ty::Void
         );
     }
@@ -1416,7 +1413,9 @@ mod pending {
             return x
             123
         }"
-            ),
+            )
+            .first()
+            .unwrap(),
             Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
         );
     }
@@ -1428,7 +1427,9 @@ mod pending {
                 "func foo() {
             return 123
         }()"
-            ),
+            )
+            .first()
+            .unwrap(),
             Ty::Int
         );
     }

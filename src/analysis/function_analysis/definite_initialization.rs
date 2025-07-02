@@ -229,17 +229,16 @@ mod tests {
 
         let cfg = ControlFlowGraph::new(function);
 
-        assert_eq!(
-            Err(IRError::PartialInitialization(
-                format!("@_{}_Person_init", person_id.0),
-                vec![Property {
-                    name: "age".into(),
-                    expr_id: 165,
-                    ty: Ty::Int
-                }]
-            )),
+        let Err(IRError::PartialInitialization(name, properties)) =
             DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)
-        );
+        else {
+            panic!("did not get error");
+        };
+
+        assert_eq!(name, format!("@_{}_Person_init", person_id.0));
+        let Property { name, ty, .. } = &properties[0];
+        assert_eq!(name, "age");
+        assert_eq!(ty, &Ty::Int);
     }
 
     #[test]
@@ -271,17 +270,16 @@ mod tests {
 
         let cfg = ControlFlowGraph::new(function);
 
-        assert_eq!(
-            Err(IRError::PartialInitialization(
-                format!("@_{}_Person_init", person_id.0),
-                vec![Property {
-                    name: "age".into(),
-                    expr_id: 165,
-                    ty: Ty::Int
-                }]
-            )),
+        let Err(IRError::PartialInitialization(name, properties)) =
             DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)
-        );
+        else {
+            panic!("did not get error");
+        };
+
+        assert_eq!(name, format!("@_{}_Person_init", person_id.0));
+        let Property { name, ty, .. } = &properties[0];
+        assert_eq!(name, "age");
+        assert_eq!(ty, &Ty::Int);
     }
 
     #[test]

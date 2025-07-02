@@ -31,6 +31,7 @@ pub fn _compile_prelude() -> Prelude {
     for file in [
         PathBuf::from("./core/Optional.tlk"),
         PathBuf::from("./core/Array.tlk"),
+        PathBuf::from("./core/String.tlk"),
     ] {
         #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
@@ -62,4 +63,4 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Optional", "Array");
+stdlib_modules!("Optional", "Array", "String");

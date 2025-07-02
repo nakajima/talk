@@ -115,6 +115,12 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
+            TokenKind::StringLiteral(_) => ParseHandler {
+                prefix: Some(Parser::literal),
+                infix: None,
+                precedence: Precedence::Primary,
+            },
+
             TokenKind::Struct => ParseHandler {
                 prefix: Some(Parser::struct_expr),
                 infix: None,

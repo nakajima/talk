@@ -8,12 +8,14 @@ use super::token_kind::TokenKind::{self, *};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LexerError {
     UnexpectedInput(char),
+    UnexpectedEOF,
 }
 
 impl LexerError {
     pub fn message(&self) -> String {
         match &self {
             Self::UnexpectedInput(ch) => format!("Unexpected character: {ch:?}"),
+            Self::UnexpectedEOF => "Unexpected end of file".to_string(),
         }
     }
 }
@@ -110,6 +112,7 @@ impl<'a> Lexer<'a> {
             '[' => self.make(LeftBracket),
             ']' => self.make(RightBracket),
             ';' => self.make(Semicolon),
+            '"' => self.string(),
             '\n' => self.newline(),
             '_' => {
                 if let Some(next) = self.peek()
@@ -200,6 +203,25 @@ impl<'a> Lexer<'a> {
         } else {
             self.make(not_found)
         }
+    }
+
+    fn string(&mut self) -> Result<Token, LexerError> {
+        self.started = self.current;
+        while let Some(ch) = self.peek() {
+            if ch == '"' {
+                let token = self.make(TokenKind::StringLiteral(
+                    self.string_from(self.started, self.current),
+                ));
+
+                self.advance();
+
+                return token;
+            }
+
+            self.advance();
+        }
+
+        Err(LexerError::UnexpectedEOF)
     }
 
     fn identifier(&mut self, starting_at: u32) -> TokenKind {
@@ -439,6 +461,18 @@ mod tests {
         // Collapses multiple newlines into 1
         let mut lexer = Lexer::new("\n\n\n");
         assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn strings() {
+        let mut lexer = Lexer::new("- \"hello world\" + ");
+        assert_eq!(lexer.next().unwrap().kind, Minus);
+        assert_eq!(
+            lexer.next().unwrap().kind,
+            StringLiteral("hello world".to_string())
+        );
+        assert_eq!(lexer.next().unwrap().kind, Plus);
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
