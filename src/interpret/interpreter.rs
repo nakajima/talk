@@ -112,7 +112,7 @@ impl IRInterpreter {
             .call_stack
             .last()
             .map(|frame| frame.sp + frame.function.size as usize)
-            .unwrap_or(0);
+            .unwrap_or(self.memory.next_stack_addr);
 
         self.call_stack.push(StackFrame {
             pred: None,
@@ -799,6 +799,19 @@ mod tests {
             )
             .unwrap(),
             Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_string() {
+        assert_eq!(
+            interpret(
+                "
+                \"hello world\"
+                "
+            )
+            .unwrap(),
+            Value::String("hello world".to_string())
         );
     }
 }

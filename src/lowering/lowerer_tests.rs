@@ -1237,12 +1237,17 @@ pub mod lowering_tests {
                             val: Register(4).into(),
                             location: Register(3)
                         },
-                        Instr::Ret(IRType::string(), Some(Register(0).into())),
+                        Instr::Load {
+                            ty: IRType::string(),
+                            dest: Register(5),
+                            addr: Register(0),
+                        },
+                        Instr::Ret(IRType::string(), Some(Register(5).into())),
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 5
+                size: 6
             }
         )
     }

@@ -105,8 +105,6 @@ impl Ty {
                     return IRType::Void;
                 };
 
-                println!("Ty::Struct to ir {self:?} -> {generics:?}");
-
                 IRType::Struct(
                     *symbol_id,
                     struct_def
@@ -702,6 +700,7 @@ impl<'a> Lowerer<'a> {
     fn lower_string(&mut self, _expr_id: &ExprID, string: String) -> Option<Register> {
         // Allocate the storage
         let chars_bytes = string.as_bytes();
+        println!("char_bytes: {chars_bytes:?}");
         self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
 
         let string_struct_reg = self.allocate_register();
@@ -720,7 +719,7 @@ impl<'a> Lowerer<'a> {
         });
         self.push_instr(Instr::Store {
             ty: IRType::Int,
-            val: IRValue::ImmediateInt(3),
+            val: IRValue::ImmediateInt(chars_bytes.len() as i64),
             location: length_reg,
         });
 
@@ -733,7 +732,7 @@ impl<'a> Lowerer<'a> {
         });
         self.push_instr(Instr::Store {
             ty: IRType::Int,
-            val: IRValue::ImmediateInt(3),
+            val: IRValue::ImmediateInt(chars_bytes.len() as i64),
             location: capacity_reg,
         });
 
@@ -756,7 +755,14 @@ impl<'a> Lowerer<'a> {
             location: storage_reg,
         });
 
-        Some(string_struct_reg)
+        let dest = self.allocate_register();
+        self.push_instr(Instr::Load {
+            dest,
+            ty: IRType::string(),
+            addr: string_struct_reg,
+        });
+
+        Some(dest)
     }
 
     fn lower_array(&mut self, expr_id: &ExprID, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
