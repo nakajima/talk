@@ -36,6 +36,8 @@ use crate::parser::Parser;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::KEYWORD,
+    SemanticTokenType::COMMENT,
+    SemanticTokenType::INTERFACE,
     SemanticTokenType::VARIABLE,
     SemanticTokenType::FUNCTION,
     SemanticTokenType::PARAMETER,

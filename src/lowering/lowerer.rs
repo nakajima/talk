@@ -473,6 +473,10 @@ impl<'a> Lowerer<'a> {
                 }
             }
         } else {
+            self.current_functions.push(CurrentFunction::new(None));
+            let id = self.new_basic_block();
+            self.set_current_block(id);
+
             for root_id in self.source_file.root_ids() {
                 self.lower_expr(&root_id);
             }

@@ -273,7 +273,7 @@ impl<'a> SemanticTokenCollector<'a> {
 
     fn make(
         &self,
-        token: Token,
+        token: &Token,
         token_type: SemanticTokenType,
         tokens: &mut Vec<(Range, SemanticTokenType)>,
     ) {
@@ -285,9 +285,10 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn collect_lexed_tokens(&mut self) {
-        let mut lexer = Lexer::new(self.source);
+        let mut lexer = Lexer::preserving_comments(self.source);
         let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
-        while let Ok(tok) = lexer.next() {
+
+        while let Ok(tok) = &lexer.next() {
             match tok.kind {
                 TokenKind::LineComment(_) => {
                     self.make(tok, SemanticTokenType::COMMENT, &mut tokens)
@@ -355,6 +356,12 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::Protocol => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
             }
         }
+
+        for tok in lexer.comments.iter() {
+            log::info!("Got a comment token: {tok:?}");
+            self.make(tok, SemanticTokenType::COMMENT, &mut tokens)
+        }
+
         self.tokens.extend(tokens);
     }
 

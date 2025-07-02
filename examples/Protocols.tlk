@@ -1,3 +1,4 @@
+// Hello world
 protocol Foo {
 	func foo() -> Int
 }
@@ -12,4 +13,3 @@ func fizz<T: Foo>(t: T) {
 }
 
 fizz(Person())
-

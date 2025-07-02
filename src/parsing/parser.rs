@@ -161,8 +161,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         while let Some(current) = self.current.clone() {
-            self.skip_newlines();
-            self.skip_semicolons();
+            self.skip_semicolons_and_newlines();
 
             if current.kind == TokenKind::EOF {
                 return;
@@ -220,10 +219,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn skip_semicolons(&mut self) {
+    fn skip_semicolons_and_newlines(&mut self) {
         while {
             if let Some(token) = &self.current {
-                token.kind == TokenKind::Semicolon
+                token.kind == TokenKind::Semicolon || token.kind == TokenKind::Newline
             } else {
                 false
             }

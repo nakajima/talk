@@ -27,7 +27,7 @@ pub struct Lexer<'a> {
     started: u32,
     line: u32,
     col: u32,
-    comments: Vec<Token>,
+    pub comments: Vec<Token>,
 }
 
 impl<'a> Lexer<'a> {
@@ -171,7 +171,7 @@ impl<'a> Lexer<'a> {
 
     fn preserve_comments(&mut self) -> Result<(), LexerError> {
         if self.peek() == Some('/') && self.peek_next() == Some('/') {
-            let start = self.current.saturating_sub(1);
+            self.started = self.current;
 
             while let Some(ch) = self.peek() {
                 if ch == '\n' {
@@ -181,7 +181,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
 
-            let comment = self.make(LineComment(self.string_from(start, self.current)))?;
+            let comment = self.make(LineComment(self.string_from(self.started, self.current)))?;
             self.comments.push(comment);
         }
 
