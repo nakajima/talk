@@ -233,22 +233,9 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        #[allow(clippy::unwrap_used)]
-        let start_idx = self
-            .code
-            .char_indices()
-            .nth(starting_at as usize)
-            .unwrap()
-            .0;
-        #[allow(clippy::unwrap_used)]
-        let end_idx = self
-            .code
-            .char_indices()
-            .nth(self.current as usize - 1)
-            .unwrap()
-            .0;
+        let string = self.string_from(starting_at, self.current);
 
-        match &self.code[start_idx..=end_idx] {
+        match string.as_str() {
             "func" => Func,
             "let" => Let,
             "if" => If,
@@ -264,7 +251,7 @@ impl<'a> Lexer<'a> {
             "break" => Break,
             "init" => Init,
             "protocol" => Protocol,
-            _ => Identifier(self.code[start_idx..=end_idx].to_string()),
+            _ => Identifier(string),
         }
     }
 
@@ -304,12 +291,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn string_from(&self, start: u32, end: u32) -> String {
-        #[allow(clippy::unwrap_used)]
-        let start_idx = self.code.char_indices().nth(start as usize).unwrap().0;
-        #[allow(clippy::unwrap_used)]
-        let end_idx = self.code.char_indices().nth(end as usize - 1).unwrap().0;
-
-        self.code[start_idx..=end_idx].to_string()
+        self.code[(start as usize)..=(end as usize - 1)].to_string()
     }
 
     fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {
@@ -322,15 +304,6 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    // fn did_match(&mut self, ch: &char) -> bool {
-    //     if Some(ch) == self.peek() {
-    //         self.advance();
-    //         true
-    //     } else {
-    //         false
-    //     }
-    // }
-
     pub(crate) fn advance(&mut self) -> Option<char> {
         if let Some(ch) = self._chars.next() {
             if ch == '\n' {
@@ -339,7 +312,7 @@ impl<'a> Lexer<'a> {
             } else {
                 self.col += 1;
             }
-            self.current += 1;
+            self.current += ch.len_utf8() as u32;
             Some(ch)
         } else {
             None
@@ -471,6 +444,18 @@ mod tests {
         assert_eq!(
             lexer.next().unwrap().kind,
             StringLiteral("hello world".to_string())
+        );
+        assert_eq!(lexer.next().unwrap().kind, Plus);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn strings_with_emoji() {
+        let mut lexer = Lexer::new("- \"😎😎 hello 🗿\" + ");
+        assert_eq!(lexer.next().unwrap().kind, Minus);
+        assert_eq!(
+            lexer.next().unwrap().kind,
+            StringLiteral("😎😎 hello 🗿".to_string())
         );
         assert_eq!(lexer.next().unwrap().kind, Plus);
         assert_eq!(lexer.next().unwrap().kind, EOF);

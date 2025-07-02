@@ -1,1 +1,9 @@
-"hello world"
+"hello 🌎"
+
+// struct SomePrintableThing: Printable {
+// 	func toString() -> String {
+// 		"It's the printable thing"
+// 	} 
+// }
+
+// print(SomePrintableThing())
