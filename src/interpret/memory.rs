@@ -61,8 +61,6 @@ impl Memory {
             }
         }
 
-        println!("init memory: {memory:?}");
-
         memory
     }
 
@@ -123,13 +121,10 @@ impl Memory {
             // Special case some stuff
             IRType::Struct(struct_id, _, _) => match *struct_id {
                 SymbolID::STRING => {
-                    println!("loading string: {range:?}");
                     let string_struct_props: Vec<Value> = self.storage[range]
                         .iter()
                         .map(|c| c.clone().unwrap())
                         .collect();
-
-                    println!("string props: {string_struct_props:?}");
 
                     let Value::Int(length) = string_struct_props[0] else {
                         panic!("Didn't get length");

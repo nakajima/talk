@@ -3,7 +3,6 @@ struct String {
   let capacity: Int
   let storage: Pointer
   
-
   init(capacity: Int) {
     self.length = 0
 		self.capacity = capacity

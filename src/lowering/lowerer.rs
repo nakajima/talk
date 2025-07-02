@@ -700,7 +700,6 @@ impl<'a> Lowerer<'a> {
     fn lower_string(&mut self, _expr_id: &ExprID, string: String) -> Option<Register> {
         // Allocate the storage
         let chars_bytes = string.as_bytes();
-        println!("char_bytes: {chars_bytes:?}");
         self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
 
         let string_struct_reg = self.allocate_register();
