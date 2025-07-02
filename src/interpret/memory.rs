@@ -38,12 +38,12 @@ impl Pointer {
 
 impl Default for Memory {
     fn default() -> Self {
-        Self::new(&vec![])
+        Self::new(&[])
     }
 }
 
 impl Memory {
-    pub fn new(static_memory: &Vec<IRConstantData>) -> Self {
+    pub fn new(static_memory: &[IRConstantData]) -> Self {
         let mut memory = Self {
             storage: [const { None }; MEM_SIZE],
             next_stack_addr: 0,
@@ -53,7 +53,7 @@ impl Memory {
         memory.next_stack_addr = static_memory.len();
         memory.next_heap_addr = static_memory.len() + 1024;
 
-        for (i, val) in static_memory.into_iter().enumerate() {
+        for (i, val) in static_memory.iter().enumerate() {
             memory.storage[i] = match val {
                 IRConstantData::RawBuffer(buf) => Some(Value::RawBuffer(buf.clone())),
             }
