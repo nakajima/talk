@@ -5,6 +5,7 @@ mod tests {
     use crate::{
         Parsed, SourceFile,
         name::Name,
+        parser::parse_with_comments,
         parsing::expr::Expr::{self, *},
         token_kind::TokenKind,
     };
@@ -22,8 +23,34 @@ mod tests {
     }
 
     #[test]
+    fn handles_semicolons() {
+        let parsed = parse("123 ; 456");
+
+        assert_eq!(*parsed.roots()[0].unwrap(), LiteralInt("123".into()));
+        assert_eq!(*parsed.roots()[1].unwrap(), LiteralInt("456".into()));
+    }
+
+    #[test]
+    fn handles_semicolons_infix() {
+        let parsed = parse("func() { };()");
+
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Func {
+                name: None,
+                generics: vec![],
+                params: vec![],
+                body: 0,
+                ret: None,
+                captures: vec![]
+            }
+        );
+        assert_eq!(*parsed.roots()[1].unwrap(), Tuple(vec![]));
+    }
+
+    #[test]
     fn ignores_comments() {
-        let parsed = parse("// what's up\n123");
+        let parsed = parse_with_comments("// what's up\n123");
         let expr = parsed.roots()[0].unwrap();
 
         assert_eq!(*expr, LiteralInt("123".into()));

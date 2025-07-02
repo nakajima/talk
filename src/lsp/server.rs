@@ -26,7 +26,7 @@ use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
-use crate::compiling::driver::Driver;
+use crate::compiling::driver::{Driver, DriverConfig};
 use crate::environment::Environment;
 use crate::lexer::Lexer;
 use crate::lsp::completion::CompletionContext;
@@ -400,7 +400,11 @@ impl ServerState {
         let mut router = Router::from_language_server(Self {
             client,
             counter: 0,
-            driver: Driver::with_files(vec![]),
+            driver: Driver::new(DriverConfig {
+                executable: false,
+                include_prelude: true,
+                include_comments: true,
+            }),
         });
         router.event(Self::on_tick);
         router

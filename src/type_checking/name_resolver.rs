@@ -1027,7 +1027,7 @@ mod tests {
         let mut driver = Driver::with_str(code);
         let file = driver.units[0]
             .clone()
-            .parse()
+            .parse(false)
             .resolved(&mut driver.symbol_table)
             .source_file(&PathBuf::from("-"))
             .unwrap()

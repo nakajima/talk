@@ -12,6 +12,7 @@ pub mod helpers {
         let mut driver = Driver::new(DriverConfig {
             executable: true,
             include_prelude: false,
+            include_comments: false,
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
@@ -28,6 +29,7 @@ pub mod helpers {
         let mut driver = Driver::new(DriverConfig {
             executable: true,
             include_prelude: false,
+            include_comments: false,
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
@@ -65,6 +67,7 @@ pub mod lowering_tests {
         let mut driver = Driver::new(DriverConfig {
             executable: true,
             include_prelude: true,
+            include_comments: false,
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();

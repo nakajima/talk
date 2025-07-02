@@ -21,6 +21,7 @@ use crate::{
 pub struct DriverConfig {
     pub executable: bool,
     pub include_prelude: bool,
+    pub include_comments: bool,
 }
 
 impl DriverConfig {
@@ -38,6 +39,7 @@ impl Default for DriverConfig {
         DriverConfig {
             executable: true,
             include_prelude: true,
+            include_comments: false,
         }
     }
 }
@@ -109,7 +111,7 @@ impl Driver {
     pub fn parse(&self) -> Vec<CompilationUnit<Parsed>> {
         let mut result = vec![];
         for unit in self.units.clone() {
-            result.push(unit.parse());
+            result.push(unit.parse(self.config.include_comments));
         }
         result
     }
@@ -118,7 +120,7 @@ impl Driver {
         let mut result = vec![];
 
         for unit in self.units.clone() {
-            let parsed = unit.parse();
+            let parsed = unit.parse(self.config.include_comments);
             let resolved = parsed.resolved(&mut self.symbol_table);
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
 
@@ -137,7 +139,7 @@ impl Driver {
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
         for unit in self.units.clone() {
-            let parsed = unit.parse();
+            let parsed = unit.parse(self.config.include_comments);
             let resolved = parsed.resolved(&mut self.symbol_table);
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
             result.push(typed);
@@ -254,7 +256,7 @@ impl Driver {
     pub fn typed_source_file(&mut self, path: &PathBuf) -> Option<SourceFile<source_file::Typed>> {
         for unit in self.units.clone() {
             let typed = unit
-                .parse()
+                .parse(self.config.include_comments)
                 .resolved(&mut self.symbol_table)
                 .typed(&mut self.symbol_table, &self.config);
             for file in typed.stage.files {
@@ -272,7 +274,9 @@ impl Driver {
         path: &Path,
     ) -> Option<SourceFile<source_file::NameResolved>> {
         for unit in self.units.clone() {
-            let typed = unit.parse().resolved(&mut self.symbol_table);
+            let typed = unit
+                .parse(self.config.include_comments)
+                .resolved(&mut self.symbol_table);
             if let Some(file) = typed.source_file(&PathBuf::from(path)) {
                 return Some(file.clone());
             }

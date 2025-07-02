@@ -111,6 +111,16 @@ pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
 }
 
 #[cfg(test)]
+pub fn parse_with_comments(code: &str) -> SourceFile {
+    let lexer = Lexer::preserving_comments(code);
+    let mut env = Environment::default();
+    let mut parser = Parser::new(env.session.clone(), lexer, PathBuf::from("-"), &mut env);
+
+    parser.parse();
+    parser.parse_tree
+}
+
+#[cfg(test)]
 pub fn parse_with_session(
     code: &str,
     file_path: PathBuf,
@@ -152,6 +162,7 @@ impl<'a> Parser<'a> {
 
         while let Some(current) = self.current.clone() {
             self.skip_newlines();
+            self.skip_semicolons();
 
             if current.kind == TokenKind::EOF {
                 return;
@@ -201,6 +212,18 @@ impl<'a> Parser<'a> {
         while {
             if let Some(token) = &self.current {
                 token.kind == TokenKind::Newline
+            } else {
+                false
+            }
+        } {
+            self.advance();
+        }
+    }
+
+    fn skip_semicolons(&mut self) {
+        while {
+            if let Some(token) = &self.current {
+                token.kind == TokenKind::Semicolon
             } else {
                 false
             }
@@ -1140,6 +1163,7 @@ impl<'a> Parser<'a> {
             self.current,
             precedence
         );
+
         self.skip_newlines();
 
         let mut lhs: Option<ExprID> = None;
@@ -1166,7 +1190,7 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            if self.did_match(TokenKind::Newline)? {
+            if self.did_match(TokenKind::Newline)? || self.did_match(TokenKind::Semicolon)? {
                 break;
             }
 

@@ -88,7 +88,7 @@ impl CompilationUnit<Raw> {
         }
     }
 
-    pub fn parse(mut self) -> CompilationUnit<Parsed> {
+    pub fn parse(mut self, include_comments: bool) -> CompilationUnit<Parsed> {
         let mut files = vec![];
 
         for path in self.input.clone() {
@@ -105,7 +105,11 @@ impl CompilationUnit<Raw> {
                 }
             };
 
-            let lexer = Lexer::new(&source);
+            let lexer = if include_comments {
+                Lexer::preserving_comments(&source)
+            } else {
+                Lexer::new(&source)
+            };
             let mut parser = Parser::new(self.session.clone(), lexer, path, &mut self.env);
             parser.parse();
             files.push(parser.parse_tree);
@@ -126,7 +130,7 @@ impl CompilationUnit<Raw> {
         driver_config: &DriverConfig,
         module: IRModule,
     ) -> CompilationUnit<Lowered> {
-        let parsed = self.parse();
+        let parsed = self.parse(driver_config.include_comments);
         let resolved = parsed.resolved(symbol_table);
         let typed = resolved.typed(symbol_table, driver_config);
         typed.lower(symbol_table, driver_config, module)

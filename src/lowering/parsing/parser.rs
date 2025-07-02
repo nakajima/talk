@@ -447,6 +447,7 @@ mod tests {
         let mut driver = Driver::new(DriverConfig {
             executable: true,
             include_prelude: false,
+            include_comments: false,
         });
         driver.update_file(&"-".into(), input.to_string());
         let module = driver.lower().into_iter().next().unwrap().module();

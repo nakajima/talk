@@ -119,6 +119,7 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
     let mut driver = Driver::new(DriverConfig {
         executable: false,
         include_prelude: false,
+        include_comments: false,
     });
     driver.update_file(path, input.into());
     let typed_compilation_unit = driver.check().into_iter().next().unwrap().clone();

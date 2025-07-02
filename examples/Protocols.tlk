@@ -2,6 +2,7 @@ protocol Foo {
 	func foo() -> Int
 }
 
+// Person doesn't implement Foo
 struct Person: Foo {
 	func foo() { 123 }
 }

@@ -26,6 +26,7 @@ pub fn _compile_prelude() -> Prelude {
     let mut driver = Driver::new(DriverConfig {
         executable: false,
         include_prelude: false,
+        include_comments: false,
     });
     for file in [
         PathBuf::from("./core/Optional.tlk"),
