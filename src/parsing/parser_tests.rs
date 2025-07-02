@@ -1353,9 +1353,10 @@ mod error_handling_tests {
     fn handles_unclosed_paren() {
         let (_, session) = parse_with_session("(", "-".into());
         let session = session.lock().unwrap();
-        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        let diagnostics = session.diagnostics_for(&PathBuf::from("-")).unwrap();
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics.contains(&Diagnostic::parser(
+            PathBuf::from("-"),
             Token {
                 kind: TokenKind::LeftParen,
                 col: 1,
@@ -1371,10 +1372,11 @@ mod error_handling_tests {
     fn handles_unclosed_brace() {
         let (_, session) = parse_with_session("func foo() {", "-".into());
         let session = session.lock().unwrap();
-        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        let diagnostics = session.diagnostics_for(&PathBuf::from("-")).unwrap();
         assert_eq!(diagnostics.len(), 1);
         assert!(
             diagnostics.contains(&Diagnostic::parser(
+                PathBuf::from("-"),
                 Token {
                     kind: TokenKind::Func,
                     col: 4,
@@ -1385,7 +1387,7 @@ mod error_handling_tests {
                 crate::parser::ParserError::UnexpectedEndOfInput(None)
             )),
             "{:?}",
-            session.diagnostics()
+            session._diagnostics()
         )
     }
 
@@ -1393,9 +1395,10 @@ mod error_handling_tests {
     fn recovers() {
         let (parsed, session) = parse_with_session("func foo() {\n\nfunc fizz() {}", "-".into());
         let session = session.lock().unwrap();
-        let diagnostics = session.diagnostics().get(&PathBuf::from("-")).unwrap();
+        let diagnostics = session.diagnostics_for(&PathBuf::from("-")).unwrap();
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(diagnostics.contains(&Diagnostic::parser(
+            PathBuf::from("-"),
             Token {
                 kind: TokenKind::Func,
                 col: 4,

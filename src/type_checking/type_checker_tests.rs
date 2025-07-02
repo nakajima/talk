@@ -1330,6 +1330,7 @@ mod type_tests {
         assert_eq!(checked.diagnostics().len(), 1);
         assert!(
             checked.diagnostics().contains(&Diagnostic::typing(
+                checked.source_file.path.clone(),
                 checked.root_ids()[0] - 3,
                 TypeError::UnexpectedType(Ty::Bool.to_string(), Ty::Float.to_string())
             )),
@@ -1640,7 +1641,8 @@ mod protocol_tests {
         assert!(matches!(
             checked.diagnostics()[0],
             Diagnostic {
-                kind: DiagnosticKind::Typing(_, TypeError::ConformanceError(_))
+                kind: DiagnosticKind::Typing(_, TypeError::ConformanceError(_)),
+                ..
             }
         ))
     }
@@ -1674,7 +1676,8 @@ mod protocol_tests {
         assert!(matches!(
             checked.diagnostics()[0],
             Diagnostic {
-                kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _))
+                kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)),
+                ..
             }
         ))
     }

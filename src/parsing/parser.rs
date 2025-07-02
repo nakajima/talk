@@ -173,7 +173,11 @@ impl<'a> Parser<'a> {
                 Ok(expr) => self.parse_tree.push_root(expr),
                 Err(err) => {
                     log::error!("{}", err.message());
-                    self.add_diagnostic(Diagnostic::parser(current, err));
+                    self.add_diagnostic(Diagnostic::parser(
+                        self.parse_tree.path.clone(),
+                        current,
+                        err,
+                    ));
                     self.recover();
                 }
             }
@@ -647,6 +651,7 @@ impl<'a> Parser<'a> {
             Err(e) => {
                 // Add an empty member name so name resolution can  but still emit the error
                 self.add_diagnostic(Diagnostic::parser(
+                    self.parse_tree.path.clone(),
                     self.current.clone().unwrap_or(Token::EOF),
                     e,
                 ));

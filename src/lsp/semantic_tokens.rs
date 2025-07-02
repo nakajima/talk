@@ -87,7 +87,7 @@ impl<'a> SemanticTokenCollector<'a> {
         };
 
         match expr {
-            Expr::LiteralString(_) => (), // already handled by lexed
+            Expr::LiteralString(_) => result.push((range, SemanticTokenType::STRING)), // already handled by lexed
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
                 result.push((range, SemanticTokenType::NUMBER))
@@ -285,6 +285,19 @@ impl<'a> SemanticTokenCollector<'a> {
         }
     }
 
+    fn make_string(
+        &self,
+        token: &Token,
+        token_type: SemanticTokenType,
+        tokens: &mut Vec<(Range, SemanticTokenType)>,
+    ) {
+        if let Some(start) = self.line_col_for(token.start.saturating_sub(1))
+            && let Some(end) = self.line_col_for(token.end.saturating_add(1))
+        {
+            tokens.push((Range::new(start, end), token_type))
+        }
+    }
+
     fn collect_lexed_tokens(&mut self) {
         let mut lexer = Lexer::preserving_comments(self.source);
         let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
@@ -304,7 +317,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::Case => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Match => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral(_) => {
-                    self.make(tok, SemanticTokenType::STRING, &mut tokens)
+                    self.make_string(tok, SemanticTokenType::STRING, &mut tokens)
                 }
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => (),

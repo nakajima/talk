@@ -538,6 +538,7 @@ impl<'a> Lowerer<'a> {
             Expr::Break => {
                 let Some(current_loop_exit) = self.loop_exits.last() else {
                     self.add_diagnostic(Diagnostic::lowering(
+                        self.source_file.path.clone(),
                         *expr_id,
                         IRError::Unknown("trying to break while not in a loop".into()),
                     ));
@@ -557,6 +558,7 @@ impl<'a> Lowerer<'a> {
             Expr::Tuple(items) => self.lower_tuple(expr_id, items),
             expr => {
                 self.add_diagnostic(Diagnostic::lowering(
+                    self.source_file.path.clone(),
                     *expr_id,
                     IRError::Unknown(format!("Cannot lower {expr:?}")),
                 ));
@@ -657,6 +659,7 @@ impl<'a> Lowerer<'a> {
             self.set_current_block(loop_cond);
             let Some(cond_reg) = self.lower_expr(cond) else {
                 self.add_diagnostic(Diagnostic::lowering(
+                    self.source_file.path.clone(),
                     *cond,
                     IRError::Unknown(format!("Cannot lower loop condition {cond:?}")),
                 ));
@@ -808,6 +811,7 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned() else {
             self.add_diagnostic(Diagnostic::lowering(
+                self.source_file.path.clone(),
                 *expr_id,
                 IRError::Unknown(format!(
                     "Could not resolve struct for symbol: {struct_id:?}"
@@ -826,7 +830,11 @@ impl<'a> Lowerer<'a> {
                 match pass.run(init_func, &cfg) {
                     Ok(_) => (),
                     Err(e) => {
-                        self.add_diagnostic(Diagnostic::lowering(initializer.expr_id, e));
+                        self.add_diagnostic(Diagnostic::lowering(
+                            self.source_file.path.clone(),
+                            initializer.expr_id,
+                            e,
+                        ));
                     }
                 }
             }
@@ -834,6 +842,7 @@ impl<'a> Lowerer<'a> {
 
         let Some(Expr::Block(member_ids)) = self.source_file.get(body_id) else {
             self.add_diagnostic(Diagnostic::lowering(
+                self.source_file.path.clone(),
                 *body_id,
                 IRError::Unknown("Did not get struct body".into()),
             ));
@@ -2557,6 +2566,7 @@ impl<'a> Lowerer<'a> {
 
     pub fn push_err(&mut self, message: &str, expr_id: ExprID) -> IRError {
         self.add_diagnostic(Diagnostic::lowering(
+            self.source_file.path.clone(),
             expr_id,
             IRError::Unknown(message.to_string()),
         ));

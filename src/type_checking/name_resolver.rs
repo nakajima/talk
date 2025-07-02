@@ -318,6 +318,7 @@ impl NameResolver {
                                     lock.add_diagnostic(
                                         source_file.path.clone(),
                                         Diagnostic::resolve(
+                                            source_file.path.clone(),
                                             *node_id,
                                             NameResolverError::InvalidSelf,
                                         ),
@@ -562,7 +563,11 @@ impl NameResolver {
             if let Ok(mut lock) = self.session.lock() {
                 lock.add_diagnostic(
                     source_file.path.clone(),
-                    Diagnostic::resolve(*node_id, NameResolverError::MissingMethodName),
+                    Diagnostic::resolve(
+                        source_file.path.clone(),
+                        *node_id,
+                        NameResolverError::MissingMethodName,
+                    ),
                 );
             }
 
@@ -580,6 +585,7 @@ impl NameResolver {
                     lock.add_diagnostic(
                         source_file.path.clone(),
                         Diagnostic::resolve(
+                            source_file.path.clone(),
                             *node_id,
                             NameResolverError::Unknown("Params must be variables".to_string()),
                         ),
@@ -1400,8 +1406,7 @@ mod tests {
             !session
                 .lock()
                 .unwrap()
-                .diagnostics()
-                .get(&PathBuf::from("-"))
+                .diagnostics_for(&PathBuf::from("-"))
                 .unwrap()
                 .is_empty()
         )

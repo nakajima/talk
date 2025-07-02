@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::{
     SourceFile,
     lexer::LexerError,
@@ -26,35 +28,41 @@ pub enum DiagnosticKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
+    pub path: PathBuf,
 }
 
 impl Diagnostic {
-    pub fn lexer(position: Position, err: LexerError) -> Diagnostic {
+    pub fn lexer(path: PathBuf, position: Position, err: LexerError) -> Diagnostic {
         Self {
+            path,
             kind: DiagnosticKind::Lexer(position, err),
         }
     }
 
-    pub fn parser(token: Token, err: ParserError) -> Diagnostic {
+    pub fn parser(path: PathBuf, token: Token, err: ParserError) -> Diagnostic {
         Self {
+            path,
             kind: DiagnosticKind::Parse(token, err),
         }
     }
 
-    pub fn resolve(expr_id: ExprID, err: NameResolverError) -> Diagnostic {
+    pub fn resolve(path: PathBuf, expr_id: ExprID, err: NameResolverError) -> Diagnostic {
         Self {
+            path,
             kind: DiagnosticKind::Resolve(expr_id, err),
         }
     }
 
-    pub fn typing(expr_id: ExprID, err: TypeError) -> Diagnostic {
+    pub fn typing(path: PathBuf, expr_id: ExprID, err: TypeError) -> Diagnostic {
         Self {
+            path,
             kind: DiagnosticKind::Typing(expr_id, err),
         }
     }
 
-    pub fn lowering(expr_id: ExprID, err: IRError) -> Diagnostic {
+    pub fn lowering(path: PathBuf, expr_id: ExprID, err: IRError) -> Diagnostic {
         Self {
+            path,
             kind: DiagnosticKind::Lowering(expr_id, err),
         }
     }

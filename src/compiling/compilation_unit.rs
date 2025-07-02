@@ -94,7 +94,7 @@ impl CompilationUnit<Raw> {
         for path in self.input.clone() {
             self.session
                 .lock()
-                .map(|mut t| t.clear_diagnostics_for(&path))
+                .map(|mut t| t.clear_diagnostics())
                 .unwrap_or_else(|e| log::error!("could not clear diagnostics: {e:?}"));
 
             let source = match self.read(&path) {

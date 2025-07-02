@@ -190,7 +190,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             match self.solve_constraint(&constraint, &mut substitutions, false) {
                 Ok(_) => (),
                 Err(err) => {
-                    self.add_diagnostic(Diagnostic::typing(*constraint.expr_id(), err));
+                    self.add_diagnostic(Diagnostic::typing(
+                        self.source_file.path.clone(),
+                        *constraint.expr_id(),
+                        err,
+                    ));
                 }
             }
         }
@@ -273,7 +277,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         Self::normalize_substitutions(substitutions);
                     }
                     Err(err) => {
-                        self.add_diagnostic(Diagnostic::typing(*expr_id, err));
+                        self.add_diagnostic(Diagnostic::typing(
+                            self.source_file.path.clone(),
+                            *expr_id,
+                            err,
+                        ));
                     }
                 }
             }
@@ -363,7 +371,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         }
                     }
                     Err(err) => {
-                        self.add_diagnostic(Diagnostic::typing(*expr_id, err));
+                        self.add_diagnostic(Diagnostic::typing(
+                            self.source_file.path.clone(),
+                            *expr_id,
+                            err,
+                        ));
                     }
                 }
             }

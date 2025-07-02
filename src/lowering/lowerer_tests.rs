@@ -16,7 +16,7 @@ pub mod helpers {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -33,7 +33,7 @@ pub mod helpers {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -71,7 +71,7 @@ pub mod lowering_tests {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");

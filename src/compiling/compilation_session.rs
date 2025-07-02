@@ -11,7 +11,7 @@ pub type SharedCompilationSession = Arc<Mutex<CompilationSession>>;
 // A shared object for all of compilation, across units
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct CompilationSession {
-    diagnostics: HashMap<PathBuf, HashSet<Diagnostic>>,
+    pub(crate) diagnostics: HashMap<PathBuf, HashSet<Diagnostic>>,
 }
 
 impl CompilationSession {
@@ -21,13 +21,15 @@ impl CompilationSession {
         }
     }
 
-    pub fn clear_diagnostics_for(&mut self, path: &PathBuf) {
-        if let Some(diagnostics) = self.diagnostics.get_mut(path) {
-            diagnostics.clear()
-        }
+    pub fn clear_diagnostics(&mut self) {
+        self.diagnostics.clear();
     }
 
-    pub fn diagnostics(&self) -> &HashMap<PathBuf, HashSet<Diagnostic>> {
+    pub fn diagnostics_for(&self, path: &PathBuf) -> Option<&HashSet<Diagnostic>> {
+        self.diagnostics.get(path)
+    }
+
+    pub fn _diagnostics(&self) -> &HashMap<PathBuf, HashSet<Diagnostic>> {
         &self.diagnostics
     }
 

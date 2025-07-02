@@ -56,8 +56,7 @@ impl CheckResult {
             .session
             .lock()
             .unwrap()
-            .diagnostics()
-            .get(&PathBuf::from("-"))
+            .diagnostics_for(&PathBuf::from("-"))
             .cloned();
 
         if let Some(diagnostics) = diagnostics {
@@ -99,8 +98,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
         .session
         .lock()
         .unwrap()
-        .diagnostics()
-        .get(path)
+        .diagnostics_for(path)
         .unwrap_or(&Default::default())
     {
         log::error!("{diagnostic:?}");

@@ -162,7 +162,7 @@ impl<'a> TypeChecker<'a> {
         {
             lock.add_diagnostic(
                 source_file.path.clone(),
-                Diagnostic::typing(*root_ids.first().unwrap_or(&0), e),
+                Diagnostic::typing(source_file.path.clone(), *root_ids.first().unwrap_or(&0), e),
             );
         }
 
@@ -173,7 +173,10 @@ impl<'a> TypeChecker<'a> {
                 Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
                 Err(e) => {
                     if let Ok(mut lock) = self.session.lock() {
-                        lock.add_diagnostic(source_file.path.clone(), Diagnostic::typing(*id, e))
+                        lock.add_diagnostic(
+                            source_file.path.clone(),
+                            Diagnostic::typing(source_file.path.clone(), *id, e),
+                        )
                     }
                 }
             }
@@ -368,7 +371,7 @@ impl<'a> TypeChecker<'a> {
                 if let Ok(mut lock) = self.session.lock() {
                     lock.add_diagnostic(
                         source_file.path.clone(),
-                        Diagnostic::typing(*id, e.clone()),
+                        Diagnostic::typing(source_file.path.clone(), *id, e.clone()),
                     );
                 }
                 ty = Err(TypeError::Handled);
