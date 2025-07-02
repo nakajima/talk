@@ -1,5 +1,6 @@
-use core::iter::Peekable;
 use core::str::Chars;
+
+use itertools::{Itertools, MultiPeek};
 
 use super::token::Token;
 use super::token_kind::TokenKind::{self, *};
@@ -20,68 +21,72 @@ impl LexerError {
 #[derive(Debug)]
 pub struct Lexer<'a> {
     pub code: &'a str,
-    chars: Peekable<Chars<'a>>,
+    preserve_comments: bool,
+    _chars: MultiPeek<Chars<'a>>,
     current: u32,
     started: u32,
     line: u32,
     col: u32,
+    comments: Vec<Token>,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(code: &'a str) -> Self {
         Self {
             code,
-            chars: code.chars().peekable(),
+            preserve_comments: false,
+            _chars: code.chars().multipeek(),
             current: 0,
             started: 0,
             line: 0,
             col: 0,
+            comments: vec![],
+        }
+    }
+
+    pub fn preserving_comments(code: &'a str) -> Self {
+        Self {
+            code,
+            preserve_comments: true,
+            _chars: code.chars().multipeek(),
+            current: 0,
+            started: 0,
+            line: 0,
+            col: 0,
+            comments: vec![],
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        // Skip whitespaces
+        while let Some(peeked) = self.peek() {
+            if peeked.is_whitespace() && peeked != '\n' {
+                self.advance();
+            } else {
+                break;
+            }
         }
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Token, LexerError> {
-        // Skip whitespaces
-        loop {
-            match self.chars.peek() {
-                Some(ch) => {
-                    if !ch.is_whitespace() || *ch == '\n' {
-                        // Collapse multiple newlines into one
-                        if *ch == '\n' {
-                            while self.chars.peek() == Some(&'\n') {
-                                self.line += 1;
-                                self.chars.next();
-                                self.current += 1;
-                            }
+        self.skip_whitespace();
 
-                            self.col = 0;
-
-                            return self.make(Newline);
-                        }
-
-                        break;
-                    }
-                }
-                None => {
-                    return self.make(EOF);
-                }
-            }
-
-            self.advance();
+        if self.preserve_comments {
+            self.preserve_comments()?;
+        } else {
+            self.skip_comments();
         }
 
-        match self.chars.next() {
-            Some(char) => self.consume(char),
-            None => self.make(EOF),
-        }
-    }
+        self.skip_whitespace();
 
-    fn consume(&mut self, char: char) -> Result<Token, LexerError> {
         self.started = self.current;
-        self.current += 1;
-        self.col += 1;
 
-        match char {
+        let Some(ch) = self.advance() else {
+            return self.make(TokenKind::EOF);
+        };
+
+        match ch {
             '.' => self.make(Dot),
             ',' => self.make(Comma),
             ':' => self.make(Colon),
@@ -104,10 +109,11 @@ impl<'a> Lexer<'a> {
             ')' => self.make(RightParen),
             '[' => self.make(LeftBracket),
             ']' => self.make(RightBracket),
-            '\n' => self.make(Newline),
+            ';' => self.make(Semicolon),
+            '\n' => self.newline(),
             '_' => {
-                if let Some(next) = self.chars.peek()
-                    && (*next == '_' || next.is_alphanumeric())
+                if let Some(next) = self.peek()
+                    && (next == '_' || next.is_alphanumeric())
                 {
                     let ident = self.identifier(self.current - 1);
                     return self.make(ident);
@@ -123,8 +129,63 @@ impl<'a> Lexer<'a> {
                 let number = self.number(self.current - 1);
                 self.make(number)
             }
-            _ => Err(LexerError::UnexpectedInput(char)),
+            _ => Err(LexerError::UnexpectedInput(ch)),
         }
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        let ch = self._chars.peek().cloned();
+        self._chars.reset_peek();
+        ch
+    }
+
+    fn peek_next(&mut self) -> Option<char> {
+        self._chars.peek();
+        let ch = self._chars.peek().cloned();
+        self._chars.reset_peek();
+        ch
+    }
+
+    fn newline(&mut self) -> Result<Token, LexerError> {
+        while self.peek() == Some('\n') {
+            self.advance();
+        }
+
+        self.make(Newline)
+    }
+
+    fn skip_comments(&mut self) {
+        // Handle single line comments
+        if self.peek() == Some('/') && self.peek_next() == Some('/') {
+            self.advance();
+            self.advance();
+            while let Some(ch) = self.peek() {
+                if ch == '\n' {
+                    break;
+                }
+
+                self.advance();
+            }
+        }
+    }
+
+    fn preserve_comments(&mut self) -> Result<(), LexerError> {
+        if self.peek() == Some('/') && self.peek_next() == Some('/') {
+            let start = self.current.saturating_sub(1);
+
+            while let Some(ch) = self.peek() {
+                if ch == '\n' {
+                    break;
+                }
+
+                self.advance();
+            }
+
+            let comment = self.make(LineComment(self.string_from(start, self.current)))?;
+            self.comments.push(comment);
+        }
+
+        Ok(())
     }
 
     fn compound(
@@ -133,7 +194,7 @@ impl<'a> Lexer<'a> {
         found: TokenKind,
         not_found: TokenKind,
     ) -> Result<Token, LexerError> {
-        if self.chars.peek() == Some(&expecting) {
+        if self.peek() == Some(expecting) {
             self.advance();
             self.make(found)
         } else {
@@ -142,8 +203,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn identifier(&mut self, starting_at: u32) -> TokenKind {
-        while let Some(ch) = self.chars.peek() {
-            if ch.is_alphanumeric() || *ch == '_' {
+        while let Some(ch) = self.peek() {
+            if ch.is_alphanumeric() || ch == '_' {
                 self.advance();
             } else {
                 break;
@@ -186,11 +247,13 @@ impl<'a> Lexer<'a> {
     }
 
     fn minus(&mut self) -> Result<Token, LexerError> {
-        if self.did_match(&'>') {
+        if self.peek() == Some('>') {
+            self.advance();
             return self.make(Arrow);
         }
 
-        if self.did_match(&'=') {
+        if self.peek() == Some('=') {
+            self.advance();
             return self.make(MinusEquals);
         }
 
@@ -200,37 +263,31 @@ impl<'a> Lexer<'a> {
     fn number(&mut self, starting_at: u32) -> TokenKind {
         let mut is_float = false;
 
-        while let Some(ch) = self.chars.peek() {
-            if *ch == '.' {
+        while let Some(ch) = self.peek() {
+            if ch == '.' {
                 is_float = true;
                 self.advance();
-            } else if ch.is_numeric() || *ch == '_' {
+            } else if ch.is_numeric() || ch == '_' {
                 self.advance();
             } else {
                 break;
             }
         }
 
-        #[allow(clippy::unwrap_used)]
-        let start_idx = self
-            .code
-            .char_indices()
-            .nth(starting_at as usize)
-            .unwrap()
-            .0;
-        #[allow(clippy::unwrap_used)]
-        let end_idx = self
-            .code
-            .char_indices()
-            .nth(self.current as usize - 1)
-            .unwrap()
-            .0;
-
         if is_float {
-            Float(self.code[start_idx..=end_idx].to_string())
+            Float(self.string_from(starting_at, self.current))
         } else {
-            Int(self.code[start_idx..=end_idx].to_string())
+            Int(self.string_from(starting_at, self.current))
         }
+    }
+
+    fn string_from(&self, start: u32, end: u32) -> String {
+        #[allow(clippy::unwrap_used)]
+        let start_idx = self.code.char_indices().nth(start as usize).unwrap().0;
+        #[allow(clippy::unwrap_used)]
+        let end_idx = self.code.char_indices().nth(end as usize - 1).unwrap().0;
+
+        self.code[start_idx..=end_idx].to_string()
     }
 
     fn make(&mut self, kind: TokenKind) -> Result<Token, LexerError> {
@@ -243,19 +300,28 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    fn did_match(&mut self, ch: &char) -> bool {
-        if Some(ch) == self.chars.peek() {
-            self.advance();
-            true
-        } else {
-            false
-        }
-    }
+    // fn did_match(&mut self, ch: &char) -> bool {
+    //     if Some(ch) == self.peek() {
+    //         self.advance();
+    //         true
+    //     } else {
+    //         false
+    //     }
+    // }
 
-    pub(crate) fn advance(&mut self) {
-        self.col += 1;
-        self.current += 1;
-        self.chars.next();
+    pub(crate) fn advance(&mut self) -> Option<char> {
+        if let Some(ch) = self._chars.next() {
+            if ch == '\n' {
+                self.col = 0;
+                self.line += 1;
+            } else {
+                self.col += 1;
+            }
+            self.current += 1;
+            Some(ch)
+        } else {
+            None
+        }
     }
 }
 
@@ -389,5 +455,34 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, Underscore);
         assert_eq!(lexer.next().unwrap().kind, Identifier("_sup".to_string()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn handles_semicolons() {
+        let mut lexer = Lexer::new(";");
+        assert_eq!(lexer.next().unwrap().kind, Semicolon);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn skips_line_comments_by_default() {
+        let mut lexer = Lexer::new("_\n// Hello world\n_");
+        assert_eq!(lexer.next().unwrap().kind, Underscore);
+        assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, Underscore);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+        assert!(lexer.comments.is_empty());
+    }
+
+    #[test]
+    fn preserves_line_comments_when_specified() {
+        let mut lexer = Lexer::preserving_comments("_\n// Hello world\n_");
+        assert_eq!(lexer.next().unwrap().kind, Underscore);
+        assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, Newline);
+        assert_eq!(lexer.next().unwrap().kind, Underscore);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+        assert_eq!(lexer.comments.len(), 1);
     }
 }

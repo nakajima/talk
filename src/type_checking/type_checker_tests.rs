@@ -1455,7 +1455,6 @@ mod pending {
     }
 
     #[test]
-    #[should_panic]
     fn checks_pattern_wildcard_in_match() {
         check(
             "

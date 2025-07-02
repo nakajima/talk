@@ -22,6 +22,14 @@ mod tests {
     }
 
     #[test]
+    fn ignores_comments() {
+        let parsed = parse("// what's up\n123");
+        let expr = parsed.roots()[0].unwrap();
+
+        assert_eq!(*expr, LiteralInt("123".into()));
+    }
+
+    #[test]
     fn parses_eq() {
         let parsed = parse("1 == 2");
         let expr = parsed.roots()[0].unwrap();

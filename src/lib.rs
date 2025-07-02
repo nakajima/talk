@@ -1,6 +1,7 @@
 #![feature(box_patterns)]
 #![feature(associated_type_defaults)]
 #![feature(assert_matches)]
+#![feature(iter_advance_by)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![cfg_attr(not(test), warn(clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::panic))]

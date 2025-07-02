@@ -256,11 +256,16 @@ impl<'a> SemanticTokenCollector<'a> {
                 result.extend(self.tokens_from_expr(body));
                 result.extend(self.tokens_from_exprs(conformances));
             }
-            Expr::FuncSignature { params, generics, ret, .. } => {
+            Expr::FuncSignature {
+                params,
+                generics,
+                ret,
+                ..
+            } => {
                 result.extend(self.tokens_from_exprs(params));
                 result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_expr(ret));
-            },
+            }
         };
 
         result
@@ -284,6 +289,9 @@ impl<'a> SemanticTokenCollector<'a> {
         let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
         while let Ok(tok) = lexer.next() {
             match tok.kind {
+                TokenKind::LineComment(_) => {
+                    self.make(tok, SemanticTokenType::COMMENT, &mut tokens)
+                }
                 TokenKind::If => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Else => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Loop => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
@@ -295,6 +303,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::Match => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => (),
+                TokenKind::Semicolon => (),
                 TokenKind::Arrow => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Colon => (),
                 TokenKind::Newline => (),

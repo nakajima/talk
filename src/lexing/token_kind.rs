@@ -2,6 +2,8 @@ use std::fmt::Display;
 
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum TokenKind {
+    LineComment(String),
+
     // Control flow
     If,
     Else,
@@ -21,6 +23,7 @@ pub enum TokenKind {
 
     // More
     QuestionMark,
+    Semicolon,
     Arrow,
     Colon,
     Newline,
@@ -77,7 +80,8 @@ impl Display for TokenKind {
 
 impl TokenKind {
     pub fn as_str(&self) -> String {
-        match &self {
+        let text = match &self {
+            TokenKind::LineComment(text) => &format!("// {text}"),
             TokenKind::If => "if",
             TokenKind::Else => "else",
             TokenKind::Loop => "loop",
@@ -136,7 +140,9 @@ impl TokenKind {
             TokenKind::Init => "init",
             TokenKind::Break => "break",
             TokenKind::Protocol => "protocol",
-        }
-        .to_string()
+            TokenKind::Semicolon => ";",
+        };
+
+        text.to_string()
     }
 }
