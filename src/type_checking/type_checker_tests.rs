@@ -1258,12 +1258,11 @@ mod type_tests {
     }
 
     #[test]
-    #[ignore = "wip"]
+    #[ignore = "wip, i think this needs to be an analysis pass?"]
     fn checks_match_exhaustiveness_error() {
         // This should fail type checking due to non-exhaustive match
-        let result = std::panic::catch_unwind(|| {
-            check(
-                "
+        let result = check_err(
+            "
                 enum Bool {
                     case yes, no
                 }
@@ -1273,8 +1272,7 @@ mod type_tests {
                     }
                 }
                 ",
-            )
-        });
+        );
 
         // Should panic or return error - depends on your error handling
         assert!(result.is_err());
