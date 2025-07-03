@@ -5,7 +5,9 @@ protocol Foo {
 
 // Person doesn't implement Foo
 struct Person: Foo {
-	func foo() { 123 }
+	func foo() {
+		123
+	}
 }
 
 func fizz<T: Foo>(t: T) {

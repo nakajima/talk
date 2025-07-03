@@ -33,6 +33,10 @@ pub struct CheckResult {
 
 #[cfg(test)]
 impl CheckResult {
+    pub fn first(&self) -> Option<Ty> {
+        self.type_for(&self.root_ids()[0])
+    }
+
     pub fn type_for(&self, id: &ExprID) -> Option<Ty> {
         self.source_file.type_for(*id, &self.env)
     }
@@ -52,8 +56,7 @@ impl CheckResult {
             .session
             .lock()
             .unwrap()
-            .diagnostics()
-            .get(&PathBuf::from("-"))
+            .diagnostics_for(&PathBuf::from("-"))
             .cloned();
 
         if let Some(diagnostics) = diagnostics {
@@ -95,8 +98,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
         .session
         .lock()
         .unwrap()
-        .diagnostics()
-        .get(path)
+        .diagnostics_for(path)
         .unwrap_or(&Default::default())
     {
         log::error!("{diagnostic:?}");

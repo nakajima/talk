@@ -8,6 +8,7 @@ pub enum IRType {
     Int,
     Float,
     Bool,
+    Byte,
     Func(Vec<IRType>, Box<IRType>),
     TypeVar(String),
     Enum(SymbolID, Vec<IRType>),
@@ -16,7 +17,8 @@ pub enum IRType {
         Vec<IRType>, /* properties */
         Vec<IRType>, /* type vars */
     ),
-    Array {
+    RawBuffer, // just bytes
+    TypedBuffer {
         element: Box<IRType>, /* element */
     },
     Tuple {
@@ -32,6 +34,14 @@ impl IRType {
 
     // Make it easier to get a pointer with no type hint
     pub const POINTER: IRType = IRType::Pointer { hint: None };
+
+    pub fn string() -> IRType {
+        IRType::Struct(
+            SymbolID::STRING,
+            vec![IRType::Int, IRType::Int, IRType::POINTER],
+            vec![],
+        )
+    }
 
     pub fn array(t: IRType) -> IRType {
         IRType::Struct(
@@ -52,6 +62,7 @@ impl IRType {
     // How many bytes does this type take
     pub fn mem_size(&self) -> usize {
         match self {
+            IRType::Byte => 1,
             IRType::Void => 0,
             IRType::Int => 8,
             IRType::Float => 8,
@@ -65,7 +76,8 @@ impl IRType {
             IRType::Struct(_, irtypes, _) => irtypes.iter().map(IRType::mem_size).sum::<usize>(),
             IRType::Pointer { .. } => 8,
             IRType::Tuple { elements } => elements.iter().map(IRType::mem_size).sum::<usize>(),
-            IRType::Array { .. } => IRType::POINTER.mem_size(),
+            IRType::RawBuffer => IRType::POINTER.mem_size(),
+            IRType::TypedBuffer { .. } => IRType::POINTER.mem_size(),
         }
     }
 }
@@ -110,7 +122,7 @@ impl FromStr for IRType {
             // Recursively parse the return type
             Ok(IRType::Struct(SymbolID(0), args, vec![]))
         } else if s.starts_with('[') && s.ends_with(']') {
-            Ok(IRType::Array {
+            Ok(IRType::TypedBuffer {
                 element: IRType::from_str(&s[1..s.len() - 1])?.into(),
             })
         } else {
@@ -121,6 +133,7 @@ impl FromStr for IRType {
                 "float" => Ok(IRType::Float),
                 "bool" => Ok(IRType::Bool),
                 "ptr" => Ok(IRType::POINTER),
+                "byte" => Ok(IRType::Byte),
                 "enum" => Ok(IRType::Enum(SymbolID(0), vec![])), // Basic enum
                 _ if s.starts_with('T') => Ok(IRType::TypeVar(s.to_string())),
                 _ => Err(ParserError::UnexpectedToken(
@@ -136,9 +149,11 @@ impl std::fmt::Display for IRType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Void => f.write_str("void"),
+            Self::Byte => f.write_str("Byte"),
             Self::Int => f.write_str("int"),
             Self::Float => f.write_str("float"),
             Self::Bool => f.write_str("bool"),
+            Self::RawBuffer => f.write_str("rawbuf"),
             Self::Tuple { elements } => write!(
                 f,
                 "({})",
@@ -178,7 +193,7 @@ impl std::fmt::Display for IRType {
                     write!(f, "ptr")
                 }
             }
-            IRType::Array { element } => write!(f, "[{element}]"),
+            IRType::TypedBuffer { element } => write!(f, "[{element}]"),
         }
     }
 }

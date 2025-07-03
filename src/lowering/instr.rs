@@ -118,13 +118,20 @@ pub enum Instr {
     Alloc {
         dest: Register,
         ty: IRType,
-        count: Option<Register>,
+        count: Option<IRValue>,
+    },
+
+    #[doc = "$dest = const $ty $val;"]
+    Const {
+        dest: Register,
+        ty: IRType,
+        val: IRValue,
     },
 
     #[doc = "store $ty $val $location;"]
     Store {
         ty: IRType,
-        val: Register,
+        val: IRValue,
         location: Register,
     },
 

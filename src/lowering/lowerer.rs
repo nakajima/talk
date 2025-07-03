@@ -14,7 +14,7 @@ use crate::{
         instr::{Callee, Instr},
         ir_error::IRError,
         ir_function::IRFunction,
-        ir_module::IRModule,
+        ir_module::{IRConstantData, IRModule},
         ir_type::IRType,
         ir_value::IRValue,
         parsing::parser::ParserError,
@@ -96,7 +96,7 @@ impl Ty {
                 items.iter().map(|i| i.to_ir(lowerer)).collect(),
                 vec![],
             ),
-            Ty::Array(el) => IRType::Array {
+            Ty::Array(el) => IRType::TypedBuffer {
                 element: el.to_ir(lowerer).into(),
             },
             Ty::Struct(symbol_id, generics) => {
@@ -414,6 +414,7 @@ pub struct Lowerer<'a> {
     current_expr_ids: Vec<ExprID>,
     pub env: &'a mut Environment,
     session: SharedCompilationSession,
+    constants: Vec<IRConstantData>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -433,6 +434,7 @@ impl<'a> Lowerer<'a> {
             current_expr_ids: vec![],
             env,
             session,
+            constants: Default::default(),
         }
     }
 
@@ -486,6 +488,8 @@ impl<'a> Lowerer<'a> {
             module.functions.push(function)
         }
 
+        module.constants = self.constants;
+
         self.source_file.to_lowered()
     }
 
@@ -538,6 +542,7 @@ impl<'a> Lowerer<'a> {
             Expr::Break => {
                 let Some(current_loop_exit) = self.loop_exits.last() else {
                     self.add_diagnostic(Diagnostic::lowering(
+                        self.source_file.path.clone(),
                         *expr_id,
                         IRError::Unknown("trying to break while not in a loop".into()),
                     ));
@@ -555,8 +560,10 @@ impl<'a> Lowerer<'a> {
                 ref conformances,
             } => self.lower_protocol(&typed_expr, name, associated_types, body, conformances),
             Expr::Tuple(items) => self.lower_tuple(expr_id, items),
+            Expr::LiteralString(string) => self.lower_string(expr_id, string),
             expr => {
                 self.add_diagnostic(Diagnostic::lowering(
+                    self.source_file.path.clone(),
                     *expr_id,
                     IRError::Unknown(format!("Cannot lower {expr:?}")),
                 ));
@@ -657,6 +664,7 @@ impl<'a> Lowerer<'a> {
             self.set_current_block(loop_cond);
             let Some(cond_reg) = self.lower_expr(cond) else {
                 self.add_diagnostic(Diagnostic::lowering(
+                    self.source_file.path.clone(),
                     *cond,
                     IRError::Unknown(format!("Cannot lower loop condition {cond:?}")),
                 ));
@@ -689,6 +697,73 @@ impl<'a> Lowerer<'a> {
         None
     }
 
+    fn lower_string(&mut self, _expr_id: &ExprID, string: String) -> Option<Register> {
+        // Allocate the storage
+        let chars_bytes = string.as_bytes();
+        self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
+
+        let string_struct_reg = self.allocate_register();
+        self.push_instr(Instr::Alloc {
+            dest: string_struct_reg,
+            ty: IRType::string(),
+            count: None,
+        });
+
+        let length_reg = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: length_reg,
+            base: string_struct_reg,
+            ty: IRType::string(),
+            index: IRValue::ImmediateInt(0),
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::Int,
+            val: IRValue::ImmediateInt(chars_bytes.len() as i64),
+            location: length_reg,
+        });
+
+        let capacity_reg = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: capacity_reg,
+            base: string_struct_reg,
+            ty: IRType::string(),
+            index: IRValue::ImmediateInt(1),
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::Int,
+            val: IRValue::ImmediateInt(chars_bytes.len() as i64),
+            location: capacity_reg,
+        });
+
+        let storage_reg = self.allocate_register();
+        self.push_instr(Instr::GetElementPointer {
+            dest: storage_reg,
+            base: string_struct_reg,
+            ty: IRType::string(),
+            index: IRValue::ImmediateInt(2),
+        });
+        let static_ptr_reg = self.allocate_register();
+        self.push_instr(Instr::Const {
+            dest: static_ptr_reg,
+            ty: IRType::RawBuffer,
+            val: IRValue::ImmediateInt(0),
+        });
+        self.push_instr(Instr::Store {
+            ty: IRType::POINTER,
+            val: static_ptr_reg.into(),
+            location: storage_reg,
+        });
+
+        let dest = self.allocate_register();
+        self.push_instr(Instr::Load {
+            dest,
+            ty: IRType::string(),
+            addr: string_struct_reg,
+        });
+
+        Some(dest)
+    }
+
     fn lower_array(&mut self, expr_id: &ExprID, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
         let Ty::Struct(SymbolID::ARRAY, els) = ty else {
             self.push_err("Invalid array type", *expr_id);
@@ -717,7 +792,7 @@ impl<'a> Lowerer<'a> {
         });
         self.push_instr(Instr::Store {
             ty: IRType::Int,
-            val: count_reg,
+            val: count_reg.into(),
             location: count_ptr_reg,
         });
 
@@ -733,7 +808,7 @@ impl<'a> Lowerer<'a> {
         });
         self.push_instr(Instr::Store {
             ty: IRType::Int,
-            val: capacity_reg,
+            val: capacity_reg.into(),
             location: capacity_ptr_reg,
         });
 
@@ -749,11 +824,11 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::Alloc {
             dest: storage_reg,
             ty: IRType::Int,
-            count: Some(count_reg),
+            count: Some(IRValue::Register(count_reg)),
         });
         self.push_instr(Instr::Store {
             ty: IRType::POINTER,
-            val: storage_reg,
+            val: storage_reg.into(),
             location: storage_ptr_reg,
         });
 
@@ -778,14 +853,14 @@ impl<'a> Lowerer<'a> {
             self.push_instr(Instr::GetElementPointer {
                 dest: item_reg,
                 base: storage_reg,
-                ty: IRType::Array {
+                ty: IRType::TypedBuffer {
                     element: ty.clone().into(),
                 },
                 index: IRValue::ImmediateInt(i as i64),
             });
             self.push_instr(Instr::Store {
                 ty,
-                val: lowered_item,
+                val: lowered_item.into(),
                 location: item_reg,
             });
         }
@@ -808,6 +883,7 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned() else {
             self.add_diagnostic(Diagnostic::lowering(
+                self.source_file.path.clone(),
                 *expr_id,
                 IRError::Unknown(format!(
                     "Could not resolve struct for symbol: {struct_id:?}"
@@ -826,7 +902,11 @@ impl<'a> Lowerer<'a> {
                 match pass.run(init_func, &cfg) {
                     Ok(_) => (),
                     Err(e) => {
-                        self.add_diagnostic(Diagnostic::lowering(initializer.expr_id, e));
+                        self.add_diagnostic(Diagnostic::lowering(
+                            self.source_file.path.clone(),
+                            initializer.expr_id,
+                            e,
+                        ));
                     }
                 }
             }
@@ -834,6 +914,7 @@ impl<'a> Lowerer<'a> {
 
         let Some(Expr::Block(member_ids)) = self.source_file.get(body_id) else {
             self.add_diagnostic(Diagnostic::lowering(
+                self.source_file.path.clone(),
                 *body_id,
                 IRError::Unknown("Did not get struct body".into()),
             ));
@@ -1861,7 +1942,7 @@ impl<'a> Lowerer<'a> {
                         });
                         self.push_instr(Instr::Store {
                             ty: ty.clone(),
-                            val: rhs,
+                            val: rhs.into(),
                             location: capture_ptr,
                         });
 
@@ -1879,7 +1960,7 @@ impl<'a> Lowerer<'a> {
                 if let Some(dest) = self.lower_member(&Some(*receiver_id), lhs_id, name, true) {
                     self.push_instr(Instr::Store {
                         ty: lhs.ty.to_ir(self),
-                        val: rhs,
+                        val: rhs.into(),
                         location: dest,
                     });
                     Some(rhs)
@@ -2433,7 +2514,7 @@ impl<'a> Lowerer<'a> {
         // Store the environment
         self.push_instr(Instr::Store {
             ty: environment_type,
-            val: environment_register,
+            val: environment_register.into(),
             location: env_dest_ptr,
         });
 
@@ -2460,14 +2541,18 @@ impl<'a> Lowerer<'a> {
         // Store the environment and function pointers
         self.push_instr(Instr::Store {
             ty: IRType::POINTER,
-            val: env_dest_ptr,
+            val: env_dest_ptr.into(),
             location: env_ptr,
         });
         self.push_instr(Instr::Store {
             ty: IRType::POINTER,
-            val: func_ref_reg,
+            val: func_ref_reg.into(),
             location: fn_ptr,
         });
+    }
+
+    fn push_constant(&mut self, constant: IRConstantData) {
+        self.constants.push(constant)
     }
 
     pub(super) fn push_instr(&mut self, instr: Instr) {
@@ -2557,6 +2642,7 @@ impl<'a> Lowerer<'a> {
 
     pub fn push_err(&mut self, message: &str, expr_id: ExprID) -> IRError {
         self.add_diagnostic(Diagnostic::lowering(
+            self.source_file.path.clone(),
             expr_id,
             IRError::Unknown(message.to_string()),
         ));

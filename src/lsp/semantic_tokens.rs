@@ -87,6 +87,7 @@ impl<'a> SemanticTokenCollector<'a> {
         };
 
         match expr {
+            Expr::LiteralString(_) => (), // already handled by lexed
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
                 result.push((range, SemanticTokenType::NUMBER))
@@ -284,6 +285,19 @@ impl<'a> SemanticTokenCollector<'a> {
         }
     }
 
+    fn make_string(
+        &self,
+        token: &Token,
+        token_type: SemanticTokenType,
+        tokens: &mut Vec<(Range, SemanticTokenType)>,
+    ) {
+        if let Some(start) = self.line_col_for(token.start.saturating_sub(1))
+            && let Some(end) = self.line_col_for(token.end.saturating_add(1))
+        {
+            tokens.push((Range::new(start, end), token_type))
+        }
+    }
+
     fn collect_lexed_tokens(&mut self) {
         let mut lexer = Lexer::preserving_comments(self.source);
         let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
@@ -302,6 +316,9 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::Enum => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Case => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Match => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
+                TokenKind::StringLiteral(_) => {
+                    self.make_string(tok, SemanticTokenType::STRING, &mut tokens)
+                }
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => (),
                 TokenKind::Semicolon => (),
@@ -434,10 +451,17 @@ mod tests {
         parser::parse,
     };
 
-    fn tokens_for(code: &'static str) -> Vec<SemanticToken> {
+    fn parsed_tokens_for(code: &'static str) -> Vec<SemanticToken> {
         let parsed = parse(code, "-".into());
         let mut semantic_tokens = SemanticTokenCollector::new(&parsed, code);
         semantic_tokens.collect_parsed_tokens();
+        semantic_tokens.encode_tokens()
+    }
+
+    fn lexed_tokens_for(code: &'static str) -> Vec<SemanticToken> {
+        let parsed = parse(code, "-".into());
+        let mut semantic_tokens = SemanticTokenCollector::new(&parsed, code);
+        semantic_tokens.collect_lexed_tokens();
         semantic_tokens.encode_tokens()
     }
 
@@ -448,7 +472,7 @@ mod tests {
     #[test]
     fn gets_int_tokens() {
         assert_eq!(
-            tokens_for("123\n1.23"),
+            parsed_tokens_for("123\n1.23"),
             vec![
                 SemanticToken {
                     delta_line: 0,
@@ -471,7 +495,7 @@ mod tests {
     #[test]
     fn gets_bool() {
         assert_eq!(
-            tokens_for("true\n  false\n\ntrue"),
+            parsed_tokens_for("true\n  false\n\ntrue"),
             vec![
                 SemanticToken {
                     delta_line: 0,
@@ -491,6 +515,61 @@ mod tests {
                     delta_line: 2,
                     delta_start: 0,
                     length: 4,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn gets_string() {
+        assert_eq!(
+            lexed_tokens_for("true\n\"sup\"\nfalse"),
+            vec![
+                SemanticToken {
+                    delta_line: 0,
+                    delta_start: 0,
+                    length: 4,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 1,
+                    delta_start: 0,
+                    length: 5,
+                    token_type: pos(SemanticTokenType::STRING),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 1,
+                    delta_start: 0,
+                    length: 5,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+            ],
+            "{:#?}\n{:#?}",
+            lexed_tokens_for("true\n\"sup\"\nfalse"),
+            vec![
+                SemanticToken {
+                    delta_line: 0,
+                    delta_start: 0,
+                    length: 4,
+                    token_type: pos(SemanticTokenType::KEYWORD),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 1,
+                    delta_start: 0,
+                    length: 5,
+                    token_type: pos(SemanticTokenType::STRING),
+                    token_modifiers_bitset: 0
+                },
+                SemanticToken {
+                    delta_line: 1,
+                    delta_start: 1,
+                    length: 5,
                     token_type: pos(SemanticTokenType::KEYWORD),
                     token_modifiers_bitset: 0
                 },

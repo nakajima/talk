@@ -35,21 +35,22 @@ use crate::lsp::semantic_tokens;
 use crate::parser::Parser;
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
-    SemanticTokenType::KEYWORD,
     SemanticTokenType::COMMENT,
-    SemanticTokenType::INTERFACE,
-    SemanticTokenType::VARIABLE,
-    SemanticTokenType::FUNCTION,
-    SemanticTokenType::PARAMETER,
-    SemanticTokenType::NUMBER,
-    SemanticTokenType::TYPE,
     SemanticTokenType::ENUM_MEMBER,
-    SemanticTokenType::STRUCT,
     SemanticTokenType::ENUM,
-    SemanticTokenType::TYPE_PARAMETER,
-    SemanticTokenType::OPERATOR,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::INTERFACE,
+    SemanticTokenType::KEYWORD,
     SemanticTokenType::METHOD,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::OPERATOR,
+    SemanticTokenType::PARAMETER,
     SemanticTokenType::PROPERTY,
+    SemanticTokenType::STRING,
+    SemanticTokenType::STRUCT,
+    SemanticTokenType::TYPE_PARAMETER,
+    SemanticTokenType::TYPE,
+    SemanticTokenType::VARIABLE,
 ];
 
 #[allow(dead_code)]
@@ -232,9 +233,15 @@ impl LanguageServer for ServerState {
         };
 
         log::info!("Getting diagnostics for {path:?}");
-        self.driver.check();
-        let diagnostics = self.driver.diagnostics(&path);
-        log::info!("Got {} diagnostics", diagnostics.len());
+        let diagnostics = self.driver.refresh_diagnostics_for(&path);
+        log::info!(
+            "Got {:#?} diagnostics",
+            self.driver
+                .session
+                .lock()
+                .ok()
+                .map(|d| d.diagnostics.clone())
+        );
 
         Box::pin(async {
             Ok(DocumentDiagnosticReportResult::Report(

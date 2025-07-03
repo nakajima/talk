@@ -111,6 +111,7 @@ impl<'a> Parser<'a> {
         }
 
         Ok(IRModule {
+            constants: vec![],
             functions: self.functions,
         })
     }

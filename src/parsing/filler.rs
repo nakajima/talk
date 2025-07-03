@@ -15,6 +15,7 @@ pub enum FullExpr<'a> {
     LiteralFloat(&'a str),
     LiteralTrue,
     LiteralFalse,
+    LiteralString(&'a str),
     Unary(&'a TokenKind, &'a FullExpr<'a>),
     Binary(&'a FullExpr<'a>, &'a TokenKind, &'a FullExpr<'a>),
     Tuple(Vec<&'a FullExpr<'a>>),
@@ -189,6 +190,7 @@ impl<'a, P: Phase> Filler<'a, P> {
 
         let full_expr = match expr {
             Expr::LiteralInt(s) => FullExpr::LiteralInt(s),
+            Expr::LiteralString(s) => FullExpr::LiteralString(s),
             Expr::Unary(op, rhs_id) => {
                 let rhs = self.fill(*rhs_id);
                 FullExpr::Unary(op, rhs)

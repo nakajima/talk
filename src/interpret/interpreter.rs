@@ -1,5 +1,8 @@
 use crate::{
-    interpret::{memory::Memory, value::Value},
+    interpret::{
+        memory::{Memory, Pointer},
+        value::Value,
+    },
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -48,10 +51,11 @@ pub struct IRInterpreter {
 #[allow(clippy::expect_used)]
 impl IRInterpreter {
     pub fn new(program: IRModule) -> Self {
+        let memory = Memory::new(&program.constants);
         Self {
             program,
             call_stack: vec![],
-            memory: Memory::new(),
+            memory,
         }
     }
 
@@ -108,7 +112,7 @@ impl IRInterpreter {
             .call_stack
             .last()
             .map(|frame| frame.sp + frame.function.size as usize)
-            .unwrap_or(0);
+            .unwrap_or(self.memory.next_stack_addr);
 
         self.call_stack.push(StackFrame {
             pred: None,
@@ -378,9 +382,7 @@ impl IRInterpreter {
                 );
             }
             Instr::Alloc { dest, ty, count } => {
-                let Value::Int(count) = count
-                    .map(|c| self.register_value(&c))
-                    .unwrap_or(Value::Int(1))
+                let Value::Int(count) = count.map(|c| self.value(&c)).unwrap_or(Value::Int(1))
                 else {
                     return Err(InterpreterError::Unknown("invalid alloc count".into()));
                 };
@@ -388,7 +390,7 @@ impl IRInterpreter {
                 self.set_register_value(&dest, Value::Pointer(ptr));
             }
             Instr::Store { val, location, ty } => match self.register_value(&location) {
-                Value::Pointer(ptr) => self.memory.store(ptr, self.register_value(&val), &ty),
+                Value::Pointer(ptr) => self.memory.store(ptr, self.value(&val), &ty),
                 _ => {
                     return Err(InterpreterError::Unknown(format!(
                         "no pointer in {location}: {:?}",
@@ -408,6 +410,17 @@ impl IRInterpreter {
                     )));
                 }
             },
+            Instr::Const { dest, val, .. } => {
+                let Value::Int(int) = self.value(&val) else {
+                    return Err(InterpreterError::Unknown(format!(
+                        "no const found for {:?}",
+                        self.value(&val)
+                    )));
+                };
+
+                let const_ptr = Pointer::new(int as usize);
+                self.set_register_value(&dest, Value::Pointer(const_ptr));
+            }
             Instr::GetElementPointer {
                 dest, base, index, ..
             } => {
@@ -442,6 +455,13 @@ impl IRInterpreter {
         self.call_stack.last_mut().unwrap().pc += 1;
 
         Ok(None)
+    }
+
+    fn value(&self, value: &IRValue) -> Value {
+        match value {
+            IRValue::ImmediateInt(int) => Value::Int(*int),
+            IRValue::Register(reg) => self.register_value(reg),
+        }
     }
 
     fn current_basic_block(&self) -> &BasicBlock {
@@ -521,7 +541,7 @@ mod tests {
         let mut driver = Driver::with_str(code);
         let unit = driver.lower().into_iter().next().unwrap();
 
-        let diagnostics = driver.diagnostics(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let module = unit.module();
 
@@ -681,6 +701,34 @@ mod tests {
     }
 
     #[test]
+    fn interprets_fib() {
+        let res = interpret(
+            "
+        func fib(n) {
+          if n <= 1 {
+            n
+          } else {
+            fib(n - 2) + fib(n - 1)
+          }
+        }
+
+        let i = 0
+        let n = 0
+
+        loop i < 10 {
+          n = fib(i)
+          i = i + 1
+        }
+
+        n
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(res, Value::Int(34))
+    }
+
+    #[test]
     fn interprets_closure() {
         assert_eq!(
             Value::Int(3),
@@ -779,6 +827,19 @@ mod tests {
             )
             .unwrap(),
             Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_string() {
+        assert_eq!(
+            interpret(
+                "
+                \"hello world\"
+                "
+            )
+            .unwrap(),
+            Value::String("hello world".to_string())
         );
     }
 }

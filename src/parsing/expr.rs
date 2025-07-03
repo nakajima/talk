@@ -61,6 +61,7 @@ pub enum Expr {
     LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
+    LiteralString(String),
     Unary(TokenKind, ExprID),
     Binary(ExprID, TokenKind, ExprID),
     Tuple(Vec<ExprID>),

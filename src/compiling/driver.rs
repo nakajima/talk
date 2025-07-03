@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
@@ -162,26 +159,35 @@ impl Driver {
         None
     }
 
-    pub fn diagnostics(&mut self, path: &PathBuf) -> Vec<Diagnostic> {
+    pub fn refresh_diagnostics_for(&mut self, path: &PathBuf) -> Vec<Diagnostic> {
         let mut result = vec![];
         let mut round = 0;
+
+        if let Ok(session) = &mut self.session.lock() {
+            session.clear_diagnostics()
+        } else {
+            log::error!("Unable to clear diagnostics")
+        }
 
         while result.is_empty() && round < 3 {
             let diagnostics = match round {
                 0 => {
                     let parsed = self.parse();
                     round += 1;
-                    self.diagnostics_from(path, parsed).unwrap_or_default()
+                    self.encode_diagnostics_from(path, parsed)
+                        .unwrap_or_default()
                 }
                 1 => {
                     let checked = self.check();
                     round += 1;
-                    self.diagnostics_from(path, checked).unwrap_or_default()
+                    self.encode_diagnostics_from(path, checked)
+                        .unwrap_or_default()
                 }
                 _ => {
                     let lowered = self.lower();
                     round += 1;
-                    self.diagnostics_from(path, lowered).unwrap_or_default()
+                    self.encode_diagnostics_from(path, lowered)
+                        .unwrap_or_default()
                 }
             };
 
@@ -191,7 +197,7 @@ impl Driver {
         result
     }
 
-    fn diagnostics_from<S: StageTrait>(
+    fn encode_diagnostics_from<S: StageTrait>(
         &self,
         path: &PathBuf,
         units: Vec<CompilationUnit<S>>,
@@ -201,15 +207,14 @@ impl Driver {
             log::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
+                && let Some(diagnostics) = self.session.lock().ok()?.diagnostics_for(path)
             {
-                for diag in self
-                    .session
-                    .lock()
-                    .ok()?
-                    .diagnostics()
-                    .get(path)
-                    .unwrap_or(&HashSet::default())
-                {
+                for diag in diagnostics {
+                    if &diag.path != path {
+                        // This is definitely the wrong place to be doing this filtering...
+                        continue;
+                    }
+
                     let diag_range = diag.range(source_file);
                     let range = Range::new(
                         Position::new(diag_range.0.line, diag_range.0.col),

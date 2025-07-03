@@ -64,6 +64,7 @@ pub enum TokenKind {
     Int(String),
     Float(String),
     Identifier(String),
+    StringLiteral(String),
     Func,
     Init,
     Let,
@@ -141,6 +142,7 @@ impl TokenKind {
             TokenKind::Break => "break",
             TokenKind::Protocol => "protocol",
             TokenKind::Semicolon => ";",
+            TokenKind::StringLiteral(string) => &format!("\"{string}\""),
         };
 
         text.to_string()

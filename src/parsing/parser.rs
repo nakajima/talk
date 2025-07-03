@@ -173,7 +173,11 @@ impl<'a> Parser<'a> {
                 Ok(expr) => self.parse_tree.push_root(expr),
                 Err(err) => {
                     log::error!("{}", err.message());
-                    self.add_diagnostic(Diagnostic::parser(current, err));
+                    self.add_diagnostic(Diagnostic::parser(
+                        self.parse_tree.path.clone(),
+                        current,
+                        err,
+                    ));
                     self.recover();
                 }
             }
@@ -208,25 +212,14 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_newlines(&mut self) {
-        while {
-            if let Some(token) = &self.current {
-                token.kind == TokenKind::Newline
-            } else {
-                false
-            }
-        } {
+        while self.peek_is(TokenKind::Newline) {
             self.advance();
         }
     }
 
     fn skip_semicolons_and_newlines(&mut self) {
-        while {
-            if let Some(token) = &self.current {
-                token.kind == TokenKind::Semicolon || token.kind == TokenKind::Newline
-            } else {
-                false
-            }
-        } {
+        while self.peek_is(TokenKind::Semicolon) || self.peek_is(TokenKind::Newline) {
+            log::trace!("Skipping {:?}", self.current);
             self.advance();
         }
     }
@@ -367,13 +360,15 @@ impl<'a> Parser<'a> {
     fn struct_body(&mut self) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
+        log::info!("in struct body: {:?}", self.current);
         self.consume(TokenKind::LeftBrace)?;
+        self.skip_semicolons_and_newlines();
 
         let mut members: Vec<ExprID> = vec![];
 
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_newlines();
-            log::info!("in struct body: {:?}", self.current);
+
             match self.current {
                 some_kind!(Let) => {
                     members.push(self.property()?);
@@ -383,8 +378,6 @@ impl<'a> Parser<'a> {
                     members.push(self.parse_with_precedence(Precedence::Assignment)?);
                 }
             }
-
-            self.skip_newlines();
         }
 
         self.add_expr(Expr::Block(members), tok)
@@ -398,7 +391,7 @@ impl<'a> Parser<'a> {
         let mut members: Vec<ExprID> = vec![];
 
         while !self.did_match(TokenKind::RightBrace)? {
-            self.skip_newlines();
+            self.skip_semicolons_and_newlines();
             log::info!("in struct body: {:?}", self.current);
             match self.current {
                 some_kind!(Let) => {
@@ -444,7 +437,7 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            self.skip_newlines();
+            self.skip_semicolons_and_newlines();
         }
 
         self.add_expr(Expr::Block(members), tok)
@@ -484,7 +477,7 @@ impl<'a> Parser<'a> {
     pub(crate) fn enum_decl(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Enum)?;
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
 
         let name = self.identifier()?;
         let generics = self.type_reprs()?;
@@ -533,7 +526,7 @@ impl<'a> Parser<'a> {
     }
 
     fn match_block(&mut self) -> Result<Vec<ExprID>, ParserError> {
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
         let mut items: Vec<ExprID> = vec![];
@@ -552,7 +545,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_match_pattern(&mut self) -> Result<expr::Pattern, ParserError> {
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
 
         if self.did_match(TokenKind::Underscore)? {
             return Ok(expr::Pattern::Wildcard);
@@ -658,6 +651,7 @@ impl<'a> Parser<'a> {
             Err(e) => {
                 // Add an empty member name so name resolution can  but still emit the error
                 self.add_diagnostic(Diagnostic::parser(
+                    self.parse_tree.path.clone(),
                     self.current.clone().unwrap_or(Token::EOF),
                     e,
                 ));
@@ -667,7 +661,7 @@ impl<'a> Parser<'a> {
 
         let member = self.add_expr(Member(Some(lhs), name), tok)?;
 
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
 
         let expr_id = if let Some(call_id) = self.check_call(member, can_assign)? {
             call_id
@@ -799,6 +793,7 @@ impl<'a> Parser<'a> {
         match prev {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
+            TokenKind::StringLiteral(val) => self.add_expr(LiteralString(val.to_string()), tok),
             TokenKind::Func => self.func(),
             _ => unreachable!("didn't get a literal"),
         }
@@ -1189,7 +1184,7 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            if self.did_match(TokenKind::Newline)? || self.did_match(TokenKind::Semicolon)? {
+            if self.did_match(TokenKind::Newline)? {
                 break;
             }
 
@@ -1225,7 +1220,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn identifier(&mut self) -> Result<String, ParserError> {
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
         if let Some(current) = self.current.clone()
             && let TokenKind::Identifier(ref name) = current.kind
         {
@@ -1239,7 +1234,7 @@ impl<'a> Parser<'a> {
 
     // Try to get an identifier. If it's a match, return it, otherwise return None
     pub(super) fn try_identifier(&mut self) -> Option<(String, Token)> {
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
 
         if let Some(current) = self.current.clone()
             && let TokenKind::Identifier(ref name) = current.kind
@@ -1333,7 +1328,7 @@ impl<'a> Parser<'a> {
     }
 
     fn consume_any(&mut self, possible_tokens: Vec<TokenKind>) -> Result<Token, ParserError> {
-        self.skip_newlines();
+        self.skip_semicolons_and_newlines();
 
         match self.current.clone() {
             Some(current) => {

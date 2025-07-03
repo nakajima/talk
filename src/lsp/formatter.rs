@@ -133,6 +133,7 @@ impl<'a> Formatter<'a> {
 
         match expr {
             Expr::LiteralArray(items) => self.format_array_literal(items),
+            Expr::LiteralString(string) => self.format_string_literal(string),
             Expr::LiteralInt(val) => text(val),
             Expr::LiteralFloat(val) => text(val),
             Expr::LiteralTrue => text("true"),
@@ -244,6 +245,10 @@ impl<'a> Formatter<'a> {
             concat(self.format_name(name), text(": ")),
             self.format_expr(*value),
         ))
+    }
+
+    fn format_string_literal(&self, string: &String) -> Doc {
+        concat(text("\""), concat(text(string), text("\"")))
     }
 
     fn format_array_literal(&self, items: &[ExprID]) -> Doc {

@@ -18,6 +18,7 @@ impl SymbolID {
     pub const OPTIONAL: SymbolID = SymbolID(1);
     pub const ARRAY: SymbolID = SymbolID(5);
     pub const TUPLE: SymbolID = SymbolID(-10);
+    pub const STRING: SymbolID = SymbolID(21);
 
     // These are special for the lowering phase
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
