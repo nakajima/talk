@@ -9,7 +9,7 @@ use super::server::TOKEN_TYPES;
 struct SemanticTokenCollector<'a> {
     source_file: &'a SourceFile<Parsed>,
     source: &'a str,
-    tokens: Vec<(Range, SemanticTokenType)>,
+    tokens: Vec<(Range, u32, SemanticTokenType)>,
 }
 
 pub fn collect(source_file: SourceFile<Parsed>, source: String) -> Vec<SemanticToken> {
@@ -56,33 +56,39 @@ impl<'a> SemanticTokenCollector<'a> {
         }
     }
 
-    fn range_for(&self, expr_id: &ExprID) -> Option<Range> {
+    fn range_for(&self, expr_id: &ExprID) -> Option<(Range, u32)> {
         let meta = self.source_file.meta.get(expr_id)?;
         let range = meta.source_range();
 
         if let Some(start) = self.line_col_for(range.start)
             && let Some(end) = self.line_col_for(range.end)
         {
-            Some(Range::new(start, end))
+            Some((
+                Range::new(start, end),
+                meta.end.end.saturating_sub(meta.start.start),
+            ))
         } else {
-            Some(Range::new(Position::new(0, 0), Position::new(0, 0)))
+            Some((
+                Range::new(Position::new(0, 0), Position::new(0, 0)),
+                meta.end.end.saturating_sub(meta.start.start),
+            ))
         }
     }
 
-    fn tokens_from_exprs(&self, exprs: &[ExprID]) -> Vec<(Range, SemanticTokenType)> {
+    fn tokens_from_exprs(&self, exprs: &[ExprID]) -> Vec<(Range, u32, SemanticTokenType)> {
         exprs
             .iter()
             .flat_map(|e| self.tokens_from_expr(e))
             .collect()
     }
 
-    fn tokens_from_expr(&self, expr_id: &ExprID) -> Vec<(Range, SemanticTokenType)> {
+    fn tokens_from_expr(&self, expr_id: &ExprID) -> Vec<(Range, u32, SemanticTokenType)> {
         let mut result = vec![];
         let Some(expr) = self.source_file.get(expr_id) else {
             return vec![];
         };
 
-        let Some(range) = self.range_for(expr_id) else {
+        let Some((range, length)) = self.range_for(expr_id) else {
             return vec![];
         };
 
@@ -90,17 +96,17 @@ impl<'a> SemanticTokenCollector<'a> {
             Expr::LiteralString(_) => (), // already handled by lexed
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
-                result.push((range, SemanticTokenType::NUMBER))
+                result.push((range, length, SemanticTokenType::NUMBER))
             }
             Expr::LiteralTrue | Expr::LiteralFalse => {
-                result.push((range, SemanticTokenType::KEYWORD))
+                result.push((range, length, SemanticTokenType::KEYWORD))
             }
             Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
             Expr::Binary(lhs, _token_kind, rhs) => {
                 result.extend(self.tokens_from_exprs(&[*lhs, *rhs]))
             }
             Expr::Tuple(items) => result.extend(self.tokens_from_exprs(items)),
-            Expr::Break => result.push((range, SemanticTokenType::KEYWORD)),
+            Expr::Break => result.push((range, length, SemanticTokenType::KEYWORD)),
             Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Call {
                 callee,
@@ -113,16 +119,16 @@ impl<'a> SemanticTokenCollector<'a> {
             }
             Expr::Pattern(pattern) => match pattern {
                 crate::expr::Pattern::LiteralInt(_) => {
-                    result.push((range, SemanticTokenType::NUMBER))
+                    result.push((range, length, SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralFloat(_) => {
-                    result.push((range, SemanticTokenType::NUMBER))
+                    result.push((range, length, SemanticTokenType::NUMBER))
                 }
                 crate::expr::Pattern::LiteralTrue => {
-                    result.push((range, SemanticTokenType::KEYWORD))
+                    result.push((range, length, SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::LiteralFalse => {
-                    result.push((range, SemanticTokenType::KEYWORD))
+                    result.push((range, length, SemanticTokenType::KEYWORD))
                 }
                 crate::expr::Pattern::Bind(_name) => {}
                 crate::expr::Pattern::Wildcard => {}
@@ -173,11 +179,16 @@ impl<'a> SemanticTokenCollector<'a> {
                 ..
             } => {
                 if let Some(meta) = self.source_file.meta.get(expr_id) {
-                    result.extend(
-                        meta.identifiers
-                            .iter()
-                            .map(|i| (self.range_from_token(i), SemanticTokenType::TYPE_PARAMETER)),
-                    )
+                    result.extend(meta.identifiers.iter().map(|i| {
+                        (
+                            self.range_from_token(i),
+                            meta.end
+                                .end
+                                .saturating_add(1)
+                                .saturating_sub(meta.start.start.saturating_sub(1)),
+                            SemanticTokenType::TYPE_PARAMETER,
+                        )
+                    }))
                 }
                 result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_exprs(conformances));
@@ -248,11 +259,13 @@ impl<'a> SemanticTokenCollector<'a> {
             }
             Expr::CallArg { value, .. } => {
                 if let Some(meta) = self.source_file.meta.get(expr_id) {
-                    result.extend(
-                        meta.identifiers
-                            .iter()
-                            .map(|i| (self.range_from_token(i), SemanticTokenType::PROPERTY)),
-                    )
+                    result.extend(meta.identifiers.iter().map(|i| {
+                        (
+                            self.range_from_token(i),
+                            meta.end.end.saturating_sub(meta.start.start),
+                            SemanticTokenType::PROPERTY,
+                        )
+                    }))
                 }
 
                 result.extend(self.tokens_from_expr(value));
@@ -286,12 +299,16 @@ impl<'a> SemanticTokenCollector<'a> {
         &self,
         token: &Token,
         token_type: SemanticTokenType,
-        tokens: &mut Vec<(Range, SemanticTokenType)>,
+        tokens: &mut Vec<(Range, u32, SemanticTokenType)>,
     ) {
         if let Some(start) = self.line_col_for(token.start)
             && let Some(end) = self.line_col_for(token.end)
         {
-            tokens.push((Range::new(start, end), token_type))
+            tokens.push((
+                Range::new(start, end),
+                token.end.saturating_sub(token.start),
+                token_type,
+            ))
         }
     }
 
@@ -299,18 +316,25 @@ impl<'a> SemanticTokenCollector<'a> {
         &self,
         token: &Token,
         token_type: SemanticTokenType,
-        tokens: &mut Vec<(Range, SemanticTokenType)>,
+        tokens: &mut Vec<(Range, u32, SemanticTokenType)>,
     ) {
         if let Some(start) = self.line_col_for(token.start.saturating_sub(1))
             && let Some(end) = self.line_col_for(token.end.saturating_add(1))
         {
-            tokens.push((Range::new(start, end), token_type))
+            tokens.push((
+                Range::new(start, end),
+                token
+                    .end
+                    .saturating_add(1)
+                    .saturating_sub(token.start.saturating_sub(1)),
+                token_type,
+            ))
         }
     }
 
     fn collect_lexed_tokens(&mut self) {
         let mut lexer = Lexer::preserving_comments(self.source);
-        let mut tokens: Vec<(Range, SemanticTokenType)> = vec![];
+        let mut tokens: Vec<(Range, u32, SemanticTokenType)> = vec![];
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
@@ -394,7 +418,7 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn collect_parsed_tokens(&mut self) {
-        let tokens: Vec<(Range, SemanticTokenType)> = self
+        let tokens: Vec<(Range, u32, SemanticTokenType)> = self
             .source_file
             .root_ids()
             .iter()
@@ -404,7 +428,7 @@ impl<'a> SemanticTokenCollector<'a> {
     }
 
     fn encode_tokens(mut self) -> Vec<SemanticToken> {
-        self.tokens.sort_by(|(a, _), (b, _)| {
+        self.tokens.sort_by(|(a, _, _), (b, _, _)| {
             a.start
                 .line
                 .cmp(&b.start.line)
@@ -414,14 +438,9 @@ impl<'a> SemanticTokenCollector<'a> {
         let mut encoded_tokens = Vec::new();
         let mut last_pos = Position::new(0, 0);
 
-        for (range, token_type) in self.tokens {
-            if range.start.line != range.end.line {
-                eprintln!("Warning: Skipping multi-line token: {range:?}");
-                continue;
-            }
-
-            if range.end.character < range.start.character {
-                eprintln!("Warning: Invalid range detected: {range:?}");
+        for (range, length, token_type) in self.tokens {
+            if range.end.character < range.start.character && range.end.line <= range.start.line {
+                log::error!("Warning: Invalid range detected: {range:?}");
                 continue;
             }
 
@@ -431,12 +450,13 @@ impl<'a> SemanticTokenCollector<'a> {
             } else {
                 range.start.character
             };
-            let length = range.end.character - range.start.character;
 
             let token_type_index = TOKEN_TYPES
                 .iter()
                 .position(|tt| tt == &token_type)
                 .unwrap_or(0) as u32;
+
+            log::error!("{range:?} {length:?} {token_type:?}");
 
             encoded_tokens.push(SemanticToken {
                 delta_line,
@@ -586,5 +606,19 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn gets_multiline_string() {
+        assert_eq!(
+            lexed_tokens_for("\"sup\nhi\""),
+            vec![SemanticToken {
+                delta_line: 0,
+                delta_start: 0,
+                length: 8,
+                token_type: pos(SemanticTokenType::STRING),
+                token_modifiers_bitset: 0
+            }]
+        )
     }
 }
