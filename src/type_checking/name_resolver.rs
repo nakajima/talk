@@ -744,6 +744,20 @@ impl NameResolver {
                 continue;
             };
 
+            if self.lookup(&name_str).0 != SymbolID(0)
+                && let Some(info) = symbol_table.get(&self.lookup(&name_str).0)
+                && let Some(this_info) = source_file.meta.get(id)
+                && let Some(existing_info) = source_file.meta.get(&info.expr_id)
+                && this_info != existing_info
+                && let Ok(session) = &mut self.session.lock()
+            {
+                session.add_diagnostic(Diagnostic::resolve(
+                    source_file.path.clone(),
+                    *id,
+                    NameResolverError::Redeclaration(name_str.clone(), info.clone()),
+                ));
+            }
+
             let struct_symbol = self.declare(
                 name_str.clone(),
                 SymbolKind::Struct,
@@ -990,29 +1004,6 @@ impl NameResolver {
         let Some(meta) = source_file.meta.get(expr_id) else {
             return SymbolID(0);
         };
-
-        if self.lookup(&name).0 != SymbolID(0)
-            && [SymbolKind::Struct, SymbolKind::Enum, SymbolKind::Protocol].contains(&kind)
-        {
-            let Some(info) = symbol_table.get(&self.lookup(&name).0) else {
-                log::error!("Unable to get symbol info for {name}");
-                return SymbolID(0);
-            };
-
-            if *expr_id != info.expr_id {
-                log::error!("{name} is already declared:\nexisting: {info:#?}");
-
-                if let Ok(session) = &mut self.session.lock() {
-                    session.add_diagnostic(Diagnostic::resolve(
-                        source_file.path.clone(),
-                        *expr_id,
-                        NameResolverError::Redeclaration(name, info.clone()),
-                    ));
-                }
-
-                return SymbolID(0);
-            }
-        }
 
         let definition = Definition {
             path: source_file.path.clone(),
@@ -1733,6 +1724,7 @@ mod tests {
         let (_, session) = resolve_with_session(
             "
         struct Person {}
+
         struct Person {}
         ",
         );
