@@ -42,13 +42,14 @@ async fn main() {
     // matches just as you would the top level cmd
     match &cli.command {
         // Dump the IR
+        #[allow(clippy::print_with_newline)]
         Commands::IR { filename } => {
             use talk::{compiling::driver::Driver, lowering::ir_printer::print};
             let mut driver = Driver::with_files(vec![filename.clone()]);
             let lowered = driver.lower();
 
             for unit in lowered {
-                println!("{}", print(&unit.stage.module));
+                print!("{}\n", print(&unit.stage.module));
             }
         }
 

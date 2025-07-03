@@ -75,8 +75,6 @@ impl<'a> SatisfiesChecker<'a> {
                             conformance.associated_types.iter().zip(type_args)
                         {
                             map.insert(provided.clone(), required.clone());
-                            //println!("-> Unifying provided: {provided:?} <> {required:?}");
-                            // unifications.push((required.clone(), provided.clone()));
                         }
 
                         for (param, arg) in associated_types.iter().zip(type_args) {

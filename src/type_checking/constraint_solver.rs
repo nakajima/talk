@@ -336,7 +336,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     Ty::Func(_args, ret, _generics) => {
                         let Ty::Enum(enum_id, _generics) = Self::apply(ret, substitutions, 0)
                         else {
-                            println!(
+                            log::error!(
                                 "did not get enum type: {:?}",
                                 Self::apply(ret, substitutions, 0)
                             );

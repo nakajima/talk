@@ -25,9 +25,9 @@ macro_rules! assert_lowered_functions {
                         functions: right_val.clone(),
                     };
 
-                    use $crate::lowering::ir_printer::print;
                     use prettydiff::{diff_chars, diff_lines};
-                    println!(
+                    use $crate::lowering::ir_printer::print;
+                    log::error!(
                         "{}",
                         diff_chars(
                             &format!("{:?}", &left_val.functions),
@@ -73,11 +73,12 @@ macro_rules! assert_lowered_function {
                 function.debug_info = Default::default();
                 expected_function.debug_info = Default::default();
 
+                #[allow(clippy::print_with_newline)]
                 if function != expected_function {
                     use prettydiff::{diff_chars, diff_lines};
                     use $crate::lowering::ir_printer::format_func;
-                    println!(
-                        "{}",
+                    print!(
+                        "{}\n",
                         diff_chars(
                             &format!("{:?}", &function),
                             &format!("{:?}", expected_function)

@@ -1741,8 +1741,6 @@ mod protocol_tests {
             checked.diagnostics()
         );
 
-        println!("{:#?}", checked.env);
-
         assert_eq!(checked.at(2).unwrap(), Ty::Struct(SymbolID(4), vec![]));
     }
 }

@@ -100,7 +100,7 @@ macro_rules! indented_println {
     ($env:expr, $fmt:literal $(, $args:expr)*) => {
         // Expander:
         // This is the code that will be generated.
-        println!(
+        log::trace!(
             // `concat!` joins the initial indent placeholder "{}" with your format string.
             // e.g., concat!("{}", "Infer node {}: {:?}") -> "{}Infer node {}: {:?}"
             concat!("{}", $fmt),
@@ -863,14 +863,6 @@ impl<'a> TypeChecker<'a> {
         }
 
         let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
-
-        // indented_println!(
-        //     env,
-        //     "type repr {:?} -> {:?} {:?}",
-        //     name,
-        //     instantiated,
-        //     substitutions
-        // );
 
         Ok(instantiated)
     }

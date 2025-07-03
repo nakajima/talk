@@ -266,7 +266,7 @@ impl LanguageServer for ServerState {
         };
 
         let Some(source_file) = self.driver.parsed_source_file(&path) else {
-            eprintln!("Failed to find parsed file: {:?}", params.text_document.uri);
+            log::error!("Failed to find parsed file: {:?}", params.text_document.uri);
             return Box::pin(async { Ok(None) });
         };
 

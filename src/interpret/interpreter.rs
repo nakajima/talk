@@ -62,8 +62,9 @@ impl IRInterpreter {
     pub fn run(mut self) -> Result<Value, InterpreterError> {
         log::info!("Monomorphizing module");
 
+        #[allow(clippy::print_with_newline)]
         if std::env::var("IR").is_ok() {
-            println!("{}", crate::lowering::ir_printer::print(&self.program));
+            print!("{}\n", crate::lowering::ir_printer::print(&self.program));
         }
 
         let main = self
@@ -449,9 +450,10 @@ impl IRInterpreter {
                 let structure = Value::Struct(self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
+            #[allow(clippy::print_with_newline)]
             Instr::Print { val } => {
                 let val = self.value(&val);
-                println!("{val}");
+                print!("{val}\n");
             }
             Instr::GetValueOf { .. } => (),
         }
@@ -505,8 +507,8 @@ impl IRInterpreter {
     fn dump(&self) {
         for (i, frame) in self.call_stack.iter().rev().enumerate() {
             let stack = self.memory.range(frame.sp, frame.function.size as usize);
-            println!(
-                "{}:\n{}",
+            print!(
+                "{}:\n{}\n",
                 i,
                 stack
                     .iter()

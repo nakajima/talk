@@ -317,7 +317,6 @@ impl<'a> Parser<'a> {
     fn advance(&mut self) -> Option<Token> {
         self.previous = self.current.clone();
         self.current = self.lexer.next().ok();
-        // println!("Adv: {:?}", self.current);
         self.previous.clone()
     }
 
