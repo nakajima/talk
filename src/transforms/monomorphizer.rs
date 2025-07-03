@@ -337,6 +337,7 @@ impl<'a> Monomorphizer<'a> {
             Instr::GetEnumValue(_, ty, _, _, _) => *ty = Self::apply_type(ty, substitutions),
             Instr::TagVariant(_, ty, _, __list) => *ty = Self::apply_type(ty, substitutions),
             Instr::Ret(ty, _) => *ty = Self::apply_type(ty, substitutions),
+            Instr::Print { .. } => (),
             Instr::Jump(_) => (),
             Instr::Branch { .. } => (),
             Instr::Unreachable => (),

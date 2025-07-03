@@ -22,6 +22,7 @@ pub fn lower_builtin(
         SymbolID(-7) => lower_free(lowerer, typed_callee, args),
         SymbolID(-8) => lower_store(lowerer, typed_callee, args),
         SymbolID(-9) => lower_load(lowerer, typed_callee, args),
+        SymbolID(-11) => lower_print(lowerer, typed_callee, args),
         _ => Err(IRError::BuiltinNotFound(*symbol_id)),
     }
 }
@@ -124,12 +125,22 @@ fn lower_realloc(
     Ok(Some(dest))
 }
 
-#[allow(unused)]
 fn lower_print(
-    _lowerer: &mut Lowerer,
+    lowerer: &mut Lowerer,
     _typed_callee: &TypedExpr,
-    _args: &[ExprID],
+    args: &[ExprID],
 ) -> Result<Option<Register>, IRError> {
+    if args.is_empty() {
+        return Err(IRError::Unknown("No arg to print".to_string()));
+    }
+
+    // TODO handle case where arg conforms to Printable
+    let Some(reg) = lowerer.lower_expr(&args[0]) else {
+        return Err(IRError::Unknown("Could not lower print arg".to_string()));
+    };
+
+    lowerer.push_instr(Instr::Print { val: reg.into() });
+
     Ok(None)
 }
 

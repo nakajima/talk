@@ -9,3 +9,9 @@ extend String: Printable {
 	}
 }
 
+extend Optional: Printable {
+	func toString() -> String {
+		"Optional"
+	}
+}
+

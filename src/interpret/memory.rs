@@ -1,4 +1,4 @@
-use std::ops::Add;
+use std::{fmt::Display, ops::Add};
 
 use crate::{
     SymbolID,
@@ -20,6 +20,12 @@ pub struct Memory {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pointer {
     addr: usize,
+}
+
+impl Display for Pointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x{}", self.addr)
+    }
 }
 
 impl Add<usize> for Pointer {

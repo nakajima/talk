@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::interpret::{interpreter::InterpreterError, memory::Pointer};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +23,42 @@ pub enum Value {
         count: usize,
         capacity: usize,
     },
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Int(i) => write!(f, "{i}"),
+            Value::Float(i) => write!(f, "{i}"),
+            Value::Bool(i) => write!(f, "{i}"),
+            Value::Enum { tag, values } => write!(f, ".{tag}({values:?})"),
+            Value::Void => write!(f, "void"),
+            Value::Struct(values) => write!(
+                f,
+                "Struct({})",
+                values
+                    .iter()
+                    .map(|v| format!("{v}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            Value::Pointer(pointer) => write!(f, "0x{pointer}"),
+            Value::Func(func) => write!(f, "@{:?}()", func),
+            Value::RawBuffer(b) => write!(f, "{b:?}"),
+            Value::String(string) => write!(f, "{string}"),
+            Value::Array(values) => write!(
+                f,
+                "[{}]",
+                values
+                    .iter()
+                    .map(|v| format!("{v}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+
+            Value::Buffer { .. } => write!(f, "buf"),
+        }
+    }
 }
 
 impl Value {
