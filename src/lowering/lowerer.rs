@@ -529,6 +529,11 @@ impl<'a> Lowerer<'a> {
                 body,
                 ..
             } => self.lower_struct(expr_id, struct_id, &body),
+            Expr::Extend {
+                name: Name::Resolved(type_id, _),
+                body,
+                ..
+            } => self.lower_extend(expr_id, type_id, &body),
             Expr::Init(symbol_id, func_id) => symbol_id
                 .map(|symbol_id| self.lower_init(&symbol_id, &func_id))
                 .unwrap_or_else(|| {
@@ -865,13 +870,6 @@ impl<'a> Lowerer<'a> {
             });
         }
 
-        // let loaded = self.allocate_register();
-        // self.push_instr(Instr::Load {
-        //     dest: loaded,
-        //     ty: IRType::array(),
-        //     addr: array_reg,
-        // });
-
         Some(array_reg)
     }
 
@@ -956,21 +954,76 @@ impl<'a> Lowerer<'a> {
         None
     }
 
+    fn lower_extend(
+        &mut self,
+        expr_id: &ExprID,
+        type_id: SymbolID,
+        body_id: &ExprID,
+    ) -> Option<Register> {
+        let Some(type_def) = self.env.lookup_type(&type_id).cloned() else {
+            self.add_diagnostic(Diagnostic::lowering(
+                self.source_file.path.clone(),
+                *expr_id,
+                IRError::Unknown(format!("Could not resolve type for symbol: {type_id:?}")),
+            ));
+            return None;
+        };
+
+        log::trace!("Lowering extension for {type_def:?}");
+
+        let Some(Expr::Block(member_ids)) = self.source_file.get(body_id) else {
+            self.add_diagnostic(Diagnostic::lowering(
+                self.source_file.path.clone(),
+                *body_id,
+                IRError::Unknown("Did not get extension body".into()),
+            ));
+            return None;
+        };
+
+        for member_id in member_ids.clone() {
+            let Some(typed_member) = self.source_file.typed_expr(&member_id, self.env).clone()
+            else {
+                continue;
+            };
+
+            match typed_member.expr {
+                Expr::Func {
+                    name: Some(name), ..
+                } => {
+                    self.lower_method(&type_id, &member_id, &name.name_str());
+                }
+                Expr::Init(..) | Expr::Property { .. } => {
+                    // These are handled by the type defs; ignore them here.
+                    continue;
+                }
+                _ => {
+                    log::warn!("unhandled struct member: {:?}", typed_member.expr);
+                    continue;
+                }
+            }
+        }
+
+        None
+    }
+
     fn setup_self_context(
         &mut self,
         symbol_id: &SymbolID,
         func_id: &ExprID,
     ) -> Option<(IRType, StructDef, TypedExpr, Register, Option<IRValue>)> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(symbol_id).cloned() else {
-            unreachable!()
+            log::error!("Cannot setup self context for {symbol_id:?}");
+            return None;
         };
 
         let Some(typed_func) = self.source_file.typed_expr(func_id, self.env) else {
-            unreachable!()
+            log::error!("Did not get typed function for func_id: {func_id}");
+            return None;
         };
 
         let Expr::Func { params, body, .. } = &typed_func.expr else {
-            unreachable!()
+            log::error!("Typed expr not a func: {typed_func:?}");
+            return None;
         };
 
         let struct_ty = IRType::Struct(
@@ -2636,7 +2689,7 @@ impl<'a> Lowerer<'a> {
 
     pub fn add_diagnostic(&self, diagnostic: Diagnostic) {
         if let Ok(mut lock) = self.session.lock() {
-            lock.add_diagnostic(self.source_file.path.clone(), diagnostic);
+            lock.add_diagnostic(diagnostic);
         }
     }
 

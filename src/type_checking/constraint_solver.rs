@@ -179,7 +179,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
     fn add_diagnostic(&self, diagnostic: Diagnostic) {
         if let Ok(mut lock) = self.session.lock() {
-            lock.add_diagnostic(self.source_file.path.clone(), diagnostic)
+            lock.add_diagnostic(diagnostic)
         }
     }
 

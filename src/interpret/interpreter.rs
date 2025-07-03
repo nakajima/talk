@@ -449,6 +449,10 @@ impl IRInterpreter {
                 let structure = Value::Struct(self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
+            Instr::Print { val } => {
+                let val = self.value(&val);
+                println!("{val}");
+            }
             Instr::GetValueOf { .. } => (),
         }
 

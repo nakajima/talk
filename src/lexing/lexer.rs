@@ -248,6 +248,7 @@ impl<'a> Lexer<'a> {
             "match" => Match,
             "return" => Return,
             "struct" => Struct,
+            "extend" => Extend,
             "break" => Break,
             "init" => Init,
             "protocol" => Protocol,

@@ -787,11 +787,11 @@ mod type_tests {
     fn checks_basic_match_expression() {
         let checker = check(
             "
-            enum Bool {
+            enum Boolean {
                 case yes, no
             }
 
-            func test(b: Bool) {
+            func test(b: Boolean) {
                 match b {
                     .yes -> 1
                     .no -> 0
@@ -1484,6 +1484,27 @@ mod type_tests {
             }
         ",
         );
+    }
+
+    #[test]
+    fn checks_extend_struct() {
+        let checked = check_without_prelude(
+            "
+        protocol Thingable { func thing() -> Int {} }
+        struct Person { func sup() {} }
+        extend Person: Thingable {
+            func thing() { 123 }
+        }
+        ",
+        )
+        .unwrap();
+        let person_struct = checked.env.lookup_struct(&SymbolID(3)).unwrap();
+        let thingable_protocol = checked.env.lookup_protocol(&SymbolID(1)).unwrap();
+        assert_eq!(person_struct.name_str, "Person");
+        assert!(person_struct.conforms_to(&thingable_protocol.symbol_id));
+
+        // Make sure extensions don't blow away what was there before
+        assert!(person_struct.member_ty("sup").is_some())
     }
 }
 

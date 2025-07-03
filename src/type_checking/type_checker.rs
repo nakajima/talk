@@ -160,10 +160,11 @@ impl<'a> TypeChecker<'a> {
         if let Err(e) = self.hoist(&root_ids, env, &mut source_file)
             && let Ok(mut lock) = self.session.lock()
         {
-            lock.add_diagnostic(
+            lock.add_diagnostic(Diagnostic::typing(
                 source_file.path.clone(),
-                Diagnostic::typing(source_file.path.clone(), *root_ids.first().unwrap_or(&0), e),
-            );
+                *root_ids.first().unwrap_or(&0),
+                e,
+            ));
         }
 
         let mut typed_roots = vec![];
@@ -173,10 +174,7 @@ impl<'a> TypeChecker<'a> {
                 Ok(_ty) => typed_roots.push(env.typed_exprs.get(id).unwrap().clone()),
                 Err(e) => {
                     if let Ok(mut lock) = self.session.lock() {
-                        lock.add_diagnostic(
-                            source_file.path.clone(),
-                            Diagnostic::typing(source_file.path.clone(), *id, e),
-                        )
+                        lock.add_diagnostic(Diagnostic::typing(source_file.path.clone(), *id, e))
                     }
                 }
             }
@@ -324,6 +322,20 @@ impl<'a> TypeChecker<'a> {
                 expected,
                 source_file,
             ),
+            Expr::Extend {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.infer_extension(
+                name,
+                generics,
+                conformances,
+                body,
+                env,
+                expected,
+                source_file,
+            ),
             Expr::CallArg { value, .. } => self.infer_node(value, env, expected, source_file),
             Expr::Init(Some(struct_id), func_id) => {
                 self.infer_init(struct_id, func_id, expected, env, source_file)
@@ -369,10 +381,11 @@ impl<'a> TypeChecker<'a> {
             Err(e) => {
                 log::error!("error inferring {:?}: {:?}", source_file.get(id), e);
                 if let Ok(mut lock) = self.session.lock() {
-                    lock.add_diagnostic(
+                    lock.add_diagnostic(Diagnostic::typing(
                         source_file.path.clone(),
-                        Diagnostic::typing(source_file.path.clone(), *id, e.clone()),
-                    );
+                        *id,
+                        e.clone(),
+                    ));
                 }
                 ty = Err(TypeError::Handled);
             }
@@ -506,6 +519,36 @@ impl<'a> TypeChecker<'a> {
         };
 
         Ok(Ty::Init(*struct_id, params))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn infer_extension(
+        &mut self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        _body: &ExprID,
+        env: &mut Environment,
+        expected: &Option<Ty>,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        let mut inferred_generics: Vec<Ty> = vec![];
+        for generic in generics {
+            inferred_generics.push(
+                self.infer_node(generic, env, expected, source_file)?
+                    .clone(),
+            );
+        }
+
+        for id in conformances {
+            self.infer_node(id, env, expected, source_file)?;
+        }
+
+        let Name::Resolved(symbol_id, _) = name else {
+            return Err(TypeError::Unresolved(name.name_str()));
+        };
+
+        Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
 
     #[allow(clippy::too_many_arguments)]

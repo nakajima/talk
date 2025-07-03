@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+#[cfg(test)]
+use crate::filler::FullExpr;
 use crate::{
     SourceFile, compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
     environment::Environment, lexer::Lexer, token::Token, token_kind::TokenKind,
@@ -111,6 +113,21 @@ pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
 }
 
 #[cfg(test)]
+pub fn parse_fill(code: &str) -> Vec<FullExpr> {
+    let lexer = Lexer::new(code);
+    let mut env = Environment::default();
+    let mut parser = Parser::new(env.session.clone(), lexer, PathBuf::from("-"), &mut env);
+
+    parser.parse();
+
+    use crate::filler::Filler;
+
+    let filler = Filler::new(parser.parse_tree);
+
+    filler.fill_root()
+}
+
+#[cfg(test)]
 pub fn parse_with_comments(code: &str) -> SourceFile {
     let lexer = Lexer::preserving_comments(code);
     let mut env = Environment::default();
@@ -188,7 +205,7 @@ impl<'a> Parser<'a> {
 
     fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         if let Ok(mut lock) = self.session.lock() {
-            lock.add_diagnostic(self.parse_tree.path.clone(), diagnostic)
+            lock.add_diagnostic(diagnostic)
         }
     }
 
@@ -357,6 +374,28 @@ impl<'a> Parser<'a> {
         )
     }
 
+    pub(crate) fn extend_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Extend)?;
+
+        let Some((name_str, _)) = self.try_identifier() else {
+            return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+        };
+
+        let generics = self.type_reprs()?;
+        let conformances = self.conformances()?;
+        let body = self.extend_body()?;
+        self.add_expr(
+            Extend {
+                name: Name::Raw(name_str),
+                generics,
+                conformances,
+                body,
+            },
+            tok,
+        )
+    }
+
     fn struct_body(&mut self) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
@@ -372,6 +411,33 @@ impl<'a> Parser<'a> {
             match self.current {
                 some_kind!(Let) => {
                     members.push(self.property()?);
+                }
+                some_kind!(Init) => members.push(self.init()?),
+                _ => {
+                    members.push(self.parse_with_precedence(Precedence::Assignment)?);
+                }
+            }
+        }
+
+        self.add_expr(Expr::Block(members), tok)
+    }
+
+    fn extend_body(&mut self) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+        self.skip_newlines();
+        self.consume(TokenKind::LeftBrace)?;
+        self.skip_semicolons_and_newlines();
+
+        let mut members: Vec<ExprID> = vec![];
+
+        while !self.did_match(TokenKind::RightBrace)? {
+            self.skip_newlines();
+
+            match self.current {
+                some_kind!(Let) => {
+                    return Err(ParserError::UnknownError(
+                        "Extensions can't define properties".into(),
+                    ));
                 }
                 some_kind!(Init) => members.push(self.init()?),
                 _ => {

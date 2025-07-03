@@ -1,3 +1,17 @@
 protocol Printable {
   func toString() -> String
 }
+
+// Builtins
+extend String: Printable {
+	func toString() -> String {
+		self
+	}
+}
+
+extend Optional: Printable {
+	func toString() -> String {
+		"Optional"
+	}
+}
+

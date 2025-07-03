@@ -64,6 +64,12 @@ impl<'a> ControlFlowGraph<'a> {
 
         let mut postorder = Vec::new();
         let mut visited = HashSet::new();
+
+        if func.blocks.is_empty() {
+            log::error!("cannot generate CFG for func with no blocks");
+            return postorder;
+        }
+
         // Start the traversal from the function's entry block.
         dfs_postorder(func.blocks[0].id, successors, &mut visited, &mut postorder);
 

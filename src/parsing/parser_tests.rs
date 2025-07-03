@@ -1152,7 +1152,12 @@ mod pattern_parsing_tests {
 
 #[cfg(test)]
 mod arrays {
-    use crate::{expr::Expr, parser::parse};
+    use crate::{
+        expr::Expr,
+        filler::FullExpr,
+        name::Name,
+        parser::{parse, parse_fill},
+    };
 
     #[test]
     fn parses_array_literal() {
@@ -1182,11 +1187,60 @@ mod arrays {
             Expr::LiteralArray(vec!(0, 1, 2))
         );
     }
+
+    #[test]
+    fn parses_extensions() {
+        let parsed = parse_fill(
+            "
+        extend Person: Something<String> {
+            func foo() {}
+        }
+        ",
+        );
+
+        use FullExpr::*;
+        assert_eq!(
+            parsed[0],
+            Extend {
+                name: Name::Raw("Person".into()),
+                generics: vec![],
+                conformances: vec![TypeRepr {
+                    name: Name::Raw("Something".into()),
+                    generics: vec![TypeRepr {
+                        name: Name::Raw("String".into()),
+                        generics: vec![],
+                        conformances: vec![],
+                        introduces_type: false
+                    }],
+                    conformances: vec![],
+                    introduces_type: false
+                }],
+                body: Block(vec![Func {
+                    name: Some("foo".into()),
+                    generics: vec![],
+                    params: vec![],
+                    body: Block(vec![]).into(),
+                    ret: None.into(),
+                    captures: vec![]
+                }])
+                .into()
+            }
+        )
+    }
 }
 
 #[cfg(test)]
 mod structs {
-    use crate::{expr::Expr, name::Name, parser::parse};
+    use crate::{
+        diagnostic::Diagnostic,
+        expr::Expr,
+        filler::{Filler, FullExpr},
+        name::Name,
+        parser::{parse, parse_with_session},
+        token::Token,
+        token_kind::TokenKind,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn parses_empty_struct_def() {
@@ -1331,23 +1385,6 @@ mod structs {
         assert_eq!(&8, body);
         assert!(captures.is_empty());
     }
-}
-
-#[cfg(test)]
-mod error_handling_tests {
-    use std::path::PathBuf;
-
-    use typed_arena::Arena;
-
-    use crate::{
-        diagnostic::Diagnostic,
-        expr::Expr,
-        filler::{Filler, FullExpr},
-        name::Name,
-        parser::{parse, parse_with_session},
-        token::Token,
-        token_kind::TokenKind,
-    };
 
     #[test]
     fn handles_unclosed_paren() {
@@ -1534,19 +1571,18 @@ mod error_handling_tests {
             "-".into(),
         );
 
-        let arena = Arena::new();
-        let filler = Filler::new(&parsed, &arena);
+        let filler = Filler::new(parsed);
         let filled = filler.fill_root();
 
         use FullExpr::*;
         assert_eq!(
             filled[0],
-            &Func {
-                name: &Some(Name::Raw("foo".into())),
-                generics: vec![&TypeRepr {
-                    name: &Name::Raw("T".into()),
-                    conformances: vec![&TypeRepr {
-                        name: &Name::Raw("Fizz".into()),
+            Func {
+                name: Some(Name::Raw("foo".into())),
+                generics: vec![TypeRepr {
+                    name: Name::Raw("T".into()),
+                    conformances: vec![TypeRepr {
+                        name: Name::Raw("Fizz".into()),
                         generics: vec![],
                         conformances: vec![],
                         introduces_type: false
@@ -1554,15 +1590,16 @@ mod error_handling_tests {
                     generics: vec![],
                     introduces_type: true
                 }],
-                params: vec![&Parameter(&Name::Raw("x".into()), None)],
-                body: &Block(vec![&Variable(&Name::Raw("x".into()), None)]),
-                ret: Some(&TypeRepr {
-                    name: &Name::Raw("T".into()),
+                params: vec![Parameter(Name::Raw("x".into()), None.into())],
+                body: Block(vec![Variable(Name::Raw("x".into()), None.into())]).into(),
+                ret: Some(TypeRepr {
+                    name: Name::Raw("T".into()),
                     conformances: vec![],
                     generics: vec![],
                     introduces_type: false
-                }),
-                captures: &vec![]
+                })
+                .into(),
+                captures: vec![]
             }
         );
     }

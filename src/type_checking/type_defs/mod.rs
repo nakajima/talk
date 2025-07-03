@@ -15,7 +15,7 @@ pub mod struct_def;
 
 pub type TypeParams = Vec<TypeParameter>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDef {
     Enum(EnumDef),
     Struct(StructDef),
@@ -79,75 +79,76 @@ impl TypeDef {
         }
     }
 
-    pub fn set_methods(&mut self, methods: Vec<Method>) {
+    pub fn add_methods(&mut self, methods: Vec<Method>) {
         if methods.is_empty() {
             return;
         }
+
         match self {
-            Self::Enum(def) => def.methods = methods,
-            Self::Struct(def) => def.methods = methods,
-            Self::Protocol(def) => def.methods = methods,
+            Self::Enum(def) => def.methods.extend(methods),
+            Self::Struct(def) => def.methods.extend(methods),
+            Self::Protocol(def) => def.methods.extend(methods),
         }
     }
 
-    pub fn set_type_parameters(&mut self, params: Vec<TypeParameter>) {
+    pub fn add_type_parameters(&mut self, params: Vec<TypeParameter>) {
         match self {
-            Self::Enum(def) => def.type_parameters = params,
-            Self::Struct(def) => def.type_parameters = params,
-            Self::Protocol(def) => def.associated_types = params,
+            Self::Enum(def) => def.type_parameters.extend(params),
+            Self::Struct(def) => def.type_parameters.extend(params),
+            Self::Protocol(def) => def.associated_types.extend(params),
         }
     }
 
-    pub fn set_method_requirements(&mut self, methods: Vec<Method>) {
+    pub fn add_method_requirements(&mut self, methods: Vec<Method>) {
         if methods.is_empty() {
             return;
         }
         match self {
             Self::Enum(_) => (),
             Self::Struct(_) => (),
-            Self::Protocol(def) => def.method_requirements = methods,
+            Self::Protocol(def) => def.method_requirements.extend(methods),
         }
     }
 
-    pub fn set_initializers(&mut self, initializers: Vec<Initializer>) {
+    pub fn add_initializers(&mut self, initializers: Vec<Initializer>) {
         if initializers.is_empty() {
             return;
         }
 
         match self {
-            Self::Enum(_) => (),
-            Self::Struct(def) => def.initializers = initializers,
-            Self::Protocol(def) => def.initializers = initializers,
+            Self::Enum(_) => log::error!("Enums can't have initializers"),
+            Self::Struct(def) => def.initializers.extend(initializers),
+            Self::Protocol(def) => def.initializers.extend(initializers),
         }
     }
 
-    pub fn set_properties(&mut self, properties: Vec<Property>) {
+    pub fn add_properties(&mut self, properties: Vec<Property>) {
         if properties.is_empty() {
             return;
         }
         match self {
-            Self::Enum(_) => (),
-            Self::Struct(def) => def.properties = properties,
-            Self::Protocol(def) => def.properties = properties,
+            Self::Enum(_) => log::error!("Enums can't have properties"),
+            Self::Struct(def) => def.properties.extend(properties),
+            Self::Protocol(def) => def.properties.extend(properties),
         }
     }
 
-    pub fn set_variants(&mut self, variants: Vec<EnumVariant>) {
+    pub fn add_variants(&mut self, variants: Vec<EnumVariant>) {
         if variants.is_empty() {
             return;
         }
         match self {
-            Self::Enum(def) => def.variants = variants,
+            Self::Enum(def) => def.variants.extend(variants),
             Self::Struct(_) => (),
             Self::Protocol(_) => (),
         }
     }
 
-    pub fn set_conformances(&mut self, conformances: Vec<Conformance>) {
+    pub fn add_conformances(&mut self, conformances: Vec<Conformance>) {
         match self {
-            Self::Enum(def) => def.conformances = conformances,
-            Self::Struct(def) => def.conformances = conformances,
-            Self::Protocol(def) => def.conformances = conformances,
+            Self::Enum(def) => def.conformances.extend(conformances),
+            Self::Struct(def) => def.conformances.extend(conformances),
+            Self::Protocol(def) => def.conformances.extend(conformances),
         }
     }
 }
