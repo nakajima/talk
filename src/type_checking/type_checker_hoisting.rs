@@ -317,29 +317,32 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect();
 
-            let type_def = match expr_ids.kind {
-                PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
-                    symbol_id,
-                    name_str,
-                    type_parameters: type_params,
-                    variants: Default::default(),
-                    methods: Default::default(),
-                    conformances: Default::default(),
-                }),
-                PredeclarationKind::Struct => {
-                    TypeDef::Struct(StructDef::new(symbol_id, name_str, type_params))
-                }
-                PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
-                    symbol_id,
-                    name_str,
-                    associated_types: type_params,
-                    conformances: vec![],
-                    properties: Default::default(),
-                    methods: Default::default(),
-                    initializers: Default::default(),
-                    method_requirements: Default::default(),
-                }),
-            };
+            let type_def =
+                env.lookup_type(&symbol_id)
+                    .cloned()
+                    .unwrap_or_else(|| match expr_ids.kind {
+                        PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
+                            symbol_id,
+                            name_str,
+                            type_parameters: type_params,
+                            variants: Default::default(),
+                            methods: Default::default(),
+                            conformances: Default::default(),
+                        }),
+                        PredeclarationKind::Struct => {
+                            TypeDef::Struct(StructDef::new(symbol_id, name_str, type_params))
+                        }
+                        PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
+                            symbol_id,
+                            name_str,
+                            associated_types: type_params,
+                            conformances: vec![],
+                            properties: Default::default(),
+                            methods: Default::default(),
+                            initializers: Default::default(),
+                            method_requirements: Default::default(),
+                        }),
+                    });
 
             env.register(&type_def).map_err(|e| (*id, e))?;
 
@@ -385,7 +388,7 @@ impl<'a> TypeChecker<'a> {
                     substitutions.insert(property.placeholder.clone(), ty.clone());
                 }
 
-                def.set_properties(properties.clone());
+                def.add_properties(properties.clone());
                 env.register(&def)
                     .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or(0), e))?;
             }
@@ -420,7 +423,7 @@ impl<'a> TypeChecker<'a> {
                     substitutions.insert(method.placeholder.clone(), ty.clone());
                 }
 
-                def.set_method_requirements(method_requirements.clone());
+                def.add_method_requirements(method_requirements.clone());
                 env.register(&def).map_err(|e| {
                     (
                         method_requirements.last().map(|p| p.expr_id).unwrap_or(0),
@@ -468,7 +471,7 @@ impl<'a> TypeChecker<'a> {
                     });
                 }
 
-                def.set_variants(variants);
+                def.add_variants(variants);
                 env.register(&def).map_err(|e| (0, e))?;
             }
 

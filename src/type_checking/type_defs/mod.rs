@@ -91,22 +91,22 @@ impl TypeDef {
         }
     }
 
-    pub fn set_type_parameters(&mut self, params: Vec<TypeParameter>) {
+    pub fn add_type_parameters(&mut self, params: Vec<TypeParameter>) {
         match self {
-            Self::Enum(def) => def.type_parameters = params,
-            Self::Struct(def) => def.type_parameters = params,
-            Self::Protocol(def) => def.associated_types = params,
+            Self::Enum(def) => def.type_parameters.extend(params),
+            Self::Struct(def) => def.type_parameters.extend(params),
+            Self::Protocol(def) => def.associated_types.extend(params),
         }
     }
 
-    pub fn set_method_requirements(&mut self, methods: Vec<Method>) {
+    pub fn add_method_requirements(&mut self, methods: Vec<Method>) {
         if methods.is_empty() {
             return;
         }
         match self {
             Self::Enum(_) => (),
             Self::Struct(_) => (),
-            Self::Protocol(def) => def.method_requirements = methods,
+            Self::Protocol(def) => def.method_requirements.extend(methods),
         }
     }
 
@@ -122,23 +122,23 @@ impl TypeDef {
         }
     }
 
-    pub fn set_properties(&mut self, properties: Vec<Property>) {
+    pub fn add_properties(&mut self, properties: Vec<Property>) {
         if properties.is_empty() {
             return;
         }
         match self {
             Self::Enum(_) => log::error!("Enums can't have properties"),
-            Self::Struct(def) => def.properties = properties,
-            Self::Protocol(def) => def.properties = properties,
+            Self::Struct(def) => def.properties.extend(properties),
+            Self::Protocol(def) => def.properties.extend(properties),
         }
     }
 
-    pub fn set_variants(&mut self, variants: Vec<EnumVariant>) {
+    pub fn add_variants(&mut self, variants: Vec<EnumVariant>) {
         if variants.is_empty() {
             return;
         }
         match self {
-            Self::Enum(def) => def.variants = variants,
+            Self::Enum(def) => def.variants.extend(variants),
             Self::Struct(_) => (),
             Self::Protocol(_) => (),
         }
