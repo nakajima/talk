@@ -2095,7 +2095,6 @@ impl<'a> Lowerer<'a> {
         };
 
         let cond_reg = self.lower_expr(&cond)?;
-
         let then_id = self.new_basic_block();
 
         let mut else_reg: Option<Register> = None;
@@ -2128,9 +2127,12 @@ impl<'a> Lowerer<'a> {
         let ir_type = typed_expr.ty.to_ir(self);
         let mut predecessors = vec![];
 
-        if let Some(then_reg) = then_reg {
-            predecessors.push((then_reg, then_id));
-        }
+        let Some(then_reg) = then_reg else {
+            log::error!("Did not get then_reg");
+            return None;
+        };
+
+        predecessors.push((then_reg, then_id));
 
         if let Some(else_reg) = else_reg
             && let Some(else_id) = else_id
@@ -2138,7 +2140,7 @@ impl<'a> Lowerer<'a> {
             predecessors.push((else_reg, else_id));
         }
 
-        if predecessors.is_empty() {
+        if predecessors.len() <= 1 {
             None
         } else {
             self.push_instr(Instr::Phi(

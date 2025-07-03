@@ -1,5 +1,5 @@
 func fib(n) {
-  if (n <= 1) {
+  if n <= 1 {
     return n
   }
   return fib(n - 2) + fib(n - 1)
@@ -13,5 +13,5 @@ loop i < 10 {
   i = i + 1
 }
 
-n
+print(n)
 

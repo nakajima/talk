@@ -175,7 +175,15 @@ impl std::fmt::Display for IRType {
                 )
             }
             Self::TypeVar(name) => f.write_str(name),
-            Self::Enum(_, _generics) => f.write_str("enum"),
+            Self::Enum(sym, generics) => write!(
+                f,
+                "enum{sym:?}({})",
+                generics
+                    .iter()
+                    .map(|a| format!("{a}"))
+                    .collect::<Vec<String>>()
+                    .join(", "),
+            ),
             Self::Struct(id, types, _) => write!(
                 f,
                 "{:?}{{{}}}",

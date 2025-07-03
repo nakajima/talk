@@ -664,6 +664,62 @@ pub mod lowering_tests {
     }
 
     #[test]
+    fn lowers_if_expr_without_else() {
+        let lowered = lower(
+            "
+                if true {
+                    return 123
+                }
+
+                789
+        ",
+        )
+        .unwrap();
+
+        let expected = IRFunction {
+            debug_info: Default::default(),
+            ty: IRType::Func(vec![], IRType::Void.into()),
+            name: "@main".into(),
+            blocks: vec![
+                // if block
+                BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        Instr::ConstantBool(Register(0), true),
+                        Instr::Branch {
+                            cond: Register(0),
+                            true_target: BasicBlockID(1),
+                            false_target: BasicBlockID(2),
+                        },
+                    ],
+                },
+                // if block
+                BasicBlock {
+                    id: BasicBlockID(1),
+                    instructions: vec![
+                        Instr::ConstantInt(Register(1), 123),
+                        Instr::Ret(IRType::Int, Some(Register(1).into())),
+                        Instr::Jump(BasicBlockID(2)),
+                    ],
+                },
+                // else block
+                BasicBlock {
+                    id: BasicBlockID(2),
+                    instructions: vec![
+                        Instr::ConstantInt(Register(3), 789),
+                        Instr::Ret(IRType::Int, Some(Register(3).into())),
+                    ],
+                },
+            ],
+            env_ty: None,
+            env_reg: None,
+            size: 4,
+        };
+
+        assert_lowered_function!(lowered, "@main", expected);
+    }
+
+    #[test]
     fn lowers_basic_enum() {
         let lowered = lower_without_prelude(
             "enum Foo {
