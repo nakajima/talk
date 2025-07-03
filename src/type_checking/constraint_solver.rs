@@ -210,7 +210,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
             // Try to fill in the symbol ID of types of variables
             let this_symbol = match typed_expr.expr {
-                Expr::Variable(Name::Resolved(symbol_id, _), _) => symbol_id,
+                Expr::Variable(Name::Resolved(symbol_id, _) | Name::_Self(symbol_id), _) => {
+                    symbol_id
+                }
                 _ => continue,
             };
 

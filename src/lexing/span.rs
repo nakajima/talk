@@ -26,6 +26,10 @@ impl Span {
         true
     }
 
+    pub fn length(&self) -> u32 {
+        self.end - self.start
+    }
+
     pub fn contains_span(&self, span: &Span) -> bool {
         self.start <= span.start && self.end >= span.end
     }

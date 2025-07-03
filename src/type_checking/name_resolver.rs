@@ -127,7 +127,24 @@ impl NameResolver {
                             self.resolve_nodes(&[receiver], source_file, symbol_table);
                         }
                     }
-                    IncompleteExpr::Func { .. } => (),
+                    IncompleteExpr::Func {
+                        name,
+                        params,
+                        generics,
+                        ret,
+                        body,
+                    } => {
+                        self.resolve_func(
+                            &name,
+                            node_id,
+                            &params.unwrap_or(vec![]),
+                            &generics.unwrap_or(vec![]),
+                            body.as_ref(),
+                            &ret,
+                            symbol_table,
+                            source_file,
+                        );
+                    }
                 },
                 Struct {
                     name,
@@ -369,7 +386,9 @@ impl NameResolver {
                     Name::Raw(name_str) => {
                         let name = if name_str == "self" {
                             if let Some(last_symbol) = self.type_symbol_stack.last() {
-                                Name::_Self(*last_symbol)
+                                let name = Name::_Self(*last_symbol);
+                                symbol_table.add_map(source_file, node_id, last_symbol);
+                                name
                             } else {
                                 if let Ok(mut lock) = self.session.lock() {
                                     lock.add_diagnostic(Diagnostic::resolve(

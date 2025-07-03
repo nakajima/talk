@@ -146,17 +146,24 @@ impl Driver {
     }
 
     pub fn symbol_from_position(&self, position: Position, path: &PathBuf) -> Option<&SymbolID> {
+        let mut result = None;
+
+        // We want to find the smallest possible span
+        let mut min = u32::MAX;
+
         for (span, sym) in &self.symbol_table.symbol_map {
             if span.contains(&crate::diagnostic::Position {
                 line: position.line,
                 col: position.character,
             }) && span.path == *path
+                && span.length() < min
             {
-                return Some(sym);
+                min = span.length();
+                result = Some(sym);
             }
         }
 
-        None
+        result
     }
 
     pub fn refresh_diagnostics_for(&mut self, path: &PathBuf) -> Vec<Diagnostic> {

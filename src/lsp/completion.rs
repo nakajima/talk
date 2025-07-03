@@ -53,12 +53,6 @@ impl<'a> CompletionContext<'a> {
             .and_then(|definition| definition.sym)
             .and_then(|sym| self.env.lookup_type(&sym))
         {
-            // let type_def = match ty {
-            //     Ty::Enum(symbol_id, _) => self.env.lookup_type(&symbol_id),
-            //     Ty::Struct(symbol_id, _) => self.env.lookup_type(&symbol_id),
-            //     _ => return vec![],
-            // };
-
             match type_def {
                 TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
@@ -78,16 +72,17 @@ impl<'a> CompletionContext<'a> {
                 }
                 TypeDef::Struct(struct_def) => {
                     let mut completions = vec![];
-                    completions.extend(struct_def.methods.iter().map(|m| CompletionItem {
-                        label: m.name.clone(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        ..Default::default()
-                    }));
                     completions.extend(struct_def.properties.iter().map(|prop| CompletionItem {
                         label: prop.name.clone(),
                         kind: Some(CompletionItemKind::PROPERTY),
                         ..Default::default()
                     }));
+                    completions.extend(struct_def.methods.iter().map(|m| CompletionItem {
+                        label: m.name.clone(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        ..Default::default()
+                    }));
+
                     completions
                 }
                 TypeDef::Protocol(def) => {
@@ -106,7 +101,7 @@ impl<'a> CompletionContext<'a> {
                 }
             }
         } else {
-            log::error!("did not get struct: {:?}", self.env.types);
+            log::error!("did not get type: {:#?}", self.env.types);
             vec![]
         }
     }
@@ -235,6 +230,28 @@ mod tests {
         );
 
         assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].label, "bar");
+    }
+
+    #[test]
+    fn test_self_member_completion() {
+        let completions = complete(
+            vec![&formatdoc!(
+                r#"
+            struct Foo {{
+                let bar: Int
+
+                func fizz() {{
+                    self.
+                }}
+            }}
+            "#
+            )],
+            Position::new(4, 9),
+            true,
+        );
+
+        assert_eq!(completions.len(), 2);
         assert_eq!(completions[0].label, "bar");
     }
 }
