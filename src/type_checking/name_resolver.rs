@@ -137,8 +137,8 @@ impl NameResolver {
                         self.resolve_func(
                             &name,
                             node_id,
-                            &params.unwrap_or(vec![]),
-                            &generics.unwrap_or(vec![]),
+                            &params.unwrap_or_default(),
+                            &generics.unwrap_or_default(),
                             body.as_ref(),
                             &ret,
                             symbol_table,
