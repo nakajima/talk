@@ -43,7 +43,7 @@ impl Display for Value {
                     .join(", ")
             ),
             Value::Pointer(pointer) => write!(f, "0x{pointer}"),
-            Value::Func(func) => write!(f, "@{:?}()", func),
+            Value::Func(func) => write!(f, "@{func:?}()"),
             Value::RawBuffer(b) => write!(f, "{b:?}"),
             Value::String(string) => write!(f, "{string}"),
             Value::Array(values) => write!(

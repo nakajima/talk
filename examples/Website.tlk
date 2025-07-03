@@ -1,0 +1,10 @@
+print("
+<html>
+<head>
+<title>it's a website</title>
+</head>
+<body>
+<h1>welcome to my web page</h1>
+</body>
+</html>
+")

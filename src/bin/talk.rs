@@ -65,7 +65,7 @@ async fn main() {
             for lowered in lowered {
                 let monomorphized = Monomorphizer::new(&lowered.env).run(lowered.module());
                 let interpreter = IRInterpreter::new(monomorphized);
-                println!("{:?}", interpreter.run());
+                interpreter.run().unwrap();
             }
         }
         Commands::Lsp(_args) => talk::lsp::server::start().await,
