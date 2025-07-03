@@ -454,6 +454,24 @@ mod type_tests {
     }
 
     #[test]
+    fn infers_simple_recursion() {
+        let checker = check_without_prelude(
+            "
+        func rec(x, y, z) {
+            if x == y { x } else { rec(y-z, y, z) }
+        }
+
+        rec(0, 2, 1)
+        rec(0.0, 2.0, 1.0)
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(&checker.root_ids()[2]).unwrap(), Ty::Float);
+    }
+
+    #[test]
     fn checks_mutual_recursion() {
         let checker = check_without_prelude(
             "

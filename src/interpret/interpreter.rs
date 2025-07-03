@@ -701,6 +701,34 @@ mod tests {
     }
 
     #[test]
+    fn interprets_fib() {
+        let res = interpret(
+            "
+        func fib(n) {
+          if n <= 1 {
+            n
+          } else {
+            fib(n - 2) + fib(n - 1)
+          }
+        }
+
+        let i = 0
+        let n = 0
+
+        loop i < 10 {
+          n = fib(i)
+          i = i + 1
+        }
+
+        n
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(res, Value::Int(34))
+    }
+
+    #[test]
     fn interprets_closure() {
         assert_eq!(
             Value::Int(3),

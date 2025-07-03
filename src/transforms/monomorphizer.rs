@@ -26,6 +26,7 @@ pub struct Monomorphizer<'a> {
     env: &'a Environment,
     cache: HashSet<String>,
     generic_functions: Vec<IRFunction>,
+    currently_monomorphizing_stack: Vec<String>,
 }
 
 impl<'a> Monomorphizer<'a> {
@@ -34,6 +35,7 @@ impl<'a> Monomorphizer<'a> {
             env,
             cache: Default::default(),
             generic_functions: Default::default(),
+            currently_monomorphizing_stack: Default::default(),
         }
     }
 
@@ -182,6 +184,9 @@ impl<'a> Monomorphizer<'a> {
             return mangled_name;
         }
 
+        self.currently_monomorphizing_stack
+            .push(function.name.clone());
+
         log::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
@@ -216,6 +221,8 @@ impl<'a> Monomorphizer<'a> {
         monomorphized_function =
             self.detect_monomorphizations_in(monomorphized_function.clone(), module, substitutions);
         self.generic_functions.push(monomorphized_function);
+
+        self.currently_monomorphizing_stack.pop();
 
         mangled_name
     }
@@ -317,6 +324,7 @@ impl<'a> Monomorphizer<'a> {
                         .iter()
                         .find(|f| f.name == *name)
                         .cloned()
+                    && Some(name) != self.currently_monomorphizing_stack.last_mut()
                 {
                     let name = self
                         .detect_monomorphizations_in(func, module, substitutions)
@@ -748,5 +756,99 @@ mod tests {
                 debug_info: Default::default()
             }
         )
+    }
+
+    #[test]
+    fn handles_recursion() {
+        let (lowered, env) = lower_without_prelude_with_env(
+            "
+            func rec(x, y) {
+                if x == y { x } else { rec(x-y, y) }
+            }
+
+            rec(0, 2)
+            rec(0.0, 2.0)
+        ",
+        )
+        .unwrap();
+
+        let mono = Monomorphizer::new(&env).run(lowered);
+        let t2 = IRType::TypeVar("T2".to_string());
+
+        assert_lowered_function!(
+            mono,
+            "@main",
+            IRFunction {
+                debug_info: Default::default(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID::ENTRY,
+                    instructions: vec![
+                        Instr::Ref(
+                            Register(0),
+                            IRType::Func(vec![t2.clone(), t2.clone()], t2.clone().into()),
+                            RefKind::Func("@_1_rec".into())
+                        ),
+                        Instr::ConstantInt(Register(1), 0),
+                        Instr::ConstantInt(Register(2), 2),
+                        Instr::Call {
+                            dest_reg: Register(3),
+                            ty: IRType::Int,
+                            callee: Callee::Name("@_1_rec<int int>".into()),
+                            args: RegisterList(vec![
+                                TypedRegister::new(IRType::Int, Register(1)),
+                                TypedRegister::new(IRType::Int, Register(2))
+                            ])
+                        },
+                        Instr::ConstantFloat(Register(4), 0.),
+                        Instr::ConstantFloat(Register(5), 2.),
+                        Instr::Call {
+                            dest_reg: Register(6),
+                            ty: IRType::Float,
+                            callee: Callee::Name("@_1_rec<float float>".into()),
+                            args: RegisterList(vec![
+                                TypedRegister::new(IRType::Float, Register(4)),
+                                TypedRegister::new(IRType::Float, Register(5))
+                            ])
+                        },
+                        Instr::Ret(IRType::Float, Some(IRValue::Register(Register(6))))
+                    ]
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 7,
+            }
+        );
+
+        // assert_lowered_function!(
+        //     mono,
+        //     "@_3_get<@4{}>",
+        //     IRFunction {
+        //         ty: IRType::Func(vec![person_struct.clone()], IRType::Int.into()),
+        //         name: "@_3_get<@4{}>".into(),
+        //         blocks: vec![BasicBlock {
+        //             id: BasicBlockID::ENTRY,
+        //             instructions: vec![
+        //                 Instr::Call {
+        //                     dest_reg: Register(1),
+        //                     ty: IRType::Int,
+        //                     callee: Callee::Name("@_4_Person_getAge".into()),
+        //                     args: RegisterList(vec![TypedRegister::new(
+        //                         IRType::Pointer {
+        //                             hint: Some("T7".into())
+        //                         },
+        //                         Register(0)
+        //                     )])
+        //                 },
+        //                 Instr::Ret(IRType::Int, Some(IRValue::Register(Register(1))))
+        //             ]
+        //         }],
+        //         env_ty: None,
+        //         env_reg: None,
+        //         size: 2,
+        //         debug_info: Default::default()
+        //     }
+        // )
     }
 }
