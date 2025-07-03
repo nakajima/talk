@@ -127,6 +127,12 @@ impl Precedence {
                 precedence: Precedence::Call,
             },
 
+            TokenKind::Extend => ParseHandler {
+                prefix: Some(Parser::extend_expr),
+                infix: None,
+                precedence: Precedence::Call,
+            },
+
             TokenKind::Protocol => ParseHandler {
                 prefix: Some(Parser::protocol_expr),
                 infix: None,

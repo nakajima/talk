@@ -1,5 +1,3 @@
-use typed_arena::Arena;
-
 use crate::{
     Phase, SourceFile, SymbolID,
     expr::{Expr, Pattern},
@@ -9,166 +7,168 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum FullExpr<'a> {
-    LiteralArray(Vec<&'a FullExpr<'a>>),
-    LiteralInt(&'a str),
-    LiteralFloat(&'a str),
+pub enum FullExpr {
+    LiteralArray(Vec<FullExpr>),
+    LiteralInt(String),
+    LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
-    LiteralString(&'a str),
-    Unary(&'a TokenKind, &'a FullExpr<'a>),
-    Binary(&'a FullExpr<'a>, &'a TokenKind, &'a FullExpr<'a>),
-    Tuple(Vec<&'a FullExpr<'a>>),
-    Block(Vec<&'a FullExpr<'a>>),
+    LiteralString(String),
+    Unary(TokenKind, Box<FullExpr>),
+    Binary(Box<FullExpr>, TokenKind, Box<FullExpr>),
+    Tuple(Vec<FullExpr>),
+    Block(Vec<FullExpr>),
     Call {
-        callee: &'a FullExpr<'a>,
-        type_args: Vec<&'a FullExpr<'a>>,
-        args: Vec<&'a FullExpr<'a>>,
+        callee: Box<FullExpr>,
+        type_args: Vec<FullExpr>,
+        args: Vec<FullExpr>,
     },
-    Pattern(&'a Pattern),
-    Return(Option<&'a FullExpr<'a>>),
+    Pattern(Pattern),
+    Return(Box<Option<FullExpr>>),
     Break,
     Struct {
-        name: &'a Name,                  /* name */
-        generics: Vec<&'a FullExpr<'a>>, /* generics */
-        conformances: Vec<&'a FullExpr<'a>>,
-        body: &'a FullExpr<'a>, /* body */
+        name: Name,              /* name */
+        generics: Vec<FullExpr>, /* generics */
+        conformances: Vec<FullExpr>,
+        body: Box<FullExpr>, /* body */
+    },
+    Extend {
+        name: Name,
+        generics: Vec<FullExpr>,
+        conformances: Vec<FullExpr>,
+        body: Box<FullExpr>,
     },
     Property {
-        name: &'a Name,
-        type_repr: Option<&'a FullExpr<'a>>,
-        default_value: Option<&'a FullExpr<'a>>,
+        name: Name,
+        type_repr: Box<Option<FullExpr>>,
+        default_value: Box<Option<FullExpr>>,
     },
 
     // A type annotation
     TypeRepr {
-        name: &'a Name,
-        generics: Vec<&'a FullExpr<'a>>, /* generics */
-        conformances: Vec<&'a FullExpr<'a>>,
+        name: Name,
+        generics: Vec<FullExpr>, /* generics */
+        conformances: Vec<FullExpr>,
         introduces_type: bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     },
 
     FuncTypeRepr(
-        Vec<&'a FullExpr<'a>>, /* [TypeRepr] args */
-        &'a FullExpr<'a>,      /* return TypeRepr */
+        Vec<FullExpr>, /* [TypeRepr] args */
+        Box<FullExpr>, /* return TypeRepr */
         bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
     TupleTypeRepr(
-        Vec<&'a FullExpr<'a>>, /* (T1, T2) */
+        Vec<FullExpr>, /* (T1, T2) */
         bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
     // A dot thing
-    Member(Option<&'a FullExpr<'a>> /* receiver */, &'a str),
+    Member(Box<Option<FullExpr>> /* receiver */, String),
 
-    Init(Option<SymbolID>, &'a FullExpr<'a> /* func */),
+    Init(Option<SymbolID>, Box<FullExpr> /* func */),
 
     // Function stuff
     Func {
-        name: &'a Option<Name>,
-        generics: Vec<&'a FullExpr<'a>>,
-        params: Vec<&'a FullExpr<'a>>, /* params tuple */
-        body: &'a FullExpr<'a>,        /* body */
-        ret: Option<&'a FullExpr<'a>>, /* return type */
-        captures: &'a Vec<SymbolID>,
+        name: Option<Name>,
+        generics: Vec<FullExpr>,
+        params: Vec<FullExpr>,      /* params tuple */
+        body: Box<FullExpr>,        /* body */
+        ret: Box<Option<FullExpr>>, /* return type */
+        captures: Vec<SymbolID>,
     },
 
     Parameter(
-        &'a Name,                 /* name */
-        Option<&'a FullExpr<'a>>, /* TypeRepr */
+        Name,                  /* name */
+        Box<Option<FullExpr>>, /* TypeRepr */
     ),
     CallArg {
-        label: &'a Option<Name>,
-        value: &'a FullExpr<'a>,
+        label: Option<Name>,
+        value: Box<FullExpr>,
     },
 
     // Variables
     Let(
-        &'a Name,                 /* name */
-        Option<&'a FullExpr<'a>>, /* type annotation */
+        Name,                  /* name */
+        Box<Option<FullExpr>>, /* type annotation */
     ),
-    Assignment(
-        &'a FullExpr<'a>, /* LHS */
-        &'a FullExpr<'a>, /* RHS */
-    ),
-    Variable(&'a Name, Option<&'a FullExpr<'a>>),
+    Assignment(Box<FullExpr> /* LHS */, Box<FullExpr> /* RHS */),
+    Variable(Name, Box<Option<FullExpr>>),
 
     // For name resolution
-    // ResolvedVariable(SymbolID, Option<&'a FullExpr<'a>>),
-    // ResolvedLet(SymbolID, Option<&'a FullExpr<'a>> /* RHS */),
+    // ResolvedVariable(SymbolID, Option< FullExpr>),
+    // ResolvedLet(SymbolID, Option< FullExpr> /* RHS */),
 
     // Control flow
     If(
-        &'a FullExpr<'a>,         /* condition */
-        &'a FullExpr<'a>,         /* condition block */
-        Option<&'a FullExpr<'a>>, /* else block */
+        Box<FullExpr>,         /* condition */
+        Box<FullExpr>,         /* condition block */
+        Box<Option<FullExpr>>, /* else block */
     ),
 
     Loop(
-        Option<&'a FullExpr<'a>>, /* condition */
-        &'a FullExpr<'a>,         /* body */
+        Box<Option<FullExpr>>, /* condition */
+        Box<FullExpr>,         /* body */
     ),
 
     // Enum declaration
     EnumDecl {
-        name: &'a Name,                  // TypeRepr name: Option
-        generics: Vec<&'a FullExpr<'a>>, // Generics TypeParams <T>
-        conformances: Vec<&'a FullExpr<'a>>,
-        body: &'a FullExpr<'a>, // Body
+        name: Name,              // TypeRepr name: Option
+        generics: Vec<FullExpr>, // Generics TypeParams <T>
+        conformances: Vec<FullExpr>,
+        body: Box<FullExpr>, // Body
     },
 
     // Individual enum variant in declaration
     EnumVariant(
-        &'a Name,              // name: "some"
-        Vec<&'a FullExpr<'a>>, // associated types: [TypeRepr("T")]
+        Name,          // name: "some"
+        Vec<FullExpr>, // associated types: [TypeRepr("T")]
     ),
 
     // Match expression
     Match(
-        &'a FullExpr<'a>,      // scrutinee: the value being matched
-        Vec<&'a FullExpr<'a>>, // arms: [MatchArm(pattern, body)]
+        Box<FullExpr>, // scrutinee: the value being matched
+        Vec<FullExpr>, // arms: [MatchArm(pattern, body)]
     ),
 
     // Individual match arm
     MatchArm(
-        &'a FullExpr<'a>, // pattern
-        &'a FullExpr<'a>, // body (after ->)
+        Box<FullExpr>, // pattern
+        Box<FullExpr>, // body (after ->)
     ),
 
     // Patterns (for match arms)
     PatternVariant(
-        &'a Option<Name>,      // enum name (None for unqualified .some)
-        &'a Name,              // variant name: "some"
-        Vec<&'a FullExpr<'a>>, // bindings: ["wrapped"]
+        Option<Name>,  // enum name (None for unqualified .some)
+        Name,          // variant name: "some"
+        Vec<FullExpr>, // bindings: ["wrapped"]
     ),
 
     ProtocolDecl {
-        name: &'a Name,
-        associated_types: Vec<&'a FullExpr<'a>>, // Associated types
-        body: &'a FullExpr<'a>,                  // Body ID
-        conformances: Vec<&'a FullExpr<'a>>,
+        name: Name,
+        associated_types: Vec<FullExpr>, // Associated types
+        body: Box<FullExpr>,             // Body ID
+        conformances: Vec<FullExpr>,
     },
 
     FuncSignature {
-        name: &'a Name,
-        params: Vec<&'a FullExpr<'a>>,
-        generics: Vec<&'a FullExpr<'a>>,
-        ret: &'a FullExpr<'a>,
+        name: Name,
+        params: Vec<FullExpr>,
+        generics: Vec<FullExpr>,
+        ret: Box<FullExpr>,
     },
 }
 
-pub struct Filler<'a, P: Phase> {
-    source: &'a SourceFile<P>,
-    arena: &'a Arena<FullExpr<'a>>,
+pub struct Filler<P: Phase> {
+    source: SourceFile<P>,
 }
 
-impl<'a, P: Phase> Filler<'a, P> {
-    pub fn new(source: &'a SourceFile<P>, arena: &'a Arena<FullExpr<'a>>) -> Self {
-        Self { source, arena }
+impl<P: Phase> Filler<P> {
+    pub fn new(source: SourceFile<P>) -> Self {
+        Self { source }
     }
 
-    pub fn fill_root(&self) -> Vec<&'a FullExpr<'a>> {
+    pub fn fill_root(&self) -> Vec<FullExpr> {
         let mut full_exprs = Vec::new();
         for root_id in self.source.root_ids() {
             full_exprs.push(self.fill(root_id));
@@ -176,7 +176,7 @@ impl<'a, P: Phase> Filler<'a, P> {
         full_exprs
     }
 
-    fn fill_mult(&self, expr_ids: &Vec<ExprID>) -> Vec<&'a FullExpr<'a>> {
+    fn fill_mult(&self, expr_ids: &Vec<ExprID>) -> Vec<FullExpr> {
         let mut result = vec![];
         for id in expr_ids {
             result.push(self.fill(*id));
@@ -184,21 +184,21 @@ impl<'a, P: Phase> Filler<'a, P> {
         result
     }
 
-    pub fn fill(&self, expr_id: ExprID) -> &'a FullExpr<'a> {
+    pub fn fill(&self, expr_id: ExprID) -> FullExpr {
         #[allow(clippy::unwrap_used)]
         let expr = self.source.get(&expr_id).unwrap();
 
-        let full_expr = match expr {
+        match expr.clone() {
             Expr::LiteralInt(s) => FullExpr::LiteralInt(s),
             Expr::LiteralString(s) => FullExpr::LiteralString(s),
             Expr::Unary(op, rhs_id) => {
-                let rhs = self.fill(*rhs_id);
-                FullExpr::Unary(op, rhs)
+                let rhs = self.fill(rhs_id);
+                FullExpr::Unary(op, rhs.into())
             }
             Expr::Binary(lhs_id, op, rhs_id) => {
-                let lhs = self.fill(*lhs_id);
-                let rhs = self.fill(*rhs_id);
-                FullExpr::Binary(lhs, op, rhs)
+                let lhs = self.fill(lhs_id);
+                let rhs = self.fill(rhs_id);
+                FullExpr::Binary(lhs.into(), op, rhs.into())
             }
             Expr::Block(expr_ids) => {
                 let children = expr_ids.iter().map(|id| self.fill(*id)).collect();
@@ -210,15 +210,15 @@ impl<'a, P: Phase> Filler<'a, P> {
             }
             Expr::Let(name, type_repr_id) => {
                 let type_repr = type_repr_id.map(|id| self.fill(id));
-                FullExpr::Let(name, type_repr)
+                FullExpr::Let(name, type_repr.into())
             }
             Expr::If(cond_id, then_id, else_id) => {
-                let cond = self.fill(*cond_id);
-                let then_block = self.fill(*then_id);
+                let cond = self.fill(cond_id);
+                let then_block = self.fill(then_id);
                 let else_block = else_id.map(|id| self.fill(id));
-                FullExpr::If(cond, then_block, else_block)
+                FullExpr::If(cond.into(), then_block.into(), else_block.into())
             }
-            Expr::LiteralArray(items) => FullExpr::LiteralArray(self.fill_mult(items)),
+            Expr::LiteralArray(items) => FullExpr::LiteralArray(self.fill_mult(&items)),
             Expr::LiteralFloat(val) => FullExpr::LiteralFloat(val),
             Expr::LiteralTrue => FullExpr::LiteralTrue,
             Expr::LiteralFalse => FullExpr::LiteralFalse,
@@ -227,12 +227,12 @@ impl<'a, P: Phase> Filler<'a, P> {
                 type_args,
                 args,
             } => FullExpr::Call {
-                callee: self.fill(*callee),
-                type_args: self.fill_mult(type_args),
-                args: self.fill_mult(args),
+                callee: self.fill(callee).into(),
+                type_args: self.fill_mult(&type_args),
+                args: self.fill_mult(&args),
             },
             Expr::Pattern(pattern) => FullExpr::Pattern(pattern),
-            Expr::Return(rhs) => FullExpr::Return(rhs.map(|rhs| self.fill(rhs))),
+            Expr::Return(rhs) => FullExpr::Return(rhs.map(|rhs| self.fill(rhs)).into()),
             Expr::Break => FullExpr::Break,
             Expr::Struct {
                 name,
@@ -241,9 +241,20 @@ impl<'a, P: Phase> Filler<'a, P> {
                 body,
             } => FullExpr::Struct {
                 name,
-                generics: self.fill_mult(generics),
-                conformances: self.fill_mult(conformances),
-                body: self.fill(*body),
+                generics: self.fill_mult(&generics),
+                conformances: self.fill_mult(&conformances),
+                body: self.fill(body).into(),
+            },
+            Expr::Extend {
+                name,
+                generics,
+                conformances,
+                body,
+            } => FullExpr::Extend {
+                name,
+                generics: self.fill_mult(&generics),
+                conformances: self.fill_mult(&conformances),
+                body: self.fill(body).into(),
             },
             Expr::Property {
                 name,
@@ -251,8 +262,10 @@ impl<'a, P: Phase> Filler<'a, P> {
                 default_value,
             } => FullExpr::Property {
                 name,
-                type_repr: type_repr.map(|type_repr| self.fill(type_repr)),
-                default_value: default_value.map(|default_value| self.fill(default_value)),
+                type_repr: type_repr.map(|type_repr| self.fill(type_repr)).into(),
+                default_value: default_value
+                    .map(|default_value| self.fill(default_value))
+                    .into(),
             },
             Expr::TypeRepr {
                 name,
@@ -261,20 +274,22 @@ impl<'a, P: Phase> Filler<'a, P> {
                 introduces_type,
             } => FullExpr::TypeRepr {
                 name,
-                generics: self.fill_mult(generics),
-                conformances: self.fill_mult(conformances),
-                introduces_type: *introduces_type,
+                generics: self.fill_mult(&generics),
+                conformances: self.fill_mult(&conformances),
+                introduces_type,
             },
-            Expr::FuncTypeRepr(items, ret, introduces_vars) => {
-                FullExpr::FuncTypeRepr(self.fill_mult(items), self.fill(*ret), *introduces_vars)
-            }
+            Expr::FuncTypeRepr(items, ret, introduces_vars) => FullExpr::FuncTypeRepr(
+                self.fill_mult(&items),
+                self.fill(ret).into(),
+                introduces_vars,
+            ),
             Expr::TupleTypeRepr(items, introduces_vars) => {
-                FullExpr::TupleTypeRepr(self.fill_mult(items), *introduces_vars)
+                FullExpr::TupleTypeRepr(self.fill_mult(&items), introduces_vars)
             }
             Expr::Member(receiver, name) => {
-                FullExpr::Member(receiver.map(|receiver| self.fill(receiver)), name)
+                FullExpr::Member(receiver.map(|receiver| self.fill(receiver)).into(), name)
             }
-            Expr::Init(symbol_id, func) => FullExpr::Init(*symbol_id, self.fill(*func)),
+            Expr::Init(symbol_id, func) => FullExpr::Init(symbol_id, self.fill(func).into()),
             Expr::Func {
                 name,
                 generics,
@@ -284,26 +299,29 @@ impl<'a, P: Phase> Filler<'a, P> {
                 captures,
             } => FullExpr::Func {
                 name,
-                generics: self.fill_mult(generics),
-                params: self.fill_mult(params),
-                body: self.fill(*body),
-                ret: ret.map(|ret| self.fill(ret)),
+                generics: self.fill_mult(&generics),
+                params: self.fill_mult(&params),
+                body: self.fill(body).into(),
+                ret: ret.map(|ret| self.fill(ret)).into(),
                 captures,
             },
             Expr::Parameter(name, type_repr) => {
-                FullExpr::Parameter(name, type_repr.map(|type_repr| self.fill(type_repr)))
+                FullExpr::Parameter(name, type_repr.map(|type_repr| self.fill(type_repr)).into())
             }
             Expr::CallArg { label, value } => FullExpr::CallArg {
                 label,
-                value: self.fill(*value),
+                value: self.fill(value).into(),
             },
-            Expr::Assignment(lhs, rhs) => FullExpr::Assignment(self.fill(*lhs), self.fill(*rhs)),
+            Expr::Assignment(lhs, rhs) => {
+                FullExpr::Assignment(self.fill(lhs).into(), self.fill(rhs).into())
+            }
             Expr::Variable(name, type_repr) => {
-                FullExpr::Variable(name, type_repr.map(|type_repr| self.fill(type_repr)))
+                FullExpr::Variable(name, type_repr.map(|type_repr| self.fill(type_repr)).into())
             }
-            Expr::Loop(cond, body) => {
-                FullExpr::Loop(cond.map(|cond| self.fill(cond)), self.fill(*body))
-            }
+            Expr::Loop(cond, body) => FullExpr::Loop(
+                cond.map(|cond| self.fill(cond)).into(),
+                self.fill(body).into(),
+            ),
             Expr::EnumDecl {
                 name,
                 generics,
@@ -311,19 +329,19 @@ impl<'a, P: Phase> Filler<'a, P> {
                 body,
             } => FullExpr::EnumDecl {
                 name,
-                generics: self.fill_mult(generics),
-                conformances: self.fill_mult(conformances),
-                body: self.fill(*body),
+                generics: self.fill_mult(&generics),
+                conformances: self.fill_mult(&conformances),
+                body: self.fill(body).into(),
             },
-            Expr::EnumVariant(name, items) => FullExpr::EnumVariant(name, self.fill_mult(items)),
+            Expr::EnumVariant(name, items) => FullExpr::EnumVariant(name, self.fill_mult(&items)),
             Expr::Match(scrutinee, items) => {
-                FullExpr::Match(self.fill(*scrutinee), self.fill_mult(items))
+                FullExpr::Match(self.fill(scrutinee).into(), self.fill_mult(&items))
             }
             Expr::MatchArm(pattern, body) => {
-                FullExpr::MatchArm(self.fill(*pattern), self.fill(*body))
+                FullExpr::MatchArm(self.fill(pattern).into(), self.fill(body).into())
             }
             Expr::PatternVariant(name, name1, items) => {
-                FullExpr::PatternVariant(name, name1, self.fill_mult(items))
+                FullExpr::PatternVariant(name, name1, self.fill_mult(&items))
             }
             Expr::ProtocolDecl {
                 name,
@@ -332,9 +350,9 @@ impl<'a, P: Phase> Filler<'a, P> {
                 conformances,
             } => FullExpr::ProtocolDecl {
                 name,
-                associated_types: self.fill_mult(associated_types),
-                body: self.fill(*body),
-                conformances: self.fill_mult(conformances),
+                associated_types: self.fill_mult(&associated_types),
+                body: self.fill(body).into(),
+                conformances: self.fill_mult(&conformances),
             },
             Expr::FuncSignature {
                 name,
@@ -343,12 +361,10 @@ impl<'a, P: Phase> Filler<'a, P> {
                 ret,
             } => FullExpr::FuncSignature {
                 name,
-                params: self.fill_mult(params),
-                generics: self.fill_mult(generics),
-                ret: self.fill(*ret),
+                params: self.fill_mult(&params),
+                generics: self.fill_mult(&generics),
+                ret: self.fill(ret).into(),
             },
-        };
-
-        self.arena.alloc(full_expr)
+        }
     }
 }

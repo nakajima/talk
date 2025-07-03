@@ -33,10 +33,13 @@ impl CompilationSession {
         &self.diagnostics
     }
 
-    pub fn add_diagnostic(&mut self, path: PathBuf, diagnostic: Diagnostic) {
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         if diagnostic.is_unhandled() {
-            log::info!("adding diagnostic to {path:?}: {diagnostic:?}");
-            self.diagnostics.entry(path).or_default().insert(diagnostic);
+            log::info!("adding diagnostic to {:?}: {diagnostic:?}", diagnostic.path);
+            self.diagnostics
+                .entry(diagnostic.path.clone())
+                .or_default()
+                .insert(diagnostic);
         }
     }
 }

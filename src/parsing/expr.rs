@@ -74,6 +74,12 @@ pub enum Expr {
     Pattern(Pattern),
     Return(Option<ExprID>),
     Break,
+    Extend {
+        name: Name,            /* name */
+        generics: Vec<ExprID>, /* generics */
+        conformances: Vec<ExprID>,
+        body: ExprID, /* body */
+    },
     Struct {
         name: Name,            /* name */
         generics: Vec<ExprID>, /* generics */

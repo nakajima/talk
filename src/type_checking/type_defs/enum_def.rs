@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     SymbolID,
     parser::ExprID,
@@ -19,13 +21,13 @@ pub struct EnumVariant {
     pub ty: Ty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub variants: Vec<EnumVariant>,
-    pub methods: Vec<Method>,
+    pub methods: HashSet<Method>,
     pub conformances: Vec<Conformance>,
 }
 

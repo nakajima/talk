@@ -156,6 +156,12 @@ impl<'a> Formatter<'a> {
                 conformances,
                 body,
             } => self.format_struct(name, generics, conformances, *body),
+            Expr::Extend {
+                name,
+                generics,
+                conformances,
+                body,
+            } => self.format_extend(name, generics, conformances, *body),
             Expr::Property {
                 name,
                 type_repr,
@@ -455,6 +461,41 @@ impl<'a> Formatter<'a> {
         body: ExprID,
     ) -> Doc {
         let mut result = concat_space(text("struct"), self.format_name(name));
+
+        if !generics.is_empty() {
+            let generic_docs: Vec<_> = generics.iter().map(|&id| self.format_expr(id)).collect();
+
+            result = concat(
+                result,
+                concat(
+                    text("<"),
+                    concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
+                ),
+            );
+        }
+
+        if !conformances.is_empty() {
+            let conformances_docs = conformances
+                .iter()
+                .map(|&id| self.format_expr(id))
+                .collect();
+            result = concat(
+                result,
+                concat(text(": "), join(conformances_docs, text(", "))),
+            );
+        }
+
+        concat_space(result, self.format_expr(body))
+    }
+
+    fn format_extend(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        conformances: &[ExprID],
+        body: ExprID,
+    ) -> Doc {
+        let mut result = concat_space(text("extend"), self.format_name(name));
 
         if !generics.is_empty() {
             let generic_docs: Vec<_> = generics.iter().map(|&id| self.format_expr(id)).collect();

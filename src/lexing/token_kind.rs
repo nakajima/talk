@@ -22,6 +22,7 @@ pub enum TokenKind {
     Protocol,
 
     // More
+    Extend,
     QuestionMark,
     Semicolon,
     Arrow,
@@ -143,6 +144,7 @@ impl TokenKind {
             TokenKind::Protocol => "protocol",
             TokenKind::Semicolon => ";",
             TokenKind::StringLiteral(string) => &format!("\"{string}\""),
+            TokenKind::Extend => "extend",
         };
 
         text.to_string()

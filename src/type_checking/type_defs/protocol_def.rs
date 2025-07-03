@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     SymbolID,
     ty::Ty,
@@ -23,14 +25,14 @@ impl Conformance {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub associated_types: TypeParams,
     pub conformances: Vec<Conformance>,
     pub properties: Vec<Property>,
-    pub methods: Vec<Method>,
+    pub methods: HashSet<Method>,
     pub initializers: Vec<Initializer>,
     pub method_requirements: Vec<Method>,
 }
@@ -43,7 +45,7 @@ impl ProtocolDef {
         associated_types: TypeParams,
         conformances: Vec<Conformance>,
         properties: Vec<Property>,
-        methods: Vec<Method>,
+        methods: HashSet<Method>,
         initializers: Vec<Initializer>,
         method_requirements: Vec<Method>,
     ) -> Self {

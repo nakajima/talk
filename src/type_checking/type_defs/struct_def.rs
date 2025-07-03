@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     SymbolID,
     parser::ExprID,
@@ -72,13 +74,13 @@ impl RawMethod {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub properties: Vec<Property>,
-    pub methods: Vec<Method>,
+    pub methods: HashSet<Method>,
     pub initializers: Vec<Initializer>,
     pub conformances: Vec<Conformance>,
 }
@@ -106,6 +108,16 @@ impl StructDef {
         }
 
         None
+    }
+
+    pub fn conforms_to(&self, protocol_id: &SymbolID) -> bool {
+        for conformance in self.conformances.iter() {
+            if &conformance.protocol_id == protocol_id {
+                return true;
+            }
+        }
+
+        false
     }
 
     pub fn canonical_type_parameters(&self) -> Vec<Ty> {

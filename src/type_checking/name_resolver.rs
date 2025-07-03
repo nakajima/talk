@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::Definition;
 use crate::NameResolved;
 use crate::SymbolID;
+use crate::SymbolInfo;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
@@ -21,14 +22,18 @@ pub enum NameResolverError {
     InvalidSelf,
     MissingMethodName,
     Unknown(String),
+    UnresolvedName(String),
+    Redeclaration(String, SymbolInfo),
 }
 
 impl NameResolverError {
     pub fn message(&self) -> String {
         match self {
             Self::InvalidSelf => "`self` can't be used outside type".to_string(),
+            Self::UnresolvedName(string) => format!("Unknown identifier: {string}"),
             Self::MissingMethodName => "Missing method name".to_string(),
             Self::Unknown(string) => string.to_string(),
+            Self::Redeclaration(name, _info) => format!("{name} already defined"),
         }
     }
 }
@@ -134,6 +139,49 @@ impl NameResolver {
                             source_file.nodes.insert(
                                 *node_id,
                                 Struct {
+                                    name: Name::Resolved(symbol_id, name_str),
+                                    generics: generics.clone(),
+                                    conformances: conformances.clone(),
+                                    body,
+                                },
+                            );
+                        }
+                        _ => continue,
+                    }
+
+                    self.resolve_nodes(&generics, source_file, symbol_table);
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
+                    self.resolve_nodes(&[body], source_file, symbol_table);
+                    self.type_symbol_stack.pop();
+                }
+                Extend {
+                    name,
+                    generics,
+                    body,
+                    conformances,
+                } => {
+                    match name {
+                        Name::Raw(name_str) => {
+                            let symbol_id = self.lookup(&name_str);
+
+                            if symbol_id.0 == SymbolID(0) {
+                                if let Ok(mut session) = self.session.lock() {
+                                    session.add_diagnostic(Diagnostic::resolve(
+                                        source_file.path.clone(),
+                                        *node_id,
+                                        NameResolverError::UnresolvedName(name_str),
+                                    ))
+                                }
+
+                                return;
+                            }
+
+                            let symbol_id = symbol_id.0;
+
+                            self.type_symbol_stack.push(symbol_id);
+                            source_file.nodes.insert(
+                                *node_id,
+                                Extend {
                                     name: Name::Resolved(symbol_id, name_str),
                                     generics: generics.clone(),
                                     conformances: conformances.clone(),
@@ -315,14 +363,11 @@ impl NameResolver {
                                 Name::_Self(*last_symbol)
                             } else {
                                 if let Ok(mut lock) = self.session.lock() {
-                                    lock.add_diagnostic(
+                                    lock.add_diagnostic(Diagnostic::resolve(
                                         source_file.path.clone(),
-                                        Diagnostic::resolve(
-                                            source_file.path.clone(),
-                                            *node_id,
-                                            NameResolverError::InvalidSelf,
-                                        ),
-                                    );
+                                        *node_id,
+                                        NameResolverError::InvalidSelf,
+                                    ));
                                 }
                                 continue;
                             }
@@ -561,14 +606,11 @@ impl NameResolver {
     ) {
         if !self.type_symbol_stack.is_empty() && name.is_none() {
             if let Ok(mut lock) = self.session.lock() {
-                lock.add_diagnostic(
+                lock.add_diagnostic(Diagnostic::resolve(
                     source_file.path.clone(),
-                    Diagnostic::resolve(
-                        source_file.path.clone(),
-                        *node_id,
-                        NameResolverError::MissingMethodName,
-                    ),
-                );
+                    *node_id,
+                    NameResolverError::MissingMethodName,
+                ));
             }
 
             return;
@@ -582,14 +624,11 @@ impl NameResolver {
         for param in params {
             let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
                 if let Ok(mut lock) = self.session.lock() {
-                    lock.add_diagnostic(
+                    lock.add_diagnostic(Diagnostic::resolve(
                         source_file.path.clone(),
-                        Diagnostic::resolve(
-                            source_file.path.clone(),
-                            *node_id,
-                            NameResolverError::Unknown("Params must be variables".to_string()),
-                        ),
-                    );
+                        *node_id,
+                        NameResolverError::Unknown("Params must be variables".to_string()),
+                    ));
                 }
 
                 continue;
@@ -952,6 +991,29 @@ impl NameResolver {
             return SymbolID(0);
         };
 
+        if self.lookup(&name).0 != SymbolID(0)
+            && [SymbolKind::Struct, SymbolKind::Enum, SymbolKind::Protocol].contains(&kind)
+        {
+            let Some(info) = symbol_table.get(&self.lookup(&name).0) else {
+                log::error!("Unable to get symbol info for {name}");
+                return SymbolID(0);
+            };
+
+            if *expr_id != info.expr_id {
+                log::error!("{name} is already declared:\nexisting: {info:#?}");
+
+                if let Ok(session) = &mut self.session.lock() {
+                    session.add_diagnostic(Diagnostic::resolve(
+                        source_file.path.clone(),
+                        *expr_id,
+                        NameResolverError::Redeclaration(name, info.clone()),
+                    ));
+                }
+
+                return SymbolID(0);
+            }
+        }
+
         let definition = Definition {
             path: source_file.path.clone(),
             line: meta.start.line,
@@ -1010,10 +1072,10 @@ impl NameResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{collections::HashSet, path::PathBuf};
 
     use super::*;
-    use crate::{compiling::driver::Driver, expr::Expr};
+    use crate::{compiling::driver::Driver, diagnostic::DiagnosticKind, expr::Expr};
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
@@ -1635,6 +1697,75 @@ mod tests {
 
         let Expr::Init(_, _) = resolved.get(&body[1]).unwrap() else {
             panic!("didn't get init");
+        };
+    }
+
+    #[test]
+    fn resolves_extend() {
+        let resolved = resolve(
+            "
+        struct Person {}
+        extend Person: Printable {}
+        ",
+        );
+
+        let Struct {
+            name: Name::Resolved(person_symbol, _),
+            ..
+        } = resolved.roots()[0].unwrap()
+        else {
+            panic!("didn't get struct");
+        };
+
+        let Extend {
+            name: Name::Resolved(extend_symbol, _),
+            ..
+        } = resolved.roots()[1].unwrap()
+        else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(person_symbol, extend_symbol);
+    }
+
+    #[test]
+    fn doesnt_let_structs_get_double_declared() {
+        let (_, session) = resolve_with_session(
+            "
+        struct Person {}
+        struct Person {}
+        ",
+        );
+
+        let ses = session.lock().unwrap();
+        let diagnostics = ses
+            .diagnostics_for(&PathBuf::from("-"))
+            .cloned()
+            .unwrap_or(HashSet::new());
+        assert_eq!(diagnostics.len(), 1);
+
+        let Diagnostic {
+            kind:
+                DiagnosticKind::Resolve(
+                    _,
+                    NameResolverError::Redeclaration(
+                        _,
+                        SymbolInfo {
+                            name: _,
+                            kind: SymbolKind::Struct,
+                            expr_id: _,
+                            is_captured: false,
+                            definition: Some(Definition { .. }),
+                        },
+                    ),
+                ),
+            ..
+        } = diagnostics.iter().find(|_| true).unwrap()
+        else {
+            panic!(
+                "didn't get diagnostic: {:?}",
+                diagnostics.iter().find(|_| true).unwrap()
+            );
         };
     }
 }

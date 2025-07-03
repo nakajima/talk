@@ -145,6 +145,16 @@ impl<'a> SemanticTokenCollector<'a> {
                 result.extend(self.tokens_from_exprs(conformances));
                 result.extend(self.tokens_from_expr(body));
             }
+            Expr::Extend {
+                generics,
+                conformances,
+                body,
+                ..
+            } => {
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
+                result.extend(self.tokens_from_expr(body));
+            }
             Expr::Property {
                 name: _name,
                 type_repr,
@@ -307,6 +317,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 TokenKind::LineComment(_) => {
                     self.make(tok, SemanticTokenType::COMMENT, &mut tokens)
                 }
+                TokenKind::Extend => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::If => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Else => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
                 TokenKind::Loop => self.make(tok, SemanticTokenType::KEYWORD, &mut tokens),
