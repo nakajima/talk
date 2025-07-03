@@ -55,7 +55,23 @@ pub enum Pattern {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum IncompleteExpr {
+    Member(Option<ExprID>), // Receiver
+    Func {
+        name: Option<Name>,
+        params: Option<Vec<ExprID>>,
+        generics: Option<Vec<ExprID>>,
+        ret: Option<ExprID>,
+        body: Option<ExprID>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
+    // These first expressions only exist to assist with LSP operations
+    Incomplete(IncompleteExpr),
+
+    // Start of the real expressions
     LiteralArray(Vec<ExprID>),
     LiteralInt(String),
     LiteralFloat(String),

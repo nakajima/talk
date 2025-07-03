@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use crate::filler::FullExpr;
 use crate::{
     SourceFile, compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
-    environment::Environment, lexer::Lexer, token::Token, token_kind::TokenKind,
+    environment::Environment, expr::IncompleteExpr, lexer::Lexer, token::Token,
+    token_kind::TokenKind,
 };
 
 use super::{
@@ -714,14 +715,9 @@ impl<'a> Parser<'a> {
 
         let name = match self.identifier() {
             Ok(name) => name,
-            Err(e) => {
-                // Add an empty member name so name resolution can  but still emit the error
-                self.add_diagnostic(Diagnostic::parser(
-                    self.parse_tree.path.clone(),
-                    self.current.clone().unwrap_or(Token::EOF),
-                    e,
-                ));
-                "".into()
+            Err(_) => {
+                let incomplete_member = Expr::Incomplete(IncompleteExpr::Member(Some(lhs)));
+                return self.add_expr(incomplete_member, tok);
             }
         };
 
@@ -918,17 +914,73 @@ impl<'a> Parser<'a> {
 
         let generics = self.type_reprs()?;
 
-        self.consume(TokenKind::LeftParen)?;
+        match self.consume(TokenKind::LeftParen) {
+            Ok(_) => (),
+            Err(e) => {
+                self.add_diagnostic(Diagnostic::parser(
+                    self.parse_tree.path.clone(),
+                    self.current.clone().unwrap_or(Token::EOF),
+                    e,
+                ));
+                let incomplete_func = IncompleteExpr::Func {
+                    name: name.map(|n| Name::Raw(n.into())),
+                    params: None,
+                    generics: None,
+                    ret: None,
+                    body: None,
+                };
+
+                return self.add_expr(Expr::Incomplete(incomplete_func), tok);
+            }
+        }
+
         let params = self.parameter_list()?;
-        self.consume(TokenKind::RightParen)?;
+
+        match self.consume(TokenKind::RightParen) {
+            Ok(_) => (),
+            Err(e) => {
+                self.add_diagnostic(Diagnostic::parser(
+                    self.parse_tree.path.clone(),
+                    self.current.clone().unwrap_or(Token::EOF),
+                    e,
+                ));
+                let incomplete_func = IncompleteExpr::Func {
+                    name: name.map(|n| Name::Raw(n.into())),
+                    params: Some(params),
+                    generics: None,
+                    ret: None,
+                    body: None,
+                };
+
+                return self.add_expr(Expr::Incomplete(incomplete_func), tok);
+            }
+        }
 
         let ret = if self.did_match(TokenKind::Arrow)? {
-            Some(self.type_repr(false))
+            Some(self.type_repr(false)?)
         } else {
             None
         };
 
-        let body = self.block(false)?;
+        let body = match self.block(false) {
+            Ok(body) => body,
+            Err(e) => {
+                self.add_diagnostic(Diagnostic::parser(
+                    self.parse_tree.path.clone(),
+                    self.current.clone().unwrap_or(Token::EOF),
+                    e,
+                ));
+                let incomplete_func = IncompleteExpr::Func {
+                    name: name.map(|n| Name::Raw(n.into())),
+                    params: Some(params),
+                    generics: Some(generics),
+                    ret,
+                    body: None,
+                };
+
+                return self.add_expr(Expr::Incomplete(incomplete_func), tok);
+            }
+        };
 
         let func_id = self.add_expr(
             Expr::Func {
@@ -936,7 +988,7 @@ impl<'a> Parser<'a> {
                 generics,
                 params,
                 body,
-                ret: ret.transpose()?,
+                ret,
                 captures: vec![],
             },
             tok,

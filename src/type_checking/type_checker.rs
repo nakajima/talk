@@ -6,7 +6,7 @@ use crate::{
     conformance_checker::ConformanceError,
     constraint_solver::{Constraint, ConstraintSolver, Substitutions},
     diagnostic::Diagnostic,
-    expr::{Expr, Pattern},
+    expr::{Expr, IncompleteExpr, Pattern},
     name::Name,
     name_resolver::NameResolverError,
     parser::ExprID,
@@ -217,6 +217,9 @@ impl<'a> TypeChecker<'a> {
 
         log::trace!("Infer node [{id}]: {expr:?}");
         let mut ty = match &expr {
+            Expr::Incomplete(expr_id) => {
+                self.handle_incomplete(expr_id, expected, env, source_file)
+            }
             Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
             Expr::If(condition, consequence, alternative) => {
@@ -392,6 +395,22 @@ impl<'a> TypeChecker<'a> {
         }
 
         ty
+    }
+
+    fn handle_incomplete(
+        &mut self,
+        expr: &IncompleteExpr,
+        expected: &Option<Ty>,
+        env: &mut Environment,
+        source_file: &mut SourceFile<NameResolved>,
+    ) -> Result<Ty, TypeError> {
+        match expr {
+            IncompleteExpr::Member(Some(receiver)) => {
+                self.infer_node(receiver, env, expected, source_file)?;
+                Ok(Ty::Void)
+            }
+            _ => Ok(Ty::Void),
+        }
     }
 
     fn infer_protocol(

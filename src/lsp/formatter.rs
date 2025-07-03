@@ -132,6 +132,7 @@ impl<'a> Formatter<'a> {
         };
 
         match expr {
+            Expr::Incomplete(_) => Doc::Empty,
             Expr::LiteralArray(items) => self.format_array_literal(items),
             Expr::LiteralString(string) => self.format_string_literal(string),
             Expr::LiteralInt(val) => text(val),

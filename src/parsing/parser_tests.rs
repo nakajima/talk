@@ -1415,11 +1415,11 @@ mod structs {
             diagnostics.contains(&Diagnostic::parser(
                 PathBuf::from("-"),
                 Token {
-                    kind: TokenKind::Func,
-                    col: 4,
+                    kind: TokenKind::EOF,
+                    col: 12,
                     line: 0,
-                    start: 0,
-                    end: 4,
+                    start: 12,
+                    end: 12,
                 },
                 crate::parser::ParserError::UnexpectedEndOfInput(None)
             )),
@@ -1437,11 +1437,11 @@ mod structs {
         assert!(diagnostics.contains(&Diagnostic::parser(
             PathBuf::from("-"),
             Token {
-                kind: TokenKind::Func,
-                col: 4,
-                line: 0,
-                start: 0,
-                end: 4,
+                kind: TokenKind::EOF,
+                col: 14,
+                line: 2,
+                start: 28,
+                end: 28,
             },
             crate::parser::ParserError::UnexpectedEndOfInput(None)
         )));
@@ -1602,5 +1602,145 @@ mod structs {
                 captures: vec![]
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod incompleteness_tests {
+    use crate::{
+        filler::{FilledIncomplete, FullExpr},
+        name::Name,
+        parser::parse_fill,
+    };
+
+    #[test]
+    fn parses_incomplete_member_expr() {
+        let parsed = parse_fill(
+            "
+        foo.
+        ",
+        );
+
+        use FullExpr::*;
+        assert_eq!(
+            parsed[0],
+            Incomplete(FilledIncomplete::Member(Some(
+                Variable(Name::Raw("foo".into()), None.into()).into()
+            )))
+        )
+    }
+
+    #[test]
+    fn parses_incomplete_func_expr() {
+        use FullExpr::*;
+        assert_eq!(
+            parse_fill(
+                "
+            func
+            ",
+            )[0],
+            Incomplete(FilledIncomplete::Func {
+                name: None,
+                params: None,
+                generics: None,
+                ret: None,
+                body: None
+            })
+        )
+    }
+
+    #[test]
+    fn parses_incomplete_func_expr_with_name() {
+        use FullExpr::*;
+        assert_eq!(
+            parse_fill(
+                "
+            func foo
+            ",
+            )[0],
+            Incomplete(FilledIncomplete::Func {
+                name: Some(Name::Raw("foo".into())),
+                params: None,
+                generics: None,
+                ret: None,
+                body: None
+            })
+        )
+    }
+
+    #[test]
+    fn parses_incomplete_func_expr_with_name_and_open_paren() {
+        use FullExpr::*;
+        assert_eq!(
+            parse_fill(
+                "
+            func foo(
+            ",
+            )[0],
+            Incomplete(FilledIncomplete::Func {
+                name: Some(Name::Raw("foo".into())),
+                params: Some(vec![]),
+                generics: None,
+                ret: None,
+                body: None
+            })
+        )
+    }
+
+    #[test]
+    fn parses_incomplete_func_expr_with_name_and_open_paren_and_param() {
+        use FullExpr::*;
+        assert_eq!(
+            parse_fill(
+                "
+            func foo(fizz
+            ",
+            )[0],
+            Incomplete(FilledIncomplete::Func {
+                name: Some(Name::Raw("foo".into())),
+                params: Some(vec![Parameter(Name::Raw("fizz".into()), None.into())]),
+                generics: None,
+                ret: None,
+                body: None
+            })
+        )
+    }
+
+    #[test]
+    fn parses_incomplete_func_expr_without_body() {
+        use FullExpr::*;
+        assert_eq!(
+            parse_fill(
+                "
+            func foo(fizz) 
+            ",
+            )[0],
+            Incomplete(FilledIncomplete::Func {
+                name: Some(Name::Raw("foo".into())),
+                params: Some(vec![Parameter(Name::Raw("fizz".into()), None.into())]),
+                generics: Some(vec![]),
+                ret: None,
+                body: None
+            })
+        )
+    }
+
+    #[test]
+    fn parses_incomplete_func_expr_with_incomplete_body() {
+        use FullExpr::*;
+        assert_eq!(
+            parse_fill(
+                "
+            func foo(fizz) {
+            ",
+            )[0],
+            Incomplete(FilledIncomplete::Func {
+                name: Some(Name::Raw("foo".into())),
+                params: Some(vec![Parameter(Name::Raw("fizz".into()), None.into())]),
+                generics: Some(vec![]),
+                ret: None,
+                body: None
+            })
+        )
     }
 }

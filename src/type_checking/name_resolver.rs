@@ -10,6 +10,7 @@ use crate::compiling::compilation_session::SharedCompilationSession;
 use crate::diagnostic::Diagnostic;
 use crate::expr::Expr;
 use crate::expr::Expr::*;
+use crate::expr::IncompleteExpr;
 use crate::expr::Pattern;
 use crate::name::Name;
 use crate::parser::ExprID;
@@ -120,6 +121,14 @@ impl NameResolver {
                     self.resolve_nodes(&items, source_file, symbol_table);
                 }
                 LiteralTrue | LiteralFalse => continue,
+                Incomplete(incomplete) => match incomplete {
+                    IncompleteExpr::Member(receiver) => {
+                        if let Some(receiver) = receiver {
+                            self.resolve_nodes(&[receiver], source_file, symbol_table);
+                        }
+                    }
+                    IncompleteExpr::Func { .. } => (),
+                },
                 Struct {
                     name,
                     generics,

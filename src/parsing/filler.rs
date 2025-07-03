@@ -1,13 +1,27 @@
 use crate::{
     Phase, SourceFile, SymbolID,
-    expr::{Expr, Pattern},
+    expr::{Expr, IncompleteExpr, Pattern},
     name::Name,
     parser::ExprID,
     token_kind::TokenKind,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FilledIncomplete {
+    Member(Option<Box<FullExpr>>),
+    Func {
+        name: Option<Name>,
+        params: Option<Vec<FullExpr>>,
+        generics: Option<Vec<FullExpr>>,
+        ret: Option<Box<FullExpr>>,
+        body: Option<Box<FullExpr>>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FullExpr {
+    Incomplete(FilledIncomplete),
+
     LiteralArray(Vec<FullExpr>),
     LiteralInt(String),
     LiteralFloat(String),
@@ -189,6 +203,25 @@ impl<P: Phase> Filler<P> {
         let expr = self.source.get(&expr_id).unwrap();
 
         match expr.clone() {
+            Expr::Incomplete(e) => match e {
+                IncompleteExpr::Member(rec) => FullExpr::Incomplete(FilledIncomplete::Member(
+                    rec.map(|rec| self.fill(rec).into()),
+                )),
+                IncompleteExpr::Func {
+                    name,
+                    params,
+                    generics,
+                    ret,
+                    body,
+                } => FullExpr::Incomplete(FilledIncomplete::Func {
+                    name,
+                    params: params.map(|p| self.fill_mult(&p)),
+                    generics: generics.map(|p| self.fill_mult(&p)),
+                    ret: ret.map(|r| self.fill(r).into()),
+                    body: body.map(|b| self.fill(b).into()),
+                }),
+            },
+
             Expr::LiteralInt(s) => FullExpr::LiteralInt(s),
             Expr::LiteralString(s) => FullExpr::LiteralString(s),
             Expr::Unary(op, rhs_id) => {

@@ -1,5 +1,10 @@
 use crate::{
-    Parsed, expr::Expr, lexer::Lexer, parser::ExprID, source_file::SourceFile, token::Token,
+    Parsed,
+    expr::{Expr, IncompleteExpr},
+    lexer::Lexer,
+    parser::ExprID,
+    source_file::SourceFile,
+    token::Token,
     token_kind::TokenKind,
 };
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
@@ -93,6 +98,14 @@ impl<'a> SemanticTokenCollector<'a> {
         };
 
         match expr {
+            Expr::Incomplete(e) => match e {
+                IncompleteExpr::Member(rec) => {
+                    if let Some(receiver) = rec {
+                        result.extend(self.tokens_from_expr(receiver))
+                    }
+                }
+                IncompleteExpr::Func { .. } => (),
+            },
             Expr::LiteralString(_) => (), // already handled by lexed
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
