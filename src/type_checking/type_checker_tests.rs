@@ -1718,4 +1718,46 @@ mod protocol_tests {
             }
         ))
     }
+
+    #[test]
+    fn types_self() {
+        let checked = check_without_prelude(
+            "protocol Identifty {
+                func identity(x: Self) -> Self {
+                    x
+                }
+            }
+            
+            struct I: Identifty {}
+
+            I().identity(x: I())
+            ",
+        )
+        .unwrap();
+
+        assert!(
+            checked.diagnostics().is_empty(),
+            "{:?}",
+            checked.diagnostics()
+        );
+
+        println!("{:#?}", checked.env);
+
+        assert_eq!(checked.at(2).unwrap(), Ty::Struct(SymbolID(4), vec![]));
+    }
+}
+
+#[cfg(test)]
+mod operator_tests {
+    use crate::check_without_prelude;
+
+    #[ignore]
+    #[test]
+    fn add() {
+        let _checked = check_without_prelude(
+            "
+
+        ",
+        );
+    }
 }

@@ -482,7 +482,10 @@ impl<'a> TypeChecker<'a> {
                     .infer_node(id, env, &None, source_file)
                     .map_err(|e| (*id, e))?
                 else {
-                    log::error!("Didn't get protocol for expr id: {id}");
+                    log::error!(
+                        "Didn't get protocol for expr id: {id} {:?}",
+                        source_file.get(id)
+                    );
                     continue;
                 };
 

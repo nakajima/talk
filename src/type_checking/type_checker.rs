@@ -461,9 +461,7 @@ impl<'a> TypeChecker<'a> {
             }
             (None, Some(default_value)) => default_value,
             (Some(type_repr), None) => type_repr,
-            (None, None) => {
-                env.placeholder(expr_id, name.name_str(), &name.try_symbol_id(), vec![])
-            }
+            (None, None) => env.placeholder(expr_id, name.name_str(), &name.symbol_id()?, vec![]),
         };
 
         Ok(ty)
@@ -510,7 +508,7 @@ impl<'a> TypeChecker<'a> {
 
         // Parameters are monomorphic inside the function body
         let scheme = Scheme::new(param_ty.clone(), vec![]);
-        env.declare(name.try_symbol_id(), scheme)?;
+        env.declare(name.symbol_id()?, scheme)?;
 
         Ok(param_ty)
     }
@@ -798,7 +796,19 @@ impl<'a> TypeChecker<'a> {
         is_type_parameter: &bool,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let symbol_id = name.try_symbol_id();
+        let symbol_id = match name {
+            Name::SelfType => match env.selfs.last() {
+                Some(
+                    Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _),
+                ) => *symbol_id,
+                _ => {
+                    return Err(TypeError::Unresolved(format!(
+                        "Unable to get Self for {id}"
+                    )));
+                }
+            },
+            _ => name.symbol_id()?,
+        };
 
         if *is_type_parameter {
             let mut unbound_vars = vec![];
@@ -836,7 +846,12 @@ impl<'a> TypeChecker<'a> {
 
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
-            return Ok(env.ty_for_symbol(id, name.name_str(), &symbol_id, &[]));
+            let ty = if name == &Name::SelfType {
+                env.placeholder(id, name.name_str(), &symbol_id, vec![])
+            } else {
+                env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
+            };
+            return Ok(ty);
         }
 
         let ty_scheme = env.lookup_symbol(&symbol_id)?.clone();
@@ -1015,6 +1030,11 @@ impl<'a> TypeChecker<'a> {
                 Ok(ty)
             }
             Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
+            Name::SelfType => env
+                .selfs
+                .last()
+                .cloned()
+                .ok_or(TypeError::Unknown("No type found for Self".to_string())),
         }
     }
 

@@ -2,6 +2,7 @@
 #![feature(associated_type_defaults)]
 #![feature(assert_matches)]
 #![feature(iter_advance_by)]
+#![feature(if_let_guard)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![cfg_attr(not(test), warn(clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::panic))]

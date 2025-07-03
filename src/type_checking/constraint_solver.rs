@@ -672,6 +672,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Ty::Int => ty.clone(),
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
+            Ty::ProtocolSelf => ty.clone(),
             Ty::Func(params, returning, generics) => {
                 let applied_params = Self::apply_multiple(params, substitutions, depth + 1);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
@@ -1047,7 +1048,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .map(|t| Self::substitute_ty_with_map(t, substitutions))
                     .collect(),
             ),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool => ty.clone(),
+            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::ProtocolSelf => {
+                ty.clone()
+            }
         }
     }
 }

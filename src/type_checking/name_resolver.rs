@@ -188,9 +188,7 @@ impl NameResolver {
                 } => {
                     match name {
                         Name::Raw(name_str) => {
-                            let symbol_id = self.lookup(&name_str);
-
-                            if symbol_id.0 == SymbolID(0) {
+                            let Some(symbol_id) = self.lookup(&name_str) else {
                                 if let Ok(mut session) = self.session.lock() {
                                     session.add_diagnostic(Diagnostic::resolve(
                                         source_file.path.clone(),
@@ -198,12 +196,10 @@ impl NameResolver {
                                         NameResolverError::UnresolvedName(name_str),
                                     ))
                                 }
-
                                 return;
-                            }
+                            };
 
                             let symbol_id = symbol_id.0;
-
                             self.type_symbol_stack.push(symbol_id);
                             source_file.nodes.insert(
                                 *node_id,
@@ -305,7 +301,7 @@ impl NameResolver {
                             );
                             Name::Resolved(symbol_id, name_str)
                         }
-                        Name::Resolved(_, _) | Name::_Self(_) => name,
+                        Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name,
                     };
 
                     if let Some(rhs) = rhs {
@@ -372,14 +368,23 @@ impl NameResolver {
 
                     match name {
                         Name::Raw(name_str) => {
-                            let (symbol_id, _) = self.lookup(&name_str);
+                            let Some((symbol_id, _)) = self.lookup(&name_str) else {
+                                if let Ok(mut session) = self.session.lock() {
+                                    session.add_diagnostic(Diagnostic::resolve(
+                                        source_file.path.clone(),
+                                        *node_id,
+                                        NameResolverError::UnresolvedName(name_str),
+                                    ))
+                                }
+                                return;
+                            };
                             symbol_table.add_map(source_file, node_id, &symbol_id);
                             source_file.nodes.insert(
                                 *node_id,
                                 Parameter(Name::Resolved(symbol_id, name_str), ty_repr),
                             );
                         }
-                        Name::Resolved(_, _) | Name::_Self(_) => (),
+                        Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
                     }
                 }
                 Variable(name, _) => match name {
@@ -400,7 +405,17 @@ impl NameResolver {
                                 continue;
                             }
                         } else {
-                            let (symbol_id, depth) = self.lookup(&name_str);
+                            let Some((symbol_id, depth)) = self.lookup(&name_str) else {
+                                if let Ok(mut session) = self.session.lock() {
+                                    session.add_diagnostic(Diagnostic::resolve(
+                                        source_file.path.clone(),
+                                        *node_id,
+                                        NameResolverError::UnresolvedName(name_str),
+                                    ))
+                                }
+
+                                return;
+                            };
                             log::info!("Replacing variable {name_str} with {symbol_id:?}");
 
                             symbol_table.add_map(source_file, node_id, &symbol_id);
@@ -435,7 +450,7 @@ impl NameResolver {
 
                         source_file.nodes.insert(*node_id, Variable(name, None));
                     }
-                    Name::Resolved(_, _) | Name::_Self(_) => (),
+                    Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
                 },
                 TypeRepr {
                     name,
@@ -463,11 +478,28 @@ impl NameResolver {
                             } else {
                                 // Usage site of a type name (e.g., T in `case some(T)`, or `Int`)
                                 // Look up an existing symbol.
-                                let (symbol_id, _) = self.lookup(&raw_name_str);
-                                Name::Resolved(symbol_id, raw_name_str)
+                                if raw_name_str == "Self"
+                                    && let Some(last_symbol) = self.type_symbol_stack.last()
+                                {
+                                    let name = Name::SelfType;
+                                    symbol_table.add_map(source_file, node_id, last_symbol);
+                                    name
+                                } else if let Some((symbol_id, _)) = self.lookup(&raw_name_str) {
+                                    Name::Resolved(symbol_id, raw_name_str)
+                                } else {
+                                    if let Ok(mut session) = self.session.lock() {
+                                        session.add_diagnostic(Diagnostic::resolve(
+                                            source_file.path.clone(),
+                                            *node_id,
+                                            NameResolverError::UnresolvedName(raw_name_str),
+                                        ))
+                                    }
+
+                                    return;
+                                }
                             }
                         }
-                        Name::Resolved(_, _) | Name::_Self(_) => name, // Already resolved, no change needed to the name itself.
+                        Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name, // Already resolved, no change needed to the name itself.
                     };
 
                     self.resolve_nodes(&conformances, source_file, symbol_table);
@@ -772,8 +804,8 @@ impl NameResolver {
                 continue;
             };
 
-            if self.lookup(&name_str).0 != SymbolID(0)
-                && let Some(info) = symbol_table.get(&self.lookup(&name_str).0)
+            if let Some((symbol_id, _)) = self.lookup(&name_str)
+                && let Some(info) = symbol_table.get(&symbol_id)
                 && let Some(this_info) = source_file.meta.get(id)
                 && let Some(existing_info) = source_file.meta.get(&info.expr_id)
                 && this_info != existing_info
@@ -905,8 +937,9 @@ impl NameResolver {
                 variant_name,
                 fields,
             } => {
-                let enum_name = if let Some(Name::Raw(enum_name)) = enum_name {
-                    let symbol = self.lookup(enum_name).0;
+                let enum_name = if let Some(Name::Raw(enum_name)) = enum_name
+                    && let Some((symbol, _)) = self.lookup(enum_name)
+                {
                     Some(Name::Resolved(symbol, enum_name.to_string()))
                 } else {
                     None
@@ -1058,18 +1091,16 @@ impl NameResolver {
         symbol_id
     }
 
-    fn lookup(&self, name: &str) -> (SymbolID, usize /* depth */) {
-        // self.scopes.last().unwrap().get(name)
+    fn lookup(&self, name: &str) -> Option<(SymbolID, usize /* depth */)> {
         for (i, scope) in self.scopes.iter().rev().enumerate() {
             if let Some(symbol_id) = scope.get(name) {
                 // The depth of the scope where the variable was found
                 let found_depth = self.scopes.len() - 1 - i;
-                return (*symbol_id, found_depth);
+                return Some((*symbol_id, found_depth));
             }
         }
 
-        // panic!("Undeclared name: {name}");
-        (SymbolID(0), 0)
+        None
     }
 
     fn start_scope(&mut self, source_file: &mut SourceFile, span: Span) {
@@ -1149,11 +1180,11 @@ mod tests {
 
     #[test]
     fn resolves_simple_variable_to_depth_0() {
-        let tree = resolve("hello");
-        let root = tree.roots()[0].unwrap();
+        let tree = resolve("let hello = 1; hello");
+        let root = tree.roots()[1].unwrap();
         assert_eq!(
             root,
-            &Variable(Name::Resolved(SymbolID(0), "hello".into()), None)
+            &Variable(Name::Resolved(SymbolID::resolved(1), "hello".into()), None)
         );
     }
 
@@ -1237,17 +1268,18 @@ mod tests {
     fn resolves_inside_array_literals() {
         let resolved = resolve(
             "
+            let a = 1; let b = 2; let c = 3;
             [a, b, c]
             ",
         );
 
-        let Expr::LiteralArray(ids) = resolved.get(&resolved.root_ids()[0]).unwrap() else {
+        let Expr::LiteralArray(ids) = resolved.get(&resolved.root_ids()[3]).unwrap() else {
             panic!("did not get literal array");
         };
 
         assert_eq!(
             resolved.get(&ids[0]).unwrap(),
-            &Expr::Variable(Name::Resolved(SymbolID(0), "a".into()), None)
+            &Expr::Variable(Name::Resolved(SymbolID::resolved(1), "a".into()), None)
         );
     }
 
@@ -1333,19 +1365,20 @@ mod tests {
 
     #[test]
     fn block_scoping_prevents_let_leak() {
-        // parse a block with a single let,
-        // followed by a bare `x` at top level:
-        let tree = resolve("{ let x = 123 } x");
+        let (tree, session) = resolve_with_session("{ let x = 123 }; x");
 
-        // The first root is the Block, the second is the Variable("x")
-        let roots = tree.root_ids();
-        // That `x` should resolve to the global‐fallback ID 0,
-        // not to the block's own `x` (which would have been >0).
-        let second = tree.get(&roots[1]).unwrap();
-        assert_eq!(
-            second,
-            &Variable(Name::Resolved(SymbolID(0), "x".into()), None)
-        );
+        let session = session.lock().unwrap();
+        let diagnostics = session.diagnostics_for(&tree.path).unwrap();
+        assert!(!diagnostics.is_empty());
+        let Diagnostic {
+            path: _,
+            kind: DiagnosticKind::Resolve(_, NameResolverError::UnresolvedName(name)),
+        } = diagnostics.iter().find(|_| true).unwrap().clone()
+        else {
+            panic!("didn't get diagnostic");
+        };
+
+        assert_eq!("x", name);
     }
 
     #[test]

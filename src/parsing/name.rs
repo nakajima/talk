@@ -1,10 +1,11 @@
-use crate::{SymbolID, ty::Ty};
+use crate::{SymbolID, ty::Ty, type_checker::TypeError};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Name {
     Raw(String),
     Resolved(SymbolID, String),
     _Self(SymbolID),
+    SelfType,
 }
 
 impl Name {
@@ -19,6 +20,7 @@ impl Name {
                 }
             }
             Name::_Self(symbol) => format!("self{symbol:?}"),
+            Name::SelfType => "Self".to_string(),
         }
     }
 
@@ -27,15 +29,21 @@ impl Name {
             Name::Raw(name_str) => name_str.into(),
             Name::Resolved(_symbol_id, name_str) => name_str.into(),
             Name::_Self(_) => "self".into(),
+            Name::SelfType => "Self".to_string(),
         }
     }
 
-    pub fn try_symbol_id(&self) -> SymbolID {
+    pub fn symbol_id(&self) -> Result<SymbolID, TypeError> {
         match self {
             #[allow(clippy::panic)]
-            Name::Raw(name_str) => panic!("Cannot get symbol ID from unresolved {name_str:?}"),
-            Name::Resolved(symbol_id, _) => *symbol_id,
-            Name::_Self(symbol_id) => *symbol_id,
+            Name::Raw(name_str) => Err(TypeError::Unknown(format!(
+                "Cannot get symbol ID from unresolved {name_str:?}"
+            ))),
+            Name::Resolved(symbol_id, _) => Ok(*symbol_id),
+            Name::_Self(symbol_id) => Ok(*symbol_id),
+            Name::SelfType => Err(TypeError::Unknown(
+                "Cannot get symbol ID from unresolved Self".to_string(),
+            )),
         }
     }
 }

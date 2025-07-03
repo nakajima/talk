@@ -37,6 +37,10 @@ impl CheckResult {
         self.type_for(&self.root_ids()[0])
     }
 
+    pub fn at(&self, i: usize) -> Option<Ty> {
+        self.type_for(&self.root_ids()[i])
+    }
+
     pub fn type_for(&self, id: &ExprID) -> Option<Ty> {
         self.source_file.type_for(*id, &self.env)
     }

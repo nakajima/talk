@@ -897,6 +897,7 @@ impl<'a> Formatter<'a> {
             Name::Raw(s) => text(s),
             Name::Resolved(_, s) => text(s),
             Name::_Self(_) => text("self"),
+            Name::SelfType => text("Self"),
         }
     }
 

@@ -44,7 +44,7 @@ impl<'a> ConformanceChecker<'a> {
 
         let mut unifications = vec![];
 
-        for method in self.protocol.methods.iter() {
+        for method in self.protocol.method_requirements.iter() {
             let ty_method = match self.find_method(&method.name) {
                 Ok(m) => m.clone(),
                 Err(e) => {

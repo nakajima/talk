@@ -68,6 +68,7 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
+            Ty::ProtocolSelf => IRType::Void,
             Ty::Pointer => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
@@ -594,7 +595,7 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        let Some(protocol_def) = self.env.lookup_protocol(&name.try_symbol_id()).cloned() else {
+        let Some(protocol_def) = self.env.lookup_protocol(&name.symbol_id().ok()?).cloned() else {
             self.push_err("No Protocol found", *body);
             return None;
         };
@@ -605,7 +606,7 @@ impl<'a> Lowerer<'a> {
                 ..
             }) = self.source_file.typed_expr(&id, self.env).clone()
             {
-                self.lower_method(&name.try_symbol_id(), &id, &name.name_str())?;
+                self.lower_method(&name.symbol_id().ok()?, &id, &name.name_str())?;
             }
 
             if let Some(TypedExpr {
@@ -1168,7 +1169,7 @@ impl<'a> Lowerer<'a> {
 
         let type_var = Ty::TypeVar(TypeVarID::new(
             0,
-            TypeVarKind::SelfVar(name.try_symbol_id()),
+            TypeVarKind::SelfVar(name.symbol_id().ok()?),
             vec![],
         ));
 
@@ -1179,7 +1180,7 @@ impl<'a> Lowerer<'a> {
             ty: Ty::Func(params, ret, generics).to_ir(self),
             name: format!(
                 "@_{}_{}_{}",
-                protocol_name.try_symbol_id().0,
+                protocol_name.symbol_id().map(|s| s.0).ok()?,
                 protocol_name.name_str(),
                 name.name_str()
             ),
@@ -2252,7 +2253,7 @@ impl<'a> Lowerer<'a> {
         // we can just call by name. Otherwise if it's something like SymbolKind::Local, we'll have to load
         // the callee from the register.
         if let Expr::Variable(name, _) = &callee_typed_expr.expr
-            && let Some(name_info) = self.symbol_table.get(&name.try_symbol_id())
+            && let Some(name_info) = self.symbol_table.get(&name.symbol_id().ok()?)
             && name_info.kind == SymbolKind::FuncDef
         {
             // Determine the underlying function type, whether it's a direct function or a closure.
