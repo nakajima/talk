@@ -6,6 +6,6 @@ struct String {
   init(capacity: Int) {
     self.length = 0
 		self.capacity = capacity
-		self.storage = __alloc<T>(capacity)
+		self.storage = __alloc<Byte>(capacity)
   }
 }

@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 
 use crate::{
-    SymbolID, conformance_checker::ConformanceError, environment::Environment, ty::Ty,
-    type_checker::TypeError, type_constraint::TypeConstraint,
+    SymbolID,
+    conformance_checker::ConformanceError,
+    environment::{Environment, free_type_vars},
+    ty::Ty,
+    type_checker::TypeError,
+    type_constraint::TypeConstraint,
+    type_defs::{TypeDef, protocol_def::ProtocolDef, struct_def::Property},
+    type_var_id::TypeVarKind,
 };
 
 pub struct SatisfiesChecker<'a> {
@@ -58,15 +64,9 @@ impl<'a> SatisfiesChecker<'a> {
                     log::trace!("= Checking {:?} satisfies {constraint:?}", self.ty);
 
                     let Some(protocol_def) = self.env.lookup_protocol(protocol_id).cloned() else {
+                        log::error!("Protocol not found: {protocol_id:?}");
                         continue;
                     };
-
-                    //if type_args.len() != associated_types.len() {
-                    //    errors.push(ConformanceError::TypeDoesNotConform(
-                    //        type_def.name().to_string(),
-                    //        "could not determine type parameters".to_string(),
-                    //    ));
-                    //}
 
                     if let Some(conformance) = type_def
                         .conformances()
@@ -75,16 +75,31 @@ impl<'a> SatisfiesChecker<'a> {
                     {
                         let mut map = HashMap::new();
 
-                        for (provided, required) in conformance.associated_types
-                            .iter()
-                            .zip(type_args)
+                        let (method_unifications, method_errors) =
+                            self.check_method_conformance(&protocol_def, type_def);
+                        unifications.extend(method_unifications);
+                        errors.extend(method_errors);
+
+                        let (property_unifications, property_errors) =
+                            self.check_property_performance(&protocol_def, type_def);
+                        unifications.extend(property_unifications);
+                        errors.extend(property_errors);
+
+                        log::warn!("Checking constraint: {constraint:?}");
+                        log::warn!("Conformances: {conformance:?}");
+                        log::warn!("Type def: {type_def:?}");
+                        log::warn!("Protocol: {protocol_def:?}");
+
+                        for (provided, required) in
+                            conformance.associated_types.iter().zip(type_args)
                         {
                             map.insert(provided.clone(), required.clone());
                         }
 
-                        for (param, arg) in conformance.associated_types
-                            .iter()
-                            .zip(associated_types)
+                        log::warn!("Map: {map:?}");
+
+                        for (param, arg) in
+                            conformance.associated_types.iter().zip(associated_types)
                         {
                             let arg = map.get(arg).unwrap_or(arg);
                             unifications.push((param.clone(), arg.clone()));
@@ -100,9 +115,102 @@ impl<'a> SatisfiesChecker<'a> {
         }
 
         if errors.is_empty() {
+            log::warn!("Returning unifications: {unifications:?}");
             Ok(unifications)
         } else {
             Err(TypeError::ConformanceError(errors))
+        }
+    }
+
+    fn check_method_conformance(
+        &self,
+        protocol_def: &ProtocolDef,
+        type_def: &TypeDef,
+    ) -> (Vec<(Ty, Ty)>, Vec<ConformanceError>) {
+        let mut errors = vec![];
+        let mut unifications = vec![];
+
+        for method in protocol_def.methods.iter() {
+            let ty_method = match self.find_method(type_def, &protocol_def.symbol_id, &method.name)
+            {
+                Ok(m) => m.clone(),
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            };
+
+            // Find self references in the protocol's type and replace them with our concrete type
+            for type_var in free_type_vars(&ty_method) {
+                log::error!("free type var: {type_var:?}");
+                if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
+                    unifications.push((Ty::TypeVar(type_var), type_def.ty()));
+                }
+            }
+
+            unifications.push((method.ty.clone(), ty_method));
+        }
+
+        (unifications, errors)
+    }
+
+    fn check_property_performance(
+        &self,
+        protocol_def: &ProtocolDef,
+        type_def: &TypeDef,
+    ) -> (Vec<(Ty, Ty)>, Vec<ConformanceError>) {
+        let mut errors = vec![];
+        let mut unifications = vec![];
+
+        for property in protocol_def.properties.iter() {
+            let ty_property =
+                match self.find_property(type_def, protocol_def.symbol_id, &property.name) {
+                    Ok(p) => p.clone(),
+                    Err(e) => {
+                        errors.push(e);
+                        continue;
+                    }
+                };
+
+            unifications.push((property.ty.clone(), ty_property.ty.clone()));
+        }
+
+        (unifications, errors)
+    }
+
+    fn find_property<'b>(
+        &self,
+        type_def: &'b TypeDef,
+        protocol_id: SymbolID,
+        name: &str,
+    ) -> Result<&'b Property, ConformanceError> {
+        if let Some(property) = type_def.find_property(name) {
+            Ok(property)
+        } else {
+            Err(ConformanceError::MemberNotImplemented {
+                ty: type_def.symbol_id(),
+                protocol: protocol_id,
+                member: name.to_string(),
+            })
+        }
+    }
+
+    fn find_method(
+        &self,
+        type_def: &TypeDef,
+        protocol_id: &SymbolID,
+        method_name: &str,
+    ) -> Result<Ty, ConformanceError> {
+        if let Some(ty) = type_def.member_ty_with_conformances(method_name, self.env)
+            && matches!(ty, Ty::Func(_, _, _))
+        {
+            Ok(ty)
+        } else {
+            Err(ConformanceError::MemberNotImplemented {
+                ty: type_def.symbol_id(),
+                protocol: *protocol_id,
+                member: method_name.to_string(),
+            })
         }
     }
 }

@@ -68,6 +68,7 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
+            Ty::Byte => IRType::Byte,
             Ty::SelfType => IRType::Void,
             Ty::Pointer => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
@@ -1013,7 +1014,10 @@ impl<'a> Lowerer<'a> {
         func_id: &ExprID,
     ) -> Option<(IRType, StructDef, TypedExpr, Register, Option<IRValue>)> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(symbol_id).cloned() else {
-            log::error!("Cannot setup self context for {symbol_id:?}");
+            log::error!(
+                "Cannot setup self context for {symbol_id:?} {:?}",
+                self.source_file.get(func_id)
+            );
             return None;
         };
 

@@ -1,12 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::{
-        SymbolID, check, check_without_prelude, expr::Expr, ty::Ty, typed_expr::TypedExpr,
-    };
+    use crate::{SymbolID, check, expr::Expr, ty::Ty, typed_expr::TypedExpr};
 
     #[test]
     fn checks_initializer() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         struct Person {
             let age: Int
@@ -43,7 +41,7 @@ mod tests {
 
     #[test]
     fn checks_generic_init() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         struct Person<T> {
             init() {
@@ -83,7 +81,7 @@ mod tests {
 
     #[test]
     fn checks_property() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         struct Person {
             let age: Int
@@ -99,7 +97,7 @@ mod tests {
 
     #[test]
     fn checks_method() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         struct Person {
             let age: Int
@@ -119,7 +117,7 @@ mod tests {
 
     #[test]
     fn checks_method_out_of_order() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         struct Person {
             let age: Int
@@ -143,7 +141,7 @@ mod tests {
 
     #[test]
     fn checks_constructor_args() {
-        let checked = check_without_prelude(
+        let checked = check(
             "struct Person {
                 let age: Int
 
@@ -182,7 +180,7 @@ mod tests {
 #[cfg(test)]
 mod type_tests {
     use crate::{
-        SymbolID, check_without_prelude,
+        SymbolID, check,
         diagnostic::{Diagnostic, DiagnosticKind},
         expr::Expr,
         ty::Ty,
@@ -193,31 +191,27 @@ mod type_tests {
         type_var_id::{TypeVarID, TypeVarKind},
     };
 
-    fn check(code: &'static str) -> CheckResult {
-        crate::check(code).unwrap()
-    }
-
     #[test]
     fn checks_an_int() {
-        let checker = check_without_prelude("123").unwrap();
+        let checker = check("123").unwrap();
         assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_a_float() {
-        let checker = check("123.0");
+        let checker = check("123.0").unwrap();
         assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Float);
     }
 
     #[test]
     fn checks_a_string() {
-        let checker = check("\"hello world\"");
+        let checker = check("\"hello world\"").unwrap();
         assert_eq!(checker.first().unwrap(), Ty::string())
     }
 
     #[test]
     fn checks_a_named_func() {
-        let checker = check("func sup(name) { name }\nsup");
+        let checker = check("func sup(name) { name }\nsup").unwrap();
         let root_id = checker.root_ids()[0];
 
         let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
@@ -261,7 +255,7 @@ mod type_tests {
 
     #[test]
     fn checks_a_func_with_return_type() {
-        let checker = check("func sup(name) -> Int { name }\n");
+        let checker = check("func sup(name) -> Int { name }\n").unwrap();
         let root_id = checker.root_ids()[0];
         let Ty::Func(params, return_type, _) = checker.type_for(&root_id).unwrap() else {
             panic!(
@@ -276,7 +270,7 @@ mod type_tests {
 
     #[test]
     fn checks_call() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
         func fizz(c) { c }
         fizz(c: 123)
@@ -289,14 +283,14 @@ mod type_tests {
 
     #[test]
     fn checks_a_let_assignment() {
-        let checker = check_without_prelude("let count = 123\ncount").unwrap();
+        let checker = check("let count = 123\ncount").unwrap();
         let root_id = checker.root_ids()[1];
         assert_eq!(checker.type_for(&root_id).unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_apply_twice() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
         func applyTwice(f, x) { f(f(x)) }
         applyTwice
@@ -331,7 +325,7 @@ mod type_tests {
 
     #[test]
     fn checks_call_with_generics() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         func fizz<T>(ty: T) { T }
 
@@ -347,7 +341,7 @@ mod type_tests {
 
     #[test]
     fn checks_composition() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
         func compose(f, g) {
             func inner(x) { f(g(x)) }
@@ -429,7 +423,7 @@ mod type_tests {
 
     #[test]
     fn checks_simple_recursion() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
         func rec(n) {
             rec(n)
@@ -455,7 +449,7 @@ mod type_tests {
 
     #[test]
     fn infers_simple_recursion() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
         func rec(x, y, z) {
             if x == y { x } else { rec(y-z, y, z) }
@@ -473,7 +467,7 @@ mod type_tests {
 
     #[test]
     fn checks_mutual_recursion() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
         func even(n: Int) -> Int {
             odd(n)
@@ -509,7 +503,7 @@ mod type_tests {
 
     #[test]
     fn infers_let_with_enum_case() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         enum Maybe<T> {
           case definitely(T), nope
@@ -529,7 +523,7 @@ mod type_tests {
 
     #[test]
     fn infers_identity() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             func identity(arg) { arg }
             identity(1)
@@ -544,7 +538,7 @@ mod type_tests {
 
     #[test]
     fn generalizes_at_the_right_time() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             protocol Aged { let age: Int }
             func id<T: Aged>(t: T) { t.age }
@@ -559,6 +553,7 @@ mod type_tests {
                 associated_types: vec![],
             }],
         });
+
         assert_eq!(
             checker.type_for(&checker.root_ids()[1]).unwrap(),
             Ty::Func(vec![id.clone()], Ty::Int.into(), vec![id])
@@ -567,7 +562,7 @@ mod type_tests {
 
     #[test]
     fn updates_definition() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             struct Person {}
 
@@ -604,7 +599,7 @@ mod type_tests {
 
     #[test]
     fn checks_simple_enum_declaration() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             enum Fizz {
                 case foo, bar
@@ -646,7 +641,8 @@ mod type_tests {
                 case some(Int), none
             }
             ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checker.type_for(&checker.root_ids()[0]).unwrap(),
@@ -681,7 +677,8 @@ mod type_tests {
                 case some(T), none
             }
             ",
-        );
+        )
+        .unwrap();
 
         let enum_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
         match enum_ty {
@@ -705,7 +702,8 @@ mod type_tests {
 
             Option.some(42)
             ",
-        );
+        )
+        .unwrap();
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(&checker.root_ids()[1]).unwrap();
@@ -725,7 +723,8 @@ mod type_tests {
             Option.some(42)
             Option.some(3.14)
             ",
-        );
+        )
+        .unwrap();
 
         // First call should be Option<Int>
         let call1 = checker.type_for(&checker.root_ids()[1]).unwrap();
@@ -761,7 +760,8 @@ mod type_tests {
             }
             Result.ok(Option.some(42))
             ",
-        );
+        )
+        .unwrap();
 
         // Should be Result<Option<Int>, _>
         let result_ty = checker.type_for(&checker.root_ids()[2]).unwrap();
@@ -798,7 +798,8 @@ mod type_tests {
                 }
             }
             ",
-        );
+        )
+        .unwrap();
 
         // Function should have type Bool -> Int
         let func_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
@@ -826,7 +827,8 @@ mod type_tests {
                 }
             }
             ",
-        );
+        )
+        .unwrap();
 
         // Function should have type Option<Int> -> Int
         let func_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
@@ -848,7 +850,8 @@ mod type_tests {
                 case cons(T, List<T>), nil
             }
             ",
-        );
+        )
+        .unwrap();
 
         let enum_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
         match enum_ty {
@@ -886,7 +889,7 @@ mod type_tests {
     #[test]
     fn checks_match_type_mismatch_error() {
         // This should fail due to inconsistent return types in match arms
-        let result = check_without_prelude(
+        let result = check(
             "
                 enum Bool {
                     case true, false  
@@ -921,7 +924,8 @@ mod type_tests {
             }
             describe(.red)
             ",
-        );
+        )
+        .unwrap();
 
         // Call should type check correctly
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
@@ -930,7 +934,7 @@ mod type_tests {
 
     #[test]
     fn checks_multiple_enum_parameters() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             enum Boolean {
                 case yes, no
@@ -952,7 +956,7 @@ mod type_tests {
 
     #[test]
     fn checks_enum_as_return_type() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             enum Option<T> {
                 case some(T), none
@@ -971,7 +975,7 @@ mod type_tests {
 
     #[test]
     fn checks_complex_generic_constraints() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             enum Either<L, R> {
                 case left(L), right(R)
@@ -1012,7 +1016,8 @@ mod type_tests {
 
         Optional.some(123)
         ",
-        );
+        )
+        .unwrap();
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(&checker.root_ids()[0]).unwrap();
@@ -1041,7 +1046,8 @@ mod type_tests {
         let x: Optional<Int> = .some(42)
         x
         ",
-        );
+        )
+        .unwrap();
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(&checker.root_ids()[1]).unwrap();
@@ -1050,7 +1056,7 @@ mod type_tests {
 
     #[test]
     fn checks_polymorphic_match() {
-        let checker = check_without_prelude(
+        let checker = check(
             "
             enum O<I> {
                 case some(I), none
@@ -1136,7 +1142,8 @@ mod type_tests {
                 123
             }
         }",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[0]),
@@ -1176,7 +1183,7 @@ mod type_tests {
 
     #[test]
     fn checks_closure() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         let x = 1 
         func add(y) {
@@ -1191,7 +1198,7 @@ mod type_tests {
             checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Closure {
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
-                captures: vec![SymbolID(2)]
+                captures: vec![SymbolID::typed(2)]
             }
         );
 
@@ -1216,7 +1223,8 @@ mod type_tests {
             "
             [1,2,3]
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[0]).unwrap(),
@@ -1226,7 +1234,7 @@ mod type_tests {
 
     #[test]
     fn checks_array_builtin() {
-        let checked = check("func c(a: Array<Int>) { a }");
+        let checked = check("func c(a: Array<Int>) { a }").unwrap();
         let root = checked.typed_expr(&checked.root_ids()[0]).unwrap();
         assert_eq!(
             root.ty,
@@ -1245,7 +1253,8 @@ mod type_tests {
         let a = [1,2,3]
         a.get(0)
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
     }
@@ -1259,7 +1268,8 @@ mod type_tests {
         identity([1.0, 2.0, 3.0])
         [1,2,3]
         ",
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[1]).unwrap(),
@@ -1272,7 +1282,7 @@ mod type_tests {
     }
 
     fn check_err(code: &'static str) -> Result<CheckResult, TypeError> {
-        check_without_prelude(code)
+        check(code)
     }
 
     #[test]
@@ -1298,22 +1308,28 @@ mod type_tests {
 
     #[test]
     fn checks_literal_true() {
-        assert_eq!(check("true").first().unwrap(), Ty::Bool);
+        assert_eq!(check("true").unwrap().first().unwrap(), Ty::Bool);
     }
 
     #[test]
     fn checks_literal_false() {
-        assert_eq!(check("false").first().unwrap(), Ty::Bool);
+        assert_eq!(check("false").unwrap().first().unwrap(), Ty::Bool);
     }
 
     #[test]
     fn checks_if_expression() {
-        assert_eq!(check("if true { 1 } else { 0 }").first().unwrap(), Ty::Int);
+        assert_eq!(
+            check("if true { 1 } else { 0 }").unwrap().first().unwrap(),
+            Ty::Int
+        );
     }
 
     #[test]
     fn checks_if_expression_without_else() {
-        assert_eq!(check("if true { 1 }").first().unwrap(), Ty::Int.optional());
+        assert_eq!(
+            check("if true { 1 }").unwrap().first().unwrap(),
+            Ty::Int.optional()
+        );
     }
 
     #[test]
@@ -1332,12 +1348,12 @@ mod type_tests {
 
     #[test]
     fn checks_loop_expression() {
-        assert_eq!(check("loop { 1 }").first().unwrap(), Ty::Void);
+        assert_eq!(check("loop { 1 }").unwrap().first().unwrap(), Ty::Void);
     }
 
     #[test]
     fn checks_loop_expression_with_condition() {
-        assert_eq!(check("loop true { 1 }").first().unwrap(), Ty::Void);
+        assert_eq!(check("loop true { 1 }").unwrap().first().unwrap(), Ty::Void);
     }
 
     #[test]
@@ -1358,14 +1374,14 @@ mod type_tests {
     #[test]
     fn checks_tuple_expression() {
         assert_eq!(
-            check("(1, true)").first().unwrap(),
+            check("(1, true)").unwrap().first().unwrap(),
             Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
     }
 
     #[test]
     fn checks_unit_tuple_expression() {
-        assert_eq!(check("()").first().unwrap(), Ty::Tuple(vec![]));
+        assert_eq!(check("()").unwrap().first().unwrap(), Ty::Tuple(vec![]));
     }
 
     #[test]
@@ -1382,18 +1398,18 @@ mod type_tests {
 
     #[test]
     fn checks_grouping_expression() {
-        assert_eq!(check("(1)").first().unwrap(), Ty::Int);
+        assert_eq!(check("(1)").unwrap().first().unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_unary_expression() {
-        assert_eq!(check("-1").first().unwrap(), Ty::Int);
+        assert_eq!(check("-1").unwrap().first().unwrap(), Ty::Int);
     }
 
     #[test]
     fn checks_binary_expression() {
-        assert_eq!(check("1 + 2").first().unwrap(), Ty::Int);
-        assert_eq!(check("1.1 + 2.1").first().unwrap(), Ty::Float);
+        assert_eq!(check("1 + 2").unwrap().first().unwrap(), Ty::Int);
+        assert_eq!(check("1.1 + 2.1").unwrap().first().unwrap(), Ty::Float);
     }
 
     #[test]
@@ -1404,6 +1420,7 @@ mod type_tests {
             return
         }()"
             )
+            .unwrap()
             .first()
             .unwrap(),
             Ty::Void
@@ -1431,6 +1448,7 @@ mod type_tests {
             123
         }"
             )
+            .unwrap()
             .first()
             .unwrap(),
             Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
@@ -1445,6 +1463,7 @@ mod type_tests {
             return 123
         }()"
             )
+            .unwrap()
             .first()
             .unwrap(),
             Ty::Int
@@ -1453,7 +1472,7 @@ mod type_tests {
 
     #[test]
     fn checks_pattern_literal_int_in_match() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
             enum MyEnum {
                 case val(Int)
@@ -1483,12 +1502,13 @@ mod type_tests {
                 }
             }
         ",
-        );
+        )
+        .unwrap();
     }
 
     #[test]
     fn checks_extend_struct() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Thingable { func thing() -> Int {} }
         struct Person { func sup() {} }
@@ -1511,7 +1531,7 @@ mod type_tests {
 #[cfg(test)]
 mod protocol_tests {
     use crate::{
-        SymbolID, check_without_prelude,
+        SymbolID, check,
         diagnostic::{Diagnostic, DiagnosticKind},
         ty::Ty,
         type_checker::TypeError,
@@ -1520,7 +1540,7 @@ mod protocol_tests {
 
     #[test]
     fn infers_protocol_conformance() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Aged<T> {
             func getAge() -> T
@@ -1551,7 +1571,7 @@ mod protocol_tests {
 
     #[test]
     fn infers_protocol_property() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Aged {
             let age: Int
@@ -1572,7 +1592,7 @@ mod protocol_tests {
 
     #[test]
     fn infers_protocol_method() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Aged {
             func getAge() -> Int
@@ -1593,7 +1613,7 @@ mod protocol_tests {
 
     #[test]
     fn infers_protocol_associated_type() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Aged<T> {
             let age: T
@@ -1623,7 +1643,7 @@ mod protocol_tests {
 
     #[test]
     fn infers_protocol_associated_type_conformance() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Gettable {
             func get() -> Int
@@ -1657,7 +1677,7 @@ mod protocol_tests {
 
     #[test]
     fn errors_on_non_conformance() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Aged<T> {
             let age: T
@@ -1686,7 +1706,7 @@ mod protocol_tests {
 
     #[test]
     fn errors_on_wrong_associated_type() {
-        let checked = check_without_prelude(
+        let checked = check(
             "
         protocol Aged<T> {
             let age: T
@@ -1721,7 +1741,7 @@ mod protocol_tests {
 
     #[test]
     fn types_self() {
-        let checked = check_without_prelude(
+        let checked = check(
             "protocol Identifty {
                 func identity(x: Self) -> Self {
                     x
@@ -1746,7 +1766,7 @@ mod protocol_tests {
 
     #[test]
     fn can_extend_builtins() {
-        let checked = check_without_prelude(
+        let checked = check(
             "protocol Identifty {
                 func identity() -> Self {
                     self
@@ -1766,7 +1786,7 @@ mod protocol_tests {
 
     #[test]
     fn can_extend_builtin_literals() {
-        let checked = check_without_prelude(
+        let checked = check(
             "protocol Identifty {
                 func identity() -> Self {
                     self

@@ -199,8 +199,6 @@ impl NameResolver {
                             return;
                         };
 
-                        log::error!("Resolving extension {name_str} {symbol_id:?}");
-
                         let symbol_id = symbol_id.0;
                         self.type_symbol_stack.push(symbol_id);
                         source_file.nodes.insert(

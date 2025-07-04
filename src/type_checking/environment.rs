@@ -38,7 +38,7 @@ pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
-    pub constraints: Vec<Constraint>,
+    constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
@@ -91,7 +91,7 @@ impl Environment {
         );
 
         // 2. Generate the InstanceOf constraint.
-        self.constraints.push(Constraint::InstanceOf {
+        self.constrain(Constraint::InstanceOf {
             scheme: Scheme {
                 ty: usage_placeholder.clone(),
                 unbound_vars: vec![],
@@ -119,6 +119,19 @@ impl Environment {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
+    pub fn constrain(&mut self, constraint: Constraint) {
+        if !constraint.needs_solving() {
+            return;
+        }
+
+        if cfg!(debug_assertions) {
+            let loc = std::panic::Location::caller();
+            log::info!("⊢ {constraint:?} ({}:{})", loc.file(), loc.line(),);
+        }
+        self.constraints.push(constraint)
+    }
+
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
         if lhs == rhs {
             // No need to constrain equality of equal things
@@ -136,7 +149,7 @@ impl Environment {
                 rhs,
             );
         }
-        self.constraints.push(Constraint::Equality(id, lhs, rhs))
+        self.constrain(Constraint::Equality(id, lhs, rhs))
     }
 
     pub fn flush_constraints<P: Phase>(
@@ -292,7 +305,6 @@ impl Environment {
         for old in &scheme.unbound_vars {
             if let Some(arg_ty) = args.get(old) {
                 var_map.insert(old.clone(), arg_ty.clone());
-                // self.constrain_equality(-1, Ty::TypeVar(fresh.clone()), arg_ty.clone());
             } else {
                 let type_var = TypeVarKind::Instantiated(old.id);
                 let fresh = self.new_type_variable(type_var, old.constraints.clone());
@@ -344,9 +356,13 @@ impl Environment {
                 }
                 Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
-                Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType => {
-                    ty.clone()
-                }
+                Ty::Void
+                | Ty::Pointer
+                | Ty::Int
+                | Ty::Float
+                | Ty::Bool
+                | Ty::SelfType
+                | Ty::Byte => ty.clone(),
             }
         }
 
@@ -595,7 +611,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
                 s.extend(free_type_vars(generic));
             }
         }
-        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType => {
+        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
             // These types contain no nested types, so there's nothing to do.
         }
     }

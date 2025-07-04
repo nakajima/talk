@@ -10,6 +10,7 @@ use crate::{
 pub enum Ty {
     Void,
     Int,
+    Byte,
     Bool,
     Float,
     Init(SymbolID, Vec<Ty> /* params */),
@@ -41,6 +42,7 @@ impl Display for Ty {
             Ty::Bool => write!(f, "Bool"),
             Ty::Float => write!(f, "Float"),
             Ty::SelfType => write!(f, "Self"),
+            Ty::Byte => write!(f, "Byte"),
             Ty::Init(_, params) => write!(
                 f,
                 "init({})",

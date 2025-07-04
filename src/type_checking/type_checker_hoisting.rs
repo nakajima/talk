@@ -9,6 +9,7 @@ use crate::{
     parser::ExprID,
     ty::Ty,
     type_checker::{Scheme, TypeChecker, TypeError},
+    type_constraint::TypeConstraint,
     type_defs::{
         TypeDef,
         enum_def::{EnumDef, EnumVariant, RawEnumVariant},
@@ -391,7 +392,8 @@ impl<'a> TypeChecker<'a> {
                 env.instantiate(&scheme)
             };
 
-            env.selfs.push(ty);
+            log::error!("PUSHING SELF: {ty:?}");
+            env.selfs.push(ty.clone());
 
             if !matches!(def, TypeDef::Enum(_)) {
                 let mut properties = vec![];
@@ -509,18 +511,24 @@ impl<'a> TypeChecker<'a> {
                     continue;
                 };
 
-                let conformance = Conformance::new(symbol_id, associated_types);
+                let conformance = Conformance::new(symbol_id, associated_types.clone());
                 conformances.push(conformance.clone());
-                conformance_constraints.push(Constraint::ConformsTo {
+                conformance_constraints.push(Constraint::Satisfies {
                     expr_id: *id,
-                    type_def: def.symbol_id(),
-                    conformance,
+                    ty: ty.clone(),
+                    constraints: vec![TypeConstraint::Conforms {
+                        protocol_id: conformance.protocol_id,
+                        associated_types,
+                    }],
                 });
             }
 
             def.add_conformances(conformances);
             env.register(&def).map_err(|e| (0, e))?;
-            env.constraints.extend(conformance_constraints);
+            for constraint in conformance_constraints {
+                env.constrain(constraint);
+            }
+
             env.selfs.pop();
         }
 

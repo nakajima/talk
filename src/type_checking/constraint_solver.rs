@@ -72,6 +72,16 @@ impl Constraint {
         }
     }
 
+    pub fn needs_solving(&self) -> bool {
+        match self {
+            Constraint::Equality(_, ty, ty1) => ty != ty1,
+            Constraint::InstanceOf { scheme, ty, .. } => {
+                !scheme.unbound_vars.is_empty() || &scheme.ty != ty
+            }
+            _ => true,
+        }
+    }
+
     pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
@@ -190,6 +200,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             match self.solve_constraint(&constraint, &mut substitutions, false) {
                 Ok(_) => (),
                 Err(err) => {
+                    log::error!("{} [{:?}]", err.message(), constraint);
                     self.add_diagnostic(Diagnostic::typing(
                         self.source_file.path.clone(),
                         *constraint.expr_id(),
@@ -421,10 +432,19 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         let Some(member_ty) =
                             type_def.member_ty_with_conformances(member_name, self.env)
                         else {
-                            return Err(TypeError::MemberNotFound(
-                                type_def.name().to_string(),
-                                member_name.to_string(),
-                            ));
+                            if !is_retry && !matches!(constraint, Constraint::Retry(_)) {
+                                log::warn!("Pushing retry {constraint:?}");
+
+                                self.constraints
+                                    .push(Constraint::Retry(constraint.clone().into()));
+                                return Ok(());
+                            } else {
+                                log::error!("Retry failed for {constraint:?}");
+                                return Err(TypeError::MemberNotFound(
+                                    type_def.name().to_string(),
+                                    member_name.to_string(),
+                                ));
+                            }
                         };
 
                         (
@@ -672,6 +692,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
             Ty::SelfType => ty.clone(),
+            Ty::Byte => ty.clone(),
             Ty::Func(params, returning, generics) => {
                 let applied_params = Self::apply_multiple(params, substitutions, depth + 1);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
@@ -787,6 +808,18 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             (a, b) if a == b => Ok(()),
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
+                if matches!(v1.kind, TypeVarKind::CanonicalTypeParameter(_)) {
+                    log::error!(
+                        "Attemping to unify canonical type param: {v1:?}. Consider instantiating?"
+                    );
+                }
+
+                if matches!(v2.kind, TypeVarKind::CanonicalTypeParameter(_)) {
+                    log::error!(
+                        "Attemping to unify canonical type param: {v2:?}. Consider instantiating?"
+                    );
+                }
+
                 let combined_constraints =
                     [v1.constraints.clone(), v2.constraints.clone()].concat();
 
@@ -809,6 +842,12 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
+                if matches!(v.kind, TypeVarKind::CanonicalTypeParameter(_)) {
+                    log::error!(
+                        "Attemping to unify canonical type param: {v:?}. Consider instantiating?"
+                    );
+                }
+
                 if Self::occurs_check(&v, &ty, substitutions) {
                     Err(TypeError::OccursConflict)
                 } else {
@@ -914,17 +953,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 Ok(())
             }
-            _ => {
-                log::error!(
-                    "Mismatch: {:?} ({lhs:?}) and {:?} ({rhs:?})",
-                    Self::apply(lhs, substitutions, 0),
-                    Self::apply(rhs, substitutions, 0)
-                );
-                Err(TypeError::Mismatch(
-                    Self::apply(lhs, substitutions, 0).to_string(),
-                    Self::apply(rhs, substitutions, 0).to_string(),
-                ))
-            }
+            _ => Err(TypeError::Mismatch(
+                Self::apply(lhs, substitutions, 0).to_string(),
+                Self::apply(rhs, substitutions, 0).to_string(),
+            )),
         };
 
         log::debug!(
@@ -1047,7 +1079,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .map(|t| Self::substitute_ty_with_map(t, substitutions))
                     .collect(),
             ),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType => ty.clone(),
+            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
+                ty.clone()
+            }
         }
     }
 }

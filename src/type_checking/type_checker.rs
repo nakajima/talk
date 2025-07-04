@@ -62,7 +62,7 @@ impl TypeError {
             Self::Nonconformance(protocol, structname) => {
                 format!("{structname} does not conform to the {protocol} protocol")
             }
-            Self::MemberNotFound(name, receiver) => {
+            Self::MemberNotFound(receiver, name) => {
                 format!("Cannot find member named {name} for {receiver}")
             }
             Self::ConformanceError(err) => {
@@ -669,6 +669,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[track_caller]
     fn infer_call(
         &mut self,
         id: &ExprID,
@@ -749,7 +750,7 @@ impl<'a> TypeChecker<'a> {
                     unbound_vars: struct_def.canonical_type_vars(),
                 });
 
-                env.constraints.push(Constraint::InitializerCall {
+                env.constrain(Constraint::InitializerCall {
                     expr_id: *callee,
                     initializes_id: *symbol_id,
                     args: arg_tys.clone(),
@@ -761,6 +762,14 @@ impl<'a> TypeChecker<'a> {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
+                if cfg!(debug_assertions) {
+                    let loc = std::panic::Location::caller();
+                    log::info!(
+                        "CALLEE TY: {callee_ty:?} EXPECTED CALLEE_TY: {expected_callee_ty}: {}:{}",
+                        loc.file(),
+                        loc.line()
+                    );
+                }
                 env.constrain_equality(*callee, callee_ty.clone(), expected_callee_ty);
             }
         };
@@ -793,7 +802,7 @@ impl<'a> TypeChecker<'a> {
         name: &Name,
         generics: &[ExprID],
         conformances: &[ExprID],
-        is_type_parameter: &bool,
+        introduces_type: &bool,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let symbol_id = match name {
@@ -811,7 +820,7 @@ impl<'a> TypeChecker<'a> {
             _ => name.symbol_id()?,
         };
 
-        if *is_type_parameter {
+        if *introduces_type {
             let mut unbound_vars = vec![];
             let mut type_constraints = vec![];
 
@@ -847,6 +856,7 @@ impl<'a> TypeChecker<'a> {
 
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
+            log::warn!("Generics is empty");
             let ty = if name == &Name::SelfType {
                 Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
                 // env.placeholder(id, name.name_str(), &symbol_id, vec![])
@@ -865,6 +875,8 @@ impl<'a> TypeChecker<'a> {
         }
 
         let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
+
+        println!("\n\ninfer_type_repr instantiated: {instantiated:?}\n\n");
 
         Ok(instantiated)
     }
@@ -1090,11 +1102,17 @@ impl<'a> TypeChecker<'a> {
                     unreachable!()
                 };
 
-                let ret = expected.clone().unwrap_or_else(|| {
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::CallReturn, vec![]))
-                });
+                let constraints = if let Some(expected) = expected {
+                    vec![TypeConstraint::Equals {
+                        ty: expected.clone(),
+                    }]
+                } else {
+                    vec![]
+                };
 
-                env.constraints.push(Constraint::Satisfies {
+                let ret = Ty::TypeVar(env.new_type_variable(TypeVarKind::CallReturn, constraints));
+
+                env.constrain(Constraint::Satisfies {
                     expr_id: *id,
                     ty: lhs,
                     constraints: vec![TypeConstraint::Conforms {
@@ -1163,13 +1181,11 @@ impl<'a> TypeChecker<'a> {
                     );
                 }
             } else {
-                block_return_ty = Some(self.infer_node(item_id, env, &None, source_file)?);
+                //block_return_ty = Some(self.infer_node(item_id, env, &None, source_file)?);
             }
         }
 
         env.end_scope();
-
-        log::warn!("infer_block: {block_return_ty:?}");
 
         Ok(block_return_ty.unwrap_or(Ty::Void))
     }
