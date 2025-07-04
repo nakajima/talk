@@ -208,9 +208,7 @@ pub enum Instr {
     },
 
     #[doc = "print $val;"]
-    Print {
-        val: IRValue
-    },
+    Print { val: IRValue },
 
     #[doc = "unreachable;"]
     Unreachable,

@@ -2129,7 +2129,7 @@ impl<'a> Lowerer<'a> {
         let mut predecessors = vec![];
 
         let Some(then_reg) = then_reg else {
-            log::error!("Did not get then_reg");
+            log::error!("Did not get then_reg: {typed_expr:?}");
             return None;
         };
 

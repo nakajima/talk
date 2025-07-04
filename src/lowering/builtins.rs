@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use crate::{
     SymbolID,
     expr::Expr,
@@ -23,6 +25,7 @@ pub fn lower_builtin(
         SymbolID(-8) => lower_store(lowerer, typed_callee, args),
         SymbolID(-9) => lower_load(lowerer, typed_callee, args),
         SymbolID(-11) => lower_print(lowerer, typed_callee, args),
+        SymbolID(-12) => lower_ir_instr(lowerer, typed_callee, args),
         _ => Err(IRError::BuiltinNotFound(*symbol_id)),
     }
 }
@@ -242,4 +245,37 @@ fn lower_load(
     });
 
     Ok(Some(dest))
+}
+
+fn lower_ir_instr(
+    lowerer: &mut Lowerer,
+    typed_callee: &TypedExpr,
+    args: &[ExprID],
+) -> Result<Option<Register>, IRError> {
+    let Ty::Func(_, _, _) = &typed_callee.ty else {
+        return Err(IRError::Unknown("Did not get __ir_instr func".to_string()));
+    };
+
+    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
+        unreachable!("didn't get call arg for load")
+    };
+
+    let Some(Expr::LiteralString(instruction_string)) = lowerer.source_file.get(&value).cloned()
+    else {
+        unreachable!(
+            "didn't get call instruction string: {:?} {typed_callee:?}",
+            lowerer.source_file.get(&args[0])
+        );
+    };
+
+    let ret_reg = lowerer.allocate_register();
+    let substituted_string = instruction_string.replace("$?", &format!("{ret_reg}"));
+
+    let Ok(instr) = Instr::from_str(&substituted_string) else {
+        return Err(IRError::ParseError);
+    };
+
+    lowerer.push_instr(instr);
+
+    Ok(Some(ret_reg))
 }

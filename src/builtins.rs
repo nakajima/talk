@@ -251,6 +251,36 @@ fn builtins() -> Vec<Builtin> {
             }],
             type_def: None,
         },
+        Builtin {
+            id: -12,
+            info: SymbolInfo {
+                name: "__ir_instr".into(),
+                kind: SymbolKind::BuiltinFunc,
+                expr_id: -12,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Func(
+                vec![Ty::string()],
+                Ty::TypeVar(TypeVarID {
+                    id: -12,
+                    kind: TypeVarKind::CallReturn,
+                    constraints: vec![],
+                })
+                .into(),
+                vec![Ty::TypeVar(TypeVarID {
+                    id: -12,
+                    kind: TypeVarKind::CallReturn,
+                    constraints: vec![],
+                })],
+            ),
+            unbound_vars: vec![TypeVarID {
+                id: -12,
+                kind: TypeVarKind::CallReturn,
+                constraints: vec![],
+            }],
+            type_def: None,
+        },
     ]
 }
 
@@ -812,6 +842,39 @@ mod stdlib_tests {
                 env_ty: None,
                 env_reg: None,
                 size: 5
+            },
+        );
+    }
+
+    #[test]
+    fn lowers_ir_instr() {
+        let mut driver = Driver::with_str(
+            "
+        let x = 1
+        let y = 2
+        __ir_instr<Int>(\"$? = add int %0, %1;\")
+        ",
+        );
+        let lowered = driver.lower().into_iter().next().unwrap().module();
+        assert_lowered_function!(
+            lowered,
+            "@main",
+            IRFunction {
+                debug_info: Default::default(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 1),
+                        Instr::ConstantInt(Register(1), 2),
+                        Instr::Add(Register(2), IRType::Int, Register(0), Register(1)),
+                        Instr::Ret(IRType::Int, Some(Register(2).into()))
+                    ],
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 3
             },
         );
     }
