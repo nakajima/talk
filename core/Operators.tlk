@@ -7,3 +7,9 @@ extend Int: Adds<Int, Int> {
 		self + op	
 	}
 }
+
+extend Float: Adds<Float, Float> {
+  func adds(op: Float) -> Float {
+    self + op
+  }
+}

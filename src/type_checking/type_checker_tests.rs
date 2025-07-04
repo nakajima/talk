@@ -1759,7 +1759,7 @@ mod operator_tests {
 
         extend Person: Adds<String, Int> {
             func adds(other: String) -> Int {
-                self.age + other
+                123
             }
         }
 

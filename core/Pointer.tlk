@@ -1,1 +1,7 @@
-struct Pointer {}
+struct Pointer {
+  let addr: Int
+
+  init(addr: Int) {
+    self.addr = addr
+  }
+}

@@ -29,7 +29,10 @@ pub fn _compile_prelude() -> Prelude {
         include_comments: false,
     });
     for file in [
-        PathBuf::from("./core/Optional.tlk"),
+        PathBuf::from("./core/Int.tlk"),
+        PathBuf::from("./core/Float.tlk"),
+        PathBuf::from("./core/Bool.tlk"),
+        PathBuf::from("./core/Pointer.tlk"),
         PathBuf::from("./core/Operators.tlk"),
         PathBuf::from("./core/Array.tlk"),
         PathBuf::from("./core/String.tlk"),
@@ -65,4 +68,14 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Optional", "Array", "String", "Operators", "Printable");
+stdlib_modules!(
+    "Optional",
+    "Array",
+    "String",
+    "Operators",
+    "Printable",
+    "Int",
+    "Float",
+    "Bool",
+    "Pointer"
+);

@@ -1,1 +1,3 @@
-struct Float {}
+struct Float {
+  init() {}
+}

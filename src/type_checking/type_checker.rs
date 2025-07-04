@@ -54,7 +54,7 @@ impl TypeError {
                 format!("Unexpected type: {expected}, expected: {actual}")
             }
             Self::Mismatch(expected, actual) => {
-                format!("Unexpected type: {expected}, expected: {actual}")
+                format!("Type mismatch: {expected}, expected: {actual}")
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),
@@ -1065,7 +1065,7 @@ impl<'a> TypeChecker<'a> {
         lhs_id: &ExprID,
         rhs_id: &ExprID,
         op: &TokenKind,
-        _expected: &Option<Ty>,
+        expected: &Option<Ty>,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
@@ -1083,21 +1083,20 @@ impl<'a> TypeChecker<'a> {
                             "No Adds protocol (maybe prelude not included)".to_string(),
                         ))?;
 
-                let ret = env.new_type_variable(
-                    TypeVarKind::CallReturn,
-                    vec![TypeConstraint::Equals { ty: lhs.clone() }],
-                );
+                let ret = expected.clone().unwrap_or_else(|| {
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::CallReturn, vec![]))
+                });
 
                 env.constraints.push(Constraint::Satisfies {
                     expr_id: *id,
                     ty: lhs,
                     constraints: vec![TypeConstraint::Conforms {
                         protocol_id: protocol.symbol_id(),
-                        associated_types: vec![rhs, Ty::TypeVar(ret.clone())],
+                        associated_types: vec![rhs, ret.clone()],
                     }],
                 });
 
-                Ok(Ty::TypeVar(ret))
+                Ok(ret)
             }
             // Bool ops
             EqualsEquals => Ok(Ty::BOOL),

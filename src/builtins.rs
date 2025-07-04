@@ -253,9 +253,9 @@ pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
 
 pub fn default_name_scope() -> HashMap<String, SymbolID> {
     let mut scope = HashMap::new();
-    for builtin in builtins() {
-        scope.insert(builtin.info.name, SymbolID(builtin.id));
-    }
+    // for builtin in builtins() {
+    //     scope.insert(builtin.info.name, SymbolID(builtin.id));
+    // }
     scope
 }
 
@@ -279,6 +279,16 @@ pub fn match_builtin(name: &Name) -> Option<Ty> {
                 }
             }
             _ => return None,
+        }
+    }
+
+    None
+}
+
+pub fn resolve_builtin(name: &str) -> Option<SymbolID> {
+    for builtin in builtins() {
+        if builtin.info.name.as_str() == name {
+            return Some(SymbolID(builtin.id));
         }
     }
 

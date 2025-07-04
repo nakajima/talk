@@ -8,7 +8,6 @@ use crate::{
     environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
-    operator_solver::OperatorSolver,
     parser::ExprID,
     satisfies_checker::SatisfiesChecker,
     token_kind::TokenKind,
@@ -54,12 +53,6 @@ pub enum Constraint {
         ty: Ty,
         constraints: Vec<TypeConstraint>,
     },
-    Operator {
-        expr_id: ExprID,
-        lhs: Option<Ty>,
-        rhs: Ty,
-        op: TokenKind,
-    },
     Retry(Box<Constraint>),
 }
 
@@ -76,7 +69,6 @@ impl Constraint {
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
             Self::Satisfies { expr_id, .. } => expr_id,
-            Self::Operator { expr_id, .. } => expr_id,
             Self::Retry(c) => c.expr_id(),
         }
     }
@@ -88,19 +80,6 @@ impl Constraint {
                 ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
                 ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
             ),
-            Constraint::Operator {
-                expr_id,
-                lhs,
-                rhs,
-                op,
-            } => Constraint::Operator {
-                expr_id: *expr_id,
-                rhs: ConstraintSolver::<NameResolved>::apply(rhs, substitutions, 0),
-                lhs: lhs
-                    .as_ref()
-                    .map(|lhs| ConstraintSolver::<NameResolved>::apply(lhs, substitutions, 0)),
-                op: op.clone(),
-            },
             Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
                 *id,
                 ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
@@ -388,6 +367,22 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 ..
             } => {
                 let ty = Self::apply(ty, substitutions, 0);
+
+                // Check if the type is still a TypeVar and needs retry
+                if matches!(ty, Ty::TypeVar(_)) {
+                    if !is_retry && !matches!(constraint, Constraint::Retry(_)) {
+                        log::warn!("Pushing retry for Satisfies with unresolved type: {ty:?}");
+                        self.constraints
+                            .insert(0, Constraint::Retry(constraint.clone().into()));
+                        return Ok(());
+                    } else {
+                        log::error!("Retry failed for Satisfies: {constraint:?}");
+                        return Err(TypeError::Unknown(format!(
+                            "Retry failed for Satisfies: {constraint:?}",
+                        )));
+                    }
+                }
+
                 let checker = SatisfiesChecker::new(self.env, &ty, constraints);
                 match checker.check() {
                     Ok(unifications) => {
@@ -402,14 +397,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             err,
                         ));
                     }
-                }
-            }
-            Constraint::Operator { lhs, rhs, op, .. } => {
-                let solver = OperatorSolver::new(lhs, rhs, op, self.env);
-                if lhs.is_none() {
-                    solver.solve_unary()?;
-                } else {
-                    solver.solve_binary()?;
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
@@ -558,7 +545,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             log::warn!("Pushing retry {constraint:?}");
 
                             self.constraints
-                                .push(Constraint::Retry(constraint.clone().into()));
+                                .insert(0, Constraint::Retry(constraint.clone().into()));
                             return Ok(());
                         } else {
                             log::error!("Retry failed for {constraint:?}");

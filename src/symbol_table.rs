@@ -1,6 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
+use crate::{
+    Phase, SourceFile, parser::ExprID, prelude::compile_prelude, resolve_builtin, span::Span,
+};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
@@ -181,8 +183,12 @@ impl SymbolTable {
             );
         }
 
-        self.next_id += 1;
-        let symbol_id = SymbolID(self.next_id);
+        let symbol_id = if let Some(id) = resolve_builtin(name) {
+            id
+        } else {
+            self.next_id += 1;
+            SymbolID(self.next_id)
+        };
 
         self.symbols.insert(
             symbol_id,

@@ -57,6 +57,14 @@ impl<'a> SatisfiesChecker<'a> {
                         continue;
                     };
 
+                    // Handle builtins
+                    // if (type_def.symbol_id() == SymbolID::INT
+                    //     || type_def.symbol_id() == SymbolID::FLOAT)
+                    //     && protocol_def.name_str == "Adds"
+                    // {
+                    //     return Ok(vec![]);
+                    // }
+
                     // if type_args.len() != associated_types.len() {
                     //     errors.push(ConformanceError::TypeDoesNotConform(
                     //         type_def.name().to_string(),
@@ -71,13 +79,20 @@ impl<'a> SatisfiesChecker<'a> {
                     {
                         let mut map = HashMap::new();
 
+                        log::info!("Checking constraint: {constraint:?}");
+                        log::info!("Conformances: {conformance:?}");
+                        log::info!("Type def: {type_def:?}");
+                        log::info!("Protocol: {protocol_def:?}");
+
                         for (provided, required) in
                             conformance.associated_types.iter().zip(type_args)
                         {
                             map.insert(provided.clone(), required.clone());
                         }
 
-                        for (param, arg) in associated_types.iter().zip(type_args) {
+                        for (param, arg) in
+                            conformance.associated_types.iter().zip(associated_types)
+                        {
                             let arg = map.get(arg).unwrap_or(arg);
                             unifications.push((param.clone(), arg.clone()));
                         }

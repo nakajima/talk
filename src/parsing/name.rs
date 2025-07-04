@@ -1,4 +1,4 @@
-use crate::{SymbolID, ty::Ty, type_checker::TypeError};
+use crate::{SymbolID, resolve_builtin, ty::Ty, type_checker::TypeError};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Name {
@@ -36,9 +36,15 @@ impl Name {
     pub fn symbol_id(&self) -> Result<SymbolID, TypeError> {
         match self {
             #[allow(clippy::panic)]
-            Name::Raw(name_str) => Err(TypeError::Unknown(format!(
-                "Cannot get symbol ID from unresolved {name_str:?}"
-            ))),
+            Name::Raw(name_str) => {
+                if let Some(builtin) = resolve_builtin(name_str) {
+                    return Ok(builtin);
+                }
+
+                Err(TypeError::Unknown(format!(
+                    "Cannot get symbol ID from unresolved {name_str:?}"
+                )))
+            }
             Name::Resolved(symbol_id, _) => Ok(*symbol_id),
             Name::_Self(symbol_id) => Ok(*symbol_id),
             Name::SelfType => Err(TypeError::Unknown(
