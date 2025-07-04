@@ -12,27 +12,19 @@ impl std::fmt::Debug for SymbolID {
 }
 
 impl SymbolID {
-    // Array = @25
-    // Optional = @21
-    // String = @41
-    // Add = @1
-    // Subtract = @6
-    // Multiply = @11
-    // Divide = @16
-
-    // These are special because they have syntactic sugar that gets handled
-    // by the compiler. If we change the prelude, we may need to change some of them.
-    // We can see them by running:
-    //
-    // $ SHOW_BUILTIN_SYMBOLS=1 cargo test -- --nocapture
     pub const INT: SymbolID = SymbolID(-1);
     pub const FLOAT: SymbolID = SymbolID(-2);
     pub const BOOL: SymbolID = SymbolID(-3);
     pub const POINTER: SymbolID = SymbolID(-4);
     pub const TUPLE: SymbolID = SymbolID(-10);
 
-    pub const OPTIONAL: SymbolID = SymbolID(21);
+    // These are special because they have syntactic sugar that gets handled
+    // by the compiler. If we change the prelude, we may need to change some of them.
+    // We can see them by running:
+    //
+    // $ SHOW_BUILTIN_SYMBOLS=1 cargo test -- --nocapture
     pub const ARRAY: SymbolID = SymbolID(25);
+    pub const OPTIONAL: SymbolID = SymbolID(21);
     pub const STRING: SymbolID = SymbolID(41);
     pub const ADD: SymbolID = SymbolID(1);
     pub const SUBTRACT: SymbolID = SymbolID(6);

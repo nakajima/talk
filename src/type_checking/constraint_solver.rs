@@ -796,6 +796,18 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     );
                 };
 
+                if let TypeVarKind::CanonicalTypeParameter(id) = &v1.kind {
+                    log::error!(
+                        "Attempting to unify canonical type parameter: {id:?}. Consider instantiating."
+                    );
+                }
+
+                if let TypeVarKind::CanonicalTypeParameter(id) = &v2.kind {
+                    log::error!(
+                        "Attempting to unify canonical type parameter: {id:?}. Consider instantiating."
+                    );
+                }
+
                 // When unifying two type variables, pick one consistently
                 if v1.id < v2.id {
                     let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
@@ -809,6 +821,12 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
+                if let TypeVarKind::CanonicalTypeParameter(id) = &v.kind {
+                    log::error!(
+                        "Attempting to unify canonical type parameter: {id:?} <> {v:?}. Consider instantiating."
+                    );
+                }
+
                 if Self::occurs_check(&v, &ty, substitutions) {
                     Err(TypeError::OccursConflict)
                 } else {

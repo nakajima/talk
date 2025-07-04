@@ -1,5 +1,5 @@
 use lazy_static::lazy_static;
-use std::path::PathBuf;
+use std::{path::PathBuf, process::exit};
 
 use crate::{
     SymbolTable,
@@ -47,13 +47,36 @@ pub fn _compile_prelude() -> Prelude {
 
     #[allow(clippy::unwrap_used)]
     if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
-        println!("Array = {:?}", symbols.lookup("Array").unwrap());
-        println!("Optional = {:?}", symbols.lookup("Optional").unwrap());
-        println!("String = {:?}", symbols.lookup("String").unwrap());
-        println!("Add = {:?}", symbols.lookup("Add").unwrap());
-        println!("Subtract = {:?}", symbols.lookup("Subtract").unwrap());
-        println!("Multiply = {:?}", symbols.lookup("Multiply").unwrap());
-        println!("Divide = {:?}", symbols.lookup("Divide").unwrap());
+        println!(
+            "pub const ARRAY: SymbolID = SymbolID({});",
+            symbols.lookup("Array").unwrap().0
+        );
+        println!(
+            "pub const OPTIONAL: SymbolID = SymbolID({});",
+            symbols.lookup("Optional").unwrap().0
+        );
+        println!(
+            "pub const STRING: SymbolID = SymbolID({});",
+            symbols.lookup("String").unwrap().0
+        );
+        println!(
+            "pub const ADD: SymbolID = SymbolID({});",
+            symbols.lookup("Add").unwrap().0
+        );
+        println!(
+            "pub const SUBTRACT: SymbolID = SymbolID({});",
+            symbols.lookup("Subtract").unwrap().0
+        );
+        println!(
+            "pub const MULTIPLY: SymbolID = SymbolID({});",
+            symbols.lookup("Multiply").unwrap().0
+        );
+        println!(
+            "pub const DIVIDE: SymbolID = SymbolID({});",
+            symbols.lookup("Divide").unwrap().0
+        );
+
+        exit(0)
     }
 
     Prelude {
