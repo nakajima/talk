@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SourceFile, SymbolID,
+    NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
     constraint_solver::{Constraint, Substitutions},
     environment::{Environment, RawTypeParameter, TypeParameter},
     expr::Expr,
@@ -30,13 +30,15 @@ pub(super) struct TypePlaceholders {
     conformances: Vec<ExprID>,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(super) enum PredeclarationKind {
     Struct,
     Protocol,
     Enum,
+    Builtin(SymbolID),
 }
 
+#[derive(Debug)]
 pub(super) struct PredeclarationExprIDs {
     name: Name,
     generics: Vec<ExprID>,
@@ -101,12 +103,16 @@ impl<'a> TypeChecker<'a> {
 
         for id in root_ids {
             let Some(expr) = source_file.get(id).cloned() else {
+                log::warn!("No expr found for id: {id:?}");
                 continue;
             };
 
             let Some(expr_ids) = self.predeclarable_type(&expr) else {
+                log::warn!("Not predeclarable type: {expr:?}");
                 continue;
             };
+
+            log::debug!("Predeclaring {expr_ids:?}");
 
             let Name::Resolved(symbol_id, name_str) = expr_ids.name else {
                 return Err((*id, TypeError::Unresolved(expr_ids.name.name_str())));
@@ -163,10 +169,17 @@ impl<'a> TypeChecker<'a> {
                 PredeclarationKind::Struct => Ty::Struct(symbol_id, canonical_types.clone()),
                 PredeclarationKind::Enum => Ty::Enum(symbol_id, canonical_types.clone()),
                 PredeclarationKind::Protocol => Ty::Protocol(symbol_id, canonical_types.clone()),
+                PredeclarationKind::Builtin(symbol_id) =>
+                {
+                    #[allow(clippy::expect_used)]
+                    builtin_type(&symbol_id).expect("builtin type should always exist")
+                }
             };
 
-            let scheme = Scheme::new(ty, unbound_vars);
-            env.declare(symbol_id, scheme).map_err(|e| (*id, e))?;
+            if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_)) {
+                let scheme = Scheme::new(ty, unbound_vars);
+                env.declare(symbol_id, scheme).map_err(|e| (*id, e))?;
+            }
 
             let Some(Expr::Block(body_ids)) = source_file.get(&expr_ids.body).cloned() else {
                 unreachable!()
@@ -342,6 +355,7 @@ impl<'a> TypeChecker<'a> {
                             initializers: Default::default(),
                             method_requirements: Default::default(),
                         }),
+                        PredeclarationKind::Builtin(symbol_id) => builtin_type_def(&symbol_id),
                     });
 
             env.register(&type_def).map_err(|e| (*id, e))?;
@@ -366,11 +380,17 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let Ok(scheme) = env.lookup_symbol(&sym).cloned() else {
-                continue;
+            let ty = if let TypeDef::Builtin(ref def) = def {
+                def.ty.clone()
+            } else {
+                let Ok(scheme) = env.lookup_symbol(&sym).cloned() else {
+                    log::warn!("Did not find symbol for inference: {sym:?}");
+                    continue;
+                };
+
+                env.instantiate(&scheme)
             };
 
-            let ty = env.instantiate(&scheme);
             env.selfs.push(ty);
 
             if !matches!(def, TypeDef::Enum(_)) {
@@ -664,13 +684,25 @@ impl<'a> TypeChecker<'a> {
             body,
         } = expr.clone()
         {
-            return Some(PredeclarationExprIDs {
-                name,
-                generics,
-                conformances,
-                body,
-                kind: PredeclarationKind::Struct,
-            });
+            if let Name::Resolved(sym, _) = name
+                && builtin_type(&sym).is_some()
+            {
+                return Some(PredeclarationExprIDs {
+                    name,
+                    generics,
+                    conformances,
+                    body,
+                    kind: PredeclarationKind::Builtin(sym),
+                });
+            } else {
+                return Some(PredeclarationExprIDs {
+                    name,
+                    generics,
+                    conformances,
+                    body,
+                    kind: PredeclarationKind::Struct,
+                });
+            }
         }
 
         if let Expr::ProtocolDecl {

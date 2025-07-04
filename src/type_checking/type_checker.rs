@@ -803,7 +803,8 @@ impl<'a> TypeChecker<'a> {
                 ) => *symbol_id,
                 _ => {
                     return Err(TypeError::Unresolved(format!(
-                        "Unable to get Self for {id}"
+                        "Unable to get Self for {:?}",
+                        source_file.get(id)
                     )));
                 }
             },
@@ -847,7 +848,8 @@ impl<'a> TypeChecker<'a> {
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
-                env.placeholder(id, name.name_str(), &symbol_id, vec![])
+                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
+                // env.placeholder(id, name.name_str(), &symbol_id, vec![])
             } else {
                 env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
             };
@@ -1011,7 +1013,14 @@ impl<'a> TypeChecker<'a> {
         match name {
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
-                    Ok(self_.clone())
+                    if let Ty::Protocol(symbol_id, _) = self_ {
+                        Ok(Ty::TypeVar(env.new_type_variable(
+                            TypeVarKind::SelfVar(*symbol_id),
+                            vec![],
+                        )))
+                    } else {
+                        Ok(self_.clone())
+                    }
                 } else {
                     Err(TypeError::Unknown("No value found for `self`".into()))
                 }
@@ -1022,11 +1031,13 @@ impl<'a> TypeChecker<'a> {
                 Ok(ty)
             }
             Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
-            Name::SelfType => env
-                .selfs
-                .last()
-                .cloned()
-                .ok_or(TypeError::Unknown("No type found for Self".to_string())),
+            Name::SelfType => {
+                log::error!("Self variable inferred: {:?}", env.selfs.last());
+                env.selfs
+                    .last()
+                    .cloned()
+                    .ok_or(TypeError::Unknown("No type found for Self".to_string()))
+            }
         }
     }
 

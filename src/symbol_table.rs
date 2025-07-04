@@ -15,6 +15,9 @@ impl SymbolID {
     // These are special because they have syntactic sugar that gets handled
     // by the compiler.
     pub const INT: SymbolID = SymbolID(-1);
+    pub const FLOAT: SymbolID = SymbolID(-2);
+    pub const BOOL: SymbolID = SymbolID(-3);
+    pub const POINTER: SymbolID = SymbolID(-4);
     pub const OPTIONAL: SymbolID = SymbolID(1);
     pub const ARRAY: SymbolID = SymbolID(5);
     pub const TUPLE: SymbolID = SymbolID(-10);

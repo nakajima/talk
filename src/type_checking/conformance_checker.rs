@@ -1,18 +1,18 @@
 use crate::{
-    SymbolID,
+    NameResolved, SymbolID,
+    constraint_solver::{ConstraintSolver, Substitutions},
+    environment::{Environment, free_type_vars},
     ty::Ty,
     type_checker::TypeError,
-    type_defs::{
-        TypeDef,
-        protocol_def::ProtocolDef,
-        struct_def::{Method, Property},
-    },
+    type_defs::{TypeDef, protocol_def::ProtocolDef, struct_def::Property},
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 pub struct ConformanceChecker<'a> {
     type_def: &'a TypeDef,
     protocol: &'a ProtocolDef,
     errors: Vec<ConformanceError>,
+    env: &'a Environment,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -27,11 +27,12 @@ pub enum ConformanceError {
 }
 
 impl<'a> ConformanceChecker<'a> {
-    pub fn new(type_def: &'a TypeDef, protocol: &'a ProtocolDef) -> Self {
+    pub fn new(type_def: &'a TypeDef, protocol: &'a ProtocolDef, env: &'a Environment) -> Self {
         Self {
             type_def,
             protocol,
             errors: Default::default(),
+            env,
         }
     }
 
@@ -44,7 +45,7 @@ impl<'a> ConformanceChecker<'a> {
 
         let mut unifications = vec![];
 
-        for method in self.protocol.method_requirements.iter() {
+        for method in self.protocol.methods.iter() {
             let ty_method = match self.find_method(&method.name) {
                 Ok(m) => m.clone(),
                 Err(e) => {
@@ -53,7 +54,14 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            unifications.push((method.ty.clone(), ty_method.ty.clone()));
+            // Find self references in the protocol's type and replace them with our concrete type
+            for type_var in free_type_vars(&ty_method) {
+                if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
+                    unifications.push((Ty::TypeVar(type_var), self.type_def.ty()));
+                }
+            }
+
+            unifications.push((method.ty.clone(), ty_method));
         }
 
         for method in self.protocol.method_requirements.iter() {
@@ -65,7 +73,7 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            unifications.push((method.ty.clone(), ty_method.ty.clone()));
+            unifications.push((method.ty.clone(), ty_method));
         }
 
         for property in self.protocol.properties.iter() {
@@ -106,9 +114,13 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
-    fn find_method(&self, method_name: &str) -> Result<&Method, ConformanceError> {
-        if let Some(method) = self.type_def.find_method(method_name) {
-            Ok(method)
+    fn find_method(&self, method_name: &str) -> Result<Ty, ConformanceError> {
+        if let Some(ty) = self
+            .type_def
+            .member_ty_with_conformances(method_name, self.env)
+            && matches!(ty, Ty::Func(_, _, _))
+        {
+            Ok(ty)
         } else {
             Err(ConformanceError::MemberNotImplemented {
                 ty: self.type_def.symbol_id(),

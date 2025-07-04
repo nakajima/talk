@@ -185,40 +185,41 @@ impl NameResolver {
                     generics,
                     body,
                     conformances,
-                } => {
-                    match name {
-                        Name::Raw(name_str) => {
-                            let Some(symbol_id) = self.lookup(&name_str) else {
-                                if let Ok(mut session) = self.session.lock() {
-                                    session.add_diagnostic(Diagnostic::resolve(
-                                        source_file.path.clone(),
-                                        *node_id,
-                                        NameResolverError::UnresolvedName(name_str),
-                                    ))
-                                }
-                                return;
-                            };
+                } => match name {
+                    Name::Raw(name_str) => {
+                        let Some(symbol_id) = self.lookup(&name_str) else {
+                            log::error!("Did not find symbol for {name_str}");
+                            if let Ok(mut session) = self.session.lock() {
+                                session.add_diagnostic(Diagnostic::resolve(
+                                    source_file.path.clone(),
+                                    *node_id,
+                                    NameResolverError::UnresolvedName(name_str),
+                                ))
+                            }
+                            return;
+                        };
 
-                            let symbol_id = symbol_id.0;
-                            self.type_symbol_stack.push(symbol_id);
-                            source_file.nodes.insert(
-                                *node_id,
-                                Extend {
-                                    name: Name::Resolved(symbol_id, name_str),
-                                    generics: generics.clone(),
-                                    conformances: conformances.clone(),
-                                    body,
-                                },
-                            );
-                        }
-                        _ => continue,
+                        log::error!("Resolving extension {name_str} {symbol_id:?}");
+
+                        let symbol_id = symbol_id.0;
+                        self.type_symbol_stack.push(symbol_id);
+                        source_file.nodes.insert(
+                            *node_id,
+                            Extend {
+                                name: Name::Resolved(symbol_id, name_str),
+                                generics: generics.clone(),
+                                conformances: conformances.clone(),
+                                body,
+                            },
+                        );
+
+                        self.resolve_nodes(&generics, source_file, symbol_table);
+                        self.resolve_nodes(&conformances, source_file, symbol_table);
+                        self.resolve_nodes(&[body], source_file, symbol_table);
+                        self.type_symbol_stack.pop();
                     }
-
-                    self.resolve_nodes(&generics, source_file, symbol_table);
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-                    self.resolve_nodes(&[body], source_file, symbol_table);
-                    self.type_symbol_stack.pop();
-                }
+                    _ => continue,
+                },
                 Break => (),
                 Init(_, func_id) => {
                     let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {

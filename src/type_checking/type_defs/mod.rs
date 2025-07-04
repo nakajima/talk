@@ -1,14 +1,19 @@
+use std::collections::HashMap;
+
 use crate::{
-    SymbolID,
-    environment::TypeParameter,
+    NameResolved, SymbolID,
+    constraint_solver::ConstraintSolver,
+    environment::{Environment, TypeParameter},
     ty::Ty,
     type_defs::{
+        builtin_def::BuiltinDef,
         enum_def::{EnumDef, EnumVariant},
         protocol_def::{Conformance, ProtocolDef},
         struct_def::{Initializer, Method, Property, StructDef},
     },
 };
 
+pub mod builtin_def;
 pub mod enum_def;
 pub mod protocol_def;
 pub mod struct_def;
@@ -20,14 +25,60 @@ pub enum TypeDef {
     Enum(EnumDef),
     Struct(StructDef),
     Protocol(ProtocolDef),
+    Builtin(BuiltinDef),
 }
 
 impl TypeDef {
+    pub fn ty(&self) -> Ty {
+        match self {
+            TypeDef::Enum(enum_def) => {
+                Ty::Enum(enum_def.symbol_id, enum_def.canonical_type_parameters())
+            }
+            TypeDef::Struct(struct_def) => {
+                Ty::Struct(struct_def.symbol_id, struct_def.canonical_type_parameters())
+            }
+            TypeDef::Protocol(protocol_def) => Ty::Protocol(
+                protocol_def.symbol_id,
+                protocol_def.canonical_associated_types(),
+            ),
+            TypeDef::Builtin(builtin_def) => builtin_def.ty.clone(),
+        }
+    }
+
+    pub fn member_ty_with_conformances(&self, name: &str, env: &Environment) -> Option<Ty> {
+        if let Some(member) = self.member_ty(name).cloned() {
+            return Some(member);
+        }
+
+        for conformance in self.conformances() {
+            if let Some(TypeDef::Protocol(protocol_def)) =
+                env.lookup_type(&conformance.protocol_id).cloned()
+                && let Some(ty) = protocol_def.member_ty(name)
+            {
+                let mut subst = HashMap::new();
+                for (param, arg) in protocol_def
+                    .associated_types
+                    .iter()
+                    .zip(&conformance.associated_types)
+                {
+                    subst.insert(param.type_var.clone(), arg.clone());
+                }
+
+                return Some(ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                    ty, &subst,
+                ));
+            }
+        }
+
+        None
+    }
+
     pub fn member_ty(&self, name: &str) -> Option<&Ty> {
         match self {
             TypeDef::Enum(enum_def) => enum_def.member_ty(name),
             TypeDef::Struct(struct_def) => struct_def.member_ty(name),
             TypeDef::Protocol(protocol_def) => protocol_def.member_ty(name),
+            TypeDef::Builtin(builtin_def) => builtin_def.member_ty(name),
         }
     }
 
@@ -36,6 +87,7 @@ impl TypeDef {
             Self::Enum(def) => def.symbol_id,
             Self::Struct(def) => def.symbol_id,
             Self::Protocol(def) => def.symbol_id,
+            Self::Builtin(def) => def.symbol_id,
         }
     }
 
@@ -44,6 +96,7 @@ impl TypeDef {
             Self::Enum(def) => &def.name_str,
             Self::Struct(def) => &def.name_str,
             Self::Protocol(def) => &def.name_str,
+            Self::Builtin(def) => &def.name_str,
         }
     }
 
@@ -52,14 +105,16 @@ impl TypeDef {
             Self::Enum(def) => &def.conformances,
             Self::Struct(def) => &def.conformances,
             Self::Protocol(def) => &def.conformances,
+            Self::Builtin(def) => &def.conformances,
         }
     }
 
-    pub fn type_parameters(&self) -> &TypeParams {
+    pub fn type_parameters(&self) -> TypeParams {
         match self {
-            Self::Enum(def) => &def.type_parameters,
-            Self::Struct(def) => &def.type_parameters,
-            Self::Protocol(def) => &def.associated_types,
+            Self::Enum(def) => def.type_parameters.clone(),
+            Self::Struct(def) => def.type_parameters.clone(),
+            Self::Protocol(def) => def.associated_types.clone(),
+            Self::Builtin(_) => vec![],
         }
     }
 
@@ -68,6 +123,7 @@ impl TypeDef {
             Self::Enum(def) => def.methods.iter().find(|m| m.name == method_name),
             Self::Struct(def) => def.methods.iter().find(|m| m.name == method_name),
             Self::Protocol(def) => def.methods.iter().find(|m| m.name == method_name),
+            Self::Builtin(def) => def.methods.iter().find(|m| m.name == method_name),
         }
     }
 
@@ -76,6 +132,7 @@ impl TypeDef {
             Self::Enum(_) => None,
             Self::Struct(def) => def.properties.iter().find(|p| p.name == name),
             Self::Protocol(def) => def.properties.iter().find(|p| p.name == name),
+            Self::Builtin(_) => None,
         }
     }
 
@@ -88,6 +145,7 @@ impl TypeDef {
             Self::Enum(def) => def.methods.extend(methods),
             Self::Struct(def) => def.methods.extend(methods),
             Self::Protocol(def) => def.methods.extend(methods),
+            Self::Builtin(def) => def.methods.extend(methods),
         }
     }
 
@@ -96,6 +154,7 @@ impl TypeDef {
             Self::Enum(def) => def.type_parameters.extend(params),
             Self::Struct(def) => def.type_parameters.extend(params),
             Self::Protocol(def) => def.associated_types.extend(params),
+            Self::Builtin(_) => (),
         }
     }
 
@@ -107,6 +166,7 @@ impl TypeDef {
             Self::Enum(_) => (),
             Self::Struct(_) => (),
             Self::Protocol(def) => def.method_requirements.extend(methods),
+            Self::Builtin(_) => (),
         }
     }
 
@@ -119,6 +179,7 @@ impl TypeDef {
             Self::Enum(_) => log::error!("Enums can't have initializers"),
             Self::Struct(def) => def.initializers.extend(initializers),
             Self::Protocol(def) => def.initializers.extend(initializers),
+            Self::Builtin(_) => (),
         }
     }
 
@@ -130,6 +191,7 @@ impl TypeDef {
             Self::Enum(_) => log::error!("Enums can't have properties"),
             Self::Struct(def) => def.properties.extend(properties),
             Self::Protocol(def) => def.properties.extend(properties),
+            Self::Builtin(_) => (),
         }
     }
 
@@ -141,6 +203,7 @@ impl TypeDef {
             Self::Enum(def) => def.variants.extend(variants),
             Self::Struct(_) => (),
             Self::Protocol(_) => (),
+            Self::Builtin(_) => (),
         }
     }
 
@@ -149,6 +212,7 @@ impl TypeDef {
             Self::Enum(def) => def.conformances.extend(conformances),
             Self::Struct(def) => def.conformances.extend(conformances),
             Self::Protocol(def) => def.conformances.extend(conformances),
+            Self::Builtin(def) => def.conformances.extend(conformances),
         }
     }
 }

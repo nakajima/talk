@@ -5,7 +5,7 @@ use crate::{
     name::Name,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::TypeDef,
+    type_defs::{TypeDef, builtin_def::BuiltinDef},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -30,7 +30,13 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Int,
             unbound_vars: vec![],
-            type_def: None,
+            type_def: Some(TypeDef::Builtin(BuiltinDef {
+                symbol_id: SymbolID(-1),
+                name_str: "Int".to_string(),
+                methods: vec![],
+                conformances: vec![],
+                ty: Ty::Int,
+            })),
         },
         Builtin {
             id: -2,
@@ -43,7 +49,13 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Float,
             unbound_vars: vec![],
-            type_def: None,
+            type_def: Some(TypeDef::Builtin(BuiltinDef {
+                symbol_id: SymbolID(-2),
+                name_str: "Float".to_string(),
+                methods: vec![],
+                conformances: vec![],
+                ty: Ty::Float,
+            })),
         },
         Builtin {
             id: -3,
@@ -56,7 +68,13 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Bool,
             unbound_vars: vec![],
-            type_def: None,
+            type_def: Some(TypeDef::Builtin(BuiltinDef {
+                symbol_id: SymbolID(-3),
+                name_str: "Bool".to_string(),
+                methods: vec![],
+                conformances: vec![],
+                ty: Ty::Bool,
+            })),
         },
         Builtin {
             id: -4,
@@ -69,7 +87,13 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Pointer,
             unbound_vars: vec![],
-            type_def: None,
+            type_def: Some(TypeDef::Builtin(BuiltinDef {
+                symbol_id: SymbolID(-4),
+                name_str: "Pointer".to_string(),
+                methods: vec![],
+                conformances: vec![],
+                ty: Ty::Pointer,
+            })),
         },
         Builtin {
             id: -5,
@@ -228,6 +252,27 @@ fn builtins() -> Vec<Builtin> {
             type_def: None,
         },
     ]
+}
+
+pub fn builtin_type(symbol_id: &SymbolID) -> Option<Ty> {
+    for builtin in builtins() {
+        if symbol_id == &SymbolID(builtin.id) {
+            return Some(builtin.ty);
+        }
+    }
+
+    None
+}
+
+pub fn builtin_type_def(symbol_id: &SymbolID) -> TypeDef {
+    for builtin in builtins() {
+        if symbol_id == &SymbolID(builtin.id) {
+            #[allow(clippy::expect_used)]
+            return builtin.type_def.expect("No builtin type def found");
+        }
+    }
+
+    unreachable!()
 }
 
 pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {

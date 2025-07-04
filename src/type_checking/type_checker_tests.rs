@@ -1743,6 +1743,26 @@ mod protocol_tests {
 
         assert_eq!(checked.at(2).unwrap(), Ty::Struct(SymbolID(4), vec![]));
     }
+
+    #[test]
+    fn can_extend_builtins() {
+        let checked = check_without_prelude(
+            "protocol Identifty {
+                func identity() -> Self {
+                    self
+                }
+            }
+            
+            extend Int: Identifty { }
+
+            let x = 123
+            x.identity()
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.at(3).unwrap(), Ty::Int);
+    }
 }
 
 #[cfg(test)]

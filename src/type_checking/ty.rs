@@ -30,7 +30,7 @@ pub enum Ty {
     Struct(SymbolID, Vec<Ty> /* generics */),
     Protocol(SymbolID, Vec<Ty> /* generics */),
     Pointer,
-    ProtocolSelf,
+    SelfType,
 }
 
 impl Display for Ty {
@@ -40,7 +40,7 @@ impl Display for Ty {
             Ty::Int => write!(f, "Int"),
             Ty::Bool => write!(f, "Bool"),
             Ty::Float => write!(f, "Float"),
-            Ty::ProtocolSelf => write!(f, "Self"),
+            Ty::SelfType => write!(f, "Self"),
             Ty::Init(_, params) => write!(
                 f,
                 "init({})",

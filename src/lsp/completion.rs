@@ -99,6 +99,15 @@ impl<'a> CompletionContext<'a> {
                     }));
                     completions
                 }
+                TypeDef::Builtin(def) => def
+                    .methods
+                    .iter()
+                    .map(|m| CompletionItem {
+                        label: m.name.clone(),
+                        kind: Some(CompletionItemKind::METHOD),
+                        ..Default::default()
+                    })
+                    .collect(),
             }
         } else {
             log::error!("did not get type: {:#?}", self.env.types);

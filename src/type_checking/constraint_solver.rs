@@ -270,7 +270,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     )));
                 };
 
-                let conformance_checker = ConformanceChecker::new(type_def, protocol);
+                let conformance_checker = ConformanceChecker::new(type_def, protocol, self.env);
                 match conformance_checker.check() {
                     Ok(unifications) => {
                         for (lhs, rhs) in unifications {
@@ -386,6 +386,30 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let result_ty = Self::apply(result_ty, substitutions, 0);
 
                 let (member_ty, type_params, type_args) = match &receiver_ty {
+                    builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
+                        #[allow(clippy::expect_used)]
+                        let type_def = match builtin {
+                            Ty::Int => self.env.lookup_type(&SymbolID::INT),
+                            Ty::Float => self.env.lookup_type(&SymbolID::FLOAT),
+                            Ty::Bool => self.env.lookup_type(&SymbolID::BOOL),
+                            Ty::Pointer => self.env.lookup_type(&SymbolID::POINTER),
+                            _ => {
+                                return Err(TypeError::Unknown("no idea how this happened".into()));
+                            }
+                        }
+                        .expect("builtins should have type defs");
+
+                        let Some(member) =
+                            type_def.member_ty_with_conformances(member_name, self.env)
+                        else {
+                            return Err(TypeError::MemberNotFound(
+                                builtin.to_string(),
+                                member_name.to_string(),
+                            ));
+                        };
+
+                        (member, vec![], &vec![])
+                    }
                     Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
                         let type_def = self
                             .env
@@ -394,39 +418,14 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                 "Unable to resolve enum with id: {type_id:?}"
                             )))?
                             .clone();
-                        let mut member_ty_search = type_def.member_ty(member_name).cloned();
-
-                        if member_ty_search.is_none() {
-                            for conformance in type_def.conformances() {
-                                if let Some(TypeDef::Protocol(protocol_def)) =
-                                    self.env.lookup_type(&conformance.protocol_id).cloned()
-                                    && let Some(ty) = protocol_def.member_ty(member_name)
-                                {
-                                    let mut subst = HashMap::new();
-                                    for (param, arg) in protocol_def
-                                        .associated_types
-                                        .iter()
-                                        .zip(&conformance.associated_types)
-                                    {
-                                        subst.insert(param.type_var.clone(), arg.clone());
-                                    }
-                                    member_ty_search =
-                                        Some(Self::substitute_ty_with_map(ty, &subst));
-                                    break;
-                                }
-                            }
-                        }
-
-                        let Some(member_ty) = member_ty_search else {
+                        let Some(member_ty) =
+                            type_def.member_ty_with_conformances(member_name, self.env)
+                        else {
                             return Err(TypeError::MemberNotFound(
-                                member_name.to_string(),
                                 type_def.name().to_string(),
+                                member_name.to_string(),
                             ));
                         };
-
-                        log::trace!(
-                            "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
-                        );
 
                         (
                             member_ty.clone(),
@@ -672,7 +671,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Ty::Int => ty.clone(),
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
-            Ty::ProtocolSelf => ty.clone(),
+            Ty::SelfType => ty.clone(),
             Ty::Func(params, returning, generics) => {
                 let applied_params = Self::apply_multiple(params, substitutions, depth + 1);
                 let applied_return = Self::apply(returning, substitutions, depth + 1);
@@ -1048,9 +1047,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .map(|t| Self::substitute_ty_with_map(t, substitutions))
                     .collect(),
             ),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::ProtocolSelf => {
-                ty.clone()
-            }
+            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType => ty.clone(),
         }
     }
 }

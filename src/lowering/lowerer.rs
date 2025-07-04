@@ -68,7 +68,7 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
-            Ty::ProtocolSelf => IRType::Void,
+            Ty::SelfType => IRType::Void,
             Ty::Pointer => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
