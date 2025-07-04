@@ -873,13 +873,10 @@ impl<'a> TypeChecker<'a> {
                 Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
             } else if let Ok(scheme) = env.lookup_symbol(&symbol_id).cloned() {
                 let i = env.instantiate(&scheme);
-                println!("INSTANTIATED: {scheme:?} -> {i:?}");
                 i
             } else {
                 env.placeholder(id, name.name_str(), &symbol_id, vec![])
             };
-
-            println!("NO GENERICS Inferring existing {name:?} -> {ty:?}");
 
             return Ok(ty);
         }
