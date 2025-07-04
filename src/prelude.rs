@@ -29,6 +29,7 @@ pub fn _compile_prelude() -> Prelude {
         include_comments: false,
     });
     for file in [
+        PathBuf::from("./core/Operators.tlk"),
         PathBuf::from("./core/Optional.tlk"),
         PathBuf::from("./core/Array.tlk"),
         PathBuf::from("./core/String.tlk"),
@@ -43,6 +44,17 @@ pub fn _compile_prelude() -> Prelude {
     let environment = unit.env.clone();
     let module = unit.module();
     let symbols = driver.symbol_table;
+
+    #[allow(clippy::unwrap_used)]
+    if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
+        println!("Array = {:?}", symbols.lookup("Array").unwrap());
+        println!("Optional = {:?}", symbols.lookup("Optional").unwrap());
+        println!("String = {:?}", symbols.lookup("String").unwrap());
+        println!("Add = {:?}", symbols.lookup("Add").unwrap());
+        println!("Subtract = {:?}", symbols.lookup("Subtract").unwrap());
+        println!("Multiply = {:?}", symbols.lookup("Multiply").unwrap());
+        println!("Divide = {:?}", symbols.lookup("Divide").unwrap());
+    }
 
     Prelude {
         symbols,
@@ -64,4 +76,4 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Optional", "Array", "String", "Printable");
+stdlib_modules!("Operators", "Optional", "Array", "String", "Printable");

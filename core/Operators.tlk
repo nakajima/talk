@@ -1,0 +1,4 @@
+protocol Add<RHS, Ret> { func add(rhs: RHS) -> Ret }
+protocol Subtract<RHS, Ret> { func subtract(rhs: RHS) -> Ret }
+protocol Multiply<RHS, Ret> { func multiplay(rhs: RHS) -> Ret }
+protocol Divide<RHS, Ret> { func divide(rhs: RHS) -> Ret }
