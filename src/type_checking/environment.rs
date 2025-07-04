@@ -38,7 +38,7 @@ pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     pub type_var_id: TypeVarID,
-    pub constraints: Vec<Constraint>,
+    constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
@@ -91,7 +91,7 @@ impl Environment {
         );
 
         // 2. Generate the InstanceOf constraint.
-        self.constraints.push(Constraint::InstanceOf {
+        self.constrain(Constraint::InstanceOf {
             scheme: Scheme {
                 ty: usage_placeholder.clone(),
                 unbound_vars: vec![],
@@ -119,24 +119,22 @@ impl Environment {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn constrain_equality(&mut self, id: ExprID, lhs: Ty, rhs: Ty) {
-        if lhs == rhs {
-            // No need to constrain equality of equal things
+    pub fn constrain(&mut self, constraint: Constraint) {
+        if !constraint.needs_solving() {
             return;
         }
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
-                "constrain_equality {:?} from {}:{}\n{:?}\n{:?} ",
-                id,
-                loc.file(),
-                loc.line(),
-                lhs,
-                rhs,
-            );
+            log::info!("⊢ {:?} ({}:{})", constraint, loc.file(), loc.line(),);
         }
-        self.constraints.push(Constraint::Equality(id, lhs, rhs))
+
+        #[allow(clippy::panic)]
+        if constraint.contains_canonical_type_parameter() {
+            panic!("Constraints must not contain canonical type params: {constraint:?}")
+        }
+
+        self.constraints.push(constraint)
     }
 
     pub fn flush_constraints<P: Phase>(
@@ -148,29 +146,6 @@ impl Environment {
             ConstraintSolver::new(self.session.clone(), source_file, self, symbol_table);
         let substitutions = solver.solve();
         Ok(substitutions)
-    }
-
-    pub fn constrain_unqualified_member(&mut self, id: ExprID, name: String, result_ty: Ty) {
-        self.constraints
-            .push(Constraint::UnqualifiedMember(id, name, result_ty))
-    }
-
-    #[cfg_attr(debug_assertions, track_caller)]
-    pub fn constrain_member(&mut self, id: ExprID, receiver: Ty, name: String, result_ty: Ty) {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            log::trace!(
-                "[.] Member {:?} {} from {}:{}\n{:?}\n{:?} ",
-                id,
-                name,
-                loc.file(),
-                loc.line(),
-                receiver,
-                result_ty
-            );
-        }
-        self.constraints
-            .push(Constraint::MemberAccess(id, receiver, name, result_ty))
     }
 
     pub fn replace_typed_exprs_values(&mut self, substitutions: &Substitutions) {
@@ -240,14 +215,6 @@ impl Environment {
     pub fn start_scope(&mut self) {
         self.scopes.push(Default::default());
     }
-
-    // fn specialize(&mut self, scheme: Scheme, type_args: &[Ty]) -> Ty {
-    //     let mut substitutions = HashMap::new();
-    //     for (unbound_var, type_arg) in scheme.unbound_vars.iter().zip(type_args.iter()) {
-    //         substitutions.insert(unbound_var.clone(), type_arg.clone());
-    //     }
-    //     self.substitute_ty_with_map(scheme.ty, &substitutions)
-    // }
 
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.

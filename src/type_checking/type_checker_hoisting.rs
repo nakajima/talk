@@ -108,7 +108,6 @@ impl<'a> TypeChecker<'a> {
             };
 
             let Some(expr_ids) = self.predeclarable_type(&expr) else {
-                log::warn!("Not predeclarable type: {expr:?}");
                 continue;
             };
 
@@ -498,14 +497,11 @@ impl<'a> TypeChecker<'a> {
             let mut conformance_constraints = vec![];
             let mut conformances = vec![];
             for id in placeholders.conformances.iter() {
-                let Ty::Protocol(symbol_id, associated_types) = self
+                let ty = self
                     .infer_node(id, env, &None, source_file)
-                    .map_err(|e| (*id, e))?
-                else {
-                    log::error!(
-                        "Didn't get protocol for expr id: {id} {:?}",
-                        source_file.get(id)
-                    );
+                    .map_err(|e| (*id, e))?;
+                let Ty::Protocol(symbol_id, associated_types) = ty else {
+                    log::error!("Didn't get protocol for expr id: {id} {ty:?}",);
                     continue;
                 };
 
@@ -520,7 +516,11 @@ impl<'a> TypeChecker<'a> {
 
             def.add_conformances(conformances);
             env.register(&def).map_err(|e| (0, e))?;
-            env.constraints.extend(conformance_constraints);
+
+            for constraint in conformance_constraints {
+                env.constrain(constraint);
+            }
+
             env.selfs.pop();
         }
 

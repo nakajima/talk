@@ -72,6 +72,50 @@ impl Constraint {
         }
     }
 
+    pub fn contains_canonical_type_parameter(&self) -> bool {
+        match self {
+            Constraint::Equality(_, ty, ty1) => {
+                has_canonical_type_var(ty) || has_canonical_type_var(ty1)
+            }
+            Constraint::MemberAccess(_, ty, _, ty1) => {
+                has_canonical_type_var(ty) || has_canonical_type_var(ty1)
+            }
+            Constraint::UnqualifiedMember(_, _, ty) => has_canonical_type_var(ty),
+            Constraint::InitializerCall {
+                args,
+                func_ty,
+                result_ty,
+                ..
+            } => {
+                args.iter().any(has_canonical_type_var)
+                    || has_canonical_type_var(func_ty)
+                    || has_canonical_type_var(result_ty)
+            }
+            Constraint::VariantMatch {
+                scrutinee_ty,
+                field_tys,
+                ..
+            } => {
+                has_canonical_type_var(scrutinee_ty) || field_tys.iter().any(has_canonical_type_var)
+            }
+            Constraint::InstanceOf { scheme, ty, .. } => {
+                has_canonical_type_var(&scheme.ty) || has_canonical_type_var(ty)
+            }
+            Constraint::Satisfies { ty, .. } => has_canonical_type_var(ty),
+            _ => false,
+        }
+    }
+
+    pub fn needs_solving(&self) -> bool {
+        match self {
+            Constraint::Equality(_, ty, ty1) => ty != ty1,
+            Constraint::InstanceOf { scheme, ty, .. } => {
+                !scheme.unbound_vars.is_empty() || &scheme.ty != ty
+            }
+            _ => true,
+        }
+    }
+
     pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
@@ -421,6 +465,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         let Some(member_ty) =
                             type_def.member_ty_with_conformances(member_name, self.env)
                         else {
+                            panic!("wtf: {type_def:#?}");
                             return Err(TypeError::MemberNotFound(
                                 type_def.name().to_string(),
                                 member_name.to_string(),
@@ -471,6 +516,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                         continue;
                                     };
                                     let Some(ty) = type_def.member_ty(member_name) else {
+                                        panic!("wtf");
                                         return Err(TypeError::MemberNotFound(
                                             member_name.to_string(),
                                             type_def.name().to_string(),
@@ -797,15 +843,15 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     );
                 };
 
-                if let TypeVarKind::CanonicalTypeParameter(id) = &v1.kind {
+                if let TypeVarKind::CanonicalTypeParameter(_) = &v1.kind {
                     log::error!(
-                        "Attempting to unify canonical type parameter: {id:?}. Consider instantiating."
+                        "Attempting to unify canonical type parameter {v1:?} with {v2:?}. Consider instantiating."
                     );
                 }
 
-                if let TypeVarKind::CanonicalTypeParameter(id) = &v2.kind {
+                if let TypeVarKind::CanonicalTypeParameter(_) = &v2.kind {
                     log::error!(
-                        "Attempting to unify canonical type parameter: {id:?}. Consider instantiating."
+                        "Attempting to unify canonical type parameter {v2:?} with {v1:?}. Consider instantiating."
                     );
                 }
 
@@ -822,9 +868,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
-                if let TypeVarKind::CanonicalTypeParameter(id) = &v.kind {
+                if let TypeVarKind::CanonicalTypeParameter(_) = &v.kind {
                     log::error!(
-                        "Attempting to unify canonical type parameter: {id:?} <> {v:?}. Consider instantiating."
+                        "Attempting to unify canonical type parameter {v:?} with {ty:?}. Consider instantiating."
                     );
                 }
 
@@ -1071,4 +1117,18 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
         }
     }
+}
+
+fn has_canonical_type_var(ty: &Ty) -> bool {
+    if matches!(
+        ty,
+        Ty::TypeVar(TypeVarID {
+            kind: TypeVarKind::CanonicalTypeParameter(_),
+            ..
+        })
+    ) {
+        return true;
+    }
+
+    false
 }

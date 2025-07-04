@@ -23,9 +23,9 @@ impl SymbolID {
     // We can see them by running:
     //
     // $ SHOW_BUILTIN_SYMBOLS=1 cargo test -- --nocapture
-    pub const ARRAY: SymbolID = SymbolID(25);
-    pub const OPTIONAL: SymbolID = SymbolID(21);
-    pub const STRING: SymbolID = SymbolID(41);
+    pub const ARRAY: SymbolID = SymbolID(41);
+    pub const OPTIONAL: SymbolID = SymbolID(37);
+    pub const STRING: SymbolID = SymbolID(57);
     pub const ADD: SymbolID = SymbolID(1);
     pub const SUBTRACT: SymbolID = SymbolID(6);
     pub const MULTIPLY: SymbolID = SymbolID(11);

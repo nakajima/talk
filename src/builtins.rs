@@ -281,6 +281,19 @@ fn builtins() -> Vec<Builtin> {
             }],
             type_def: None,
         },
+        Builtin {
+            id: -13,
+            info: SymbolInfo {
+                name: "Byte".into(),
+                kind: SymbolKind::BuiltinType,
+                expr_id: -13,
+                is_captured: false,
+                definition: None,
+            },
+            ty: Ty::Byte,
+            unbound_vars: vec![],
+            type_def: None,
+        },
     ]
 }
 

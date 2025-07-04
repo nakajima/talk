@@ -3,50 +3,50 @@ protocol Subtract<RHS, Ret> { func subtract(rhs: RHS) -> Ret }
 protocol Multiply<RHS, Ret> { func multiplay(rhs: RHS) -> Ret }
 protocol Divide<RHS, Ret> { func divide(rhs: RHS) -> Ret }
 
-// extend Int: Add<Int, Int> {
-//   func add(rhs: Int) -> Int {
-//     __ir_instr("$? = add int %0, %1;")
-//   }
-// }
+extend Int: Add<Int, Int> {
+  func add(rhs: Int) -> Int {
+    __ir_instr("$? = add int %0, %1;")
+  }
+}
 
-// extend Float: Add<Float, Float> {
-//   func add(rhs: Float) -> Float {
-//     __ir_instr("$? = add float %0, %1;")
-//   }
-// }
+extend Float: Add<Float, Float> {
+  func add(rhs: Float) -> Float {
+    __ir_instr("$? = add float %0, %1;")
+  }
+}
 
-// extend Int: Subtract<Int, Int> {
-//   func subtract(rhs: Int) -> Int {
-//     __ir_instr("$? = subtract int %0, %1;")
-//   }
-// }
+extend Int: Subtract<Int, Int> {
+  func subtract(rhs: Int) -> Int {
+    __ir_instr("$? = subtract int %0, %1;")
+  }
+}
 
-// extend Float: Subtract<Float, Float> {
-//   func subtract(rhs: Float) -> Float {
-//     __ir_instr("$? = subtract float %0, %1;")
-//   }
-// }
+extend Float: Subtract<Float, Float> {
+  func subtract(rhs: Float) -> Float {
+    __ir_instr("$? = subtract float %0, %1;")
+  }
+}
 
-// extend Int: Multiply<Int, Int> {
-//   func multiply(rhs: Int) -> Int {
-//     __ir_instr("$? = mul int %0, %1;")
-//   }
-// }
+extend Int: Multiply<Int, Int> {
+  func multiply(rhs: Int) -> Int {
+    __ir_instr("$? = mul int %0, %1;")
+  }
+}
 
-// extend Float: Multiply<Float, Float> {
-//   func multiply(rhs: Float) -> Float {
-//     __ir_instr("$? = mul float %0, %1;")
-//   }
-// }
+extend Float: Multiply<Float, Float> {
+  func multiply(rhs: Float) -> Float {
+    __ir_instr("$? = mul float %0, %1;")
+  }
+}
 
-// extend Divide: Subtract<Int, Int> {
-//   func divide(rhs: Int) -> Int {
-//     __ir_instr("$? = div int %0, %1;")
-//   }
-// }
+extend Divide: Subtract<Int, Int> {
+  func divide(rhs: Int) -> Int {
+    __ir_instr("$? = div int %0, %1;")
+  }
+}
 
-// extend Float: Subtract<Float, Float> {
-//   func divide(rhs: Float) -> Float {
-//     __ir_instr("$? = div float %0, %1;")
-//   }
-// }
+extend Float: Subtract<Float, Float> {
+  func divide(rhs: Float) -> Float {
+    __ir_instr("$? = div float %0, %1;")
+  }
+}

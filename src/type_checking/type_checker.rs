@@ -456,7 +456,11 @@ impl<'a> TypeChecker<'a> {
 
         let ty = match (type_repr, default_value) {
             (Some(type_repr), Some(default_value)) => {
-                env.constrain_equality(*expr_id, type_repr.clone(), default_value);
+                env.constrain(Constraint::Equality(
+                    *expr_id,
+                    type_repr.clone(),
+                    default_value,
+                ));
                 type_repr
             }
             (None, Some(default_value)) => default_value,
@@ -661,7 +665,11 @@ impl<'a> TypeChecker<'a> {
         let consequence = self.infer_node(consequence, env, &None, source_file)?;
         if let Some(alternative_id) = alternative {
             let alternative = self.infer_node(alternative_id, env, &None, source_file)?;
-            env.constrain_equality(*alternative_id, consequence.clone(), alternative);
+            env.constrain(Constraint::Equality(
+                *alternative_id,
+                consequence.clone(),
+                alternative,
+            ));
             Ok(consequence)
         } else {
             Ok(consequence.optional())
@@ -749,7 +757,7 @@ impl<'a> TypeChecker<'a> {
                     unbound_vars: struct_def.canonical_type_vars(),
                 });
 
-                env.constraints.push(Constraint::InitializerCall {
+                env.constrain(Constraint::InitializerCall {
                     expr_id: *callee,
                     initializes_id: *symbol_id,
                     args: arg_tys.clone(),
@@ -761,7 +769,11 @@ impl<'a> TypeChecker<'a> {
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
-                env.constrain_equality(*callee, callee_ty.clone(), expected_callee_ty);
+                env.constrain(Constraint::Equality(
+                    *callee,
+                    callee_ty.clone(),
+                    expected_callee_ty,
+                ));
             }
         };
 
@@ -780,7 +792,7 @@ impl<'a> TypeChecker<'a> {
         // Expect lhs to be the same as rhs
         let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.clone()), source_file)?;
 
-        env.constrain_equality(*rhs, rhs_ty.clone(), lhs_ty);
+        env.constrain(Constraint::Equality(*rhs, rhs_ty.clone(), lhs_ty));
 
         Ok(rhs_ty)
     }
@@ -835,10 +847,20 @@ impl<'a> TypeChecker<'a> {
                 });
             }
 
+            let ref ty @ Ty::TypeVar(ref type_var_id) =
+                env.placeholder(id, name.name_str(), &symbol_id, type_constraints)
+            else {
+                unreachable!()
+            };
+
+            unbound_vars.push(type_var_id.clone());
+
             let scheme = Scheme {
-                ty: env.placeholder(id, name.name_str(), &symbol_id, type_constraints),
+                ty: ty.clone(),
                 unbound_vars,
             };
+
+            println!("Introducing {name:?} -> {scheme:?}");
 
             env.declare(symbol_id, scheme.clone())?;
 
@@ -849,15 +871,24 @@ impl<'a> TypeChecker<'a> {
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
                 Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
-                // env.placeholder(id, name.name_str(), &symbol_id, vec![])
+            } else if let Ok(scheme) = env.lookup_symbol(&symbol_id).cloned() {
+                let i = env.instantiate(&scheme);
+                println!("INSTANTIATED: {scheme:?} -> {i:?}");
+                i
             } else {
-                env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
+                env.placeholder(id, name.name_str(), &symbol_id, vec![])
             };
+
+            println!("NO GENERICS Inferring existing {name:?} -> {ty:?}");
+
             return Ok(ty);
         }
 
         let ty_scheme = env.lookup_symbol(&symbol_id)?.clone();
         let mut substitutions = Substitutions::default();
+
+        println!("Inferring existing {name:?} -> {ty_scheme:?}");
+
         for (var, generic_id) in ty_scheme.unbound_vars.iter().zip(generics) {
             // Recursively get arg_ty
             let arg_ty = self.infer_node(generic_id, env, &None, source_file)?;
@@ -958,7 +989,11 @@ impl<'a> TypeChecker<'a> {
             && let Some(ret_id) = ret
         {
             ret_ty = ret_type.clone();
-            env.constrain_equality(*ret_id, body_ty.clone(), ret_type.clone());
+            env.constrain(Constraint::Equality(
+                *ret_id,
+                body_ty.clone(),
+                ret_type.clone(),
+            ));
         }
 
         env.end_scope();
@@ -1083,7 +1118,7 @@ impl<'a> TypeChecker<'a> {
         let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
         let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
 
-        env.constrain_equality(*lhs_id, lhs.clone(), rhs);
+        env.constrain(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
 
         // TODO: For now we're just gonna hardcode these
         use TokenKind::*;
@@ -1135,11 +1170,11 @@ impl<'a> TypeChecker<'a> {
 
                 // If we have any explicit returns, we need to constrain equality of this with them
                 for ret_ty in &ret_tys {
-                    env.constrain_equality(
+                    env.constrain(Constraint::Equality(
                         *item_id,
                         block_return_ty.clone().unwrap_or(Ty::Void),
                         ret_ty.clone(),
-                    );
+                    ));
                 }
             } else {
                 block_return_ty = Some(self.infer_node(item_id, env, &None, source_file)?);
@@ -1147,8 +1182,6 @@ impl<'a> TypeChecker<'a> {
         }
 
         env.end_scope();
-
-        log::warn!("infer_block: {block_return_ty:?}");
 
         Ok(block_return_ty.unwrap_or(Ty::Void))
     }
@@ -1212,7 +1245,11 @@ impl<'a> TypeChecker<'a> {
                     Ty::TypeVar(member_var.clone())
                 };
 
-                env.constrain_unqualified_member(*id, member_name.to_string(), ret.clone());
+                env.constrain(Constraint::UnqualifiedMember(
+                    *id,
+                    member_name.to_string(),
+                    ret.clone(),
+                ));
 
                 Ok(ret)
             }
@@ -1225,12 +1262,12 @@ impl<'a> TypeChecker<'a> {
                 );
 
                 // Add a constraint that links the receiver type to the member
-                env.constrain_member(
+                env.constrain(Constraint::MemberAccess(
                     *id,
                     receiver_ty,
                     member_name.to_string(),
                     member_var.clone(),
-                );
+                ));
 
                 Ok(member_var.clone())
             }
