@@ -205,7 +205,7 @@ mod type_tests {
 
     #[test]
     fn checks_a_float() {
-        let checker = check("123.");
+        let checker = check("123.0");
         assert_eq!(checker.type_for(&checker.root_ids()[0]).unwrap(), Ty::Float);
     }
 
@@ -1762,6 +1762,25 @@ mod protocol_tests {
         .unwrap();
 
         assert_eq!(checked.at(3).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn can_extend_builtin_literals() {
+        let checked = check_without_prelude(
+            "protocol Identifty {
+                func identity() -> Self {
+                    self
+                }
+            }
+            
+            extend Int: Identifty { }
+
+            123.identity()
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.at(2).unwrap(), Ty::Int);
     }
 }
 

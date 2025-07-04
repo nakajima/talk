@@ -415,7 +415,7 @@ pub mod lowering_tests {
 
     #[test]
     fn lowers_float() {
-        let lowered = lower("123.").unwrap();
+        let lowered = lower("123.0").unwrap();
         assert_lowered_function!(
             lowered,
             "@main",

@@ -274,7 +274,7 @@ impl<'a> Lexer<'a> {
         let mut is_float = false;
 
         while let Some(ch) = self.peek() {
-            if ch == '.' {
+            if ch == '.' && self.peek_next().map(|f| f.is_numeric()).unwrap_or(false) && !is_float {
                 is_float = true;
                 self.advance();
             } else if ch.is_numeric() || ch == '_' {

@@ -1119,7 +1119,10 @@ mod pattern_parsing_tests {
 
     #[test]
     fn parses_literal_float() {
-        assert_eq!(parse_pattern("123."), Pattern::LiteralFloat("123.".into()));
+        assert_eq!(
+            parse_pattern("123.0"),
+            Pattern::LiteralFloat("123.0".into())
+        );
     }
 
     #[test]

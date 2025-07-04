@@ -841,7 +841,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(crate) fn literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn literal(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
 
         self.advance();
@@ -852,12 +852,18 @@ impl<'a> Parser<'a> {
             .map(|p| p.kind.clone())
             .ok_or(ParserError::UnexpectedEndOfInput(None))?;
 
-        match prev {
+        let expr = match prev {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::StringLiteral(val) => self.add_expr(LiteralString(val.to_string()), tok),
             TokenKind::Func => self.func(),
             _ => unreachable!("didn't get a literal"),
+        }?;
+
+        if let Some(call_id) = self.check_call(expr, can_assign)? {
+            Ok(call_id)
+        } else {
+            Ok(expr)
         }
     }
 

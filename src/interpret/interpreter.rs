@@ -574,28 +574,28 @@ mod tests {
     #[test]
     fn interprets_add() {
         assert_eq!(Value::Int(3), interpret("1 + 2").unwrap());
-        assert_eq!(Value::Float(3.0), interpret("1. + 2.").unwrap());
+        assert_eq!(Value::Float(3.0), interpret("1.0 + 2.0").unwrap());
         assert!(interpret("true + false").is_err());
     }
 
     #[test]
     fn interprets_sub() {
         assert_eq!(Value::Int(-1), interpret("1 - 2").unwrap());
-        assert_eq!(Value::Float(-1.0), interpret("1. - 2.").unwrap());
+        assert_eq!(Value::Float(-1.0), interpret("1.0 - 2.0").unwrap());
         assert!(interpret("true - false").is_err());
     }
 
     #[test]
     fn interprets_mul() {
         assert_eq!(Value::Int(6), interpret("2 * 3").unwrap());
-        assert_eq!(Value::Float(6.0), interpret("2. * 3.").unwrap());
+        assert_eq!(Value::Float(6.0), interpret("2.0 * 3.0").unwrap());
         assert!(interpret("true * false").is_err());
     }
 
     #[test]
     fn interprets_div() {
         assert_eq!(Value::Int(3), interpret("6 / 2").unwrap());
-        assert_eq!(Value::Float(3.0), interpret("6. / 2.").unwrap());
+        assert_eq!(Value::Float(3.0), interpret("6.0 / 2.0").unwrap());
         assert!(interpret("true / false").is_err());
     }
 
