@@ -1072,22 +1072,40 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
         &mut self,
-        _id: &ExprID,
+        id: &ExprID,
         lhs_id: &ExprID,
         rhs_id: &ExprID,
         op: &TokenKind,
-        _expected: &Option<Ty>,
+        expected: &Option<Ty>,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
         let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
 
-        env.constrain_equality(*lhs_id, lhs.clone(), rhs);
-
-        // TODO: For now we're just gonna hardcode these
         use TokenKind::*;
         match op {
+            Plus => {
+                let Some(protocol) = env.type_def_from_name("Add").cloned() else {
+                    unreachable!()
+                };
+
+                let ret = expected.clone().unwrap_or_else(|| {
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::CallReturn, vec![]))
+                });
+
+                env.constraints.push(Constraint::Satisfies {
+                    expr_id: *id,
+                    ty: lhs,
+                    constraints: vec![TypeConstraint::Conforms {
+                        protocol_id: protocol.symbol_id(),
+                        associated_types: vec![rhs, ret.clone()],
+                    }],
+                });
+
+                Ok(ret)
+            }
+
             // Bool ops
             EqualsEquals => Ok(Ty::Bool),
             BangEquals => Ok(Ty::Bool),
@@ -1097,7 +1115,10 @@ impl<'a> TypeChecker<'a> {
             LessEquals => Ok(Ty::Bool),
 
             // Same type ops
-            _ => Ok(lhs),
+            _ => {
+                env.constrain_equality(*lhs_id, lhs.clone(), rhs);
+                Ok(lhs)
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    conformance_checker::ConformanceError, environment::Environment, ty::Ty,
+    SymbolID, conformance_checker::ConformanceError, environment::Environment, ty::Ty,
     type_checker::TypeError, type_constraint::TypeConstraint,
 };
 
@@ -26,6 +26,10 @@ impl<'a> SatisfiesChecker<'a> {
             | Ty::EnumVariant(type_id, type_args)
             | Ty::Struct(type_id, type_args)
             | Ty::Protocol(type_id, type_args) => (type_id, type_args),
+            Ty::Int => (&SymbolID::INT, &vec![]),
+            Ty::Float => (&SymbolID::FLOAT, &vec![]),
+            Ty::Bool => (&SymbolID::BOOL, &vec![]),
+            Ty::Pointer => (&SymbolID::POINTER, &vec![]),
             _ => {
                 return Err(TypeError::Unknown(format!(
                     "{:?} cannot satisfy type requirements: {:?}",
@@ -57,12 +61,12 @@ impl<'a> SatisfiesChecker<'a> {
                         continue;
                     };
 
-                    if type_args.len() != associated_types.len() {
-                        errors.push(ConformanceError::TypeDoesNotConform(
-                            type_def.name().to_string(),
-                            "could not determine type parameters".to_string(),
-                        ));
-                    }
+                    //if type_args.len() != associated_types.len() {
+                    //    errors.push(ConformanceError::TypeDoesNotConform(
+                    //        type_def.name().to_string(),
+                    //        "could not determine type parameters".to_string(),
+                    //    ));
+                    //}
 
                     if let Some(conformance) = type_def
                         .conformances()
@@ -71,13 +75,17 @@ impl<'a> SatisfiesChecker<'a> {
                     {
                         let mut map = HashMap::new();
 
-                        for (provided, required) in
-                            conformance.associated_types.iter().zip(type_args)
+                        for (provided, required) in conformance.associated_types
+                            .iter()
+                            .zip(type_args)
                         {
                             map.insert(provided.clone(), required.clone());
                         }
 
-                        for (param, arg) in associated_types.iter().zip(type_args) {
+                        for (param, arg) in conformance.associated_types
+                            .iter()
+                            .zip(associated_types)
+                        {
                             let arg = map.get(arg).unwrap_or(arg);
                             unifications.push((param.clone(), arg.clone()));
                         }

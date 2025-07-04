@@ -916,7 +916,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
             _ => {
                 log::error!(
-                    "Mismatch: {:?} and {:?}",
+                    "Mismatch: {:?} ({lhs:?}) and {:?} ({rhs:?})",
                     Self::apply(lhs, substitutions, 0),
                     Self::apply(rhs, substitutions, 0)
                 );

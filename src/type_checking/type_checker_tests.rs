@@ -1786,15 +1786,27 @@ mod protocol_tests {
 
 #[cfg(test)]
 mod operator_tests {
-    use crate::check_without_prelude;
+    use crate::{check, ty::Ty};
 
-    #[ignore]
     #[test]
     fn add() {
-        let _checked = check_without_prelude(
+        let checked = check(
             "
+                struct Person {
+                    let age: Int
+                }
+            
+                extend Person: Add<String, Float> {
+                    func add(other: String) -> Float {
+                        123.0
+                    }
+                }
+            
+                Person(age: 123) + \"sup\"
+                     ",
+        )
+        .unwrap();
 
-        ",
-        );
+        assert_eq!(checked.at(2).unwrap(), Ty::Float);
     }
 }

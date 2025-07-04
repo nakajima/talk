@@ -1,0 +1,63 @@
+protocol Add<RHS, Returns> {
+  func add(rhs: RHS) -> Returns
+}
+
+extend Int: Add<Int, Int> {
+  func add(rhs: Int) -> Int {
+    self + rhs
+  }
+}
+
+extend Float: Add<Float, Float> {
+  func add(rhs: Float) -> Float {
+    self + rhs
+  }
+}
+
+protocol Subtract<RHS, Returns> {
+  func subtract(rhs: RHS) -> Returns
+}
+
+extend Int: Subtract<Int, Int> {
+  func add(rhs: Int) -> Int {
+    self - rhs
+  }
+}
+
+extend Float: Subtract<Float, Float> {
+    func add(rhs: Float) -> Float {
+    self - rhs
+  }
+}
+
+protocol Multiply<RHS, Returns> {
+  func multiply(rhs: RHS) -> Returns
+}
+
+extend Int: Multiply<Int, Int> {
+  func add(rhs: Int) -> Int {
+    self * rhs
+  }
+}
+
+extend Float: Multiply<Float, Float> {
+  func add(rhs: Float) -> Float {
+    self * rhs
+  }
+}
+
+protocol Divide<RHS, Returns> {
+  func divide(rhs: RHS) -> Returns
+}
+
+extend Int: Divide<Int, Int> {
+  func add(rhs: Int) -> Int {
+    self / rhs
+  }
+}
+
+extend Float: Divide<Float, Float> {
+    func add(rhs: Float) -> Float {
+    self / rhs
+  }
+}

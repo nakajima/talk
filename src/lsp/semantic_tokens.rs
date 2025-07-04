@@ -195,10 +195,7 @@ impl<'a> SemanticTokenCollector<'a> {
                     result.extend(meta.identifiers.iter().map(|i| {
                         (
                             self.range_from_token(i),
-                            meta.end
-                                .end
-                                .saturating_add(1)
-                                .saturating_sub(meta.start.start.saturating_sub(1)),
+                            meta.end.end.saturating_sub(meta.start.start),
                             SemanticTokenType::TYPE_PARAMETER,
                         )
                     }))

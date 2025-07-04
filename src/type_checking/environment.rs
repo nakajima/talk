@@ -357,6 +357,12 @@ impl Environment {
         self.scopes.pop();
     }
 
+    pub fn type_def_from_name(&self, name: &str) -> Option<&TypeDef> {
+        self.types
+            .values()
+            .find(|&type_def| type_def.name() == name)
+    }
+
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn ty_for_symbol(
         &mut self,

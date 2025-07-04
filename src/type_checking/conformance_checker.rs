@@ -55,6 +55,7 @@ impl<'a> ConformanceChecker<'a> {
 
             // Find self references in the protocol's type and replace them with our concrete type
             for type_var in free_type_vars(&ty_method) {
+                log::error!("free type var: {type_var:?}");
                 if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
                     unifications.push((Ty::TypeVar(type_var), self.type_def.ty()));
                 }

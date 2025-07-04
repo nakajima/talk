@@ -18,10 +18,10 @@ impl SymbolID {
     pub const FLOAT: SymbolID = SymbolID(-2);
     pub const BOOL: SymbolID = SymbolID(-3);
     pub const POINTER: SymbolID = SymbolID(-4);
-    pub const OPTIONAL: SymbolID = SymbolID(1);
-    pub const ARRAY: SymbolID = SymbolID(5);
+    pub const OPTIONAL: SymbolID = SymbolID(37);
+    pub const ARRAY: SymbolID = SymbolID(41);
     pub const TUPLE: SymbolID = SymbolID(-10);
-    pub const STRING: SymbolID = SymbolID(21);
+    pub const STRING: SymbolID = SymbolID(47);
 
     // These are special for the lowering phase
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
