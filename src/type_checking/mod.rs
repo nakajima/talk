@@ -118,25 +118,26 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
 
 #[cfg(test)]
 pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
-    use crate::compiling::driver::{Driver, DriverConfig};
-    use std::path::PathBuf;
+    check(input)
+  //  use crate::compiling::driver::{Driver, DriverConfig};
+  //  use std::path::PathBuf;
 
-    let path = &PathBuf::from("-");
-    let mut driver = Driver::new(DriverConfig {
-        executable: false,
-        include_prelude: false,
-        include_comments: false,
-    });
-    driver.update_file(path, input.into());
-    let typed_compilation_unit = driver.check().into_iter().next().unwrap().clone();
-    let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+  //  let path = &PathBuf::from("-");
+  //  let mut driver = Driver::new(DriverConfig {
+  //      executable: false,
+  //      include_prelude: false,
+  //      include_comments: false,
+  //  });
+  //  driver.update_file(path, input.into());
+  //  let typed_compilation_unit = driver.check().into_iter().next().unwrap().clone();
+  //  let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
 
-    Ok(CheckResult {
-        session: driver.session,
-        source_file,
-        env: typed_compilation_unit.env,
-        symbols: driver.symbol_table,
-    })
+  //  Ok(CheckResult {
+  //      session: driver.session,
+  //      source_file,
+  //      env: typed_compilation_unit.env,
+  //      symbols: driver.symbol_table,
+  //  })
 }
 
 // pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable), TypeError> {

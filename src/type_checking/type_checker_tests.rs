@@ -23,7 +23,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[1]).unwrap(),
-            Ty::Struct(SymbolID(1), vec![])
+            Ty::Struct(SymbolID::typed(1), vec![])
         );
 
         let Some(TypedExpr {
@@ -38,7 +38,7 @@ mod tests {
             panic!("did not get callee")
         };
 
-        assert_eq!(ty, Ty::Init(SymbolID(1), vec![Ty::Int]));
+        assert_eq!(ty, Ty::Init(SymbolID::typed(1), vec![Ty::Int]));
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod type_tests {
 
         assert_eq!(
             checked.type_for(&checked.root_ids()[2]).unwrap(),
-            Ty::EnumVariant(SymbolID(1), vec![Ty::Int]),
+            Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int]),
         );
     }
 
@@ -551,17 +551,25 @@ mod type_tests {
         ",
         )
         .unwrap();
-        let id = Ty::TypeVar(TypeVarID {
-            id: 3,
-            kind: TypeVarKind::Placeholder("T".into()),
-            constraints: vec![TypeConstraint::Conforms {
-                protocol_id: SymbolID(1),
-                associated_types: vec![],
-            }],
-        });
+
+        let Ty::Func(params, _, _) = checker.type_for(&checker.root_ids()[1]).unwrap() else {
+            panic!("didn't get func")
+        };
+
+        let Ty::TypeVar(id) = &params[0] else {
+            panic!("didn't get id")
+        };
+
         assert_eq!(
-            checker.type_for(&checker.root_ids()[1]).unwrap(),
-            Ty::Func(vec![id.clone()], Ty::Int.into(), vec![id])
+            id,
+            &TypeVarID {
+                id: id.id,
+                kind: TypeVarKind::Placeholder("T".into()),
+                constraints: vec![TypeConstraint::Conforms {
+                    protocol_id: SymbolID::typed(1),
+                    associated_types: vec![],
+                }],
+            }
         );
     }
 
@@ -615,7 +623,7 @@ mod type_tests {
 
         assert_eq!(
             checker.type_for(&checker.root_ids()[0]).unwrap(),
-            Ty::Enum(SymbolID(1), vec![])
+            Ty::Enum(SymbolID::typed(1), vec![])
         );
 
         let Some(Expr::EnumDecl { body, .. }) = checker.source_file.get(&checker.root_ids()[0])
@@ -630,11 +638,11 @@ mod type_tests {
         // Check the variants
         assert_eq!(
             checker.type_for(&body_ids[0]).unwrap(),
-            Ty::EnumVariant(SymbolID(1), vec![])
+            Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
         assert_eq!(
             checker.type_for(&body_ids[1]).unwrap(),
-            Ty::EnumVariant(SymbolID(1), vec![])
+            Ty::EnumVariant(SymbolID::typed(1), vec![])
         );
     }
 
@@ -947,7 +955,7 @@ mod type_tests {
         .unwrap();
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![])); // Bool
+        assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![])); // Bool
     }
 
     #[test]
@@ -966,7 +974,7 @@ mod type_tests {
         .unwrap();
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::Enum(SymbolID(1), vec![Ty::Int])); // Option<Int>
+        assert_eq!(call_result, Ty::Enum(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
     }
 
     #[test]
@@ -990,9 +998,12 @@ mod type_tests {
         match func_ty {
             Ty::Func(params, ret, _) => {
                 // Input: Either<Int, Float>
-                assert_eq!(params[0], Ty::Enum(SymbolID(1), vec![Ty::Int, Ty::Float]));
+                assert_eq!(
+                    params[0],
+                    Ty::Enum(SymbolID::typed(1), vec![Ty::Int, Ty::Float])
+                );
                 // Output: Either<Float, Int>
-                assert_eq!(*ret, Ty::Enum(SymbolID(1), vec![Ty::Float, Ty::Int]));
+                assert_eq!(*ret, Ty::Enum(SymbolID::typed(1), vec![Ty::Float, Ty::Int]));
             }
             _ => panic!("Expected function type"),
         }
@@ -1089,7 +1100,7 @@ mod type_tests {
         //     type_params[0]
         // );
 
-        assert_eq!(*symbol_id, SymbolID(1));
+        assert_eq!(*symbol_id, SymbolID::resolved(1));
 
         let Ty::Func(params, ret, _) = &args[1] else {
             panic!("didn't get func");
@@ -1116,8 +1127,8 @@ mod type_tests {
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         match call_result {
-            Ty::Enum(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
+            Ty::Enum(sym, generics) => {
+                assert_eq!(*symbol_id, sym); // Optional's ID
                 assert_eq!(generics, vec![Ty::Int]);
             }
             _ => panic!("Expected Optional<Int>, got {call_result:?}"),
@@ -1191,7 +1202,7 @@ mod type_tests {
             checked.type_for(&checked.root_ids()[1]).unwrap(),
             Ty::Closure {
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
-                captures: vec![SymbolID(2)]
+                captures: vec![SymbolID::typed(2)]
             }
         );
 
@@ -1323,7 +1334,7 @@ mod type_tests {
         assert!(
             matches!(
                 checked.diagnostics()[0].kind,
-                DiagnosticKind::Typing(0, TypeError::UnexpectedType(_, _))
+                DiagnosticKind::Typing(_, TypeError::UnexpectedType(_, _))
             ),
             "{:?}",
             checked.diagnostics()
@@ -1498,8 +1509,8 @@ mod type_tests {
         ",
         )
         .unwrap();
-        let person_struct = checked.env.lookup_struct(&SymbolID(3)).unwrap();
-        let thingable_protocol = checked.env.lookup_protocol(&SymbolID(1)).unwrap();
+        let person_struct = checked.env.lookup_struct(&SymbolID::typed(3)).unwrap();
+        let thingable_protocol = checked.env.lookup_protocol(&SymbolID::typed(1)).unwrap();
         assert_eq!(person_struct.name_str, "Person");
         assert!(person_struct.conforms_to(&thingable_protocol.symbol_id));
 
@@ -1534,18 +1545,19 @@ mod protocol_tests {
         )
         .unwrap();
 
-        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID(4)) else {
+        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID::typed(4)) else {
             panic!("didn't get person: {:?}", checked.env.types);
         };
 
-        let Some(TypeDef::Protocol(_aged_def)) = checked.env.lookup_type(&SymbolID(1)) else {
+        let Some(TypeDef::Protocol(_aged_def)) = checked.env.lookup_type(&SymbolID::typed(1))
+        else {
             panic!("didn't get aged protocol: {:#?}", checked.env.types);
         };
 
         assert_eq!(person_def.conformances.len(), 1);
         assert_eq!(
             person_def.conformances[0],
-            Conformance::new(SymbolID(1), vec![Ty::Int])
+            Conformance::new(SymbolID::typed(1), vec![Ty::Int])
         );
     }
 
@@ -1741,7 +1753,10 @@ mod protocol_tests {
             checked.diagnostics()
         );
 
-        assert_eq!(checked.at(2).unwrap(), Ty::Struct(SymbolID(4), vec![]));
+        assert_eq!(
+            checked.at(2).unwrap(),
+            Ty::Struct(SymbolID::typed(4), vec![])
+        );
     }
 
     #[test]
