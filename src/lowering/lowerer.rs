@@ -74,6 +74,7 @@ impl Ty {
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
             ),
+            Ty::Byte => IRType::Byte,
             Ty::Void => IRType::Void,
             Ty::Int => IRType::Int,
             Ty::Bool => IRType::Bool,

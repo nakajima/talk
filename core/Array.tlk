@@ -1,4 +1,4 @@
-struct Array<T> {
+struct Array<Element> {
 	let count: Int  
 	let capacity: Int
 	let storage: Pointer
@@ -6,21 +6,21 @@ struct Array<T> {
 	init(capacity: Int) {
 		self.count = 0
 		self.capacity = capacity
-		self.storage = __alloc<T>(capacity)
+		self.storage = __alloc<Element>(capacity)
 	}
 
-	func push(element: T) {
+	func push(element: Element) {
 		self.resizeIfNeeded()
-		__store<T>(self.storage, self.count, element)
+		__store<Element>(self.storage, self.count, element)
 		self.count = self.count + 1
 	}
 
-	func get(index: Int) -> T {
-		__load<T>(self.storage, index)
+	func get(index: Int) -> Element {
+		__load<Element>(self.storage, index)
 	}
 
-	func pop() -> T {
-		let popped = __load<T>(self.storage, self.count - 1)
+	func pop() -> Element {
+		let popped = __load<Element>(self.storage, self.count - 1)
 		self.count = self.count - 1
 		popped
 	}
@@ -30,10 +30,10 @@ struct Array<T> {
 			return
 		}
 
-		let newStorage = __alloc<T>(self.capacity * 2)
+		let newStorage = __alloc<Element>(self.capacity * 2)
 		let i = 0
 		loop i < self.count {
-			__store<T>(newStorage, i, self.get(i))
+			__store<Element>(newStorage, i, self.get(i))
 			i = i + 1
 		}
 		__free(self.storage)

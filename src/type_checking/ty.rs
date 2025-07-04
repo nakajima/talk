@@ -29,6 +29,7 @@ pub enum Ty {
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
     Protocol(SymbolID, Vec<Ty> /* generics */),
+    Byte,
     Pointer,
     SelfType,
 }
@@ -36,6 +37,7 @@ pub enum Ty {
 impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Ty::Byte => write!(f, "byte"),
             Ty::Void => write!(f, "void"),
             Ty::Int => write!(f, "Int"),
             Ty::Bool => write!(f, "Bool"),

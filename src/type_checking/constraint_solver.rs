@@ -669,6 +669,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         match ty {
             Ty::Pointer => ty.clone(),
             Ty::Int => ty.clone(),
+            Ty::Byte => ty.clone(),
             Ty::Float => ty.clone(),
             Ty::Bool => ty.clone(),
             Ty::SelfType => ty.clone(),
@@ -1065,7 +1066,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .map(|t| Self::substitute_ty_with_map(t, substitutions))
                     .collect(),
             ),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType => ty.clone(),
+            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
+                ty.clone()
+            }
         }
     }
 }
