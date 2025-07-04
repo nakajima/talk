@@ -67,17 +67,30 @@ impl std::fmt::Display for RefKind {
 
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
+        if self == &Ty::POINTER {
+            return IRType::POINTER;
+        };
+
+        if self == &Ty::INT {
+            return IRType::Int;
+        };
+
+        if self == &Ty::BOOL {
+            return IRType::Bool;
+        };
+
+        if self == &Ty::FLOAT {
+            return IRType::Float;
+        };
+
         match self {
             Ty::ProtocolSelf => IRType::Void,
-            Ty::Pointer => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
             ),
             Ty::Void => IRType::Void,
-            Ty::Int => IRType::Int,
-            Ty::Bool => IRType::Bool,
-            Ty::Float => IRType::Float,
+
             Ty::Func(items, ty, _generics) => IRType::Func(
                 items.iter().map(|t| t.to_ir(lowerer)).collect(),
                 Box::new(ty.to_ir(lowerer)),
@@ -1100,7 +1113,7 @@ impl<'a> Lowerer<'a> {
             //     struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
             // )
             // .into(),
-            Ty::Pointer.into(),
+            Ty::POINTER.into(),
             generics,
         );
 

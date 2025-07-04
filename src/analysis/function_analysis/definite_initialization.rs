@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(name, format!("@_{}_Person_init", person_id.0));
         let Property { name, ty, .. } = &properties[0];
         assert_eq!(name, "age");
-        assert_eq!(ty, &Ty::Int);
+        assert_eq!(ty, &Ty::INT);
     }
 
     #[test]
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(name, format!("@_{}_Person_init", person_id.0));
         let Property { name, ty, .. } = &properties[0];
         assert_eq!(name, "age");
-        assert_eq!(ty, &Ty::Int);
+        assert_eq!(ty, &Ty::INT);
     }
 
     #[test]

@@ -6,12 +6,10 @@ use crate::{
     type_var_id::TypeVarID,
 };
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Ty {
     Void,
-    Int,
-    Bool,
-    Float,
+
     Init(SymbolID, Vec<Ty> /* params */),
     Func(
         FuncParams,    /* params */
@@ -29,7 +27,7 @@ pub enum Ty {
     Array(Box<Ty>),
     Struct(SymbolID, Vec<Ty> /* generics */),
     Protocol(SymbolID, Vec<Ty> /* generics */),
-    Pointer,
+
     ProtocolSelf,
 }
 
@@ -37,9 +35,6 @@ impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Ty::Void => write!(f, "void"),
-            Ty::Int => write!(f, "Int"),
-            Ty::Bool => write!(f, "Bool"),
-            Ty::Float => write!(f, "Float"),
             Ty::ProtocolSelf => write!(f, "Self"),
             Ty::Init(_, params) => write!(
                 f,
@@ -74,7 +69,6 @@ impl Display for Ty {
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
             Ty::Struct(_, _) => write!(f, "struct"),
-            Ty::Pointer => write!(f, "pointer"),
             Ty::Protocol(_, _) => write!(f, "protocol"),
         }
     }
@@ -86,9 +80,12 @@ impl std::hash::Hash for Ty {
     }
 }
 
-impl Eq for Ty {}
-
 impl Ty {
+    pub const INT: Ty = Ty::Struct(SymbolID::INT, Vec::new());
+    pub const BOOL: Ty = Ty::Struct(SymbolID::BOOL, Vec::new());
+    pub const FLOAT: Ty = Ty::Struct(SymbolID::FLOAT, Vec::new());
+    pub const POINTER: Ty = Ty::Struct(SymbolID::POINTER, Vec::new());
+
     pub fn string() -> Ty {
         Ty::Struct(SymbolID::STRING, vec![])
     }

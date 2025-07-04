@@ -8,8 +8,10 @@ use crate::{
     environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
+    operator_solver::OperatorSolver,
     parser::ExprID,
     satisfies_checker::SatisfiesChecker,
+    token_kind::TokenKind,
     ty::Ty,
     type_checker::{Scheme, TypeError},
     type_constraint::TypeConstraint,
@@ -52,6 +54,12 @@ pub enum Constraint {
         ty: Ty,
         constraints: Vec<TypeConstraint>,
     },
+    Operator {
+        expr_id: ExprID,
+        lhs: Option<Ty>,
+        rhs: Ty,
+        op: TokenKind,
+    },
     Retry(Box<Constraint>),
 }
 
@@ -68,6 +76,7 @@ impl Constraint {
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
             Self::Satisfies { expr_id, .. } => expr_id,
+            Self::Operator { expr_id, .. } => expr_id,
             Self::Retry(c) => c.expr_id(),
         }
     }
@@ -79,6 +88,19 @@ impl Constraint {
                 ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
                 ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
             ),
+            Constraint::Operator {
+                expr_id,
+                lhs,
+                rhs,
+                op,
+            } => Constraint::Operator {
+                expr_id: *expr_id,
+                rhs: ConstraintSolver::<NameResolved>::apply(rhs, substitutions, 0),
+                lhs: lhs
+                    .as_ref()
+                    .map(|lhs| ConstraintSolver::<NameResolved>::apply(lhs, substitutions, 0)),
+                op: op.clone(),
+            },
             Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
                 *id,
                 ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
@@ -365,7 +387,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 constraints,
                 ..
             } => {
-                let checker = SatisfiesChecker::new(self.env, ty, constraints);
+                let ty = Self::apply(ty, substitutions, 0);
+                let checker = SatisfiesChecker::new(self.env, &ty, constraints);
                 match checker.check() {
                     Ok(unifications) => {
                         for (lhs, rhs) in unifications {
@@ -379,6 +402,14 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             err,
                         ));
                     }
+                }
+            }
+            Constraint::Operator { lhs, rhs, op, .. } => {
+                let solver = OperatorSolver::new(lhs, rhs, op, self.env);
+                if lhs.is_none() {
+                    solver.solve_unary()?;
+                } else {
+                    solver.solve_binary()?;
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
@@ -666,12 +697,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         }
 
         // log::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
+        if [Ty::INT, Ty::FLOAT, Ty::BOOL, Ty::POINTER].contains(ty) {
+            return ty.clone();
+        }
 
         match ty {
-            Ty::Pointer => ty.clone(),
-            Ty::Int => ty.clone(),
-            Ty::Float => ty.clone(),
-            Ty::Bool => ty.clone(),
             Ty::ProtocolSelf => ty.clone(),
             Ty::Func(params, returning, generics) => {
                 let applied_params = Self::apply_multiple(params, substitutions, depth + 1);
@@ -975,9 +1005,9 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
     /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
     pub fn substitute_ty_with_map(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
-        match ty {
+        match ty.clone() {
             Ty::TypeVar(type_var_id) => {
-                if let Some(substituted_ty) = substitutions.get(type_var_id) {
+                if let Some(substituted_ty) = substitutions.get(&type_var_id) {
                     substituted_ty.clone()
                 } else {
                     ty.clone() // Not in this substitution map, return as is.
@@ -989,14 +1019,14 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
                     .collect();
 
-                Ty::Init(*struct_id, applied_params)
+                Ty::Init(struct_id, applied_params)
             }
             Ty::Func(params, returning, generics) => {
                 let applied_params = params
                     .iter()
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
                     .collect();
-                let applied_return = Self::substitute_ty_with_map(returning, substitutions);
+                let applied_return = Self::substitute_ty_with_map(&returning, substitutions);
                 let applied_generics = generics
                     .iter()
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
@@ -1004,7 +1034,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }
             Ty::Closure { func, captures } => {
-                let func = Self::substitute_ty_with_map(func, substitutions)
+                let func = Self::substitute_ty_with_map(&func, substitutions)
                     .clone()
                     .into();
 
@@ -1018,14 +1048,14 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .iter()
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
                     .collect();
-                Ty::Enum(*name, applied_generics)
+                Ty::Enum(name, applied_generics)
             }
             Ty::EnumVariant(enum_id, values) => {
                 let applied_values = values
                     .iter()
                     .map(|v| Self::substitute_ty_with_map(v, substitutions))
                     .collect();
-                Ty::EnumVariant(*enum_id, applied_values)
+                Ty::EnumVariant(enum_id, applied_values)
             }
             Ty::Tuple(types) => Ty::Tuple(
                 types
@@ -1033,24 +1063,28 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
                     .collect(),
             ),
-            Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
-            Ty::Struct(sym, generics) => Ty::Struct(
-                *sym,
-                generics
-                    .iter()
-                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
-                    .collect(),
-            ),
-            Ty::Protocol(sym, generics) => Ty::Protocol(
-                *sym,
-                generics
-                    .iter()
-                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
-                    .collect(),
-            ),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::ProtocolSelf => {
-                ty.clone()
+            Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(&ty, substitutions).into()),
+            Ty::Struct(sym, generics) => {
+                if [Ty::INT, Ty::FLOAT, Ty::BOOL, Ty::POINTER].contains(ty) {
+                    return ty.clone();
+                }
+
+                Ty::Struct(
+                    sym,
+                    generics
+                        .iter()
+                        .map(|t| Self::substitute_ty_with_map(t, substitutions))
+                        .collect(),
+                )
             }
+            Ty::Protocol(sym, generics) => Ty::Protocol(
+                sym,
+                generics
+                    .iter()
+                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
+                    .collect(),
+            ),
+            Ty::Void | Ty::ProtocolSelf => ty.clone(),
         }
     }
 }

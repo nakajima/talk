@@ -68,10 +68,9 @@ fn lower_alloc(
         )));
     };
 
-    if !matches!(typed_expr.ty, Ty::Int) {
+    if typed_expr.ty != Ty::INT {
         return Err(IRError::Unknown(format!(
-            "__alloc takes an Int, got {:?}",
-            lowerer.source_file.get(&val)
+            "__alloc takes an Int, got {typed_expr:?}",
         )));
     }
 

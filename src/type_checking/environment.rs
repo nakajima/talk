@@ -344,9 +344,7 @@ impl Environment {
                 }
                 Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
                 Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
-                Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::ProtocolSelf => {
-                    ty.clone()
-                }
+                Ty::Void | Ty::ProtocolSelf => ty.clone(),
             }
         }
 
@@ -459,6 +457,12 @@ impl Environment {
             .insert(def.symbol_id, TypeDef::Protocol(def.clone()));
 
         Ok(())
+    }
+
+    pub fn type_def_from_name(&self, name: &str) -> Option<&TypeDef> {
+        self.types
+            .values()
+            .find(|&type_def| type_def.name() == name)
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
@@ -584,7 +588,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
                 s.extend(free_type_vars(generic));
             }
         }
-        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::ProtocolSelf => {
+        _ => {
             // These types contain no nested types, so there's nothing to do.
         }
     }

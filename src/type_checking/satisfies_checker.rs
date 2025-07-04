@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    conformance_checker::ConformanceError, environment::Environment, ty::Ty,
+    SymbolID, conformance_checker::ConformanceError, environment::Environment, ty::Ty,
     type_checker::TypeError, type_constraint::TypeConstraint,
 };
 
@@ -34,35 +34,35 @@ impl<'a> SatisfiesChecker<'a> {
             }
         };
 
-        let Some(type_def) = self.env.lookup_type(type_id) else {
-            return Err(TypeError::Unknown(format!(
-                "Did not resolve type with id: {type_id:?}"
-            )));
-        };
-
         let mut unifications = vec![];
         let mut errors = vec![];
 
         for constraint in self.constraints.iter() {
             match constraint {
-                TypeConstraint::Equals { .. } => (),
+                TypeConstraint::Equals { ty } => unifications.push((self.ty.clone(), ty.clone())),
                 TypeConstraint::InstanceOf { .. } => (),
                 TypeConstraint::Conforms {
                     protocol_id,
                     associated_types,
                 } => {
+                    let Some(type_def) = self.env.lookup_type(type_id) else {
+                        return Err(TypeError::Unknown(format!(
+                            "Did not resolve type with id: {type_id:?}"
+                        )));
+                    };
+
                     log::trace!("= Checking {:?} satisfies {constraint:?}", self.ty);
 
                     let Some(protocol_def) = self.env.lookup_protocol(protocol_id).cloned() else {
                         continue;
                     };
 
-                    if type_args.len() != associated_types.len() {
-                        errors.push(ConformanceError::TypeDoesNotConform(
-                            type_def.name().to_string(),
-                            "could not determine type parameters".to_string(),
-                        ));
-                    }
+                    // if type_args.len() != associated_types.len() {
+                    //     errors.push(ConformanceError::TypeDoesNotConform(
+                    //         type_def.name().to_string(),
+                    //         "could not determine type parameters".to_string(),
+                    //     ));
+                    // }
 
                     if let Some(conformance) = type_def
                         .conformances()

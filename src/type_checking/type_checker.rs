@@ -220,7 +220,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Incomplete(expr_id) => {
                 self.handle_incomplete(expr_id, expected, env, source_file)
             }
-            Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::Bool),
+            Expr::LiteralTrue | Expr::LiteralFalse => checked_expected(expected, Ty::BOOL),
             Expr::Loop(cond, body) => self.infer_loop(cond, body, env, source_file),
             Expr::If(condition, consequence, alternative) => {
                 let ty = self.infer_if(condition, consequence, alternative, env, source_file);
@@ -235,8 +235,8 @@ impl<'a> TypeChecker<'a> {
                 type_args,
                 args,
             } => self.infer_call(id, env, callee, type_args, args, expected, source_file),
-            Expr::LiteralInt(_) => checked_expected(expected, Ty::Int),
-            Expr::LiteralFloat(_) => checked_expected(expected, Ty::Float),
+            Expr::LiteralInt(_) => checked_expected(expected, Ty::INT),
+            Expr::LiteralFloat(_) => checked_expected(expected, Ty::FLOAT),
             Expr::LiteralString(_) => Ok(Ty::string()),
             Expr::Assignment(lhs, rhs) => self.infer_assignment(env, lhs, rhs, source_file),
             Expr::TypeRepr {
@@ -641,7 +641,7 @@ impl<'a> TypeChecker<'a> {
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         if let Some(cond) = cond {
-            self.infer_node(cond, env, &Some(Ty::Bool), source_file)?;
+            self.infer_node(cond, env, &Some(Ty::BOOL), source_file)?;
         }
 
         self.infer_node(body, env, &None, source_file)?;
@@ -657,7 +657,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let _condition = self.infer_node(condition, env, &Some(Ty::Bool), source_file)?;
+        let _condition = self.infer_node(condition, env, &Some(Ty::BOOL), source_file)?;
         let consequence = self.infer_node(consequence, env, &None, source_file)?;
         if let Some(alternative_id) = alternative {
             let alternative = self.infer_node(alternative_id, env, &None, source_file)?;
@@ -1061,7 +1061,7 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
         &mut self,
-        _id: &ExprID,
+        id: &ExprID,
         lhs_id: &ExprID,
         rhs_id: &ExprID,
         op: &TokenKind,
@@ -1072,21 +1072,46 @@ impl<'a> TypeChecker<'a> {
         let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
         let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
 
-        env.constrain_equality(*lhs_id, lhs.clone(), rhs);
-
         // TODO: For now we're just gonna hardcode these
         use TokenKind::*;
         match op {
+            Plus => {
+                let protocol =
+                    env.type_def_from_name("Adds")
+                        .cloned()
+                        .ok_or(TypeError::Unknown(
+                            "No Adds protocol (maybe prelude not included)".to_string(),
+                        ))?;
+
+                let ret = env.new_type_variable(
+                    TypeVarKind::CallReturn,
+                    vec![TypeConstraint::Equals { ty: lhs.clone() }],
+                );
+
+                env.constraints.push(Constraint::Satisfies {
+                    expr_id: *id,
+                    ty: lhs,
+                    constraints: vec![TypeConstraint::Conforms {
+                        protocol_id: protocol.symbol_id(),
+                        associated_types: vec![rhs, Ty::TypeVar(ret.clone())],
+                    }],
+                });
+
+                Ok(Ty::TypeVar(ret))
+            }
             // Bool ops
-            EqualsEquals => Ok(Ty::Bool),
-            BangEquals => Ok(Ty::Bool),
-            Greater => Ok(Ty::Bool),
-            GreaterEquals => Ok(Ty::Bool),
-            Less => Ok(Ty::Bool),
-            LessEquals => Ok(Ty::Bool),
+            EqualsEquals => Ok(Ty::BOOL),
+            BangEquals => Ok(Ty::BOOL),
+            Greater => Ok(Ty::BOOL),
+            GreaterEquals => Ok(Ty::BOOL),
+            Less => Ok(Ty::BOOL),
+            LessEquals => Ok(Ty::BOOL),
 
             // Same type ops
-            _ => Ok(lhs),
+            _ => {
+                env.constrain_equality(*lhs_id, lhs.clone(), rhs);
+                Ok(lhs)
+            }
         }
     }
 

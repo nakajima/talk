@@ -30,6 +30,7 @@ pub fn _compile_prelude() -> Prelude {
     });
     for file in [
         PathBuf::from("./core/Optional.tlk"),
+        PathBuf::from("./core/Operators.tlk"),
         PathBuf::from("./core/Array.tlk"),
         PathBuf::from("./core/String.tlk"),
         PathBuf::from("./core/Printable.tlk"),
@@ -64,4 +65,4 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Optional", "Array", "String", "Printable");
+stdlib_modules!("Optional", "Array", "String", "Operators", "Printable");

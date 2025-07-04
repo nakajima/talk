@@ -1,0 +1,9 @@
+protocol Adds<Operand, Returns> {
+  func adds(op: Operand) -> Returns
+}
+
+extend Int: Adds<Int, Int> {
+	func adds(op: Int) -> Int {
+		self + op	
+	}
+}

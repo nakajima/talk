@@ -28,7 +28,7 @@ fn builtins() -> Vec<Builtin> {
                 is_captured: false,
                 definition: None,
             },
-            ty: Ty::Int,
+            ty: Ty::INT,
             unbound_vars: vec![],
             type_def: None,
         },
@@ -41,7 +41,7 @@ fn builtins() -> Vec<Builtin> {
                 is_captured: false,
                 definition: None,
             },
-            ty: Ty::Float,
+            ty: Ty::FLOAT,
             unbound_vars: vec![],
             type_def: None,
         },
@@ -54,7 +54,7 @@ fn builtins() -> Vec<Builtin> {
                 is_captured: false,
                 definition: None,
             },
-            ty: Ty::Bool,
+            ty: Ty::BOOL,
             unbound_vars: vec![],
             type_def: None,
         },
@@ -67,7 +67,7 @@ fn builtins() -> Vec<Builtin> {
                 is_captured: false,
                 definition: None,
             },
-            ty: Ty::Pointer,
+            ty: Ty::POINTER,
             unbound_vars: vec![],
             type_def: None,
         },
@@ -81,8 +81,8 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::Int /* capacity */],
-                Ty::Pointer.into(),
+                vec![Ty::INT /* capacity */],
+                Ty::POINTER.into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: -5,
                     kind: TypeVarKind::Element,
@@ -106,8 +106,8 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::Pointer, Ty::Int],
-                Ty::Pointer.into(),
+                vec![Ty::POINTER, Ty::INT],
+                Ty::POINTER.into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: -4,
                     kind: TypeVarKind::Element,
@@ -130,7 +130,7 @@ fn builtins() -> Vec<Builtin> {
                 is_captured: false,
                 definition: None,
             },
-            ty: Ty::Func(vec![Ty::Pointer], Ty::Void.into(), vec![]),
+            ty: Ty::Func(vec![Ty::POINTER], Ty::Void.into(), vec![]),
             unbound_vars: vec![],
             type_def: None,
         },
@@ -145,8 +145,8 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Func(
                 vec![
-                    Ty::Pointer,
-                    Ty::Int,
+                    Ty::POINTER,
+                    Ty::INT,
                     Ty::TypeVar(TypeVarID {
                         id: -8,
                         kind: TypeVarKind::Element,
@@ -177,7 +177,7 @@ fn builtins() -> Vec<Builtin> {
                 definition: None,
             },
             ty: Ty::Func(
-                vec![Ty::Pointer, Ty::Int],
+                vec![Ty::POINTER, Ty::INT],
                 Ty::TypeVar(TypeVarID {
                     id: -9,
                     kind: TypeVarKind::Element,
@@ -312,7 +312,7 @@ mod tests {
         assert!(checked.diagnostics().is_empty());
         assert_eq!(
             checked.type_for(&checked.root_ids()[0]).unwrap(),
-            Ty::Pointer
+            Ty::POINTER
         );
     }
 
@@ -329,7 +329,7 @@ mod tests {
         assert!(checked.diagnostics().is_empty());
         assert_eq!(
             checked.type_for(&checked.root_ids()[1]).unwrap(),
-            Ty::Pointer
+            Ty::POINTER
         );
     }
 
@@ -362,7 +362,7 @@ mod tests {
         .unwrap();
 
         assert!(checked.diagnostics().is_empty());
-        assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
+        assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::INT));
     }
 }
 
@@ -435,14 +435,14 @@ mod array_tests {
         let checked = crate::type_checking::check("[1,2,3]").unwrap();
         assert_eq!(
             checked.type_for(&checked.root_ids()[0]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::Struct(SymbolID::ARRAY, vec![Ty::INT])
         );
     }
 
     #[test]
     fn gets_count() {
         let checked = crate::type_checking::check("[1,2,3].count").unwrap();
-        assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::INT);
     }
 
     #[test]
