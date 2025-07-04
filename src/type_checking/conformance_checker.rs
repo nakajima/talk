@@ -1,11 +1,10 @@
 use crate::{
-    NameResolved, SymbolID,
-    constraint_solver::{ConstraintSolver, Substitutions},
+    SymbolID,
     environment::{Environment, free_type_vars},
     ty::Ty,
     type_checker::TypeError,
     type_defs::{TypeDef, protocol_def::ProtocolDef, struct_def::Property},
-    type_var_id::{TypeVarID, TypeVarKind},
+    type_var_id::TypeVarKind,
 };
 
 pub struct ConformanceChecker<'a> {
