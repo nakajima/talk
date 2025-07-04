@@ -848,4 +848,19 @@ mod tests {
             Value::String("hello world".to_string())
         );
     }
+
+    #[test]
+    fn interprets_ir_instr() {
+        assert_eq!(
+            interpret(
+                "
+                let x = 2
+                let y = 3
+                __ir_instr(\"$? = add int %0, %1;\")
+            "
+            )
+            .unwrap(),
+            Value::Int(5)
+        )
+    }
 }
