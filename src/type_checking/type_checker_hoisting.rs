@@ -142,7 +142,7 @@ impl<'a> TypeChecker<'a> {
                     *symbol_id,
                     Scheme {
                         ty: Ty::TypeVar(type_param.clone()),
-                        unbound_vars: vec![],
+                        unbound_vars: vec![type_param.clone()],
                     },
                 )
                 .map_err(|e| (id, e))?;

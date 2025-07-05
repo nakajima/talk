@@ -207,7 +207,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(typed_expr) = env.typed_exprs.get(id)
             && expected.is_none()
         {
-            log::trace!("Already inferred {typed_expr:?}, returning from cache");
+            log::trace!("{typed_expr:?}, returning from cache");
             return Ok(typed_expr.ty.clone());
         }
 
@@ -215,7 +215,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unknown(format!("No expr found with id {id}")));
         };
 
-        log::trace!("Infer node [{id}]: {expr:?}");
+        log::trace!("⋈ Infer [{id}]: {expr:?}");
         let mut ty = match &expr {
             Expr::Incomplete(expr_id) => {
                 self.handle_incomplete(expr_id, expected, env, source_file)
@@ -871,11 +871,8 @@ impl<'a> TypeChecker<'a> {
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
                 Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
-            } else if let Ok(scheme) = env.lookup_symbol(&symbol_id).cloned() {
-                let i = env.instantiate(&scheme);
-                i
             } else {
-                env.placeholder(id, name.name_str(), &symbol_id, vec![])
+                env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
             };
 
             return Ok(ty);
@@ -982,14 +979,14 @@ impl<'a> TypeChecker<'a> {
         let body_ty = self.infer_node(body, env, &expected_ret_ty, source_file)?;
         let mut ret_ty = body_ty.clone();
 
-        if let Some(ret_type) = expected_ret_ty
+        if let Some(expected_ret_ty) = &expected_ret_ty
             && let Some(ret_id) = ret
         {
-            ret_ty = ret_type.clone();
+            ret_ty = expected_ret_ty.clone();
             env.constrain(Constraint::Equality(
                 *ret_id,
                 body_ty.clone(),
-                ret_type.clone(),
+                expected_ret_ty.clone(),
             ));
         }
 

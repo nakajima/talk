@@ -102,6 +102,10 @@ impl Constraint {
                 has_canonical_type_var(&scheme.ty) || has_canonical_type_var(ty)
             }
             Constraint::Satisfies { ty, .. } => has_canonical_type_var(ty),
+            Constraint::ConformsTo { conformance, .. } => conformance
+                .associated_types
+                .iter()
+                .any(has_canonical_type_var),
             _ => false,
         }
     }
@@ -300,21 +304,21 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 type_def,
                 conformance,
             } => {
-                let Some(type_def) = self.env.lookup_type(type_def) else {
+                let Some(type_def) = self.env.lookup_type(type_def).cloned() else {
                     return Err(TypeError::Unknown(format!(
                         "could not find type: {type_def:?}"
                     )));
                 };
 
                 let Some(TypeDef::Protocol(protocol)) =
-                    self.env.lookup_type(&conformance.protocol_id)
+                    self.env.lookup_type(&conformance.protocol_id).cloned()
                 else {
                     return Err(TypeError::Unknown(format!(
                         "could not find protocol: {conformance:?}"
                     )));
                 };
 
-                let conformance_checker = ConformanceChecker::new(type_def, protocol, self.env);
+                let conformance_checker = ConformanceChecker::new(&type_def, &protocol, self.env);
                 match conformance_checker.check() {
                     Ok(unifications) => {
                         for (lhs, rhs) in unifications {
@@ -441,6 +445,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                 return Err(TypeError::Unknown("no idea how this happened".into()));
                             }
                         }
+                        .cloned()
                         .expect("builtins should have type defs");
 
                         let Some(member) =
@@ -466,10 +471,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             type_def.member_ty_with_conformances(member_name, self.env)
                         else {
                             panic!("wtf: {type_def:#?}");
-                            return Err(TypeError::MemberNotFound(
-                                type_def.name().to_string(),
-                                member_name.to_string(),
-                            ));
+                            // return Err(TypeError::MemberNotFound(
+                            //     type_def.name().to_string(),
+                            //     member_name.to_string(),
+                            // ));
                         };
 
                         (
@@ -517,10 +522,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                     };
                                     let Some(ty) = type_def.member_ty(member_name) else {
                                         panic!("wtf");
-                                        return Err(TypeError::MemberNotFound(
-                                            member_name.to_string(),
-                                            type_def.name().to_string(),
-                                        ));
+                                        // return Err(TypeError::MemberNotFound(
+                                        //     member_name.to_string(),
+                                        //     type_def.name().to_string(),
+                                        // ));
                                     };
                                     result = Some((
                                         ty.clone(),

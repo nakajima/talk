@@ -1,17 +1,16 @@
 use crate::{
     SymbolID,
-    environment::{Environment, free_type_vars},
+    environment::Environment,
     ty::Ty,
     type_checker::TypeError,
     type_defs::{TypeDef, protocol_def::ProtocolDef, struct_def::Property},
-    type_var_id::TypeVarKind,
 };
 
 pub struct ConformanceChecker<'a> {
     type_def: &'a TypeDef,
     protocol: &'a ProtocolDef,
     errors: Vec<ConformanceError>,
-    env: &'a Environment,
+    env: &'a mut Environment,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -26,7 +25,7 @@ pub enum ConformanceError {
 }
 
 impl<'a> ConformanceChecker<'a> {
-    pub fn new(type_def: &'a TypeDef, protocol: &'a ProtocolDef, env: &'a Environment) -> Self {
+    pub fn new(type_def: &'a TypeDef, protocol: &'a ProtocolDef, env: &'a mut Environment) -> Self {
         Self {
             type_def,
             protocol,
@@ -113,7 +112,7 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
-    fn find_method(&self, method_name: &str) -> Result<Ty, ConformanceError> {
+    fn find_method(&mut self, method_name: &str) -> Result<Ty, ConformanceError> {
         if let Some(ty) = self
             .type_def
             .member_ty_with_conformances(method_name, self.env)

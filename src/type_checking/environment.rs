@@ -85,12 +85,10 @@ impl Environment {
         symbol_id: &SymbolID,
         constraints: Vec<TypeConstraint>,
     ) -> Ty {
-        // 1. Create a fresh placeholder for this usage of the type name.
         let usage_placeholder = Ty::TypeVar(
             self.new_type_variable(TypeVarKind::Placeholder(name.clone()), constraints),
         );
 
-        // 2. Generate the InstanceOf constraint.
         self.constrain(Constraint::InstanceOf {
             scheme: Scheme {
                 ty: usage_placeholder.clone(),
@@ -110,7 +108,6 @@ impl Environment {
             );
         }
 
-        // 3. Return the placeholder.
         usage_placeholder
     }
 
@@ -188,8 +185,14 @@ impl Environment {
         self.constraints = new_constraints;
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) -> Result<(), TypeError> {
-        log::info!("Declare {symbol_id:?} -> {scheme:?}");
+        let loc = std::panic::Location::caller();
+        log::debug!(
+            "λ Declare {symbol_id:?} -> {scheme:?} ({}:{})",
+            loc.file(),
+            loc.line()
+        );
         self.scopes
             .last_mut()
             .ok_or(TypeError::Unknown(format!(
@@ -201,7 +204,7 @@ impl Environment {
     }
 
     pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        log::info!(
+        log::debug!(
             "Declaring {:?} {:?} in {:?}",
             symbol_id,
             scheme,
@@ -234,7 +237,7 @@ impl Environment {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!(
-                "Instantiate {:?} from {}:{}",
+                "★ Instantiate {:?} from {}:{}",
                 scheme,
                 loc.file(),
                 loc.line()
@@ -245,16 +248,6 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            log::trace!(
-                "Instantiate {:?} from {}:{}",
-                scheme,
-                loc.file(),
-                loc.line()
-            );
-        }
-        // 1) build a map old_var → fresh_var
         let mut var_map: HashMap<TypeVarID, Ty> = HashMap::new();
         for old in &scheme.unbound_vars {
             if let Some(arg_ty) = args.get(old) {
@@ -266,7 +259,7 @@ impl Environment {
                 var_map.insert(old.clone(), Ty::TypeVar(fresh));
             }
         }
-        // 2) walk the type, replacing each old with its fresh
+
         fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
             match ty {
                 Ty::TypeVar(tv) => {
@@ -346,7 +339,7 @@ impl Environment {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::trace!(
-                "ty_for_symbol {} ({:?}) = {:?} from {}:{}",
+                "T ty_for_symbol {} ({:?}) = {:?} from {}:{}",
                 name,
                 symbol_id,
                 ret,
@@ -380,6 +373,15 @@ impl Environment {
     }
 
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
+        #[cfg(debug_assertions)]
+        if let Some(existing) = self.lookup_type(&def.symbol_id()) {
+            if existing != def {
+                log::info!("Updating {def:?}");
+            }
+        } else {
+            log::info!("Registering {def:?}");
+        }
+
         match def {
             TypeDef::Enum(def) => self.register_enum(def),
             TypeDef::Struct(def) => self.register_struct(def),
@@ -394,7 +396,6 @@ impl Environment {
 
     // Helper methods for enum definitions
     pub fn register_enum(&mut self, def: &EnumDef) -> Result<(), TypeError> {
-        log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
             Scheme {
@@ -408,7 +409,6 @@ impl Environment {
     }
 
     pub fn register_struct(&mut self, def: &StructDef) -> Result<(), TypeError> {
-        log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
             Scheme {
@@ -423,7 +423,6 @@ impl Environment {
     }
 
     pub fn register_protocol(&mut self, def: &ProtocolDef) -> Result<(), TypeError> {
-        log::info!("Registering {def:?}");
         self.declare(
             def.symbol_id,
             Scheme {

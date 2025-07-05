@@ -22,7 +22,7 @@ struct Array<Element> {
 	func pop() -> Element {
 		let popped = __load<Element>(self.storage, self.count - 1)
 		self.count = self.count - 1
-		popped
+		return popped
 	}
 
 	func resizeIfNeeded() {
