@@ -752,7 +752,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                ret_var = env.instantiate(&Scheme {
+                let ret_var = env.instantiate(&Scheme {
                     ty: Ty::Struct(*symbol_id, type_args),
                     unbound_vars: struct_def.canonical_type_vars(),
                 });
@@ -860,8 +860,6 @@ impl<'a> TypeChecker<'a> {
                 unbound_vars,
             };
 
-            println!("Introducing {name:?} -> {scheme:?}");
-
             env.declare(symbol_id, scheme.clone())?;
 
             return Ok(scheme.ty);
@@ -880,8 +878,6 @@ impl<'a> TypeChecker<'a> {
 
         let ty_scheme = env.lookup_symbol(&symbol_id)?.clone();
         let mut substitutions = Substitutions::default();
-
-        println!("Inferring existing {name:?} -> {ty_scheme:?}");
 
         for (var, generic_id) in ty_scheme.unbound_vars.iter().zip(generics) {
             // Recursively get arg_ty

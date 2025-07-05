@@ -204,12 +204,6 @@ impl Environment {
     }
 
     pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        log::debug!(
-            "Declaring {:?} {:?} in {:?}",
-            symbol_id,
-            scheme,
-            self.scopes.len()
-        );
         self.scopes
             .index_mut(self.scopes.len() - 2)
             .insert(symbol_id, scheme);
@@ -330,8 +324,11 @@ impl Environment {
         constraints: &[TypeConstraint],
     ) -> Ty {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
-            scheme.ty.clone()
-            // self.instantiate(&scheme)
+            if !constraints.is_empty() {
+                println!("-> Ditching constraints: {constraints:?}");
+            }
+
+            self.instantiate(&scheme)
         } else {
             self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };

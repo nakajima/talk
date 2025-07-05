@@ -525,6 +525,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         env.replace_constraint_values(&substitutions);
+        env.replace_typed_exprs_values(&substitutions);
 
         Ok(())
     }

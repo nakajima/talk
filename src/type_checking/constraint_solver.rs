@@ -470,11 +470,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         let Some(member_ty) =
                             type_def.member_ty_with_conformances(member_name, self.env)
                         else {
-                            panic!("wtf: {type_def:#?}");
-                            // return Err(TypeError::MemberNotFound(
-                            //     type_def.name().to_string(),
-                            //     member_name.to_string(),
-                            // ));
+                            return Err(TypeError::MemberNotFound(
+                                type_def.name().to_string(),
+                                member_name.to_string(),
+                            ));
                         };
 
                         (
@@ -521,11 +520,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                         continue;
                                     };
                                     let Some(ty) = type_def.member_ty(member_name) else {
-                                        panic!("wtf");
-                                        // return Err(TypeError::MemberNotFound(
-                                        //     member_name.to_string(),
-                                        //     type_def.name().to_string(),
-                                        // ));
+                                        return Err(TypeError::MemberNotFound(
+                                            member_name.to_string(),
+                                            type_def.name().to_string(),
+                                        ));
                                     };
                                     result = Some((
                                         ty.clone(),
