@@ -960,7 +960,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let expected_ret_ty = if let Some(ret) = ret {
+        let annotated_ret_ty = if let Some(ret) = ret {
             Some(self.infer_node(ret, env, &None, source_file)?)
         } else {
             None
@@ -972,18 +972,18 @@ impl<'a> TypeChecker<'a> {
             param_vars.push(param_ty);
         }
 
-        let body_ty = self.infer_node(body, env, &expected_ret_ty, source_file)?;
-        let mut ret_ty = body_ty.clone();
+        let mut ret_ty = self.infer_node(body, env, &annotated_ret_ty, source_file)?;
 
-        if let Some(expected_ret_ty) = &expected_ret_ty
+        if let Some(annotated_ret_ty) = &annotated_ret_ty
             && let Some(ret_id) = ret
         {
-            ret_ty = expected_ret_ty.clone();
             env.constrain(Constraint::Equality(
                 *ret_id,
-                body_ty.clone(),
-                expected_ret_ty.clone(),
+                ret_ty.clone(),
+                annotated_ret_ty.clone(),
             ));
+
+            ret_ty = annotated_ret_ty.clone();
         }
 
         env.end_scope();
@@ -1101,7 +1101,7 @@ impl<'a> TypeChecker<'a> {
         lhs_id: &ExprID,
         rhs_id: &ExprID,
         op: &TokenKind,
-        _expected: &Option<Ty>,
+        expected: &Option<Ty>,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
@@ -1111,9 +1111,11 @@ impl<'a> TypeChecker<'a> {
         use TokenKind::*;
         match op {
             Plus => {
-                let ret_ty = Ty::TypeVar(
-                    env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), vec![]),
-                );
+                let ret_ty = expected.clone().unwrap_or_else(|| {
+                    Ty::TypeVar(
+                        env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), vec![]),
+                    )
+                });
                 env.constrain(Constraint::Satisfies {
                     expr_id: *id,
                     ty: lhs,

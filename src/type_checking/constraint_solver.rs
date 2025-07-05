@@ -52,7 +52,7 @@ pub enum Constraint {
         ty: Ty,
         constraints: Vec<TypeConstraint>,
     },
-    Retry(Box<Constraint>),
+    Retry(Box<Constraint>, usize),
 }
 
 pub type Substitutions = HashMap<TypeVarID, Ty>;
@@ -68,7 +68,7 @@ impl Constraint {
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
             Self::Satisfies { expr_id, .. } => expr_id,
-            Self::Retry(c) => c.expr_id(),
+            Self::Retry(c, _) => c.expr_id(),
         }
     }
 
@@ -196,7 +196,9 @@ impl Constraint {
                 ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
                 constraints: constraints.clone(),
             },
-            Constraint::Retry(c) => c.replacing(substitutions).clone(),
+            Constraint::Retry(c, retries) => {
+                Constraint::Retry(c.replacing(substitutions).clone().into(), *retries)
+            }
         }
     }
 }
@@ -238,16 +240,33 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             match self.solve_constraint(&constraint, &mut substitutions) {
                 Ok(_) => (),
                 Err(err) => {
-                    if matches!(constraint, Constraint::Retry(_)) {
-                        log::error!("Retry failed for {constraint:?}");
-                        self.add_diagnostic(Diagnostic::typing(
-                            self.source_file.path.clone(),
-                            *constraint.expr_id(),
-                            err,
-                        ));
+                    if let Constraint::Retry(constraint, retries) = constraint {
+                        if retries > 0 {
+                            let constraint = constraint.replacing(&substitutions);
+                            log::trace!(
+                                "Retrying {constraint:?} ({retries} remaining (subs {})) {substitutions:?}",
+                                substitutions.len()
+                            );
+                            self.constraints.insert(
+                                0,
+                                Constraint::Retry(
+                                    constraint.replacing(&substitutions).into(),
+                                    retries - 1,
+                                ),
+                            );
+                        } else {
+                            log::error!("Retry failed for {constraint:?}");
+                            self.add_diagnostic(Diagnostic::typing(
+                                self.source_file.path.clone(),
+                                *constraint.expr_id(),
+                                err,
+                            ));
+                        }
                     } else {
-                        self.constraints
-                            .insert(0, Constraint::Retry(constraint.into()));
+                        self.constraints.insert(
+                            0,
+                            Constraint::Retry(constraint.replacing(&substitutions).into(), 3),
+                        );
                     }
                 }
             }
@@ -301,7 +320,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             constraint.replacing(substitutions)
         );
         match &constraint.replacing(substitutions) {
-            Constraint::Retry(c) => {
+            Constraint::Retry(c, _) => {
                 self.solve_constraint(c, substitutions)?;
             }
             Constraint::ConformsTo {
@@ -397,7 +416,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             Constraint::Satisfies {
                 ty, constraints, ..
             } => {
-                let checker = SatisfiesChecker::new(self.env, ty, constraints);
+                let ty = Self::apply(ty, substitutions, 0);
+                let checker = SatisfiesChecker::new(self.env, &ty, constraints);
                 let unifications = checker.check()?;
                 for (lhs, rhs) in unifications {
                     self.unify(&lhs, &rhs, substitutions)?;

@@ -34,7 +34,7 @@ impl<'a> SatisfiesChecker<'a> {
             _ => {
                 return Err(TypeError::Unknown(format!(
                     "{:?} cannot satisfy type requirements: {:?}",
-                    self.ty, self.constraints
+                    self.ty, self.constraints,
                 )));
             }
         };

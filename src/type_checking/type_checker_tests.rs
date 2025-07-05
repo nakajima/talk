@@ -536,6 +536,19 @@ mod type_tests {
     }
 
     #[test]
+    fn infers_nested_identity() {
+        let checker = check(
+            "
+            func identity(arg) { arg }
+            identity(identity(1))
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
+    }
+
+    #[test]
     fn generalizes_at_the_right_time() {
         let checker = check(
             "
@@ -1839,7 +1852,7 @@ mod operator_tests {
     fn add_op_complex() {
         let checked = check(
             "
-        func add<T>(x: T, y: T) {
+        func add(x, y) {
             x + y
         }
 

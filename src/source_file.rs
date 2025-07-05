@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap,},
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     environment::Environment, scope_tree::ScopeTree, span::Span, ty::Ty, typed_expr::TypedExpr,
@@ -75,6 +72,17 @@ impl SourceFile<NameResolved> {
             meta: self.meta,
             phase_data: Typed {},
             scope_tree: self.scope_tree,
+        }
+    }
+
+    pub fn as_parsed(&self) -> SourceFile<Parsed> {
+        SourceFile {
+            path: self.path.clone(),
+            roots: self.roots.clone(),
+            nodes: self.nodes.clone(),
+            meta: self.meta.clone(),
+            phase_data: Parsed,
+            scope_tree: self.scope_tree.clone(),
         }
     }
 }
