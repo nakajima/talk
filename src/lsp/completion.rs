@@ -110,7 +110,7 @@ impl<'a> CompletionContext<'a> {
                     .collect(),
             }
         } else {
-            log::error!("did not get type: {:#?}", self.env.types);
+            log::error!("did not get type: {:?}", self.env.types);
             vec![]
         }
     }

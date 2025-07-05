@@ -21,7 +21,7 @@ impl<'a> SatisfiesChecker<'a> {
     }
 
     pub fn check(self) -> Result<Vec<(Ty, Ty)>, TypeError> {
-        let (type_id, type_args) = match &self.ty {
+        let (type_id, _) = match &self.ty {
             Ty::Enum(type_id, type_args)
             | Ty::EnumVariant(type_id, type_args)
             | Ty::Struct(type_id, type_args)
@@ -49,7 +49,7 @@ impl<'a> SatisfiesChecker<'a> {
                 TypeConstraint::InstanceOf { .. } => (),
                 TypeConstraint::Conforms {
                     protocol_id,
-                    associated_types,
+                    associated_types: conformance_associated_types,
                 } => {
                     log::trace!("= Checking {:?} satisfies {constraint:?}", self.ty);
 
@@ -57,12 +57,12 @@ impl<'a> SatisfiesChecker<'a> {
                         continue;
                     };
 
-                    if type_args.len() != associated_types.len() {
-                        errors.push(ConformanceError::TypeDoesNotConform(
-                            type_def.name().to_string(),
-                            "could not determine type parameters".to_string(),
-                        ));
-                    }
+                    // if protocol_def.associated_types.len() != conformance_associated_types.len() {
+                    //     errors.push(ConformanceError::TypeDoesNotConform(
+                    //         type_def.name().to_string(),
+                    //         "could not determine type parameters".to_string(),
+                    //     ));
+                    // }
 
                     if let Some(conformance) = type_def
                         .conformances()
@@ -71,15 +71,20 @@ impl<'a> SatisfiesChecker<'a> {
                     {
                         let mut map = HashMap::new();
 
-                        for (provided, required) in
-                            conformance.associated_types.iter().zip(type_args)
+                        for (provided, required) in conformance
+                            .associated_types
+                            .iter()
+                            .zip(protocol_def.canonical_associated_types())
                         {
                             map.insert(provided.clone(), required.clone());
                         }
 
-                        for (param, arg) in associated_types.iter().zip(type_args) {
-                            let arg = map.get(arg).unwrap_or(arg);
-                            unifications.push((param.clone(), arg.clone()));
+                        for (provided, required) in conformance_associated_types
+                            .iter()
+                            .zip(protocol_def.canonical_associated_types().iter())
+                        {
+                            let arg = map.get(provided).unwrap_or(provided);
+                            unifications.push((required.clone(), arg.clone()));
                         }
                     } else {
                         errors.push(ConformanceError::TypeDoesNotConform(
@@ -90,6 +95,8 @@ impl<'a> SatisfiesChecker<'a> {
                 }
             }
         }
+
+        println!("--------------- Unifications from Satisfies: {unifications:#?}");
 
         if errors.is_empty() {
             Ok(unifications)

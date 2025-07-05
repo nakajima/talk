@@ -45,6 +45,19 @@ impl TypeDef {
         }
     }
 
+    pub fn instantiate(&self, env: &mut Environment) -> Ty {
+        let scheme = Scheme {
+            ty: self.ty(),
+            unbound_vars: self
+                .type_parameters()
+                .iter()
+                .map(|p| p.type_var.clone())
+                .collect(),
+        };
+
+        env.instantiate(&scheme)
+    }
+
     pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
         if let Some(member) = self.member_ty(name).cloned() {
             return Some(

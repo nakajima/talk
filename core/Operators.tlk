@@ -1,6 +1,6 @@
 protocol Add<RHS, Ret> { func add(rhs: RHS) -> Ret }
 protocol Subtract<RHS, Ret> { func subtract(rhs: RHS) -> Ret }
-protocol Multiply<RHS, Ret> { func multiplay(rhs: RHS) -> Ret }
+protocol Multiply<RHS, Ret> { func multiply(rhs: RHS) -> Ret }
 protocol Divide<RHS, Ret> { func divide(rhs: RHS) -> Ret }
 
 extend Int: Add<Int, Int> {
@@ -39,13 +39,13 @@ extend Float: Multiply<Float, Float> {
   }
 }
 
-extend Divide: Subtract<Int, Int> {
+extend Int: Divide<Int, Int> {
   func divide(rhs: Int) -> Int {
     __ir_instr("$? = div int %0, %1;")
   }
 }
 
-extend Float: Subtract<Float, Float> {
+extend Float: Divide<Float, Float> {
   func divide(rhs: Float) -> Float {
     __ir_instr("$? = div float %0, %1;")
   }

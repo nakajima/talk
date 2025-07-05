@@ -1012,8 +1012,8 @@ impl<'a> Lowerer<'a> {
         &mut self,
         symbol_id: &SymbolID,
         func_id: &ExprID,
-    ) -> Option<(IRType, StructDef, TypedExpr, Register, Option<IRValue>)> {
-        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(symbol_id).cloned() else {
+    ) -> Option<(IRType, TypeDef, TypedExpr, Register, Option<IRValue>)> {
+        let Some(type_def) = self.env.lookup_type(symbol_id).cloned() else {
             log::error!("Cannot setup self context for {symbol_id:?}");
             return None;
         };
@@ -1028,22 +1028,9 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        let struct_ty = IRType::Struct(
-            *symbol_id,
-            struct_def
-                .properties
-                .iter()
-                .map(|p| p.ty.to_ir(self))
-                .collect(),
-            struct_def
-                .type_parameters
-                .iter()
-                .map(|t| Ty::TypeVar(t.type_var.clone()).to_ir(self))
-                .collect(),
-        );
-
-        self.current_functions
-            .push(CurrentFunction::new(Some(struct_ty.clone())));
+        self.current_functions.push(CurrentFunction::new(Some(
+            type_def.ty().to_ir(self).clone(),
+        )));
         let block_id = self.new_basic_block();
         self.set_current_block(block_id);
 
@@ -1068,8 +1055,8 @@ impl<'a> Lowerer<'a> {
         let ret = self.lower_block(body);
 
         Some((
-            struct_ty,
-            struct_def,
+            type_def.ty().to_ir(self),
+            type_def,
             typed_func,
             env,
             ret.map(IRValue::Register),
@@ -1077,17 +1064,16 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_init(&mut self, symbol_id: &SymbolID, func_id: &ExprID) -> Option<Register> {
-        let (struct_ty, struct_def, typed_func, env, _) =
-            self.setup_self_context(symbol_id, func_id)?;
+        let (ty, type_def, typed_func, env, _) = self.setup_self_context(symbol_id, func_id)?;
 
         let loaded_reg = self.allocate_register();
         self.push_instr(Instr::Load {
             dest: loaded_reg,
-            ty: struct_ty.clone(),
+            ty: ty.clone(),
             addr: env,
         });
 
-        self.push_instr(Instr::Ret(struct_ty.clone(), Some(loaded_reg.into())));
+        self.push_instr(Instr::Ret(ty.clone(), Some(loaded_reg.into())));
 
         let Ty::Func(params, _ret, generics) = typed_func.ty else {
             return None;
@@ -1105,13 +1091,13 @@ impl<'a> Lowerer<'a> {
             generics,
         );
 
-        let name_str = struct_def.name_str.clone();
+        let name_str = type_def.name();
         let current_function = self.current_functions.pop()?;
 
         let func = current_function.export(
             init_func_ty.to_ir(self),
             Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
-            Some(struct_ty),
+            Some(ty),
             Some(env),
         );
 
@@ -1126,8 +1112,7 @@ impl<'a> Lowerer<'a> {
         func_id: &ExprID,
         name: &str,
     ) -> Option<Register> {
-        let (struct_ty, struct_def, typed_func, env, ret) =
-            self.setup_self_context(symbol_id, func_id)?;
+        let (ty, type_def, typed_func, env, ret) = self.setup_self_context(symbol_id, func_id)?;
 
         let (Ty::Func(_, ret_ty, _)
         | Ty::Closure {
@@ -1147,9 +1132,9 @@ impl<'a> Lowerer<'a> {
         let current_function = self.current_functions.pop()?;
         let func = current_function.export(
             typed_func.ty.to_ir(self),
-            Name::Resolved(*symbol_id, format!("{}_{name}", struct_def.name_str))
+            Name::Resolved(*symbol_id, format!("{}_{name}", type_def.name()))
                 .mangled(&typed_func.ty),
-            Some(struct_ty),
+            Some(ty),
             Some(env),
         );
 
@@ -2129,12 +2114,9 @@ impl<'a> Lowerer<'a> {
         let ir_type = typed_expr.ty.to_ir(self);
         let mut predecessors = vec![];
 
-        let Some(then_reg) = then_reg else {
-            log::error!("Did not get then_reg: {typed_expr:?}");
-            return None;
+        if let Some(then_reg) = then_reg {
+            predecessors.push((then_reg, then_id));
         };
-
-        predecessors.push((then_reg, then_id));
 
         if let Some(else_reg) = else_reg
             && let Some(else_id) = else_id

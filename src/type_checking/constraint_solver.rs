@@ -310,15 +310,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     )));
                 };
 
-                let Some(TypeDef::Protocol(protocol)) =
-                    self.env.lookup_type(&conformance.protocol_id).cloned()
-                else {
-                    return Err(TypeError::Unknown(format!(
-                        "could not find protocol: {conformance:?}"
-                    )));
-                };
-
-                let conformance_checker = ConformanceChecker::new(&type_def, &protocol, self.env);
+                let conformance_checker = ConformanceChecker::new(&type_def, conformance, self.env);
                 match conformance_checker.check() {
                     Ok(unifications) => {
                         for (lhs, rhs) in unifications {
@@ -972,12 +964,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 );
 
                 self.unify(&ret, &specialized_ty, substitutions)?;
-
-                // Inference treats all callees as funcs, even if it's an enum constructor.
-                // for (func_arg, variant_arg) in func_args.iter().zip(variant_args) {
-                //     self.unify(func_arg, &variant_arg, substitutions)?;
-                // }
-
                 Self::normalize_substitutions(substitutions);
 
                 Ok(())
