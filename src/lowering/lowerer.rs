@@ -219,16 +219,20 @@ impl FromStr for TypedRegister {
         let mut parts = s.split_whitespace();
 
         let Some(ty_str) = parts.next() else {
-            return Err(IRError::ParseError);
+            return Err(IRError::ParseError(
+                "Could not get register type".to_string(),
+            ));
         };
 
         let Some(reg_str) = parts.next() else {
-            return Err(IRError::ParseError);
+            return Err(IRError::ParseError(
+                "Could not get typed register".to_string(),
+            ));
         };
 
         Ok(TypedRegister {
-            ty: IRType::from_str(ty_str).map_err(|_| IRError::ParseError)?,
-            register: str::parse(reg_str).map_err(|_| IRError::ParseError)?,
+            ty: IRType::from_str(ty_str).map_err(|e| IRError::ParseError(format!("{e:?}")))?,
+            register: str::parse(reg_str).map_err(|e| IRError::ParseError(format!("{e:?}")))?,
         })
     }
 }
@@ -250,7 +254,7 @@ impl FromStr for RegisterList {
             .map(|part| part.trim().parse::<TypedRegister>())
             .collect::<Result<Vec<TypedRegister>, _>>()
             .map(RegisterList)
-            .map_err(|_e| IRError::ParseError)
+            .map_err(|e| IRError::ParseError(format!("{e:?}")))
     }
 }
 
@@ -1455,7 +1459,10 @@ impl<'a> Lowerer<'a> {
         );
         self.set_current_block(then_block_id);
         let Some(body_ret_reg) = self.lower_expr(&body_id) else {
-            log::error!("Did not get body return: {:?}", self.source_file.get(&body_id));
+            log::error!(
+                "Did not get body return: {:?}",
+                self.source_file.get(&body_id)
+            );
             return (Register(0), BasicBlockID(u32::MAX));
         };
 

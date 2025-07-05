@@ -4,7 +4,7 @@ use crate::{SymbolID, type_defs::struct_def::Property};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IRError {
-    ParseError,
+    ParseError(String),
     InvalidPointer(String),
     PartialInitialization(String, Vec<Property>),
     BuiltinNotFound(SymbolID),
@@ -14,7 +14,7 @@ pub enum IRError {
 impl IRError {
     pub fn message(&self) -> String {
         match self {
-            Self::ParseError => "Parse error".into(),
+            Self::ParseError(string) => format!("IR Parse error: {string}"),
             Self::InvalidPointer(name) => {
                 format!("Invalid pointer `{name}`")
             }

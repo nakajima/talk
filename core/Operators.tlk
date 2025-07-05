@@ -17,13 +17,13 @@ extend Float: Add<Float, Float> {
 
 extend Int: Subtract<Int, Int> {
   func subtract(rhs: Int) -> Int {
-    __ir_instr("$? = subtract int %0, %1;")
+    __ir_instr("$? = sub int %0, %1;")
   }
 }
 
 extend Float: Subtract<Float, Float> {
   func subtract(rhs: Float) -> Float {
-    __ir_instr("$? = subtract float %0, %1;")
+    __ir_instr("$? = sub float %0, %1;")
   }
 }
 

@@ -27,7 +27,9 @@ impl FromStr for PhiPredecessors {
             .trim()
             .strip_prefix('[')
             .and_then(|s| s.strip_suffix(']'))
-            .ok_or(IRError::ParseError)?;
+            .ok_or(IRError::ParseError(
+                "Unable to parse phi predecessors".to_string(),
+            ))?;
 
         if inner.trim().is_empty() {
             return Ok(PhiPredecessors(vec![]));
@@ -38,8 +40,16 @@ impl FromStr for PhiPredecessors {
             .map(|pair_str| {
                 let mut parts = pair_str.trim().splitn(2, ':');
 
-                let bb_str = parts.next().ok_or(IRError::ParseError)?.trim();
-                let reg_str = parts.next().ok_or(IRError::ParseError)?.trim();
+                let bb_str = parts
+                    .next()
+                    .ok_or(IRError::ParseError(
+                        "Did not get phi basic block".to_string(),
+                    ))?
+                    .trim();
+                let reg_str = parts
+                    .next()
+                    .ok_or(IRError::ParseError("Did not get phi register".to_string()))?
+                    .trim();
 
                 let bb = bb_str.parse::<BasicBlockID>()?;
                 let reg = reg_str.parse::<Register>()?;

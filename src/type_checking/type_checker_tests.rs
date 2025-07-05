@@ -1815,15 +1815,17 @@ mod protocol_tests {
 
 #[cfg(test)]
 mod operator_tests {
-    use crate::check;
+    use crate::{SymbolID, check};
 
-    #[ignore]
     #[test]
     fn add() {
-        let _checked = check(
-            "
-
-        ",
+        let checked = check("").unwrap();
+        let int_type = checked.env.lookup_type(&SymbolID::INT).unwrap();
+        assert!(
+            int_type
+                .conformances()
+                .iter()
+                .any(|c| c.protocol_id == SymbolID::ADD)
         );
     }
 }

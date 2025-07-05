@@ -44,13 +44,14 @@ impl FromStr for IRValue {
                             string.push(next_char);
                         }
                         Ok(IRValue::ImmediateInt(
-                            str::parse(&string).map_err(|_e| IRError::ParseError)?,
+                            str::parse(&string)
+                                .map_err(|e| IRError::ParseError(format!("{e:?}")))?,
                         ))
                     }
-                    _ => Err(IRError::ParseError),
+                    e => Err(IRError::ParseError(format!("{e:?}"))),
                 }
             }
-            _ => Err(IRError::ParseError),
+            e => Err(IRError::ParseError(format!("{e:?}"))),
         }
     }
 }

@@ -271,8 +271,9 @@ fn lower_ir_instr(
     let ret_reg = lowerer.allocate_register();
     let substituted_string = instruction_string.replace("$?", &format!("{ret_reg}"));
 
-    let Ok(instr) = Instr::from_str(&substituted_string) else {
-        return Err(IRError::ParseError);
+    let instr = match Instr::from_str(&substituted_string) {
+        Ok(instr) => instr,
+        Err(e) => return Err(IRError::ParseError(format!("{e:?}"))),
     };
 
     lowerer.push_instr(instr);

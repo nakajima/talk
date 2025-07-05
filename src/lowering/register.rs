@@ -8,7 +8,10 @@ impl FromStr for Register {
     type Err = IRError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let reg = Register(str::parse(&s[1..]).map_err(|_e| IRError::ParseError)?);
+        let reg = Register(
+            str::parse(&s[1..])
+                .map_err(|e| IRError::ParseError(format!("Could not parse register: {e:?}")))?,
+        );
         Ok(reg)
     }
 }
