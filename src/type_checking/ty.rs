@@ -106,4 +106,134 @@ impl Ty {
     pub fn is_concrete(&self) -> bool {
         !matches!(self, Ty::TypeVar(_))
     }
+
+    pub fn replace<F: Fn(&Ty) -> bool>(&self, replacement: Ty, f: &F) -> Ty {
+        match &self {
+            Ty::Init(sym, items) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Init(
+                        *sym,
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            Ty::Func(items, ty, items1) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Func(
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                        ty.replace(replacement.clone(), f).into(),
+                        items1
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            Ty::Closure { func, captures } => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Closure {
+                        func: func.replace(replacement.clone(), f).into(),
+                        captures: captures.clone(),
+                    }
+                }
+            }
+            Ty::TypeVar(_) => {
+                if f(self) {
+                    replacement
+                } else {
+                    self.clone()
+                }
+            }
+            Ty::Enum(symbol_id, items) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Enum(
+                        *symbol_id,
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            Ty::EnumVariant(symbol_id, items) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::EnumVariant(
+                        *symbol_id,
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            Ty::Tuple(items) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Tuple(
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            Ty::Array(ty) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Array(ty.replace(replacement.clone(), f).into())
+                }
+            }
+            Ty::Struct(symbol_id, items) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Struct(
+                        *symbol_id,
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            Ty::Protocol(symbol_id, items) => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Protocol(
+                        *symbol_id,
+                        items
+                            .iter()
+                            .map(|t| t.replace(replacement.clone(), f))
+                            .collect(),
+                    )
+                }
+            }
+            _ => {
+                if f(self) {
+                    replacement
+                } else {
+                    self.clone()
+                }
+            }
+        }
+    }
 }

@@ -567,7 +567,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             log::warn!("Pushing retry {constraint:?}");
 
                             self.constraints
-                                .push(Constraint::Retry(constraint.clone().into()));
+                                .insert(0, Constraint::Retry(constraint.clone().into()));
                             return Ok(());
                         } else {
                             log::error!("Retry failed for {constraint:?}");

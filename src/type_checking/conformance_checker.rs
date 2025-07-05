@@ -56,13 +56,6 @@ impl<'a> ConformanceChecker<'a> {
             ));
         };
 
-        // println!(
-        //     "------ Checking conformance {:?}\n{:?}\n{:?}",
-        //     self.conformance,
-        //     protocol.associated_types,
-        //     protocol.canonical_associated_types()
-        // );
-
         // Replace the protocol's associated types with the conformance's
         let mut substitutions = HashMap::new();
         for (canonical, conforming) in protocol
@@ -84,10 +77,10 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            // unifications.push((
-            //     ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
-            //     ConstraintSolver::<NameResolved>::apply(&ty_method, &substitutions, 0),
-            // ));
+            unifications.push((
+                ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
+                ConstraintSolver::<NameResolved>::apply(&ty_method, &substitutions, 0),
+            ));
         }
 
         for method in protocol.method_requirements.iter() {
@@ -99,12 +92,10 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            // unifications.push((
-            //     ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
-            //     ConstraintSolver::<NameResolved>::apply(&ty_method, &substitutions, 0),
-            // ));
-
-            // unifications.push((method.ty.clone(), ty_method));
+            unifications.push((
+                ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
+                ConstraintSolver::<NameResolved>::apply(&ty_method, &substitutions, 0),
+            ));
         }
 
         for property in protocol.properties.iter() {
@@ -121,7 +112,7 @@ impl<'a> ConformanceChecker<'a> {
 
         for _initializer in protocol.initializers.iter() {}
 
-        // println!("CONFORMANCE UNIFICATIONS: {unifications:?}");
+        println!("CONFORMANCE UNIFICATIONS: {unifications:?}");
 
         if self.errors.is_empty() {
             Ok(unifications)

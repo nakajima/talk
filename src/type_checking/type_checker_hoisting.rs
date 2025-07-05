@@ -502,14 +502,6 @@ impl<'a> TypeChecker<'a> {
                     .map_err(|e| (*id, e))?;
                 println!("placeholder conformance: {:?}", placeholders.conformances);
                 let Ty::Protocol(symbol_id, associated_types) = ty else {
-                    panic!(
-                        "Didn't get protocol for expr id: {id} {ty:?} {:?}\n{:?}",
-                        source_file.get(id),
-                        env.types
-                            .iter()
-                            .map(|v| (v.0, v.1.name()))
-                            .collect::<Vec<(&SymbolID, &str)>>()
-                    );
                     log::error!(
                         "Didn't get protocol for expr id: {id} {ty:?} {:?}",
                         source_file.get(id)

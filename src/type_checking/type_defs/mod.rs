@@ -11,6 +11,7 @@ use crate::{
         protocol_def::{Conformance, ProtocolDef},
         struct_def::{Initializer, Method, Property, StructDef},
     },
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 pub mod builtin_def;
@@ -86,21 +87,27 @@ impl TypeDef {
                     subst.insert(param.type_var.clone(), arg.clone());
                 }
 
+                let new_ty = ty.replace(self.ty(), &|ty| {
+                    matches!(
+                        ty,
+                        Ty::TypeVar(TypeVarID {
+                            kind: TypeVarKind::SelfVar(_),
+                            ..
+                        })
+                    ) || matches!(ty, Ty::SelfType)
+                });
+
+                println!(
+                    "member_ty_with_conformances: {} {ty:?} {new_ty:?}",
+                    self.name()
+                );
+
                 let res = Some(env.instantiate(&Scheme {
-                    ty: ty.clone(),
+                    ty: new_ty,
                     unbound_vars: protocol_def.canonical_associated_type_vars(),
                 }));
 
-                // println!(
-                //     "⊂ {res:?} {ty:?} {:?}",
-                //     protocol_def.canonical_associated_type_vars(),
-                // );
-
                 return res;
-
-                //return Some(ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                //    ty, &subst,
-                //));
             }
         }
 
