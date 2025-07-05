@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    conformance_checker::ConformanceError, environment::Environment, ty::Ty,
-    type_checker::TypeError, type_constraint::TypeConstraint,
+    conformance_checker::ConformanceError, environment::Environment,
+    ty::Ty, type_checker::TypeError, type_constraint::TypeConstraint,
+    constraint_solver::ConstraintSolver, NameResolved,
 };
 
 pub struct SatisfiesChecker<'a> {
@@ -21,7 +22,7 @@ impl<'a> SatisfiesChecker<'a> {
     }
 
     pub fn check(self) -> Result<Vec<(Ty, Ty)>, TypeError> {
-        let (type_id, _) = match &self.ty {
+        let (type_id, type_args) = match &self.ty {
             Ty::Enum(type_id, type_args)
             | Ty::EnumVariant(type_id, type_args)
             | Ty::Struct(type_id, type_args)
@@ -69,22 +70,32 @@ impl<'a> SatisfiesChecker<'a> {
                         .iter()
                         .find(|c| c.protocol_id == *protocol_id)
                     {
-                        let mut map = HashMap::new();
+                        // Map the struct's generic parameters to the concrete
+                        // type arguments provided in `self.ty` so we can
+                        // substitute them into the conformance's associated
+                        // types.
+                        let subst: HashMap<_, _> = type_def
+                            .type_parameters()
+                            .iter()
+                            .map(|p| p.type_var.clone())
+                            .zip(type_args.iter().cloned())
+                            .collect();
 
-                        for (provided, required) in conformance
+                        for (conformance_ty, constraint_ty) in conformance
                             .associated_types
                             .iter()
-                            .zip(protocol_def.canonical_associated_types())
+                            .zip(conformance_associated_types.iter())
                         {
-                            map.insert(provided.clone(), required.clone());
-                        }
+                            let lhs = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                                conformance_ty,
+                                &subst,
+                            );
+                            let rhs = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                                constraint_ty,
+                                &subst,
+                            );
 
-                        for (provided, required) in conformance_associated_types
-                            .iter()
-                            .zip(protocol_def.canonical_associated_types().iter())
-                        {
-                            let arg = map.get(provided).unwrap_or(provided);
-                            unifications.push((required.clone(), arg.clone()));
+                            unifications.push((lhs, rhs));
                         }
                     } else {
                         errors.push(ConformanceError::TypeDoesNotConform(
