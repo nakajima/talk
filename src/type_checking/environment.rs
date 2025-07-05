@@ -325,11 +325,10 @@ impl Environment {
     ) -> Ty {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
             if !constraints.is_empty() {
-                println!("-> Ditching constraints: {constraints:?}");
+                log::warn!("-> Ditching constraints: {constraints:?}");
             }
 
             scheme.ty.clone()
-            // self.instantiate(&scheme)
         } else {
             self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };

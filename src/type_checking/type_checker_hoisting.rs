@@ -500,7 +500,7 @@ impl<'a> TypeChecker<'a> {
                 let ty = self
                     .infer_node(id, env, &None, source_file)
                     .map_err(|e| (*id, e))?;
-                println!("placeholder conformance: {:?}", placeholders.conformances);
+
                 let Ty::Protocol(symbol_id, associated_types) = ty else {
                     log::error!(
                         "Didn't get protocol for expr id: {id} {ty:?} {:?}",

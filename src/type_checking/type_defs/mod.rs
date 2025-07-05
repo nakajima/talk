@@ -12,7 +12,6 @@ use crate::{
         protocol_def::{Conformance, ProtocolDef},
         struct_def::{Initializer, Method, Property, StructDef},
     },
-    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 pub mod builtin_def;

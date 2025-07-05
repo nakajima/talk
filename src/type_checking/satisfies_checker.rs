@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    conformance_checker::ConformanceError, environment::Environment,
-    ty::Ty, type_checker::TypeError, type_constraint::TypeConstraint,
-    constraint_solver::ConstraintSolver, NameResolved,
+    NameResolved, conformance_checker::ConformanceError, constraint_solver::ConstraintSolver,
+    environment::Environment, ty::Ty, type_checker::TypeError, type_constraint::TypeConstraint,
 };
 
 pub struct SatisfiesChecker<'a> {
@@ -106,8 +105,6 @@ impl<'a> SatisfiesChecker<'a> {
                 }
             }
         }
-
-        println!("--------------- Unifications from Satisfies: {unifications:#?}");
 
         if errors.is_empty() {
             Ok(unifications)
