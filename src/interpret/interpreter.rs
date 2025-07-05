@@ -24,6 +24,7 @@ pub enum InterpreterError {
     UnreachableReached,
     IRError(IRError),
     Unknown(String),
+    InvalidProgram,
 }
 
 #[derive(Debug)]
@@ -548,9 +549,12 @@ mod tests {
         let unit = driver.lower().into_iter().next().unwrap();
 
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let module = unit.module();
 
+        if !diagnostics.is_empty() {
+            return Err(InterpreterError::InvalidProgram);
+        }
+
+        let module = unit.module();
         let mono = Monomorphizer::new(&unit.env).run(module);
 
         IRInterpreter::new(mono).run()

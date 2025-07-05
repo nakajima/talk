@@ -1815,17 +1815,39 @@ mod protocol_tests {
 
 #[cfg(test)]
 mod operator_tests {
-    use crate::{SymbolID, check};
+    use crate::{check, ty::Ty};
 
     #[test]
-    fn add() {
-        let checked = check("").unwrap();
-        let int_type = checked.env.lookup_type(&SymbolID::INT).unwrap();
-        assert!(
-            int_type
-                .conformances()
-                .iter()
-                .any(|c| c.protocol_id == SymbolID::ADD)
-        );
+    fn add_op() {
+        let checked = check(
+            "
+        struct Person {}
+        extend Person: Add<Int, String> {
+            func add(rhs: Int) -> String {
+                \"hi\"
+            }
+        }
+        Person() + 1
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.nth(2).unwrap(), Ty::string());
+    }
+
+    #[test]
+    fn add_op_complex() {
+        let checked = check(
+            "
+        func add<T>(x: T, y: T) {
+            x + y
+        }
+
+        add(add(1, 2), 3)
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.nth(1).unwrap(), Ty::Int);
     }
 }

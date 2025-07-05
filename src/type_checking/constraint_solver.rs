@@ -235,14 +235,20 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
 
         while let Some(constraint) = self.constraints.pop() {
-            match self.solve_constraint(&constraint, &mut substitutions, false) {
+            match self.solve_constraint(&constraint, &mut substitutions) {
                 Ok(_) => (),
                 Err(err) => {
-                    self.add_diagnostic(Diagnostic::typing(
-                        self.source_file.path.clone(),
-                        *constraint.expr_id(),
-                        err,
-                    ));
+                    if matches!(constraint, Constraint::Retry(_)) {
+                        log::error!("Retry failed for {constraint:?}");
+                        self.add_diagnostic(Diagnostic::typing(
+                            self.source_file.path.clone(),
+                            *constraint.expr_id(),
+                            err,
+                        ));
+                    } else {
+                        self.constraints
+                            .insert(0, Constraint::Retry(constraint.into()));
+                    }
                 }
             }
         }
@@ -289,7 +295,6 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         &mut self,
         constraint: &Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
-        is_retry: bool,
     ) -> Result<(), TypeError> {
         log::info!(
             "Solving constraint: {:?}",
@@ -297,12 +302,12 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         );
         match &constraint.replacing(substitutions) {
             Constraint::Retry(c) => {
-                self.solve_constraint(c, substitutions, true)?;
+                self.solve_constraint(c, substitutions)?;
             }
             Constraint::ConformsTo {
-                expr_id,
                 type_def,
                 conformance,
+                ..
             } => {
                 let Some(type_def) = self.env.lookup_type(type_def).cloned() else {
                     return Err(TypeError::Unknown(format!(
@@ -311,21 +316,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 };
 
                 let conformance_checker = ConformanceChecker::new(&type_def, conformance, self.env);
-                match conformance_checker.check() {
-                    Ok(unifications) => {
-                        for (lhs, rhs) in unifications {
-                            self.unify(&lhs, &rhs, substitutions)?;
-                        }
-                        Self::normalize_substitutions(substitutions);
-                    }
-                    Err(err) => {
-                        self.add_diagnostic(Diagnostic::typing(
-                            self.source_file.path.clone(),
-                            *expr_id,
-                            err,
-                        ));
-                    }
+                let unifications = conformance_checker.check()?;
+                for (lhs, rhs) in unifications {
+                    self.unify(&lhs, &rhs, substitutions)?;
                 }
+                Self::normalize_substitutions(substitutions);
             }
             Constraint::Equality(_node_id, lhs, rhs) => {
                 let lhs = Self::apply(lhs, substitutions, 0);
@@ -400,25 +395,12 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 }
             }
             Constraint::Satisfies {
-                expr_id,
-                ty,
-                constraints,
-                ..
+                ty, constraints, ..
             } => {
                 let checker = SatisfiesChecker::new(self.env, ty, constraints);
-                match checker.check() {
-                    Ok(unifications) => {
-                        for (lhs, rhs) in unifications {
-                            self.unify(&lhs, &rhs, substitutions)?;
-                        }
-                    }
-                    Err(err) => {
-                        self.add_diagnostic(Diagnostic::typing(
-                            self.source_file.path.clone(),
-                            *expr_id,
-                            err,
-                        ));
-                    }
+                let unifications = checker.check()?;
+                for (lhs, rhs) in unifications {
+                    self.unify(&lhs, &rhs, substitutions)?;
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
@@ -558,23 +540,10 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         }
                     }
                     _ => {
-                        // todo!(
-                        //     "{:?} {:?}",
-                        //     Self::apply(&receiver_ty, substitutions, 0),
-                        //     Self::apply(&result_ty, substitutions, 0)
-                        // );
-                        if !is_retry && !matches!(constraint, Constraint::Retry(_)) {
-                            log::warn!("Pushing retry {constraint:?}");
-
-                            self.constraints
-                                .insert(0, Constraint::Retry(constraint.clone().into()));
-                            return Ok(());
-                        } else {
-                            log::error!("Retry failed for {constraint:?}");
-                            return Err(TypeError::Unknown(format!(
-                                "Retry failed for: {constraint:?}",
-                            )));
-                        }
+                        return Err(TypeError::MemberNotFound(
+                            receiver_ty.to_string(),
+                            member_name.to_string(),
+                        ));
                     }
                 };
 

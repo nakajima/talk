@@ -1,4 +1,4 @@
-use crate::{SymbolID, name::Name, type_constraint::TypeConstraint};
+use crate::{SymbolID, name::Name, token_kind::TokenKind, type_constraint::TypeConstraint};
 
 #[derive(Clone)]
 pub struct TypeVarID {
@@ -59,6 +59,9 @@ impl std::fmt::Debug for TypeVarID {
         };
 
         match &self.kind {
+            TypeVarKind::BinaryOperand(op) => {
+                write!(f, "T{}[{}{}]", self.id, op.as_str(), constraints_str)
+            }
             TypeVarKind::Blank => write!(f, "T{}[blank{}]", self.id, constraints_str),
             TypeVarKind::CallArg => write!(f, "T{}[arg{}]", self.id, constraints_str),
             TypeVarKind::CallReturn => write!(f, "T{}[ret{}]", self.id, constraints_str),
@@ -118,5 +121,6 @@ pub enum TypeVarKind {
     Placeholder(String),
     Instantiated(i32),
     Canonicalized(i32),
+    BinaryOperand(TokenKind),
     Unbound,
 }

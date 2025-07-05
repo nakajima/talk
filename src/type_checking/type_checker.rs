@@ -1097,7 +1097,7 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
         &mut self,
-        _id: &ExprID,
+        id: &ExprID,
         lhs_id: &ExprID,
         rhs_id: &ExprID,
         op: &TokenKind,
@@ -1108,11 +1108,24 @@ impl<'a> TypeChecker<'a> {
         let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
         let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
 
-        env.constrain(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
-
-        // TODO: For now we're just gonna hardcode these
         use TokenKind::*;
         match op {
+            Plus => {
+                let ret_ty = Ty::TypeVar(
+                    env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), vec![]),
+                );
+                env.constrain(Constraint::Satisfies {
+                    expr_id: *id,
+                    ty: lhs,
+                    constraints: vec![TypeConstraint::Conforms {
+                        protocol_id: SymbolID::ADD,
+                        associated_types: vec![rhs, ret_ty.clone()],
+                    }],
+                });
+
+                Ok(ret_ty)
+            }
+
             // Bool ops
             EqualsEquals => Ok(Ty::Bool),
             BangEquals => Ok(Ty::Bool),
@@ -1122,7 +1135,10 @@ impl<'a> TypeChecker<'a> {
             LessEquals => Ok(Ty::Bool),
 
             // Same type ops
-            _ => Ok(lhs),
+            _ => {
+                env.constrain(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
+                Ok(lhs)
+            }
         }
     }
 
@@ -1247,8 +1263,8 @@ impl<'a> TypeChecker<'a> {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
-                let member_var =                     Ty::TypeVar(
-                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
+                let member_var = Ty::TypeVar(
+                    env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
                 );
 
                 // Add a constraint that links the receiver type to the member
