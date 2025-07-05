@@ -839,13 +839,13 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 };
 
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v1.kind {
-                    log::error!(
+                    log::warn!(
                         "Attempting to unify canonical type parameter {v1:?} with {v2:?}. Consider instantiating."
                     );
                 }
 
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v2.kind {
-                    log::error!(
+                    log::warn!(
                         "Attempting to unify canonical type parameter {v2:?} with {v1:?}. Consider instantiating."
                     );
                 }
@@ -864,7 +864,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v.kind {
-                    log::error!(
+                    log::warn!(
                         "Attempting to unify canonical type parameter {v:?} with {ty:?}. Consider instantiating."
                     );
                 }

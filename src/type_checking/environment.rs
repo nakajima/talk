@@ -117,19 +117,19 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain(&mut self, constraint: Constraint) {
-        //if !constraint.needs_solving() {
-        //    return;
-        //}
+        if !constraint.needs_solving() {
+            return;
+        }
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             log::info!("⊢ {:?} ({}:{})", constraint, loc.file(), loc.line(),);
         }
 
-        #[allow(clippy::panic)]
-        if constraint.contains_canonical_type_parameter() {
-            panic!("Constraints must not contain canonical type params: {constraint:?}")
-        }
+        // #[allow(clippy::panic)]
+        // if constraint.contains_canonical_type_parameter() {
+        //     panic!("Constraints must not contain canonical type params: {constraint:?}")
+        // }
 
         self.constraints.push(constraint)
     }
@@ -328,7 +328,8 @@ impl Environment {
                 println!("-> Ditching constraints: {constraints:?}");
             }
 
-            self.instantiate(&scheme)
+            scheme.ty.clone()
+            // self.instantiate(&scheme)
         } else {
             self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };
