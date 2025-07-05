@@ -180,6 +180,11 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        let substitutions = env
+            .flush_constraints(&mut source_file, self.symbol_table)
+            .unwrap_or_default();
+        env.replace_typed_exprs_values(&substitutions);
+
         source_file.to_typed()
     }
 

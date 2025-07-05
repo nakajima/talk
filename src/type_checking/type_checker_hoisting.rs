@@ -73,13 +73,11 @@ impl<'a> TypeChecker<'a> {
             .map_err(|e| e.1)?;
 
         to_generalize.extend(self.infer_lets(&lets_results, env, source_file)?);
-        to_generalize.extend(self.infer_funcs(&func_results, env, source_file)?);
-
-        // Solve what we can
-        let substitutions = env.flush_constraints(source_file, self.symbol_table)?;
-
-        // Update typed exprs
-        env.replace_typed_exprs_values(&substitutions);
+        for (symbol_id, ty, has_generics) in self.infer_funcs(&func_results, env, source_file)? {
+            if has_generics {
+                to_generalize.push((symbol_id, ty));
+            }
+        }
 
         // Generalize what we can
         for (symbol_id, _) in to_generalize {
@@ -580,7 +578,7 @@ impl<'a> TypeChecker<'a> {
         func_ids: &[(ExprID, SymbolID, TypeVarID)],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
+    ) -> Result<Vec<(SymbolID, Ty, bool)>, TypeError> {
         let mut placeholder_substitutions = HashMap::new();
         let mut results = vec![];
 
@@ -600,7 +598,11 @@ impl<'a> TypeChecker<'a> {
             )?;
 
             placeholder_substitutions.insert(placeholder.clone(), ty.clone());
-            results.push((*symbol_id, ty))
+            let has_generics = match source_file.get(expr_id) {
+                Some(Expr::Func { generics, .. }) => !generics.is_empty(),
+                _ => false,
+            };
+            results.push((*symbol_id, ty, has_generics))
         }
 
         env.replace_typed_exprs_values(&placeholder_substitutions);
