@@ -687,7 +687,7 @@ impl<'a> TypeChecker<'a> {
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
-        let ret_var = if let Some(expected) = expected {
+        let mut ret_var = if let Some(expected) = expected {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
@@ -752,7 +752,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                let ret_var = env.instantiate(&Scheme {
+                ret_var = env.instantiate(&Scheme {
                     ty: Ty::Struct(*symbol_id, type_args),
                     unbound_vars: struct_def.canonical_type_vars(),
                 });
@@ -869,11 +869,8 @@ impl<'a> TypeChecker<'a> {
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
                 Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
-            // } else if let Some(type_def) = env.lookup_type(&symbol_id).cloned() {
-            //     type_def.instantiate(env)
             } else {
                 env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
-                // env.placeholder(id, name.name_str(), &symbol_id, vec![])
             };
 
             return Ok(ty);
@@ -1250,13 +1247,9 @@ impl<'a> TypeChecker<'a> {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
-                let member_var = if let Some(expected) = expected {
-                    expected.clone()
-                } else {
-                    Ty::TypeVar(
+                let member_var =                     Ty::TypeVar(
                         env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
-                    )
-                };
+                );
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain(Constraint::MemberAccess(

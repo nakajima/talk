@@ -1455,7 +1455,7 @@ impl<'a> Lowerer<'a> {
         );
         self.set_current_block(then_block_id);
         let Some(body_ret_reg) = self.lower_expr(&body_id) else {
-            self.push_err("Did not get body return", body_id);
+            log::error!("Did not get body return: {:?}", self.source_file.get(&body_id));
             return (Register(0), BasicBlockID(u32::MAX));
         };
 

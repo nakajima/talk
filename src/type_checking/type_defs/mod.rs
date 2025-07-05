@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    SymbolID,
+    NameResolved, SymbolID,
+    constraint_solver::ConstraintSolver,
     environment::{Environment, TypeParameter},
     ty::Ty,
     type_checker::Scheme,
@@ -62,14 +63,15 @@ impl TypeDef {
     pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
         if let Some(member) = self.member_ty(name).cloned() {
             return Some(
-                env.instantiate(&Scheme {
-                    ty: member,
-                    unbound_vars: self
-                        .type_parameters()
-                        .iter()
-                        .map(|v| v.type_var.clone())
-                        .collect(),
-                }),
+                member
+               // env.instantiate(&Scheme {
+               //     ty: member,
+               //     unbound_vars: self
+               //         .type_parameters()
+               //         .iter()
+               //         .map(|v| v.type_var.clone())
+               //         .collect(),
+               // }),
             );
         }
 
@@ -87,27 +89,22 @@ impl TypeDef {
                     subst.insert(param.type_var.clone(), arg.clone());
                 }
 
-                let new_ty = ty.replace(self.ty(), &|ty| {
-                    matches!(
-                        ty,
-                        Ty::TypeVar(TypeVarID {
-                            kind: TypeVarKind::SelfVar(_),
-                            ..
-                        })
-                    ) || matches!(ty, Ty::SelfType)
-                });
+                //let new_ty = ty.replace(self.ty(), &|ty| {
+                //    matches!(
+                //        ty,
+                //        Ty::TypeVar(TypeVarID {
+                //            kind: TypeVarKind::SelfVar(_),
+                //            ..
+                //        })
+                //    ) || matches!(ty, Ty::SelfType)
+                //});
 
-                println!(
-                    "member_ty_with_conformances: {} {ty:?} {new_ty:?}",
-                    self.name()
-                );
+                //let res = env.instantiate(&Scheme {
+                //    ty: new_ty,
+                //    unbound_vars: protocol_def.canonical_associated_type_vars(),
+                //});
 
-                let res = Some(env.instantiate(&Scheme {
-                    ty: new_ty,
-                    unbound_vars: protocol_def.canonical_associated_type_vars(),
-                }));
-
-                return res;
+                return Some(ConstraintSolver::<NameResolved>::substitute_ty_with_map(&ty, &subst));
             }
         }
 

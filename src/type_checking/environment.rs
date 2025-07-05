@@ -117,9 +117,9 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain(&mut self, constraint: Constraint) {
-        if !constraint.needs_solving() {
-            return;
-        }
+        //if !constraint.needs_solving() {
+        //    return;
+        //}
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();

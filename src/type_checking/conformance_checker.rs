@@ -1,16 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SymbolID,
-    constraint_solver::ConstraintSolver,
-    environment::Environment,
-    ty::Ty,
-    type_checker::TypeError,
-    type_defs::{
-        TypeDef,
-        protocol_def::{Conformance, ProtocolDef},
-        struct_def::Property,
-    },
+    constraint_solver::ConstraintSolver, environment::{free_type_vars, Environment}, ty::Ty, type_checker::TypeError, type_defs::{
+        protocol_def::{Conformance, ProtocolDef}, struct_def::Property, TypeDef
+    }, type_var_id::TypeVarKind, NameResolved, SymbolID
 };
 
 pub struct ConformanceChecker<'a> {
@@ -76,6 +69,14 @@ impl<'a> ConformanceChecker<'a> {
                     continue;
                 }
             };
+
+            // Find self references in the protocol's type and replace them with
+            // our concrete type
+            for type_var in free_type_vars(&ty_method) {
+                if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
+                    unifications.push((Ty::TypeVar(type_var), self.type_def.ty()));
+                }
+            }
 
             unifications.push((
                 ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
