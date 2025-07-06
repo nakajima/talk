@@ -140,11 +140,12 @@ impl<'a> TypeChecker<'a> {
 
                 let type_param = env
                     .new_type_variable(TypeVarKind::CanonicalTypeParameter(name_str.to_string()));
+                let ty = Ty::CanonicalTypeVar(type_param, name_str.to_string());
 
                 env.declare(
                     *symbol_id,
                     Scheme {
-                        ty: Ty::TypeVar(type_param.clone()),
+                        ty,
                         unbound_vars: vec![type_param.clone()],
                     },
                 )

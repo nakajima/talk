@@ -1,8 +1,10 @@
 use std::fmt::Display;
 
+use ena::unify::UnifyValue;
+
 use crate::{
     SymbolID,
-    type_checker::{FuncParams, FuncReturning},
+    type_checker::{FuncParams, FuncReturning, TypeError},
     type_var_id::TypeVarID,
 };
 
@@ -22,6 +24,7 @@ pub enum Ty {
         func: Box<Ty>, // the func
         captures: Vec<SymbolID>,
     },
+    CanonicalTypeVar(TypeVarID, String),
     TypeVar(TypeVarID),
     Enum(SymbolID, Vec<Ty>), // enum name + type arguments
     EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
@@ -37,6 +40,7 @@ pub enum Ty {
 impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Ty::CanonicalTypeVar(id, string) => write!(f, "{id:?}{string}"),
             Ty::Byte => write!(f, "byte"),
             Ty::Void => write!(f, "void"),
             Ty::Int => write!(f, "Int"),
@@ -89,6 +93,14 @@ impl std::hash::Hash for Ty {
 }
 
 impl Eq for Ty {}
+
+impl UnifyValue for Ty {
+    type Error = TypeError;
+
+    fn unify_values(value1: &Self, value2: &Self) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
 
 impl Ty {
     pub fn string() -> Ty {

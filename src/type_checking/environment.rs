@@ -3,6 +3,8 @@ use std::{
     ops::IndexMut,
 };
 
+use ena::unify::{InPlaceUnificationTable, UnificationTable};
+
 use crate::{
     SymbolID, SymbolTable,
     constraint::{Constraint, Substitutions},
@@ -41,6 +43,7 @@ pub struct Environment {
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
+    pub substitutions: InPlaceUnificationTable<TypeVarID>,
     next_id: i32,
 }
 
@@ -48,12 +51,13 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             typed_exprs: HashMap::new(),
-            type_var_id: TypeVarID::new(0, TypeVarKind::Blank),
+            type_var_id: TypeVarID::new(0),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
             next_id: 0,
             selfs: vec![],
+            substitutions: InPlaceUnificationTable::new(),
         }
     }
 }
@@ -325,7 +329,8 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
-        self.type_var_id = TypeVarID::new(self.type_var_id.id + 1, kind);
+        self.type_var_id = TypeVarID::new(self.type_var_id.id + 1);
+        tracing::trace!("{:?} = {kind:?}", self.type_var_id);
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
@@ -519,9 +524,14 @@ fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
         }
         Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
         Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
-        Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
-            ty.clone()
-        }
+        Ty::Void
+        | Ty::Pointer
+        | Ty::Int
+        | Ty::Float
+        | Ty::Bool
+        | Ty::SelfType
+        | Ty::Byte
+        | Ty::CanonicalTypeVar(_, _) => ty.clone(),
     }
 }
 
@@ -577,7 +587,14 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
                 s.extend(free_type_vars(generic));
             }
         }
-        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
+        Ty::Void
+        | Ty::Int
+        | Ty::Bool
+        | Ty::Float
+        | Ty::Pointer
+        | Ty::SelfType
+        | Ty::Byte
+        | Ty::CanonicalTypeVar(_, _) => {
             // These types contain no nested types, so there's nothing to do.
         }
     }
@@ -621,13 +638,13 @@ mod generalize_tests {
         environment::{Environment, Scope},
         ty::Ty,
         type_checker::Scheme,
-        type_var_id::{TypeVarID, TypeVarKind},
+        type_var_id::TypeVarID,
     };
     use std::collections::HashSet;
 
     // Helper to create a blank type variable.
     fn new_tv(id: i32) -> TypeVarID {
-        TypeVarID::new(id, TypeVarKind::Blank)
+        TypeVarID::new(id)
     }
 
     // Helper to create a Ty::TypeVar.

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use ena::unify::InPlaceUnificationTable;
+
 use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
@@ -143,7 +145,7 @@ impl Constraint {
         }
     }
 
-    pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
+    pub fn replacing(&self, substitutions: &InPlaceUnificationTable<TypeVarID>) -> Constraint {
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
                 *id,
@@ -238,13 +240,7 @@ impl Constraint {
 }
 
 fn has_canonical_type_var(ty: &Ty) -> bool {
-    if matches!(
-        ty,
-        Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::CanonicalTypeParameter(_),
-            ..
-        })
-    ) {
+    if matches!(ty, Ty::CanonicalTypeVar(_, _)) {
         return true;
     }
 

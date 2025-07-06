@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
-#[derive(PartialEq, Eq, Debug, Clone, Hash)]
+use valuable::Valuable;
+
+#[derive(PartialEq, Eq, Debug, Clone, Hash, Valuable)]
 pub enum TokenKind {
     LineComment(String),
 

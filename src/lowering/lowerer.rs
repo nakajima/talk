@@ -28,7 +28,7 @@ use crate::{
     ty::Ty,
     type_checker::Scheme,
     type_defs::{TypeDef, struct_def::StructDef},
-    type_var_id::{TypeVarID, TypeVarKind},
+    type_var_id::TypeVarID,
     typed_expr::TypedExpr,
 };
 
@@ -67,6 +67,7 @@ impl std::fmt::Display for RefKind {
 impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
+            Ty::CanonicalTypeVar(_id, _name) => IRType::Void,
             Ty::SelfType => IRType::Void,
             Ty::Pointer => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
@@ -1158,7 +1159,7 @@ impl<'a> Lowerer<'a> {
 
         let type_var = Ty::TypeVar(TypeVarID::new(
             0,
-            TypeVarKind::SelfVar(name.symbol_id().ok()?),
+            // TypeVarKind::SelfVar(name.symbol_id().ok()?),
         ));
 
         // Insert the self env param

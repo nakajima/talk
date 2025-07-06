@@ -1,6 +1,8 @@
+use valuable::Valuable;
+
 use crate::{SymbolID, ty::Ty, type_checker::TypeError};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Valuable)]
 pub enum Name {
     Raw(String),
     Resolved(SymbolID, String),

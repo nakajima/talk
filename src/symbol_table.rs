@@ -1,8 +1,10 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use valuable::Valuable;
+
 use crate::{Phase, SourceFile, parser::ExprID, span::Span};
 
-#[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, Hash, Valuable)]
 pub struct SymbolID(pub i32);
 
 impl std::fmt::Debug for SymbolID {
