@@ -38,7 +38,7 @@ pub enum Constraint {
     },
     ConformsTo {
         expr_id: ExprID,
-        type_def: SymbolID,
+        ty: Ty,
         conformance: Conformance,
     },
     Satisfies {
@@ -63,6 +63,35 @@ impl Constraint {
             Self::ConformsTo { expr_id, .. } => expr_id,
             Self::Satisfies { expr_id, .. } => expr_id,
             Self::Retry(c, _) => c.expr_id(),
+        }
+    }
+
+    pub fn contains_ty(&self, ty: &Ty) -> bool {
+        self.contains(|t| t == ty)
+    }
+
+    pub fn contains<F: Fn(&Ty) -> bool>(&self, f: F) -> bool {
+        match self {
+            Constraint::Equality(_, ty, ty1) => f(ty) || f(ty1),
+            Constraint::MemberAccess(_, ty, _, ty1) => f(ty) || f(ty1),
+            Constraint::UnqualifiedMember(_, _, ty) => f(ty),
+            Constraint::InitializerCall {
+                args,
+                func_ty,
+                result_ty,
+                ..
+            } => args.iter().any(&f) || f(func_ty) || f(result_ty),
+            Constraint::VariantMatch {
+                scrutinee_ty,
+                field_tys,
+                ..
+            } => f(scrutinee_ty) || field_tys.iter().any(f),
+            Constraint::InstanceOf { scheme, ty, .. } => f(&scheme.ty) || f(ty),
+            Constraint::Satisfies { ty, .. } => f(ty),
+            Constraint::ConformsTo {
+                ty, conformance, ..
+            } => f(ty) || conformance.associated_types.iter().any(f),
+            _ => false,
         }
     }
 

@@ -185,7 +185,6 @@ mod type_tests {
         expr::Expr,
         ty::Ty,
         type_checker::TypeError,
-        type_constraint::TypeConstraint,
         type_defs::TypeDef,
         type_var_id::{TypeVarID, TypeVarKind},
     };
@@ -571,10 +570,6 @@ mod type_tests {
             &TypeVarID {
                 id: id.id,
                 kind: TypeVarKind::Placeholder("T".into()),
-                constraints: vec![TypeConstraint::Conforms {
-                    protocol_id: SymbolID::typed(1),
-                    associated_types: vec![],
-                }],
             }
         );
     }
@@ -1749,13 +1744,17 @@ mod protocol_tests {
         .unwrap();
 
         assert!(!checked.diagnostics().is_empty());
-        assert!(matches!(
-            checked.diagnostics()[0],
-            Diagnostic {
-                kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)),
-                ..
-            }
-        ))
+        assert!(
+            matches!(
+                checked.diagnostics()[0],
+                Diagnostic {
+                    kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)),
+                    ..
+                }
+            ),
+            "{:#?}",
+            checked.diagnostics()
+        )
     }
 
     #[test]

@@ -10,7 +10,6 @@ use crate::{
     parser::ExprID,
     ty::Ty,
     type_checker::TypeError,
-    type_constraint::TypeConstraint,
     type_defs::{TypeDef, enum_def::EnumDef, protocol_def::ProtocolDef, struct_def::StructDef},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -49,7 +48,7 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             typed_exprs: HashMap::new(),
-            type_var_id: TypeVarID::new(0, TypeVarKind::Blank, vec![]),
+            type_var_id: TypeVarID::new(0, TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
@@ -76,11 +75,10 @@ impl Environment {
         expr_id: &ExprID,
         name: String,
         symbol_id: &SymbolID,
-        constraints: Vec<TypeConstraint>,
+        constraints: Vec<Constraint>,
     ) -> Ty {
-        let usage_placeholder = Ty::TypeVar(
-            self.new_type_variable(TypeVarKind::Placeholder(name.clone()), constraints),
-        );
+        let usage_placeholder =
+            Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name.clone())));
 
         self.constrain(Constraint::InstanceOf {
             scheme: Scheme {
@@ -91,6 +89,10 @@ impl Environment {
             ty: usage_placeholder.clone(),
             symbol_id: *symbol_id,
         });
+
+        for constraint in constraints {
+            self.constrain(constraint);
+        }
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
@@ -209,26 +211,35 @@ impl Environment {
     pub fn generalize(&mut self, t: &Ty, symbol_id: &SymbolID) -> Scheme {
         let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes, *symbol_id);
-        let mut unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
+        let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
 
         // Apply constraints to generalized
-        for var in &mut unbound_vars {
-            let mut collected = vec![];
-            self.constraints.retain(|c| {
-                if let Constraint::Satisfies {
-                    ty: Ty::TypeVar(tv),
-                    constraints,
-                    ..
-                } = c
-                    && tv == var
-                {
-                    collected.extend(constraints.clone());
-                    return false; // remove from env.constraints
-                }
-                true
-            });
-            var.constraints.extend(collected);
-        }
+        // for var in &mut unbound_vars {
+        //     let new_constraint = self
+        //         .constraints
+        //         .iter()
+        //         .filter(|c| c.contains(|ty| ty == &Ty::TypeVar(var.clone())))
+        //         .collect::<Vec<&Constraint>>();
+        //     let mut collected = vec![];
+        //     self.constraints.retain(|c| {
+        //         if let Constraint::Satisfies {
+        //             ty: Ty::TypeVar(tv),
+        //             constraints,
+        //             ..
+        //         } = c
+        //             && tv == var
+        //         {
+        //             collected.extend(constraints.clone());
+        //             return false; // remove from env.constraints
+        //         }
+        //         true
+        //     });
+
+        //     for constraint in collected {
+
+        //     }
+        //     var.constraints.extend(collected);
+        // }
 
         Scheme::new(t.clone(), unbound_vars)
     }
@@ -250,12 +261,19 @@ impl Environment {
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
         let mut var_map: HashMap<TypeVarID, Ty> = HashMap::new();
+        let mut constraints_to_copy = vec![];
         for old in &scheme.unbound_vars {
+            constraints_to_copy.extend(
+                self.constraints
+                    .iter()
+                    .filter(|c| c.contains_ty(&Ty::TypeVar(old.clone())))
+                    .cloned(),
+            );
+
             if let Some(arg_ty) = args.get(old) {
                 var_map.insert(old.clone(), arg_ty.clone());
             } else {
-                let fresh = self
-                    .new_type_variable(TypeVarKind::Instantiated(old.id), old.constraints.clone());
+                let fresh = self.new_type_variable(TypeVarKind::Instantiated(old.id));
                 var_map.insert(old.clone(), Ty::TypeVar(fresh));
             }
         }
@@ -273,7 +291,7 @@ impl Environment {
         id: &ExprID,
         name: String,
         symbol_id: &SymbolID,
-        constraints: &[TypeConstraint],
+        constraints: &[Constraint],
     ) -> Ty {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
             if !constraints.is_empty() {
@@ -301,12 +319,8 @@ impl Environment {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn new_type_variable(
-        &mut self,
-        kind: TypeVarKind,
-        constraints: Vec<TypeConstraint>,
-    ) -> TypeVarID {
-        self.type_var_id = TypeVarID::new(self.type_var_id.id + 1, kind, constraints);
+    pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
+        self.type_var_id = TypeVarID::new(self.type_var_id.id + 1, kind);
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
@@ -608,7 +622,7 @@ mod generalize_tests {
 
     // Helper to create a blank type variable.
     fn new_tv(id: i32) -> TypeVarID {
-        TypeVarID::new(id, TypeVarKind::Blank, vec![])
+        TypeVarID::new(id, TypeVarKind::Blank)
     }
 
     // Helper to create a Ty::TypeVar.

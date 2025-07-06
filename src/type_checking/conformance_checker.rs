@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub struct ConformanceChecker<'a> {
-    type_def: &'a TypeDef,
+    ty: &'a Ty,
     conformance: &'a Conformance,
     errors: Vec<ConformanceError>,
     env: &'a mut Environment,
@@ -26,20 +26,16 @@ pub enum ConformanceError {
     TypeCannotConform(String),
     TypeDoesNotConform(String, String),
     MemberNotImplemented {
-        ty: SymbolID,
+        ty: Ty,
         protocol: SymbolID,
         member: String,
     },
 }
 
 impl<'a> ConformanceChecker<'a> {
-    pub fn new(
-        type_def: &'a TypeDef,
-        conformance: &'a Conformance,
-        env: &'a mut Environment,
-    ) -> Self {
+    pub fn new(ty: &'a Ty, conformance: &'a Conformance, env: &'a mut Environment) -> Self {
         Self {
-            type_def,
+            ty,
             conformance,
             errors: Default::default(),
             env,
@@ -82,7 +78,7 @@ impl<'a> ConformanceChecker<'a> {
             // our concrete type
             for type_var in free_type_vars(&ty_method) {
                 if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
-                    unifications.push((Ty::TypeVar(type_var), self.type_def.ty()));
+                    unifications.push((Ty::TypeVar(type_var), self.ty.clone()));
                 }
             }
 
@@ -126,7 +122,7 @@ impl<'a> ConformanceChecker<'a> {
         } else {
             tracing::error!(
                 "{} does not conform: {:?}",
-                self.type_def.name(),
+                self.ty.to_string(),
                 self.errors
             );
             Err(TypeError::ConformanceError(self.errors))
@@ -138,11 +134,11 @@ impl<'a> ConformanceChecker<'a> {
         protocol: &ProtocolDef,
         name: &str,
     ) -> Result<&Property, ConformanceError> {
-        if let Some(property) = self.type_def.find_property(name) {
+        if let Some(Some(property)) = self.type_def().map(|t| t.find_property(name)) {
             Ok(property)
         } else {
             Err(ConformanceError::MemberNotImplemented {
-                ty: self.type_def.symbol_id(),
+                ty: self.ty.clone(),
                 protocol: protocol.symbol_id,
                 member: name.to_string(),
             })
@@ -155,17 +151,40 @@ impl<'a> ConformanceChecker<'a> {
         method_name: &str,
     ) -> Result<Ty, ConformanceError> {
         if let Some(ty) = self
-            .type_def
-            .member_ty_with_conformances(method_name, self.env)
-            && matches!(ty, Ty::Func(_, _, _))
+            .type_def()
+            .cloned()
+            .map(|t| t.member_ty_with_conformances(method_name, self.env))
+            && let Some(ty @ Ty::Func(_, _, _)) = ty
         {
             Ok(ty)
+        } else if let Ty::TypeVar(_var) = &self.ty {
+            protocol
+                .member_ty(method_name)
+                .cloned()
+                .ok_or(ConformanceError::MemberNotImplemented {
+                    ty: self.ty.clone(),
+                    protocol: protocol.symbol_id,
+                    member: method_name.to_string(),
+                })
         } else {
             Err(ConformanceError::MemberNotImplemented {
-                ty: self.type_def.symbol_id(),
+                ty: self.ty.clone(),
                 protocol: protocol.symbol_id,
                 member: method_name.to_string(),
             })
+        }
+    }
+
+    fn type_def(&self) -> Option<&TypeDef> {
+        match self.ty {
+            Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _) => {
+                self.env.lookup_type(symbol_id)
+            }
+            Ty::Int => self.env.lookup_type(&SymbolID::INT),
+            Ty::Float => self.env.lookup_type(&SymbolID::FLOAT),
+            Ty::Bool => self.env.lookup_type(&SymbolID::BOOL),
+            Ty::Pointer => self.env.lookup_type(&SymbolID::POINTER),
+            _ => None,
         }
     }
 }

@@ -15,8 +15,7 @@ use crate::{
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
-    type_constraint::TypeConstraint,
-    type_defs::TypeDef,
+    type_defs::{TypeDef, protocol_def::Conformance},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -36,6 +35,7 @@ pub enum TypeError {
     UnexpectedType(String, String),
     Mismatch(String, String),
     ArgumentError(String),
+    Defer(ConformanceError),
     Handled, // If we've already reported it
     OccursConflict,
     ConformanceError(Vec<ConformanceError>),
@@ -46,6 +46,7 @@ pub enum TypeError {
 impl TypeError {
     pub fn message(&self) -> String {
         match self {
+            Self::Defer(err) => format!("{err:?}"),
             Self::Unresolved(name) => format!("Unresolved name: {name}"),
             Self::NameResolution(e) => e.message(),
             Self::UnknownEnum(name) => format!("No enum named {}", name.name_str()),
@@ -514,7 +515,7 @@ impl<'a> TypeChecker<'a> {
         let param_ty = if let Some(param_ty) = &param_ty {
             self.infer_node(param_ty, env, &None, source_file)?
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), vec![]))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str())))
         };
 
         // Parameters are monomorphic inside the function body
@@ -629,7 +630,7 @@ impl<'a> TypeChecker<'a> {
         let ty = tys
             .into_iter()
             .last()
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element, vec![])));
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
 
         Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
@@ -706,7 +707,7 @@ impl<'a> TypeChecker<'a> {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn, vec![]);
+            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn);
             Ty::TypeVar(call_return_var)
         };
 
@@ -842,7 +843,7 @@ impl<'a> TypeChecker<'a> {
 
         if *is_type_parameter {
             let mut unbound_vars = vec![];
-            let mut type_constraints = vec![];
+            let mut conformance_data = vec![];
 
             for id in conformances {
                 let ty = self.infer_node(id, env, &None, source_file)?;
@@ -858,17 +859,24 @@ impl<'a> TypeChecker<'a> {
                     }
                 }));
 
-                type_constraints.push(TypeConstraint::Conforms {
-                    protocol_id,
-                    associated_types: associated_types.clone(),
-                });
+                conformance_data.push((id, protocol_id, associated_types));
             }
 
             let ref ty @ Ty::TypeVar(ref type_var_id) =
-                env.placeholder(id, name.name_str(), &symbol_id, type_constraints)
+                env.placeholder(id, name.name_str(), &symbol_id, vec![])
             else {
                 unreachable!()
             };
+
+            for (id, protocol_id, associated_types) in conformance_data {
+                let constraint = Constraint::ConformsTo {
+                    expr_id: *id,
+                    ty: ty.clone(),
+                    conformance: Conformance::new(protocol_id, associated_types),
+                };
+                tracing::error!("Constraining type repr: {ty}, {constraint:?}");
+                env.constrain(constraint)
+            }
 
             unbound_vars.push(type_var_id.clone());
 
@@ -885,7 +893,7 @@ impl<'a> TypeChecker<'a> {
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
-                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
+                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id)))
             } else {
                 env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
             };
@@ -1046,7 +1054,7 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(expected) = expected {
             expected.clone()
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
         };
 
         let scheme = Scheme::new(rhs_ty.clone(), vec![]);
@@ -1061,10 +1069,9 @@ impl<'a> TypeChecker<'a> {
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     if let Ty::Protocol(symbol_id, _) = self_ {
-                        Ok(Ty::TypeVar(env.new_type_variable(
-                            TypeVarKind::SelfVar(*symbol_id),
-                            vec![],
-                        )))
+                        Ok(Ty::TypeVar(
+                            env.new_type_variable(TypeVarKind::SelfVar(*symbol_id)),
+                        ))
                     } else {
                         Ok(self_.clone())
                     }
@@ -1135,17 +1142,15 @@ impl<'a> TypeChecker<'a> {
         match op {
             Plus => {
                 let ret_ty = expected.clone().unwrap_or_else(|| {
-                    Ty::TypeVar(
-                        env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), vec![]),
-                    )
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone())))
                 });
-                env.constrain(Constraint::Satisfies {
+                env.constrain(Constraint::ConformsTo {
                     expr_id: *id,
                     ty: lhs,
-                    constraints: vec![TypeConstraint::Conforms {
+                    conformance: Conformance {
                         protocol_id: SymbolID::ADD,
                         associated_types: vec![rhs, ret_ty.clone()],
-                    }],
+                    },
                 });
 
                 Ok(ret_ty)
@@ -1277,7 +1282,7 @@ impl<'a> TypeChecker<'a> {
                     expected.clone()
                 } else {
                     let member_var =
-                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]);
+                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()));
                     Ty::TypeVar(member_var.clone())
                 };
 
@@ -1294,7 +1299,7 @@ impl<'a> TypeChecker<'a> {
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
                 let member_var = Ty::TypeVar(
-                    env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
+                    env.new_type_variable(TypeVarKind::Member(member_name.to_string())),
                 );
 
                 // Add a constraint that links the receiver type to the member
@@ -1430,7 +1435,6 @@ impl<'a> TypeChecker<'a> {
                         for field_pattern in fields {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
-                                vec![],
                             ));
 
                             self.infer_node(field_pattern, env, &Some(field_ty), source_file)

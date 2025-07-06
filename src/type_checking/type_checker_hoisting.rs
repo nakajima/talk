@@ -138,10 +138,8 @@ impl<'a> TypeChecker<'a> {
                     ));
                 };
 
-                let type_param = env.new_type_variable(
-                    TypeVarKind::CanonicalTypeParameter(name_str.to_string()),
-                    vec![],
-                );
+                let type_param = env
+                    .new_type_variable(TypeVarKind::CanonicalTypeParameter(name_str.to_string()));
 
                 env.declare(
                     *symbol_id,
@@ -518,7 +516,7 @@ impl<'a> TypeChecker<'a> {
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: *id,
-                    type_def: def.symbol_id(),
+                    ty: def.ty(),
                     conformance,
                 });
             }

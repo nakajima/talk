@@ -1160,7 +1160,6 @@ impl<'a> Lowerer<'a> {
         let type_var = Ty::TypeVar(TypeVarID::new(
             0,
             TypeVarKind::SelfVar(name.symbol_id().ok()?),
-            vec![],
         ));
 
         // Insert the self env param
@@ -2469,37 +2468,37 @@ impl<'a> Lowerer<'a> {
                     struct_id.0, struct_def.name_str, method.name
                 ))
             }
-            Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
-                let mut result = None;
-                for constraint in &type_var.constraints {
-                    let TypeConstraint::Conforms { protocol_id, .. } = constraint else {
-                        continue;
-                    };
+            // Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
+            //     let mut result = None;
+            //     for constraint in &type_var.constraints {
+            //         let TypeConstraint::Conforms { protocol_id, .. } = constraint else {
+            //             continue;
+            //         };
 
-                    let protocol_def = self.env.lookup_protocol(protocol_id)?;
-                    if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
-                        result = Some(format!(
-                            "@_{}_{}_{}",
-                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
-                        ));
+            //         let protocol_def = self.env.lookup_protocol(protocol_id)?;
+            //         if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
+            //             result = Some(format!(
+            //                 "@_{}_{}_{}",
+            //                 protocol_def.symbol_id.0, protocol_def.name_str, method.name
+            //             ));
 
-                        break;
-                    } else if let Some(method) = protocol_def
-                        .method_requirements
-                        .iter()
-                        .find(|m| m.name == name)
-                    {
-                        result = Some(format!(
-                            "@_{}_{}_{}",
-                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
-                        ));
+            //             break;
+            //         } else if let Some(method) = protocol_def
+            //             .method_requirements
+            //             .iter()
+            //             .find(|m| m.name == name)
+            //         {
+            //             result = Some(format!(
+            //                 "@_{}_{}_{}",
+            //                 protocol_def.symbol_id.0, protocol_def.name_str, method.name
+            //             ));
 
-                        break;
-                    }
-                }
+            //             break;
+            //         }
+            //     }
 
-                result
-            }
+            //     result
+            // }
             _ => None,
         };
 
