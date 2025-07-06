@@ -45,8 +45,20 @@ impl<'a> ConstraintSolver<'a> {
             match self.solve_constraint(&constraint, &mut substitutions) {
                 Ok(_) => (),
                 Err(TypeError::Defer(_)) => {
-                    tracing::error!("Deferring constraint: {constraint:?}");
-                    unsolved_constraints.push(constraint.replacing(&substitutions).clone());
+                    if let Constraint::Retry(c, retries) = constraint {
+                        if retries > 0 {
+                            let constraint = c.replacing(&substitutions);
+                            self.constraints
+                                .insert(0, Constraint::Retry(constraint.into(), retries - 1));
+                        } else {
+                            unsolved_constraints.push(*c.clone());
+                        }
+                    } else {
+                        self.constraints.insert(
+                            0,
+                            Constraint::Retry(constraint.replacing(&substitutions).into(), 3),
+                        );
+                    }
                 }
                 Err(err) => {
                     if let Constraint::Retry(constraint, retries) = constraint {
@@ -335,7 +347,6 @@ impl<'a> ConstraintSolver<'a> {
                                     };
 
                                     if let Some(ty) = protocol_def.member_ty(member_name) {
-                                        tracing::error!("sick got a member: {member_name} {ty:?}");
                                         result = Some((
                                             ty.clone(),
                                             protocol_def.associated_types,

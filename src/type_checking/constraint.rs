@@ -205,7 +205,22 @@ impl Constraint {
                     unbound_vars: scheme.unbound_vars.clone(),
                 },
             },
-            constraint @ Constraint::ConformsTo { .. } => constraint.clone(),
+            Constraint::ConformsTo {
+                expr_id,
+                ty,
+                conformance,
+            } => Constraint::ConformsTo {
+                expr_id: *expr_id,
+                ty: ConstraintSolver::apply(ty, substitutions, 0),
+                conformance: Conformance {
+                    protocol_id: conformance.protocol_id,
+                    associated_types: conformance
+                        .associated_types
+                        .iter()
+                        .map(|t| ConstraintSolver::apply(t, substitutions, 0))
+                        .collect(),
+                },
+            },
             Constraint::Satisfies {
                 expr_id,
                 ty,

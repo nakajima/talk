@@ -278,6 +278,11 @@ impl Environment {
             }
         }
 
+        for constraint in constraints_to_copy {
+            let new_constraint = constraint.replacing(&var_map);
+            self.constrain(new_constraint);
+        }
+
         walk(&scheme.ty, &var_map)
     }
 
