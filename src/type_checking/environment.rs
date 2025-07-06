@@ -215,15 +215,32 @@ impl Environment {
 
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
-    pub fn generalize(&self, t: &Ty, symbol_id: &SymbolID) -> Scheme {
+    #[tracing::instrument(level = "DEBUG", skip(self))]
+    pub fn generalize(&mut self, t: &Ty, symbol_id: &SymbolID) -> Scheme {
         let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes, *symbol_id);
-        let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
+        let mut unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
 
-        Scheme {
-            unbound_vars,
-            ty: t.clone(),
+        // Apply constraints to generalized
+        for var in &mut unbound_vars {
+            let mut collected = vec![];
+            self.constraints.retain(|c| {
+                if let Constraint::Satisfies {
+                    ty: Ty::TypeVar(tv),
+                    constraints,
+                    ..
+                } = c
+                    && tv == var
+                {
+                    collected.extend(constraints.clone());
+                    return false; // remove from env.constraints
+                }
+                true
+            });
+            var.constraints.extend(collected);
         }
+
+        Scheme::new(t.clone(), unbound_vars)
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
@@ -618,7 +635,7 @@ mod generalize_tests {
     fn test_generalize_in_empty_env() {
         // In an empty environment, generalize(a -> b) should produce `forall a, b. a -> b`.
         // All type variables in the type are free and should be bound.
-        let env = Environment::default();
+        let mut env = Environment::default();
         let ty_to_generalize = Ty::Func(vec![ty_var(1)], Box::new(ty_var(2)), vec![]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -720,7 +737,7 @@ mod generalize_tests {
     #[test]
     fn test_generalize_tuple_type() {
         // generalize((a, b)) -> forall a, b. (a, b)
-        let env = Environment::default();
+        let mut env = Environment::default();
         let ty_to_generalize = Ty::Tuple(vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -733,7 +750,7 @@ mod generalize_tests {
     #[test]
     fn test_generalize_array_type() {
         // generalize(Array<a>) -> forall a. Array<a>
-        let env = Environment::default();
+        let mut env = Environment::default();
         let ty_to_generalize = Ty::Array(Box::new(ty_var(1)));
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
@@ -746,7 +763,7 @@ mod generalize_tests {
     #[test]
     fn test_generalize_struct_type() {
         // generalize(Struct<a, b>) -> forall a, b. Struct<a, b>
-        let env = Environment::default();
+        let mut env = Environment::default();
         let ty_to_generalize = Ty::Struct(SymbolID(100), vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));

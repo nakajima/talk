@@ -86,8 +86,9 @@ impl<'a> TypeChecker<'a> {
 
         // Generalize what we can
         for (symbol_id, _) in to_generalize {
-            let scheme = &env.lookup_symbol(&symbol_id)?;
-            env.declare(symbol_id, env.generalize(&scheme.ty, &symbol_id))?;
+            let scheme = env.lookup_symbol(&symbol_id)?.clone();
+            let scheme = env.generalize(&scheme.ty, &symbol_id);
+            env.declare(symbol_id, scheme)?;
         }
 
         Ok(())

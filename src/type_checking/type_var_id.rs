@@ -96,6 +96,9 @@ impl std::fmt::Debug for TypeVarID {
             TypeVarKind::Canonicalized(to) => {
                 write!(f, "T{}[Can.({}){}]", self.id, to, constraints_str)
             }
+            TypeVarKind::Combined(v1, v2) => {
+                write!(f, "T{}[{}&{}{}]", self.id, v1, v2, constraints_str)
+            }
             TypeVarKind::Unbound => write!(f, "T{}[?{}]", self.id, constraints_str),
         }
     }
@@ -122,5 +125,6 @@ pub enum TypeVarKind {
     Instantiated(i32),
     Canonicalized(i32),
     BinaryOperand(TokenKind),
+    Combined(i32, i32),
     Unbound,
 }

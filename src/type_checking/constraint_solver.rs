@@ -380,7 +380,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .ok_or(TypeError::Unknown(format!(
                                 "Unable to resolve enum with id: {enum_id:?}"
                             )))
-                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1))?;
+                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
                             self.unify(&result_ty, &variant.ty, substitutions)?;
@@ -404,7 +404,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             .ok_or(TypeError::Unknown(format!(
                                 "Unable to resolve enum with id: {enum_id:?}"
                             )))
-                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1))?;
+                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
                             self.unify(&result_ty, &variant.ty, substitutions)?;
@@ -584,7 +584,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 result_ty,
                 ..
             } => {
-                let Some(struct_def) = self.env.lookup_struct(initializes_id) else {
+                let Some(struct_def) = self.env.lookup_struct(initializes_id).cloned() else {
                     return Err(TypeError::Unresolved(
                         "did not find struct def for initialization".into(),
                     ));
@@ -801,7 +801,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
     }
 
     pub fn unify(
-        &self,
+        &mut self,
         lhs: &Ty,
         rhs: &Ty,
         substitutions: &mut HashMap<TypeVarID, Ty>,
@@ -839,15 +839,14 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     );
                 }
 
-                // When unifying two type variables, pick one consistently
-                if v1.id < v2.id {
-                    let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
-                    substitutions.insert(v2.clone(), Ty::TypeVar(id));
-                } else {
-                    let id = TypeVarID::new(v2.id, v2.kind, combined_constraints);
-                    substitutions.insert(v1.clone(), Ty::TypeVar(id));
-                }
+                let combined_var = self
+                    .env
+                    .new_type_variable(TypeVarKind::Combined(v1.id, v2.id), combined_constraints);
+
+                substitutions.insert(v1.clone(), Ty::TypeVar(combined_var.clone()));
+                substitutions.insert(v2.clone(), Ty::TypeVar(combined_var));
                 Self::normalize_substitutions(substitutions);
+
                 Ok(())
             }
 
