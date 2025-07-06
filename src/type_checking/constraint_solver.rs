@@ -4,204 +4,18 @@ use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
     compiling::compilation_session::SharedCompilationSession,
     conformance_checker::ConformanceChecker,
+    constraint::Constraint,
     diagnostic::Diagnostic,
     environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
-    parser::ExprID,
     satisfies_checker::SatisfiesChecker,
     ty::Ty,
-    type_checker::{Scheme, TypeError},
+    type_checker::TypeError,
     type_constraint::TypeConstraint,
-    type_defs::{TypeDef, protocol_def::Conformance},
+    type_defs::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Constraint {
-    Equality(ExprID, Ty, Ty),
-    MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
-    UnqualifiedMember(ExprID, String, Ty), // member name, expected type
-    InitializerCall {
-        expr_id: ExprID,
-        initializes_id: SymbolID,
-        args: Vec<Ty>,
-        func_ty: Ty,
-        result_ty: Ty,
-    },
-    VariantMatch {
-        expr_id: ExprID,
-        scrutinee_ty: Ty, // The type of the value being matched (the `expected` type)
-        variant_name: String,
-        // The list of fresh TypeVars created for each field in the pattern.
-        field_tys: Vec<Ty>,
-    },
-    InstanceOf {
-        scheme: Scheme,
-        expr_id: ExprID,
-        ty: Ty,
-        symbol_id: SymbolID,
-    },
-    ConformsTo {
-        expr_id: ExprID,
-        type_def: SymbolID,
-        conformance: Conformance,
-    },
-    Satisfies {
-        expr_id: ExprID,
-        ty: Ty,
-        constraints: Vec<TypeConstraint>,
-    },
-    Retry(Box<Constraint>, usize),
-}
-
-pub type Substitutions = HashMap<TypeVarID, Ty>;
-
-impl Constraint {
-    fn expr_id(&self) -> &ExprID {
-        match self {
-            Self::Equality(id, _, _) => id,
-            Self::MemberAccess(id, _, _, _) => id,
-            Self::UnqualifiedMember(id, _, _) => id,
-            Self::InitializerCall { expr_id, .. } => expr_id,
-            Self::VariantMatch { expr_id, .. } => expr_id,
-            Self::InstanceOf { expr_id, .. } => expr_id,
-            Self::ConformsTo { expr_id, .. } => expr_id,
-            Self::Satisfies { expr_id, .. } => expr_id,
-            Self::Retry(c, _) => c.expr_id(),
-        }
-    }
-
-    pub fn contains_canonical_type_parameter(&self) -> bool {
-        match self {
-            Constraint::Equality(_, ty, ty1) => {
-                has_canonical_type_var(ty) || has_canonical_type_var(ty1)
-            }
-            Constraint::MemberAccess(_, ty, _, ty1) => {
-                has_canonical_type_var(ty) || has_canonical_type_var(ty1)
-            }
-            Constraint::UnqualifiedMember(_, _, ty) => has_canonical_type_var(ty),
-            Constraint::InitializerCall {
-                args,
-                func_ty,
-                result_ty,
-                ..
-            } => {
-                args.iter().any(has_canonical_type_var)
-                    || has_canonical_type_var(func_ty)
-                    || has_canonical_type_var(result_ty)
-            }
-            Constraint::VariantMatch {
-                scrutinee_ty,
-                field_tys,
-                ..
-            } => {
-                has_canonical_type_var(scrutinee_ty) || field_tys.iter().any(has_canonical_type_var)
-            }
-            Constraint::InstanceOf { scheme, ty, .. } => {
-                has_canonical_type_var(&scheme.ty) || has_canonical_type_var(ty)
-            }
-            Constraint::Satisfies { ty, .. } => has_canonical_type_var(ty),
-            Constraint::ConformsTo { conformance, .. } => conformance
-                .associated_types
-                .iter()
-                .any(has_canonical_type_var),
-            _ => false,
-        }
-    }
-
-    pub fn needs_solving(&self) -> bool {
-        match self {
-            Constraint::Equality(_, ty, ty1) => ty != ty1,
-            Constraint::InstanceOf { scheme, ty, .. } => {
-                !scheme.unbound_vars.is_empty() || &scheme.ty != ty
-            }
-            _ => true,
-        }
-    }
-
-    pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
-        match self {
-            Constraint::Equality(id, ty, ty1) => Constraint::Equality(
-                *id,
-                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
-                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
-            ),
-            Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
-                *id,
-                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
-                name.clone(),
-                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
-            ),
-            Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
-                *id,
-                name.clone(),
-                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
-            ),
-            Constraint::InitializerCall {
-                expr_id,
-                initializes_id,
-                args,
-                func_ty,
-                result_ty,
-            } => Constraint::InitializerCall {
-                expr_id: *expr_id,
-                initializes_id: *initializes_id,
-                args: args
-                    .iter()
-                    .map(|a| ConstraintSolver::<NameResolved>::apply(a, substitutions, 0))
-                    .collect(),
-                func_ty: ConstraintSolver::<NameResolved>::apply(func_ty, substitutions, 0),
-                result_ty: ConstraintSolver::<NameResolved>::apply(result_ty, substitutions, 0),
-            },
-            Constraint::VariantMatch {
-                expr_id,
-                scrutinee_ty,
-                variant_name,
-                field_tys,
-            } => Constraint::VariantMatch {
-                expr_id: *expr_id,
-                scrutinee_ty: ConstraintSolver::<NameResolved>::apply(
-                    scrutinee_ty,
-                    substitutions,
-                    0,
-                ),
-                variant_name: variant_name.clone(),
-                field_tys: field_tys
-                    .iter()
-                    .map(|ty| ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0))
-                    .collect(),
-            },
-            Constraint::InstanceOf {
-                expr_id,
-                ty,
-                symbol_id,
-                scheme,
-            } => Constraint::InstanceOf {
-                expr_id: *expr_id,
-                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
-                symbol_id: *symbol_id,
-                scheme: Scheme {
-                    ty: ConstraintSolver::<NameResolved>::apply(&scheme.ty, substitutions, 0),
-                    unbound_vars: scheme.unbound_vars.clone(),
-                },
-            },
-            constraint @ Constraint::ConformsTo { .. } => constraint.clone(),
-            Constraint::Satisfies {
-                expr_id,
-                ty,
-                constraints,
-            } => Constraint::Satisfies {
-                expr_id: *expr_id,
-                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
-                constraints: constraints.clone(),
-            },
-            Constraint::Retry(c, retries) => {
-                Constraint::Retry(c.replacing(substitutions).clone().into(), *retries)
-            }
-        }
-    }
-}
 
 pub struct ConstraintSolver<'a, P: Phase = NameResolved> {
     source_file: &'a mut SourceFile<P>,
@@ -839,14 +653,16 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     );
                 }
 
-                let combined_var = self
-                    .env
-                    .new_type_variable(TypeVarKind::Combined(v1.id, v2.id), combined_constraints);
+                // When unifying two type variables, pick one consistently
+                if v1.id < v2.id {
+                    let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
+                    substitutions.insert(v2.clone(), Ty::TypeVar(id));
+                } else {
+                    let id = TypeVarID::new(v2.id, v2.kind, combined_constraints);
+                    substitutions.insert(v1.clone(), Ty::TypeVar(id));
+                }
 
-                substitutions.insert(v1.clone(), Ty::TypeVar(combined_var.clone()));
-                substitutions.insert(v2.clone(), Ty::TypeVar(combined_var));
                 Self::normalize_substitutions(substitutions);
-
                 Ok(())
             }
 
@@ -1094,18 +910,4 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
         }
     }
-}
-
-fn has_canonical_type_var(ty: &Ty) -> bool {
-    if matches!(
-        ty,
-        Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::CanonicalTypeParameter(_),
-            ..
-        })
-    ) {
-        return true;
-    }
-
-    false
 }

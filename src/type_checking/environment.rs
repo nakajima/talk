@@ -6,7 +6,8 @@ use std::{
 use crate::{
     NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
     compiling::compilation_session::SharedCompilationSession,
-    constraint_solver::{ConstraintSolver, Substitutions},
+    constraint::{Constraint, Substitutions},
+    constraint_solver::ConstraintSolver,
     parser::ExprID,
     ty::Ty,
     type_checker::TypeError,
@@ -15,7 +16,7 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-use super::{constraint_solver::Constraint, type_checker::Scheme, typed_expr::TypedExpr};
+use super::{type_checker::Scheme, typed_expr::TypedExpr};
 
 pub type Scope = HashMap<SymbolID, Scheme>;
 
@@ -254,6 +255,7 @@ impl Environment {
                 loc.line()
             );
         }
+        tracing::error!("\n\n{scheme:?}\n\n");
         self.instantiate_with_args(scheme, Default::default())
     }
 
@@ -263,65 +265,10 @@ impl Environment {
         for old in &scheme.unbound_vars {
             if let Some(arg_ty) = args.get(old) {
                 var_map.insert(old.clone(), arg_ty.clone());
-                // self.constrain_equality(-1, Ty::TypeVar(fresh.clone()), arg_ty.clone());
             } else {
-                let type_var = TypeVarKind::Instantiated(old.id);
-                let fresh = self.new_type_variable(type_var, old.constraints.clone());
+                let fresh = self
+                    .new_type_variable(TypeVarKind::Instantiated(old.id), old.constraints.clone());
                 var_map.insert(old.clone(), Ty::TypeVar(fresh));
-            }
-        }
-
-        fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
-            match ty {
-                Ty::TypeVar(tv) => {
-                    if let Some(new_tv) = map.get(tv).cloned() {
-                        new_tv
-                    } else {
-                        Ty::TypeVar(tv.clone())
-                    }
-                }
-                Ty::Func(params, ret, generics) => {
-                    let new_params = params.iter().map(|p| walk(p, map)).collect();
-                    let new_ret = Box::new(walk(ret, map));
-                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-                    Ty::Func(new_params, new_ret, new_generics)
-                }
-                Ty::Init(struct_id, params) => {
-                    let new_params = params.iter().map(|p| walk(p, map)).collect();
-                    Ty::Init(*struct_id, new_params)
-                }
-                Ty::Closure { func, captures } => {
-                    let func = Box::new(walk(func, map));
-                    Ty::Closure {
-                        func,
-                        captures: captures.clone(),
-                    }
-                }
-                Ty::Enum(name, generics) => {
-                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-                    Ty::Enum(*name, new_generics)
-                }
-                Ty::EnumVariant(name, values) => {
-                    let new_values = values.iter().map(|g| walk(g, map)).collect();
-                    Ty::EnumVariant(*name, new_values)
-                }
-                Ty::Struct(sym, generics) => {
-                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-                    Ty::Struct(*sym, new_generics)
-                }
-                Ty::Protocol(sym, generics) => {
-                    let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-                    Ty::Protocol(*sym, new_generics)
-                }
-                Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
-                Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
-                Ty::Void
-                | Ty::Pointer
-                | Ty::Int
-                | Ty::Float
-                | Ty::Bool
-                | Ty::SelfType
-                | Ty::Byte => ty.clone(),
             }
         }
 
@@ -517,6 +464,57 @@ impl Environment {
             Some(def)
         } else {
             None
+        }
+    }
+}
+
+fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
+    match ty {
+        Ty::TypeVar(tv) => {
+            if let Some(new_tv) = map.get(tv).cloned() {
+                tracing::error!("walk: {new_tv:?}");
+                new_tv
+            } else {
+                Ty::TypeVar(tv.clone())
+            }
+        }
+        Ty::Func(params, ret, generics) => {
+            let new_params = params.iter().map(|p| walk(p, map)).collect();
+            let new_ret = Box::new(walk(ret, map));
+            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+            Ty::Func(new_params, new_ret, new_generics)
+        }
+        Ty::Init(struct_id, params) => {
+            let new_params = params.iter().map(|p| walk(p, map)).collect();
+            Ty::Init(*struct_id, new_params)
+        }
+        Ty::Closure { func, captures } => {
+            let func = Box::new(walk(func, map));
+            Ty::Closure {
+                func,
+                captures: captures.clone(),
+            }
+        }
+        Ty::Enum(name, generics) => {
+            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+            Ty::Enum(*name, new_generics)
+        }
+        Ty::EnumVariant(name, values) => {
+            let new_values = values.iter().map(|g| walk(g, map)).collect();
+            Ty::EnumVariant(*name, new_values)
+        }
+        Ty::Struct(sym, generics) => {
+            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+            Ty::Struct(*sym, new_generics)
+        }
+        Ty::Protocol(sym, generics) => {
+            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+            Ty::Protocol(*sym, new_generics)
+        }
+        Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
+        Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
+        Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
+            ty.clone()
         }
     }
 }

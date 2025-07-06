@@ -4,7 +4,7 @@ use tracing::info_span;
 
 use crate::{
     NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
-    constraint_solver::{Constraint, Substitutions},
+    constraint::{Constraint, Substitutions},
     environment::{Environment, RawTypeParameter, TypeParameter},
     expr::Expr,
     name::Name,
