@@ -1078,13 +1078,11 @@ impl<'a> TypeChecker<'a> {
                 Ok(ty)
             }
             Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
-            Name::SelfType => {
-                tracing::error!("Self variable inferred: {:?}", env.selfs.last());
-                env.selfs
-                    .last()
-                    .cloned()
-                    .ok_or(TypeError::Unknown("No type found for Self".to_string()))
-            }
+            Name::SelfType => env
+                .selfs
+                .last()
+                .cloned()
+                .ok_or(TypeError::Unknown("No type found for Self".to_string())),
         }
     }
 

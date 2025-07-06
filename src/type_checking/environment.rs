@@ -255,7 +255,6 @@ impl Environment {
                 loc.line()
             );
         }
-        tracing::error!("\n\n{scheme:?}\n\n");
         self.instantiate_with_args(scheme, Default::default())
     }
 
@@ -472,7 +471,6 @@ fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
     match ty {
         Ty::TypeVar(tv) => {
             if let Some(new_tv) = map.get(tv).cloned() {
-                tracing::error!("walk: {new_tv:?}");
                 new_tv
             } else {
                 Ty::TypeVar(tv.clone())
