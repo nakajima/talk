@@ -37,6 +37,7 @@ typed-arena = "2.0.2"
 itertools = "0.14.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", ] }
+ena = "0.14.3"
 
 [features]
 default = ["cli"]

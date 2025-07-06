@@ -27,7 +27,6 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
-    type_constraint::TypeConstraint,
     type_defs::{TypeDef, struct_def::StructDef},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::TypedExpr,
