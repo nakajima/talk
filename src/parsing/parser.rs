@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use tracing::info_span;
+
 #[cfg(test)]
 use crate::filler::FullExpr;
 use crate::{
@@ -173,6 +175,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) {
+        let _s = info_span!("parsing", path = self.parse_tree.path.to_str()).entered();
         // Prime the pump
         self.advance();
         self.advance();

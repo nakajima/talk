@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use tracing::info_span;
+
 use crate::{
     NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
     constraint_solver::{Constraint, Substitutions},
@@ -56,6 +58,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
+        let _s = info_span!("hoisting", path = source_file.path.to_str()).entered();
         let mut to_generalize = vec![];
 
         // The first pass goes through and finds all the named things that need to be predeclared and just defines
@@ -92,6 +95,7 @@ impl<'a> TypeChecker<'a> {
 
     // We want to go through and predeclare all struct/enum/protocol names, then after that actually infer their members,
     // stashing properties, methods and initializers for each.
+
     #[allow(clippy::type_complexity)]
     pub(super) fn predeclare_types(
         &mut self,

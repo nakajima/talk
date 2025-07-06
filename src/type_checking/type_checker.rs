@@ -397,6 +397,7 @@ impl<'a> TypeChecker<'a> {
         ty
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn handle_incomplete(
         &mut self,
         expr: &IncompleteExpr,
@@ -413,6 +414,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_protocol(
         &mut self,
         name: &Name,
@@ -438,6 +440,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Protocol(*symbol_id, inferred_associated_types))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_property(
         &mut self,
         expr_id: &ExprID,
@@ -471,6 +474,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, _source_file))]
     fn infer_enum_decl(
         &self,
         enum_id: &SymbolID,
@@ -482,6 +486,7 @@ impl<'a> TypeChecker<'a> {
         Ok(scheme.ty.clone())
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_enum_variant(
         &mut self,
         _name: &Name,
@@ -497,6 +502,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::EnumVariant(*enum_id, values))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_parameter(
         &mut self,
         name: &Name,
@@ -517,6 +523,7 @@ impl<'a> TypeChecker<'a> {
         Ok(param_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_init(
         &mut self,
         struct_id: &SymbolID,
@@ -543,6 +550,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_extension(
         &mut self,
         name: &Name,
@@ -573,6 +581,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_struct(
         &mut self,
         name: &Name,
@@ -602,6 +611,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_array(
         &mut self,
         items: &[ExprID],
@@ -623,6 +633,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_return(
         &mut self,
         rhs: &Option<ExprID>,
@@ -637,6 +648,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_loop(
         &mut self,
         cond: &Option<ExprID>,
@@ -653,6 +665,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Void)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_if(
         &mut self,
         condition: &ExprID,
@@ -676,6 +689,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_call(
         &mut self,
@@ -780,6 +794,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ret_var)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_assignment(
         &mut self,
         env: &mut Environment,
@@ -797,6 +812,7 @@ impl<'a> TypeChecker<'a> {
         Ok(rhs_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_type_repr(
         &mut self,
@@ -890,6 +906,7 @@ impl<'a> TypeChecker<'a> {
         Ok(instantiated)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_func_type_repr(
         &mut self,
         env: &mut Environment,
@@ -908,6 +925,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_tuple_type_repr(
         &mut self,
         env: &mut Environment,
@@ -922,6 +940,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Tuple(inferred_types))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &mut self,
@@ -1012,6 +1031,7 @@ impl<'a> TypeChecker<'a> {
         Ok(inferred_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_let(
         &mut self,
         env: &mut Environment,
@@ -1034,6 +1054,7 @@ impl<'a> TypeChecker<'a> {
         Ok(rhs_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env))]
     fn infer_variable(&self, env: &mut Environment, name: &Name) -> Result<Ty, TypeError> {
         match name {
             Name::_Self(_sym) => {
@@ -1066,6 +1087,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_tuple(
         &mut self,
         types: &[ExprID],
@@ -1084,6 +1106,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Tuple(inferred_types))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_unary(
         &mut self,
         rhs: &ExprID,
@@ -1094,6 +1117,7 @@ impl<'a> TypeChecker<'a> {
         self.infer_node(rhs, env, expected, source_file)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
         &mut self,
@@ -1144,6 +1168,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_block(
         &mut self,
         id: &ExprID,
@@ -1194,6 +1219,7 @@ impl<'a> TypeChecker<'a> {
         Ok(block_return_ty.unwrap_or(Ty::Void))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_match(
         &mut self,
         env: &mut Environment,
@@ -1213,6 +1239,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ret_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_match_arm(
         &mut self,
         env: &mut Environment,
@@ -1228,10 +1255,12 @@ impl<'a> TypeChecker<'a> {
         Ok(body_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, _env))]
     fn infer_pattern_variant(&self, _id: &ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
         Ok(Ty::Void)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_member(
         &mut self,
         id: &ExprID,
@@ -1282,6 +1311,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_pattern_expr(
         &mut self,
         id: &ExprID,
@@ -1300,6 +1330,7 @@ impl<'a> TypeChecker<'a> {
         Ok(expected.clone())
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_pattern(
         &mut self,
         _id: &ExprID,
