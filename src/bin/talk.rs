@@ -27,7 +27,6 @@ async fn main() {
         stdio: bool,
     }
 
-    // let target = Box::new(File::create("log.txt").expect("Can't create file"));
     let file = File::create("log.txt").expect("can't create file");
 
     let _ = tracing_subscriber::fmt()
