@@ -103,7 +103,6 @@ pub mod trace {
     use tracing::{Metadata, Subscriber};
     use tracing_subscriber::{
         EnvFilter,
-        fmt::format::FmtSpan,
         layer::Filter,
         registry::{LookupSpan, SpanRef},
     };
