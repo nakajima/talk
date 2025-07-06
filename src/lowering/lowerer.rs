@@ -103,7 +103,7 @@ impl Ty {
             },
             Ty::Struct(symbol_id, generics) => {
                 let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
-                    log::error!("Unable to determine definition of struct: {symbol_id:?}");
+                    tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
                 };
 
@@ -293,7 +293,7 @@ impl CurrentFunction {
     fn new(env_ty: Option<IRType>) -> Self {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
+            tracing::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
         }
         Self {
             next_block_id: BasicBlockID(0),
@@ -335,7 +335,7 @@ impl CurrentFunction {
     fn register_symbol(&mut self, symbol_id: SymbolID, register: SymbolValue) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "register symbol {:?}: {:?} from {}:{}",
                 symbol_id,
                 register,
@@ -376,7 +376,7 @@ impl CurrentFunction {
             });
         }
 
-        log::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
+        tracing::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
 
         IRFunction {
             ty,
@@ -399,7 +399,7 @@ struct RegisterAllocator {
 
 impl RegisterAllocator {
     fn new() -> Self {
-        log::trace!("new register allocator");
+        tracing::trace!("new register allocator");
         Self { next_id: 0 }
     }
 
@@ -949,7 +949,7 @@ impl<'a> Lowerer<'a> {
                     continue;
                 }
                 _ => {
-                    log::warn!("unhandled struct member: {:?}", typed_member.expr);
+                    tracing::warn!("unhandled struct member: {:?}", typed_member.expr);
                     continue;
                 }
             }
@@ -975,7 +975,7 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        log::trace!("Lowering extension for {type_def:?}");
+        tracing::trace!("Lowering extension for {type_def:?}");
 
         let Some(Expr::Block(member_ids)) = self.source_file.get(body_id) else {
             self.add_diagnostic(Diagnostic::lowering(
@@ -1003,7 +1003,7 @@ impl<'a> Lowerer<'a> {
                     continue;
                 }
                 _ => {
-                    log::warn!("unhandled struct member: {:?}", typed_member.expr);
+                    tracing::warn!("unhandled struct member: {:?}", typed_member.expr);
                     continue;
                 }
             }
@@ -1018,17 +1018,17 @@ impl<'a> Lowerer<'a> {
         func_id: &ExprID,
     ) -> Option<(IRType, TypeDef, TypedExpr, Register, Option<IRValue>)> {
         let Some(type_def) = self.env.lookup_type(symbol_id).cloned() else {
-            log::error!("Cannot setup self context for {symbol_id:?}");
+            tracing::error!("Cannot setup self context for {symbol_id:?}");
             return None;
         };
 
         let Some(typed_func) = self.source_file.typed_expr(func_id, self.env) else {
-            log::error!("Did not get typed function for func_id: {func_id}");
+            tracing::error!("Did not get typed function for func_id: {func_id}");
             return None;
         };
 
         let Expr::Func { params, body, .. } = &typed_func.expr else {
-            log::error!("Typed expr not a func: {typed_func:?}");
+            tracing::error!("Typed expr not a func: {typed_func:?}");
             return None;
         };
 
@@ -1329,7 +1329,7 @@ impl<'a> Lowerer<'a> {
             Some(closure_ptr)
         };
 
-        log::trace!("lowering {name:?}");
+        tracing::trace!("lowering {name:?}");
 
         let Some(Expr::Block(body_exprs)) = self.source_file.get(body).cloned() else {
             self.push_err("Did not get body", *body);
@@ -1459,7 +1459,7 @@ impl<'a> Lowerer<'a> {
         );
         self.set_current_block(then_block_id);
         let Some(body_ret_reg) = self.lower_expr(&body_id) else {
-            log::error!(
+            tracing::error!(
                 "Did not get body return: {:?}",
                 self.source_file.get(&body_id)
             );
@@ -2161,7 +2161,7 @@ impl<'a> Lowerer<'a> {
         }
         | Ty::Init(_, params)) = &callee_typed_expr.ty
         else {
-            log::error!("didn't get callable: {callee_typed_expr:?}");
+            tracing::error!("didn't get callable: {callee_typed_expr:?}");
             return None;
         };
 
@@ -2432,17 +2432,17 @@ impl<'a> Lowerer<'a> {
         mut arg_registers: Vec<TypedRegister>,
     ) -> Option<Register> {
         let Some(receiver_id) = receiver_id else {
-            log::error!("no receiver for member expr");
+            tracing::error!("no receiver for member expr");
             return None;
         };
 
         let Some(receiver_ty) = self.source_file.typed_expr(receiver_id, self.env) else {
-            log::error!("could not determine type of receiver");
+            tracing::error!("could not determine type of receiver");
             return None;
         };
 
         let Some(receiver) = self.lower_expr(receiver_id) else {
-            log::error!("could not lower member receiver: {callee_typed_expr:?}");
+            tracing::error!("could not lower member receiver: {callee_typed_expr:?}");
             return None;
         };
 

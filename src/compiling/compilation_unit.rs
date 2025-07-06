@@ -95,12 +95,12 @@ impl CompilationUnit<Raw> {
             self.session
                 .lock()
                 .map(|mut t| t.clear_diagnostics())
-                .unwrap_or_else(|e| log::error!("could not clear diagnostics: {e:?}"));
+                .unwrap_or_else(|e| tracing::error!("could not clear diagnostics: {e:?}"));
 
             let source = match self.read(&path) {
                 Ok(source) => source.to_string(),
                 Err(e) => {
-                    log::error!("read error: {e:?}");
+                    tracing::error!("read error: {e:?}");
                     continue;
                 }
             };

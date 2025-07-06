@@ -98,7 +98,7 @@ impl Driver {
         }
 
         // We don't have this file, so add it to the default unit
-        log::info!("adding {path:?} to default unit");
+        tracing::info!("adding {path:?} to default unit");
         self.units[0].input.push(path.to_path_buf());
         self.units[0]
             .src_cache
@@ -173,7 +173,7 @@ impl Driver {
         if let Ok(session) = &mut self.session.lock() {
             session.clear_diagnostics()
         } else {
-            log::error!("Unable to clear diagnostics")
+            tracing::error!("Unable to clear diagnostics")
         }
 
         while result.is_empty() && round < 3 {
@@ -211,7 +211,7 @@ impl Driver {
     ) -> Option<Vec<Diagnostic>> {
         let mut result = vec![];
         for unit in units {
-            log::info!("checking for diagnostics in {path:?}");
+            tracing::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
                 && let Some(diagnostics) = self.session.lock().ok()?.diagnostics_for(path)

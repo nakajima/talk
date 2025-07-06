@@ -178,7 +178,7 @@ impl SymbolTable {
     ) -> SymbolID {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "add symbol {:?} {:?} {:?} {:?} from {}:{}",
                 name,
                 kind,
@@ -253,9 +253,9 @@ impl SymbolTable {
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
-        log::warn!("Lookup: {name:?}");
+        tracing::warn!("Lookup: {name:?}");
         for (id, info) in &self.symbols {
-            log::warn!("Looking up: {id:?}, {info:?}");
+            tracing::warn!("Looking up: {id:?}, {info:?}");
             if info.name == name {
                 return Some(*id);
             }

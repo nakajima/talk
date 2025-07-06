@@ -100,7 +100,7 @@ macro_rules! indented_println {
     ($env:expr, $fmt:literal $(, $args:expr)*) => {
         // Expander:
         // This is the code that will be generated.
-        log::trace!(
+        tracing::trace!(
             // `concat!` joins the initial indent placeholder "{}" with your format string.
             // e.g., concat!("{}", "Infer node {}: {:?}") -> "{}Infer node {}: {:?}"
             concat!("{}", $fmt),
@@ -207,7 +207,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(typed_expr) = env.typed_exprs.get(id)
             && expected.is_none()
         {
-            log::trace!("{typed_expr:?}, returning from cache");
+            tracing::trace!("{typed_expr:?}, returning from cache");
             return Ok(typed_expr.ty.clone());
         }
 
@@ -215,7 +215,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unknown(format!("No expr found with id {id}")));
         };
 
-        log::trace!("⋈ Infer [{id}]: {expr:?}");
+        tracing::trace!("⋈ Infer [{id}]: {expr:?}");
         let mut ty = match &expr {
             Expr::Incomplete(expr_id) => {
                 self.handle_incomplete(expr_id, expected, env, source_file)
@@ -382,7 +382,7 @@ impl<'a> TypeChecker<'a> {
                 env.typed_exprs.insert(*id, typed_expr);
             }
             Err(e) => {
-                log::error!("error inferring {:?}: {:?}", source_file.get(id), e);
+                tracing::error!("error inferring {:?}: {:?}", source_file.get(id), e);
                 if let Ok(mut lock) = self.session.lock() {
                     lock.add_diagnostic(Diagnostic::typing(
                         source_file.path.clone(),
@@ -1057,7 +1057,7 @@ impl<'a> TypeChecker<'a> {
             }
             Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
             Name::SelfType => {
-                log::error!("Self variable inferred: {:?}", env.selfs.last());
+                tracing::error!("Self variable inferred: {:?}", env.selfs.last());
                 env.selfs
                     .last()
                     .cloned()
@@ -1308,14 +1308,14 @@ impl<'a> TypeChecker<'a> {
         expected: &Ty,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
-        log::trace!("Inferring pattern: {pattern:?}");
+        tracing::trace!("Inferring pattern: {pattern:?}");
         match pattern {
             Pattern::LiteralInt(_) => (),
             Pattern::LiteralFloat(_) => (),
             Pattern::LiteralTrue => (),
             Pattern::LiteralFalse => (),
             Pattern::Bind(name) => {
-                log::info!("inferring bind pattern: {name:?}");
+                tracing::info!("inferring bind pattern: {name:?}");
                 if let Name::Resolved(symbol_id, _) = name {
                     // Use the expected type for this binding
                     let scheme = Scheme {
@@ -1410,7 +1410,7 @@ impl<'a> TypeChecker<'a> {
                                 .unwrap_or(Ty::Void);
                         }
                     }
-                    _ => log::error!(
+                    _ => tracing::error!(
                         "Unhandled pattern variant: {pattern:?}, expected: {expected:?}"
                     ),
                 }

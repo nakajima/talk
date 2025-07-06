@@ -423,7 +423,7 @@ impl<'a> SemanticTokenCollector<'a> {
         }
 
         for tok in lexer.comments.iter() {
-            log::info!("Got a comment token: {tok:?}");
+            tracing::info!("Got a comment token: {tok:?}");
             self.make(tok, SemanticTokenType::COMMENT, &mut tokens)
         }
 
@@ -453,7 +453,7 @@ impl<'a> SemanticTokenCollector<'a> {
 
         for (range, length, token_type) in self.tokens {
             if range.end.character < range.start.character && range.end.line <= range.start.line {
-                log::error!("Warning: Invalid range detected: {range:?}");
+                tracing::error!("Warning: Invalid range detected: {range:?}");
                 continue;
             }
 
@@ -469,7 +469,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 .position(|tt| tt == &token_type)
                 .unwrap_or(0) as u32;
 
-            log::error!("{range:?} {length:?} {token_type:?}");
+            tracing::error!("{range:?} {length:?} {token_type:?}");
 
             encoded_tokens.push(SemanticToken {
                 delta_line,

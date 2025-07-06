@@ -124,7 +124,7 @@ impl<'a> ConformanceChecker<'a> {
         if self.errors.is_empty() {
             Ok(unifications)
         } else {
-            log::error!(
+            tracing::error!(
                 "{} does not conform: {:?}",
                 self.type_def.name(),
                 self.errors

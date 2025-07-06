@@ -43,4 +43,17 @@ fn init_logger() {
         .try_init();
 }
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env()) // respects RUST_LOG
+        .with_test_writer() // avoids “already initialized” panic
+        .without_time()
+        .with_target(false)
+        .try_init();
+}
+
 pub mod test_utils;

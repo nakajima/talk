@@ -13,7 +13,7 @@ pub fn synthesize_inits(
 ) {
     for (sym, table) in symbol_table.types.clone() {
         if table.initializers.is_empty() {
-            log::trace!("Synthesizing init for {sym:?}");
+            tracing::trace!("Synthesizing init for {sym:?}");
             let mut body_exprs: Vec<ExprID> = vec![];
 
             // We need to generate an initializer for this struct
@@ -120,7 +120,7 @@ pub fn synthesize_inits(
 
             let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
             else {
-                log::error!(
+                tracing::error!(
                     "didn't get struct from expr id: {:?}",
                     source_file.get(&struct_info.expr_id)
                 );
@@ -128,7 +128,7 @@ pub fn synthesize_inits(
             };
 
             let Some(Expr::Block(existing_body_ids)) = source_file.get_mut(&body) else {
-                log::error!("didn't get block body");
+                tracing::error!("didn't get block body");
                 return;
             };
 

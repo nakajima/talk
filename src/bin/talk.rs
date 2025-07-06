@@ -1,7 +1,7 @@
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    use std::{fs::File, path::PathBuf};
+    use std::{fs::File, io::BufWriter, path::PathBuf};
 
     use clap::{Args, Parser, Subcommand};
 
@@ -27,14 +27,15 @@ async fn main() {
         stdio: bool,
     }
 
-    let target = Box::new(File::create("log.txt").expect("Can't create file"));
-    env_logger::builder()
-        .filter(None, log::LevelFilter::Info)
-        .target(env_logger::Target::Pipe(target))
-        .format_timestamp(None)
-        .format_target(false)
-        .try_init()
-        .unwrap();
+    // let target = Box::new(File::create("log.txt").expect("Can't create file"));
+    let file = File::create("log.txt").expect("can't create file");
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // respects RUST_LOG
+        .without_time()
+        .with_target(false)
+        .with_writer(move || BufWriter::new(file.try_clone().expect("clone failed")))
+        .try_init();
 
     let cli = Cli::parse();
 

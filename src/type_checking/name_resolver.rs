@@ -112,7 +112,7 @@ impl NameResolver {
             let Some(expr) = &mut source_file.get_mut(node_id) else {
                 continue;
             };
-            log::trace!("Resolving: {expr:?}");
+            tracing::trace!("Resolving: {expr:?}");
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
@@ -188,7 +188,7 @@ impl NameResolver {
                 } => match name {
                     Name::Raw(name_str) => {
                         let Some(symbol_id) = self.lookup(&name_str) else {
-                            log::error!("Did not find symbol for {name_str}");
+                            tracing::error!("Did not find symbol for {name_str}");
                             if let Ok(mut session) = self.session.lock() {
                                 session.add_diagnostic(Diagnostic::resolve(
                                     source_file.path.clone(),
@@ -199,7 +199,7 @@ impl NameResolver {
                             return;
                         };
 
-                        log::trace!("Resolving extension {name_str} {symbol_id:?}");
+                        tracing::trace!("Resolving extension {name_str} {symbol_id:?}");
 
                         let symbol_id = symbol_id.0;
                         self.type_symbol_stack.push(symbol_id);
@@ -223,7 +223,7 @@ impl NameResolver {
                 Break => (),
                 Init(_, func_id) => {
                     let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
-                        log::error!("no type found for initializer");
+                        tracing::error!("no type found for initializer");
                         return;
                     };
 
@@ -417,7 +417,7 @@ impl NameResolver {
 
                                 return;
                             };
-                            log::info!("Replacing variable {name_str} with {symbol_id:?}");
+                            tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
 
                             symbol_table.add_map(source_file, node_id, &symbol_id);
 
@@ -436,7 +436,7 @@ impl NameResolver {
                                 if let Some(Name::Resolved(_, func_name)) = name
                                     && func_name == &name_str
                                 {
-                                    log::trace!("the same: {func_name:?} <> {name_str:?}");
+                                    tracing::trace!("the same: {func_name:?} <> {name_str:?}");
                                 } else {
                                     if !captures.contains(&symbol_id) {
                                         (*captures).push(symbol_id);
@@ -459,7 +459,7 @@ impl NameResolver {
                     conformances,
                     introduces_type,
                 } => {
-                    log::trace!(
+                    tracing::trace!(
                         "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {introduces_type}"
                     );
 
@@ -844,7 +844,7 @@ impl NameResolver {
 
             // Hoist properties
             let Some(Block(ids)) = source_file.get(&body) else {
-                log::error!("Didn't get struct body");
+                tracing::error!("Didn't get struct body");
                 return;
             };
 
@@ -1076,7 +1076,7 @@ impl NameResolver {
 
         let symbol_id = symbol_table.add(&name, kind.clone(), *expr_id, Some(definition));
 
-        log::info!("Replacing {kind:?} {name} with {symbol_id:?}");
+        tracing::info!("Replacing {kind:?} {name} with {symbol_id:?}");
 
         if let Some(scope_id) = self.scope_tree_ids.last() {
             source_file
@@ -1105,7 +1105,7 @@ impl NameResolver {
     }
 
     fn start_scope(&mut self, source_file: &mut SourceFile, span: Span) {
-        log::trace!("scope started: {:?}", self.scopes);
+        tracing::trace!("scope started: {:?}", self.scopes);
 
         self.scope_tree_ids.push(
             source_file

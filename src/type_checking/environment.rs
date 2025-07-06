@@ -101,7 +101,7 @@ impl Environment {
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "Placeholder {usage_placeholder:?} created for {name}: {}:{}",
                 loc.file(),
                 loc.line()
@@ -123,7 +123,7 @@ impl Environment {
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::info!("⊢ {:?} ({}:{})", constraint, loc.file(), loc.line(),);
+            tracing::info!("⊢ {:?} ({}:{})", constraint, loc.file(), loc.line(),);
         }
 
         // #[allow(clippy::panic)]
@@ -188,7 +188,7 @@ impl Environment {
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) -> Result<(), TypeError> {
         let loc = std::panic::Location::caller();
-        log::debug!(
+        tracing::debug!(
             "λ Declare {symbol_id:?} -> {scheme:?} ({}:{})",
             loc.file(),
             loc.line()
@@ -230,7 +230,7 @@ impl Environment {
     pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "★ Instantiate {:?} from {}:{}",
                 scheme,
                 loc.file(),
@@ -325,7 +325,7 @@ impl Environment {
     ) -> Ty {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
             if !constraints.is_empty() {
-                log::warn!("-> Ditching constraints: {constraints:?}");
+                tracing::warn!("-> Ditching constraints: {constraints:?}");
             }
 
             scheme.ty.clone()
@@ -335,7 +335,7 @@ impl Environment {
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "T ty_for_symbol {} ({:?}) = {:?} from {}:{}",
                 name,
                 symbol_id,
@@ -358,7 +358,7 @@ impl Environment {
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "+ {:?} from {}:{}",
                 Ty::TypeVar(self.type_var_id.clone()),
                 loc.file(),
@@ -373,10 +373,10 @@ impl Environment {
         #[cfg(debug_assertions)]
         if let Some(existing) = self.lookup_type(&def.symbol_id()) {
             if existing != def {
-                log::info!("Updating {def:?}");
+                tracing::info!("Updating {def:?}");
             }
         } else {
-            log::info!("Registering {def:?}");
+            tracing::info!("Registering {def:?}");
         }
 
         match def {
@@ -445,7 +445,7 @@ impl Environment {
         } else {
             if cfg!(debug_assertions) {
                 let loc = std::panic::Location::caller();
-                log::warn!(
+                tracing::warn!(
                     "Did not find symbol {symbol_id:?}: {}:{}",
                     loc.file(),
                     loc.line()

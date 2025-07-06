@@ -55,7 +55,7 @@ impl FromStr for FuncName {
 pub fn parse_type_from_chars(chars: &mut Peekable<Chars>) -> Result<Option<IRType>, ParserError> {
     let mut arg = vec![];
     for ch in chars.by_ref() {
-        log::trace!("matching: {ch}");
+        tracing::trace!("matching: {ch}");
         match ch {
             ',' => {
                 return Ok(Some(IRType::from_str(
@@ -250,7 +250,7 @@ impl<'a> Parser<'a> {
         self.consume(Tokind::Semicolon).ok();
 
         let line_str = &self.lexer.code[start_pos..self.lexer.current].trim();
-        log::trace!("attempting to parse: {line_str:?}");
+        tracing::trace!("attempting to parse: {line_str:?}");
 
         if line_str.trim().is_empty() {
             return Ok(None);

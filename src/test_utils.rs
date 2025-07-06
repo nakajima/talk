@@ -27,7 +27,7 @@ macro_rules! assert_lowered_functions {
 
                     use prettydiff::{diff_chars, diff_lines};
                     use $crate::lowering::ir_printer::print;
-                    log::error!(
+                    tracing::error!(
                         "{}",
                         diff_chars(
                             &format!("{:?}", &left_val.functions),

@@ -243,7 +243,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     if let Constraint::Retry(constraint, retries) = constraint {
                         if retries > 0 {
                             let constraint = constraint.replacing(&substitutions);
-                            log::trace!(
+                            tracing::trace!(
                                 "Retrying {constraint:?} ({retries} remaining (subs {})) {substitutions:?}",
                                 substitutions.len()
                             );
@@ -255,7 +255,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                 ),
                             );
                         } else {
-                            log::error!("Retry failed for {constraint:?}");
+                            tracing::error!("Retry failed for {constraint:?}");
                             self.add_diagnostic(Diagnostic::typing(
                                 self.source_file.path.clone(),
                                 *constraint.expr_id(),
@@ -315,7 +315,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         constraint: &Constraint,
         substitutions: &mut HashMap<TypeVarID, Ty>,
     ) -> Result<(), TypeError> {
-        log::info!(
+        tracing::info!(
             "Solving constraint: {:?}",
             constraint.replacing(substitutions)
         );
@@ -346,7 +346,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 let rhs = Self::apply(rhs, substitutions, 0);
 
                 self.unify(&lhs, &rhs, substitutions).map_err(|err| {
-                    log::error!("{err:?}");
+                    tracing::error!("{err:?}");
                     err
                 })?;
 
@@ -390,7 +390,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     Ty::Func(_args, ret, _generics) => {
                         let Ty::Enum(enum_id, _generics) = Self::apply(ret, substitutions, 0)
                         else {
-                            log::error!(
+                            tracing::error!(
                                 "did not get enum type: {:?}",
                                 Self::apply(ret, substitutions, 0)
                             );
@@ -491,7 +491,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                             )));
                         };
 
-                        log::trace!(
+                        tracing::trace!(
                             "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
                         );
 
@@ -690,11 +690,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
     pub fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
         if depth > 20 {
-            log::error!("Hit 100 recursive applications for {ty:#?}, bailing.");
+            tracing::error!("Hit 100 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
         }
 
-        // log::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
+        // tracing::trace!("Applying:\n{:#?}\n---\n{:?}", ty, substitutions);
 
         match ty {
             Ty::Pointer => ty.clone(),
@@ -822,19 +822,19 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     [v1.constraints.clone(), v2.constraints.clone()].concat();
 
                 if !combined_constraints.is_empty() {
-                    log::trace!(
+                    tracing::trace!(
                         "Combined constraints: {v1:?} <> {v2:?} = {combined_constraints:?}"
                     );
                 };
 
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v1.kind {
-                    log::warn!(
+                    tracing::warn!(
                         "Attempting to unify canonical type parameter {v1:?} with {v2:?}. Consider instantiating."
                     );
                 }
 
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v2.kind {
-                    log::warn!(
+                    tracing::warn!(
                         "Attempting to unify canonical type parameter {v2:?} with {v1:?}. Consider instantiating."
                     );
                 }
@@ -853,7 +853,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v.kind {
-                    log::warn!(
+                    tracing::warn!(
                         "Attempting to unify canonical type parameter {v:?} with {ty:?}. Consider instantiating."
                     );
                 }
@@ -944,7 +944,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in enum_def.type_parameters.iter().zip(generics) {
-                    log::trace!("Member substitution: {type_param:?} -> {type_arg:?}");
+                    tracing::trace!("Member substitution: {type_param:?} -> {type_arg:?}");
                     member_substitutions.insert(type_param.type_var.clone(), type_arg.clone());
                 }
                 let specialized_ty = Self::substitute_ty_with_map(
@@ -958,7 +958,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                 Ok(())
             }
             _ => {
-                log::error!(
+                tracing::error!(
                     "Mismatch: {:?} and {:?}",
                     Self::apply(lhs, substitutions, 0),
                     Self::apply(rhs, substitutions, 0)
@@ -970,7 +970,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
             }
         };
 
-        log::debug!(
+        tracing::debug!(
             "∪ {:?} <> {:?} = {:?} <> {:?}",
             lhs,
             rhs,
@@ -1000,7 +1000,7 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                         .iter()
                         .any(|generic| Self::occurs_check(v, generic, substitutions));
                 if oh {
-                    log::error!("occur check failed: {ty:?}");
+                    tracing::error!("occur check failed: {ty:?}");
                 }
 
                 oh

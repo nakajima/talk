@@ -103,7 +103,7 @@ impl<'a> TypeChecker<'a> {
 
         for id in root_ids {
             let Some(expr) = source_file.get(id).cloned() else {
-                log::warn!("No expr found for id: {id:?}");
+                tracing::warn!("No expr found for id: {id:?}");
                 continue;
             };
 
@@ -111,7 +111,7 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            log::debug!("Predeclaring {expr_ids:?}");
+            tracing::debug!("Predeclaring {expr_ids:?}");
 
             let Name::Resolved(symbol_id, name_str) = expr_ids.name else {
                 return Err((*id, TypeError::Unresolved(expr_ids.name.name_str())));
@@ -308,7 +308,7 @@ impl<'a> TypeChecker<'a> {
                     }
                     _ => {
                         return {
-                            log::error!("Unhandled property: {:?}", source_file.get(&body_id));
+                            tracing::error!("Unhandled property: {:?}", source_file.get(&body_id));
                             Err((
                                 *id,
                                 TypeError::Unknown(format!(
@@ -383,7 +383,7 @@ impl<'a> TypeChecker<'a> {
                 def.ty.clone()
             } else {
                 let Ok(scheme) = env.lookup_symbol(&sym).cloned() else {
-                    log::warn!("Did not find symbol for inference: {sym:?}");
+                    tracing::warn!("Did not find symbol for inference: {sym:?}");
                     continue;
                 };
 
@@ -502,7 +502,7 @@ impl<'a> TypeChecker<'a> {
                     .map_err(|e| (*id, e))?;
 
                 let Ty::Protocol(symbol_id, associated_types) = ty else {
-                    log::error!(
+                    tracing::error!(
                         "Didn't get protocol for expr id: {id} {ty:?} {:?}",
                         source_file.get(id)
                     );
@@ -540,7 +540,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(ExprID, SymbolID, TypeVarID)>, TypeError> {
-        log::trace!("Predeclaring funcs");
+        tracing::trace!("Predeclaring funcs");
 
         let mut func_ids = vec![];
 
@@ -616,7 +616,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(ExprID, SymbolID, TypeVarID)>, (ExprID, TypeError)> {
-        log::trace!("Predeclaring lets");
+        tracing::trace!("Predeclaring lets");
         let mut result = vec![];
 
         for id in items {
@@ -652,7 +652,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
-        log::trace!("infer lets");
+        tracing::trace!("infer lets");
 
         let mut placeholder_substitutions = HashMap::new();
         let mut results = vec![];

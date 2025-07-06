@@ -56,7 +56,7 @@ impl<'a> SatisfiesChecker<'a> {
                     protocol_id,
                     associated_types: conformance_associated_types,
                 } => {
-                    log::trace!("= Checking {:?} satisfies {constraint:?}", self.ty);
+                    tracing::trace!("= Checking {:?} satisfies {constraint:?}", self.ty);
 
                     let Some(protocol_def) = self.env.lookup_protocol(protocol_id).cloned() else {
                         continue;

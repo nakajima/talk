@@ -66,7 +66,7 @@ impl<'a> ControlFlowGraph<'a> {
         let mut visited = HashSet::new();
 
         if func.blocks.is_empty() {
-            log::error!("cannot generate CFG for func with no blocks");
+            tracing::error!("cannot generate CFG for func with no blocks");
             return postorder;
         }
 

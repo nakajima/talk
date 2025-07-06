@@ -105,7 +105,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
         .diagnostics_for(path)
         .unwrap_or(&Default::default())
     {
-        log::error!("{diagnostic:?}");
+        tracing::error!("{diagnostic:?}");
     }
 
     Ok(CheckResult {

@@ -62,15 +62,14 @@ impl TypeDef {
     pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
         if let Some(member) = self.member_ty(name).cloned() {
             return Some(
-                member
-               // env.instantiate(&Scheme {
-               //     ty: member,
-               //     unbound_vars: self
-               //         .type_parameters()
-               //         .iter()
-               //         .map(|v| v.type_var.clone())
-               //         .collect(),
-               // }),
+                member, // env.instantiate(&Scheme {
+                       //     ty: member,
+                       //     unbound_vars: self
+                       //         .type_parameters()
+                       //         .iter()
+                       //         .map(|v| v.type_var.clone())
+                       //         .collect(),
+                       // }),
             );
         }
 
@@ -103,7 +102,9 @@ impl TypeDef {
                 //    unbound_vars: protocol_def.canonical_associated_type_vars(),
                 //});
 
-                return Some(ConstraintSolver::<NameResolved>::substitute_ty_with_map(&ty, &subst));
+                return Some(ConstraintSolver::<NameResolved>::substitute_ty_with_map(
+                    &ty, &subst,
+                ));
             }
         }
 
@@ -213,7 +214,7 @@ impl TypeDef {
         }
 
         match self {
-            Self::Enum(_) => log::error!("Enums can't have initializers"),
+            Self::Enum(_) => tracing::error!("Enums can't have initializers"),
             Self::Struct(def) => def.initializers.extend(initializers),
             Self::Protocol(def) => def.initializers.extend(initializers),
             Self::Builtin(_) => (),
@@ -225,7 +226,7 @@ impl TypeDef {
             return;
         }
         match self {
-            Self::Enum(_) => log::error!("Enums can't have properties"),
+            Self::Enum(_) => tracing::error!("Enums can't have properties"),
             Self::Struct(def) => def.properties.extend(properties),
             Self::Protocol(def) => def.properties.extend(properties),
             Self::Builtin(_) => (),
