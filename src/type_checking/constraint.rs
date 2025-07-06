@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SymbolID,
+    SymbolID,
     constraint_solver::ConstraintSolver,
     parser::ExprID,
     ty::Ty,
@@ -118,19 +118,19 @@ impl Constraint {
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
                 *id,
-                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
-                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
+                ConstraintSolver::apply(ty, substitutions, 0),
+                ConstraintSolver::apply(ty1, substitutions, 0),
             ),
             Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
                 *id,
-                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                ConstraintSolver::apply(ty, substitutions, 0),
                 name.clone(),
-                ConstraintSolver::<NameResolved>::apply(ty1, substitutions, 0),
+                ConstraintSolver::apply(ty1, substitutions, 0),
             ),
             Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
                 *id,
                 name.clone(),
-                ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                ConstraintSolver::apply(ty, substitutions, 0),
             ),
             Constraint::InitializerCall {
                 expr_id,
@@ -143,10 +143,10 @@ impl Constraint {
                 initializes_id: *initializes_id,
                 args: args
                     .iter()
-                    .map(|a| ConstraintSolver::<NameResolved>::apply(a, substitutions, 0))
+                    .map(|a| ConstraintSolver::apply(a, substitutions, 0))
                     .collect(),
-                func_ty: ConstraintSolver::<NameResolved>::apply(func_ty, substitutions, 0),
-                result_ty: ConstraintSolver::<NameResolved>::apply(result_ty, substitutions, 0),
+                func_ty: ConstraintSolver::apply(func_ty, substitutions, 0),
+                result_ty: ConstraintSolver::apply(result_ty, substitutions, 0),
             },
             Constraint::VariantMatch {
                 expr_id,
@@ -155,15 +155,11 @@ impl Constraint {
                 field_tys,
             } => Constraint::VariantMatch {
                 expr_id: *expr_id,
-                scrutinee_ty: ConstraintSolver::<NameResolved>::apply(
-                    scrutinee_ty,
-                    substitutions,
-                    0,
-                ),
+                scrutinee_ty: ConstraintSolver::apply(scrutinee_ty, substitutions, 0),
                 variant_name: variant_name.clone(),
                 field_tys: field_tys
                     .iter()
-                    .map(|ty| ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0))
+                    .map(|ty| ConstraintSolver::apply(ty, substitutions, 0))
                     .collect(),
             },
             Constraint::InstanceOf {
@@ -173,10 +169,10 @@ impl Constraint {
                 scheme,
             } => Constraint::InstanceOf {
                 expr_id: *expr_id,
-                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                ty: ConstraintSolver::apply(ty, substitutions, 0),
                 symbol_id: *symbol_id,
                 scheme: Scheme {
-                    ty: ConstraintSolver::<NameResolved>::apply(&scheme.ty, substitutions, 0),
+                    ty: ConstraintSolver::apply(&scheme.ty, substitutions, 0),
                     unbound_vars: scheme.unbound_vars.clone(),
                 },
             },
@@ -187,7 +183,7 @@ impl Constraint {
                 constraints,
             } => Constraint::Satisfies {
                 expr_id: *expr_id,
-                ty: ConstraintSolver::<NameResolved>::apply(ty, substitutions, 0),
+                ty: ConstraintSolver::apply(ty, substitutions, 0),
                 constraints: constraints.clone(),
             },
             Constraint::Retry(c, retries) => {

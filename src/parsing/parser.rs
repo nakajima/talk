@@ -109,7 +109,8 @@ impl ParserError {
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(env.session.clone(), lexer, file_path, &mut env);
+    let session = SharedCompilationSession::default();
+    let mut parser = Parser::new(session.clone(), lexer, file_path, &mut env);
 
     parser.parse();
     parser.parse_tree
@@ -119,7 +120,8 @@ pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
 pub fn parse_fill(code: &str) -> Vec<FullExpr> {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(env.session.clone(), lexer, PathBuf::from("-"), &mut env);
+    let session = SharedCompilationSession::default();
+    let mut parser = Parser::new(session.clone(), lexer, PathBuf::from("-"), &mut env);
 
     parser.parse();
 
@@ -134,7 +136,12 @@ pub fn parse_fill(code: &str) -> Vec<FullExpr> {
 pub fn parse_with_comments(code: &str) -> SourceFile {
     let lexer = Lexer::preserving_comments(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(env.session.clone(), lexer, PathBuf::from("-"), &mut env);
+    let mut parser = Parser::new(
+        SharedCompilationSession::default(),
+        lexer,
+        PathBuf::from("-"),
+        &mut env,
+    );
 
     parser.parse();
     parser.parse_tree
@@ -147,7 +154,7 @@ pub fn parse_with_session(
 ) -> (SourceFile, SharedCompilationSession) {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let session = env.session.clone();
+    let session = SharedCompilationSession::default();
     let mut parser = Parser::new(session.clone(), lexer, file_path, &mut env);
 
     parser.parse();

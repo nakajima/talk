@@ -1395,10 +1395,7 @@ impl<'a> TypeChecker<'a> {
                         let concrete_field_types: Vec<Ty> = values
                             .iter()
                             .map(|field_ty| {
-                                ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                                    field_ty,
-                                    &substitutions,
-                                )
+                                ConstraintSolver::substitute_ty_with_map(field_ty, &substitutions)
                             })
                             .collect();
 

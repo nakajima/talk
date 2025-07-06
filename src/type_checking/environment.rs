@@ -4,8 +4,7 @@ use std::{
 };
 
 use crate::{
-    NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
-    compiling::compilation_session::SharedCompilationSession,
+    SymbolID, SymbolTable,
     constraint::{Constraint, Substitutions},
     constraint_solver::ConstraintSolver,
     parser::ExprID,
@@ -43,23 +42,11 @@ pub struct Environment {
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
-    pub(crate) session: SharedCompilationSession,
     next_id: i32,
 }
 
-#[cfg(test)]
 impl Default for Environment {
     fn default() -> Self {
-        use crate::compiling::compilation_session::CompilationSession;
-
-        Environment::new(SharedCompilationSession::new(
-            CompilationSession::new().into(),
-        ))
-    }
-}
-
-impl Environment {
-    pub fn new(session: SharedCompilationSession) -> Self {
         Self {
             typed_exprs: HashMap::new(),
             type_var_id: TypeVarID::new(0, TypeVarKind::Blank, vec![]),
@@ -68,8 +55,13 @@ impl Environment {
             types: crate::builtins::default_env_types(),
             next_id: 0,
             selfs: vec![],
-            session,
         }
+    }
+}
+
+impl Environment {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn next_id(&mut self) -> ExprID {
@@ -124,7 +116,7 @@ impl Environment {
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            tracing::info!("⊢ {:?} ({}:{})", constraint, loc.file(), loc.line(),);
+            tracing::info!("⊢ {:#?} ({}:{})", constraint, loc.file(), loc.line(),);
         }
 
         // #[allow(clippy::panic)]
@@ -135,23 +127,23 @@ impl Environment {
         self.constraints.push(constraint)
     }
 
-    pub fn flush_constraints<P: Phase>(
+    pub fn flush_constraints(
         &mut self,
-        source_file: &mut SourceFile<P>,
         symbol_table: &mut SymbolTable,
     ) -> Result<HashMap<TypeVarID, Ty>, TypeError> {
-        let mut solver =
-            ConstraintSolver::new(self.session.clone(), source_file, self, symbol_table);
-        let substitutions = solver.solve();
-        Ok(substitutions)
+        let mut solver = ConstraintSolver::new(self, symbol_table);
+        let solution = solver.solve();
+
+        for constraint in solution.unsolved_constraints {
+            self.constrain(constraint);
+        }
+
+        Ok(solution.substitutions)
     }
 
     pub fn replace_typed_exprs_values(&mut self, substitutions: &Substitutions) {
         for (_, typed_expr) in self.typed_exprs.iter_mut() {
-            let replaced = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                &typed_expr.ty,
-                substitutions,
-            );
+            let replaced = ConstraintSolver::substitute_ty_with_map(&typed_expr.ty, substitutions);
 
             if typed_expr.ty == replaced {
                 continue;
@@ -162,10 +154,7 @@ impl Environment {
 
         for scope in self.scopes.iter_mut() {
             for scheme in scope.values_mut() {
-                let replaced = ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                    &scheme.ty,
-                    substitutions,
-                );
+                let replaced = ConstraintSolver::substitute_ty_with_map(&scheme.ty, substitutions);
 
                 if scheme.ty == replaced {
                     continue;

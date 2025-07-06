@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, Phase, SourceFile, SymbolID, SymbolTable,
-    compiling::compilation_session::SharedCompilationSession,
+    SymbolID, SymbolTable,
     conformance_checker::ConformanceChecker,
-    constraint::Constraint,
-    diagnostic::Diagnostic,
+    constraint::{Constraint, Substitutions},
     environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
+    parser::ExprID,
     satisfies_checker::SatisfiesChecker,
     ty::Ty,
     type_checker::TypeError,
@@ -17,38 +16,31 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-pub struct ConstraintSolver<'a, P: Phase = NameResolved> {
-    source_file: &'a mut SourceFile<P>,
+pub struct ConstraintSolverSolution {
+    pub unsolved_constraints: Vec<Constraint>,
+    pub substitutions: Substitutions,
+    pub errors: Vec<(ExprID, TypeError)>,
+}
+
+pub struct ConstraintSolver<'a> {
     env: &'a mut Environment,
     symbol_table: &'a mut SymbolTable,
     constraints: Vec<Constraint>,
-    session: SharedCompilationSession,
 }
 
-impl<'a, P: Phase> ConstraintSolver<'a, P> {
-    pub fn new(
-        session: SharedCompilationSession,
-        source_file: &'a mut SourceFile<P>,
-        env: &'a mut Environment,
-        symbol_table: &'a mut SymbolTable,
-    ) -> Self {
+impl<'a> ConstraintSolver<'a> {
+    pub fn new(env: &'a mut Environment, symbol_table: &'a mut SymbolTable) -> Self {
         Self {
             constraints: env.constraints().clone(),
             env,
-            source_file,
             symbol_table,
-            session,
         }
     }
 
-    fn add_diagnostic(&self, diagnostic: Diagnostic) {
-        if let Ok(mut lock) = self.session.lock() {
-            lock.add_diagnostic(diagnostic)
-        }
-    }
-
-    pub fn solve(&mut self) -> HashMap<TypeVarID, Ty> {
+    pub fn solve(&mut self) -> ConstraintSolverSolution {
         let mut substitutions = HashMap::<TypeVarID, Ty>::new();
+        let mut errors = vec![];
+        let mut unsolved_constraints = vec![];
 
         while let Some(constraint) = self.constraints.pop() {
             match self.solve_constraint(&constraint, &mut substitutions) {
@@ -69,12 +61,8 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                                 ),
                             );
                         } else {
-                            tracing::error!("Retry failed for {constraint:?}");
-                            self.add_diagnostic(Diagnostic::typing(
-                                self.source_file.path.clone(),
-                                *constraint.expr_id(),
-                                err,
-                            ));
+                            unsolved_constraints.push(*constraint.clone());
+                            errors.push((*constraint.expr_id(), err))
                         }
                     } else {
                         self.constraints.insert(
@@ -121,7 +109,11 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
         // We've applied these constraints, we don't need them anymore.. probably??
         self.constraints.clear();
 
-        substitutions
+        ConstraintSolverSolution {
+            substitutions,
+            errors,
+            unsolved_constraints,
+        }
     }
 
     fn solve_constraint(
@@ -653,11 +645,13 @@ impl<'a, P: Phase> ConstraintSolver<'a, P> {
                     );
                 }
 
-                // When unifying two type variables, pick one consistently
-                if v1.id < v2.id {
+                // When unifying two type variables, pick one consistently, favoring more constraints
+                if v1.id > v2.id {
+                    tracing::error!("Favoring {v1:?} over {v2:?}");
                     let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
                     substitutions.insert(v2.clone(), Ty::TypeVar(id));
                 } else {
+                    tracing::error!("Favoring {v1:?} over {v2:?}");
                     let id = TypeVarID::new(v2.id, v2.kind, combined_constraints);
                     substitutions.insert(v1.clone(), Ty::TypeVar(id));
                 }

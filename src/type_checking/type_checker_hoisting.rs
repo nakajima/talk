@@ -79,7 +79,7 @@ impl<'a> TypeChecker<'a> {
         to_generalize.extend(self.infer_funcs(&func_results, env, source_file)?);
 
         // Solve what we can
-        let substitutions = env.flush_constraints(source_file, self.symbol_table)?;
+        let substitutions = env.flush_constraints(self.symbol_table)?;
 
         // Update typed exprs
         env.replace_typed_exprs_values(&substitutions);

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SymbolID,
+    SymbolID,
     constraint_solver::ConstraintSolver,
     environment::{Environment, free_type_vars},
     ty::Ty,
@@ -87,8 +87,8 @@ impl<'a> ConformanceChecker<'a> {
             }
 
             unifications.push((
-                ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
-                ConstraintSolver::<NameResolved>::apply(&ty_method, &substitutions, 0),
+                ConstraintSolver::apply(&method.ty, &substitutions, 0),
+                ConstraintSolver::apply(&ty_method, &substitutions, 0),
             ));
         }
 
@@ -102,8 +102,8 @@ impl<'a> ConformanceChecker<'a> {
             };
 
             unifications.push((
-                ConstraintSolver::<NameResolved>::apply(&method.ty, &substitutions, 0),
-                ConstraintSolver::<NameResolved>::apply(&ty_method, &substitutions, 0),
+                ConstraintSolver::apply(&method.ty, &substitutions, 0),
+                ConstraintSolver::apply(&ty_method, &substitutions, 0),
             ));
         }
 

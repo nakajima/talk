@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    NameResolved, SymbolID,
+    SymbolID,
     constraint_solver::ConstraintSolver,
     environment::{Environment, TypeParameter},
     ty::Ty,
@@ -102,9 +102,7 @@ impl TypeDef {
                 //    unbound_vars: protocol_def.canonical_associated_type_vars(),
                 //});
 
-                return Some(ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                    &ty, &subst,
-                ));
+                return Some(ConstraintSolver::substitute_ty_with_map(&ty, &subst));
             }
         }
 

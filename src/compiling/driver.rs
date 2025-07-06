@@ -21,11 +21,11 @@ pub struct DriverConfig {
 }
 
 impl DriverConfig {
-    pub fn new_environment(&self, session: SharedCompilationSession) -> Environment {
+    pub fn new_environment(&self) -> Environment {
         if self.include_prelude {
             crate::prelude::compile_prelude().environment.clone()
         } else {
-            Environment::new(session)
+            Environment::new()
         }
     }
 }
@@ -57,7 +57,7 @@ impl Default for Driver {
 impl Driver {
     pub fn new(config: DriverConfig) -> Self {
         let session = SharedCompilationSession::new(CompilationSession::new().into());
-        let environment = config.new_environment(session.clone());
+        let environment = config.new_environment();
 
         Self {
             units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
