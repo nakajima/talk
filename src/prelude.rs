@@ -23,6 +23,8 @@ pub fn compile_prelude() -> &'static Prelude {
 }
 
 pub fn _compile_prelude() -> Prelude {
+    let _span = tracing::info_span!("compile_prelude", prelude = true).entered();
+
     let mut driver = Driver::new(DriverConfig {
         executable: false,
         include_prelude: false,

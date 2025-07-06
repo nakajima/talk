@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
+use crate::{Phase, SourceFile, parser::ExprID, span::Span};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolID(pub i32);
@@ -37,12 +37,12 @@ impl SymbolID {
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude().symbols.max_id())
+        SymbolID(index + crate::prelude::compile_prelude().symbols.max_id())
     }
 
     // Remove the prelude's symbol offset
     pub fn typed(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude().symbols.max_id())
+        SymbolID(index + crate::prelude::compile_prelude().symbols.max_id())
     }
 }
 

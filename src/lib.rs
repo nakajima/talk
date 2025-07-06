@@ -33,27 +33,10 @@ pub mod lsp;
 pub mod prelude;
 
 #[cfg(test)]
-#[ctor::ctor]
-fn init_logger() {
-    // .is_test(true) silences the “already initialized” panic
-    let _ = env_logger::builder()
-        .format_timestamp(None)
-        .format_target(false)
-        .is_test(true)
-        .try_init();
-}
+pub mod test_utils;
 
 #[cfg(test)]
 #[ctor::ctor]
-fn init_tracing() {
-    use tracing_subscriber::{EnvFilter, fmt};
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env()) // respects RUST_LOG
-        .with_test_writer() // avoids “already initialized” panic
-        .without_time()
-        .with_target(false)
-        .try_init();
+pub fn init_tracing() {
+    test_utils::trace::init()
 }
-
-pub mod test_utils;

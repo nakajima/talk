@@ -10,7 +10,6 @@ use crate::{
     },
     environment::Environment,
     lowering::ir_module::IRModule,
-    prelude::compile_prelude,
     source_file,
 };
 
@@ -24,7 +23,7 @@ pub struct DriverConfig {
 impl DriverConfig {
     pub fn new_environment(&self, session: SharedCompilationSession) -> Environment {
         if self.include_prelude {
-            compile_prelude().environment.clone()
+            crate::prelude::compile_prelude().environment.clone()
         } else {
             Environment::new(session)
         }
@@ -63,7 +62,7 @@ impl Driver {
         Self {
             units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
             symbol_table: if config.include_prelude {
-                compile_prelude().symbols.clone()
+                crate::prelude::compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
             },
@@ -122,7 +121,7 @@ impl Driver {
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
 
             let module = if self.config.include_prelude {
-                compile_prelude().module.clone()
+                crate::prelude::compile_prelude().module.clone()
             } else {
                 IRModule::new()
             };
