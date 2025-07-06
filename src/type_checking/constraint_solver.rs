@@ -646,12 +646,10 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 // When unifying two type variables, pick one consistently, favoring more constraints
-                if v1.id > v2.id {
-                    tracing::error!("Favoring {v1:?} over {v2:?}");
+                if v1.id < v2.id {
                     let id = TypeVarID::new(v1.id, v1.kind, combined_constraints);
                     substitutions.insert(v2.clone(), Ty::TypeVar(id));
                 } else {
-                    tracing::error!("Favoring {v1:?} over {v2:?}");
                     let id = TypeVarID::new(v2.id, v2.kind, combined_constraints);
                     substitutions.insert(v1.clone(), Ty::TypeVar(id));
                 }
