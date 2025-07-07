@@ -103,6 +103,7 @@ pub mod trace {
     use tracing::{Metadata, Subscriber};
     use tracing_subscriber::{
         EnvFilter,
+        fmt::format::FmtSpan,
         layer::Filter,
         registry::{LookupSpan, SpanRef},
     };
@@ -184,11 +185,11 @@ pub mod trace {
         let fmt_layer = fmt::layer()
             .compact()
             .with_test_writer()
-            // .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
+            .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
             .with_ansi(true) // enables colors and indentation
             .without_time()
             .with_target(false)
-            .with_file(false)
+            // .with_file(false)
             .with_filter(EnvFilter::from_default_env())
             .with_filter(SuppressPrelude);
 

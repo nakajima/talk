@@ -9,15 +9,15 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-struct Builtin {
+pub struct Builtin {
     id: i32,
     info: SymbolInfo,
-    ty: Ty,
+    pub ty: Ty,
     unbound_vars: Vec<TypeVarID>,
     type_def: Option<TypeDef>,
 }
 
-fn builtins() -> Vec<Builtin> {
+pub fn builtins() -> Vec<Builtin> {
     vec![
         Builtin {
             id: -1,

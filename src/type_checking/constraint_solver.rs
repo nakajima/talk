@@ -45,7 +45,7 @@ impl<'a> ConstraintSolver<'a> {
                 Err(TypeError::Defer(_)) => {
                     if let Constraint::Retry(c, retries) = constraint {
                         if retries > 0 {
-                            let constraint = c.replacing(&mut substitutions);
+                            let constraint = c.replacing(&mut substitutions, &mut self.env.context);
                             self.constraints
                                 .insert(0, Constraint::Retry(constraint.into(), retries - 1));
                         } else {
@@ -54,14 +54,20 @@ impl<'a> ConstraintSolver<'a> {
                     } else {
                         self.constraints.insert(
                             0,
-                            Constraint::Retry(constraint.replacing(&mut substitutions).into(), 3),
+                            Constraint::Retry(
+                                constraint
+                                    .replacing(&mut substitutions, &mut self.env.context)
+                                    .into(),
+                                3,
+                            ),
                         );
                     }
                 }
                 Err(err) => {
                     if let Constraint::Retry(constraint, retries) = constraint {
                         if retries > 0 {
-                            let constraint = constraint.replacing(&mut substitutions);
+                            let constraint =
+                                constraint.replacing(&mut substitutions, &mut self.env.context);
                             tracing::trace!(
                                 "Retrying {constraint:?} ({retries} remaining (subs {})) {substitutions:?}",
                                 substitutions.len()
@@ -69,7 +75,9 @@ impl<'a> ConstraintSolver<'a> {
                             self.constraints.insert(
                                 0,
                                 Constraint::Retry(
-                                    constraint.replacing(&mut substitutions).into(),
+                                    constraint
+                                        .replacing(&mut substitutions, &mut self.env.context)
+                                        .into(),
                                     retries - 1,
                                 ),
                             );
@@ -80,7 +88,12 @@ impl<'a> ConstraintSolver<'a> {
                     } else {
                         self.constraints.insert(
                             0,
-                            Constraint::Retry(constraint.replacing(&mut substitutions).into(), 3),
+                            Constraint::Retry(
+                                constraint
+                                    .replacing(&mut substitutions, &mut self.env.context)
+                                    .into(),
+                                3,
+                            ),
                         );
                     }
                 }
@@ -90,7 +103,7 @@ impl<'a> ConstraintSolver<'a> {
         let mut remaining_type_vars = vec![];
 
         for (_id, typed_expr) in &mut self.env.typed_exprs.iter_mut() {
-            typed_expr.ty = substitutions.apply(&typed_expr.ty, 0);
+            typed_expr.ty = substitutions.apply(&typed_expr.ty, 0, &mut self.env.context);
 
             if let Ty::TypeVar(var) = &typed_expr.ty {
                 remaining_type_vars.push(var.clone());
@@ -137,9 +150,9 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         tracing::info!(
             "Solving constraint: {:?}",
-            constraint.replacing(substitutions)
+            constraint.replacing(substitutions, &mut self.env.context)
         );
-        match &constraint.replacing(substitutions) {
+        match &constraint.replacing(substitutions, &mut self.env.context) {
             Constraint::Retry(c, _) => {
                 self.solve_constraint(c, substitutions)?;
             }
@@ -169,7 +182,7 @@ impl<'a> ConstraintSolver<'a> {
                                 substitutions.insert(type_var.clone(), type_def_ty);
 
                                 for (lhs, rhs) in unifications {
-                                    substitutions.unify(&lhs, &rhs)?;
+                                    substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
                                 }
 
                                 return Ok(());
@@ -190,17 +203,19 @@ impl<'a> ConstraintSolver<'a> {
                 let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
                 let unifications = conformance_checker.check()?;
                 for (lhs, rhs) in unifications {
-                    substitutions.unify(&lhs, &rhs)?;
+                    substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
                 }
             }
             Constraint::Equality(_node_id, lhs, rhs) => {
-                let lhs = substitutions.apply(lhs, 0);
-                let rhs = substitutions.apply(rhs, 0);
+                let lhs = substitutions.apply(lhs, 0, &mut self.env.context);
+                let rhs = substitutions.apply(rhs, 0, &mut self.env.context);
 
-                substitutions.unify(&lhs, &rhs).map_err(|err| {
-                    tracing::error!("{err:?}");
-                    err
-                })?;
+                substitutions
+                    .unify(&lhs, &rhs, &mut self.env.context)
+                    .map_err(|err| {
+                        tracing::error!("{err:?}");
+                        err
+                    })?;
             }
             Constraint::InstanceOf { scheme, ty, .. } => {
                 let mut mapping = Substitutions::new();
@@ -212,10 +227,10 @@ impl<'a> ConstraintSolver<'a> {
                 }
                 let instantiated_ty = Self::substitute_ty_with_map(ty, &mapping);
 
-                substitutions.unify(ty, &instantiated_ty)?;
+                substitutions.unify(ty, &instantiated_ty, &mut self.env.context)?;
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
-                let result_ty = substitutions.apply(result_ty, 0);
+                let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
                 match &result_ty {
                     // A variant with no values
@@ -229,15 +244,17 @@ impl<'a> ConstraintSolver<'a> {
                             .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
-                            substitutions.unify(&result_ty, &variant.ty)?;
+                            substitutions.unify(&result_ty, &variant.ty, &mut self.env.context)?;
                         }
                     }
                     // A variant with values
                     Ty::Func(_args, ret, _generics) => {
-                        let Ty::Enum(enum_id, _generics) = substitutions.apply(ret, 0) else {
+                        let Ty::Enum(enum_id, _generics) =
+                            substitutions.apply(ret, 0, &mut self.env.context)
+                        else {
                             tracing::error!(
                                 "did not get enum type: {:?}",
-                                substitutions.apply(ret, 0)
+                                substitutions.apply(ret, 0, &mut self.env.context)
                             );
                             return Ok(());
                         };
@@ -252,15 +269,15 @@ impl<'a> ConstraintSolver<'a> {
                             .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
-                            substitutions.unify(&result_ty, &variant.ty)?;
+                            substitutions.unify(&result_ty, &variant.ty, &mut self.env.context)?;
                         }
                     }
                     _ => (),
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
-                let receiver_ty = substitutions.apply(receiver_ty, 0);
-                let result_ty = substitutions.apply(result_ty, 0);
+                let receiver_ty = substitutions.apply(receiver_ty, 0, &mut self.env.context);
+                let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
                 let (member_ty, type_params, type_args) = match &receiver_ty {
                     builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
@@ -485,7 +502,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 let specialized_ty =
                     Self::substitute_ty_with_map(&member_ty, &member_substitutions);
-                substitutions.unify(&result_ty, &specialized_ty)?;
+                substitutions.unify(&result_ty, &specialized_ty, &mut self.env.context)?;
             }
             Constraint::InitializerCall {
                 initializes_id,
@@ -515,17 +532,18 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 for (param, arg) in params.iter().zip(args) {
-                    substitutions.unify(param, arg)?;
+                    substitutions.unify(param, arg, &mut self.env.context)?;
                 }
 
-                substitutions.unify(&initializer.ty, func_ty)?;
+                substitutions.unify(&initializer.ty, func_ty, &mut self.env.context)?;
 
                 let struct_with_generics =
                     Ty::Struct(*initializes_id, struct_def.canonical_type_parameters());
 
-                let specialized_struct = substitutions.apply(&struct_with_generics, 0);
+                let specialized_struct =
+                    substitutions.apply(&struct_with_generics, 0, &mut self.env.context);
 
-                substitutions.unify(result_ty, &specialized_struct)?;
+                substitutions.unify(result_ty, &specialized_struct, &mut self.env.context)?;
             }
             Constraint::VariantMatch {
                 scrutinee_ty,
@@ -533,7 +551,7 @@ impl<'a> ConstraintSolver<'a> {
                 field_tys,
                 ..
             } => {
-                let scrutinee_ty = substitutions.apply(scrutinee_ty, 0);
+                let scrutinee_ty = substitutions.apply(scrutinee_ty, 0, &mut self.env.context);
 
                 let Ty::Enum(enum_id, concrete_type_args) = &scrutinee_ty else {
                     return Err(TypeError::Unknown(format!(
@@ -579,7 +597,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
-                    substitutions.unify(specialized_ty, pattern_ty)?;
+                    substitutions.unify(specialized_ty, pattern_ty, &mut self.env.context)?;
                 }
             }
         };

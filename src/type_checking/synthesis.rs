@@ -27,29 +27,29 @@ pub fn synthesize_inits(
                 );
 
                 let assignment_receiver = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Variable(Name::_Self(sym), None),
                     ExprMeta::generated(),
                 );
                 let assignment_lhs = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Member(Some(assignment_receiver), property.name.clone()),
                     ExprMeta::generated(),
                 );
                 let assignment_rhs = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Variable(Name::Resolved(param_sym, property.name.clone()), None),
                     ExprMeta::generated(),
                 );
                 let assignment = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Assignment(assignment_lhs, assignment_rhs),
                     ExprMeta::generated(),
                 );
                 body_exprs.push(assignment);
 
                 params.push(source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Parameter(
                         Name::Resolved(param_sym, property.name.to_string()),
                         property.type_id,
@@ -60,21 +60,21 @@ pub fn synthesize_inits(
 
             // Make sure the func always returns self
             let self_ret = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Variable(Name::_Self(sym), None),
                 ExprMeta::generated(),
             );
             body_exprs.push(self_ret);
 
             let body = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Block(body_exprs),
                 ExprMeta::generated(),
             );
 
             let name = Some(Name::Raw("PLACEHOLD".into()));
             let init_func = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Func {
                     name,
                     generics: vec![],
@@ -93,7 +93,7 @@ pub fn synthesize_inits(
                 .expect("didn't get struct for struct???");
 
             let init_expr = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Init(Some(sym), init_func),
                 ExprMeta::generated(),
             );

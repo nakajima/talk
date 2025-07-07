@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        let next_id = self.env.next_id();
+        let next_id = self.env.next_expr_id();
 
         tracing::trace!("Add [{next_id}] {expr:?}");
 

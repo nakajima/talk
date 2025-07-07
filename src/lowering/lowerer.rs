@@ -2730,7 +2730,7 @@ fn find_or_create_main(
     // We didn't find a main, we have to generate one
     let body = Expr::Block(source_file.root_ids());
     let body_id = source_file.add(
-        env.next_id(),
+        env.next_expr_id(),
         body,
         ExprMeta {
             start: Token::GENERATED,
@@ -2759,7 +2759,7 @@ fn find_or_create_main(
     );
 
     source_file.add(
-        env.next_id(),
+        env.next_expr_id(),
         func_expr.clone(),
         ExprMeta {
             start: Token::GENERATED,

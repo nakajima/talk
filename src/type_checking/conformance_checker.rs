@@ -81,8 +81,8 @@ impl<'a> ConformanceChecker<'a> {
             }
 
             unifications.push((
-                substitutions.apply(&method.ty, 0),
-                substitutions.apply(&ty_method, 0),
+                substitutions.apply(&method.ty, 0, &mut self.env.context),
+                substitutions.apply(&ty_method, 0, &mut self.env.context),
             ));
         }
 
@@ -96,8 +96,8 @@ impl<'a> ConformanceChecker<'a> {
             };
 
             unifications.push((
-                substitutions.apply(&method.ty, 0),
-                substitutions.apply(&ty_method, 0),
+                substitutions.apply(&method.ty, 0, &mut self.env.context),
+                substitutions.apply(&ty_method, 0, &mut self.env.context),
             ));
         }
 

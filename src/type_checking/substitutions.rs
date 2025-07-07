@@ -4,6 +4,7 @@ use crate::{
     constraint_solver::ConstraintSolver,
     ty::Ty,
     type_checker::TypeError,
+    type_var_context::TypeVarContext,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -42,19 +43,16 @@ impl Substitutions {
         self.storage.is_empty()
     }
 
-    pub fn merge_type_vars(&mut self, lhs: TypeVarID, rhs: TypeVarID) {
-        if lhs.id > rhs.id {
-            self.insert(lhs, Ty::TypeVar(rhs));
-        } else {
-            self.insert(rhs, Ty::TypeVar(lhs));
-        }
+    pub fn merge_type_vars(
+        &mut self,
+        lhs: TypeVarID,
+        rhs: TypeVarID,
+        context: &mut TypeVarContext,
+    ) {
+        context.unify(lhs, rhs);
     }
 
-    fn normalize(&mut self, type_var: &TypeVarID) -> TypeVarID {
-        type_var.clone()
-    }
-
-    pub fn apply(&mut self, ty: &Ty, depth: u32) -> Ty {
+    pub fn apply(&mut self, ty: &Ty, depth: u32, context: &mut TypeVarContext) -> Ty {
         if depth > 20 {
             tracing::error!("Hit 100 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
@@ -70,17 +68,17 @@ impl Substitutions {
             Ty::Bool => ty.clone(),
             Ty::SelfType => ty.clone(),
             Ty::Func(params, returning, generics) => {
-                let applied_params = self.apply_multiple(params, depth + 1);
-                let applied_return = self.apply(returning, depth + 1);
-                let applied_generics = self.apply_multiple(generics, depth + 1);
+                let applied_params = self.apply_multiple(params, depth + 1, context);
+                let applied_return = self.apply(returning, depth + 1, context);
+                let applied_generics = self.apply_multiple(generics, depth + 1, context);
 
                 Ty::Func(applied_params, Box::new(applied_return), applied_generics)
             }
             Ty::TypeVar(type_var) => {
-                let type_var = self.normalize(type_var);
+                let type_var = self.normalize(type_var, context);
 
                 if let Some(ty) = self.get(&type_var).cloned() {
-                    self.apply(&ty, depth + 1)
+                    self.apply(&ty, depth + 1, context)
                 } else if let TypeVarID {
                     kind: TypeVarKind::Instantiated(i),
                     ..
@@ -88,7 +86,7 @@ impl Substitutions {
                 {
                     let parent_type_var =
                         TypeVarID::new(i, TypeVarKind::Canonicalized(type_var.id));
-                    self.apply(&Ty::TypeVar(parent_type_var), depth + 1)
+                    self.apply(&Ty::TypeVar(parent_type_var), depth + 1, context)
                 } else if let TypeVarID {
                     kind: TypeVarKind::Canonicalized(i),
                     ..
@@ -100,63 +98,82 @@ impl Substitutions {
                 }
             }
             Ty::Enum(name, generics) => {
-                let applied_generics = self.apply_multiple(generics, depth + 1);
+                let applied_generics = self.apply_multiple(generics, depth + 1, context);
 
                 Ty::Enum(*name, applied_generics)
             }
             Ty::EnumVariant(enum_id, values) => {
                 let applied_values = values
                     .iter()
-                    .map(|variant| self.apply(variant, depth + 1))
+                    .map(|variant| self.apply(variant, depth + 1, context))
                     .collect();
                 Ty::EnumVariant(*enum_id, applied_values)
             }
             Ty::Tuple(types) => Ty::Tuple(
                 types
                     .iter()
-                    .map(|variant| self.apply(variant, depth + 1))
+                    .map(|variant| self.apply(variant, depth + 1, context))
                     .collect(),
             ),
             Ty::Closure { func, captures } => {
-                let func = self.apply(func, depth + 1).into();
+                let func = self.apply(func, depth + 1, context).into();
                 Ty::Closure {
                     func,
                     captures: captures.clone(),
                 }
             }
-            Ty::Array(ty) => Ty::Array(self.apply(ty, depth + 1).into()),
-            Ty::Struct(sym, generics) => Ty::Struct(*sym, self.apply_multiple(generics, depth + 1)),
+            Ty::Array(ty) => Ty::Array(self.apply(ty, depth + 1, context).into()),
+            Ty::Struct(sym, generics) => {
+                Ty::Struct(*sym, self.apply_multiple(generics, depth + 1, context))
+            }
             Ty::Protocol(sym, generics) => {
-                Ty::Protocol(*sym, self.apply_multiple(generics, depth + 1))
+                Ty::Protocol(*sym, self.apply_multiple(generics, depth + 1, context))
             }
             Ty::Init(struct_id, params) => {
-                Ty::Init(*struct_id, self.apply_multiple(params, depth + 1))
+                Ty::Init(*struct_id, self.apply_multiple(params, depth + 1, context))
             }
             Ty::Void => ty.clone(),
         }
     }
 
-    fn apply_multiple(&mut self, types: &[Ty], depth: u32) -> Vec<Ty> {
-        types.iter().map(|ty| self.apply(ty, depth)).collect()
+    fn apply_multiple(
+        &mut self,
+        types: &[Ty],
+        depth: u32,
+        context: &mut TypeVarContext,
+    ) -> Vec<Ty> {
+        types
+            .iter()
+            .map(|ty| self.apply(ty, depth, context))
+            .collect()
     }
 
-    pub fn unify(&mut self, lhs: &Ty, rhs: &Ty) -> Result<(), TypeError> {
+    fn normalize(&self, type_var: &TypeVarID, context: &mut TypeVarContext) -> TypeVarID {
+        context.find(type_var)
+    }
+
+    pub fn unify(
+        &mut self,
+        lhs: &Ty,
+        rhs: &Ty,
+        context: &mut TypeVarContext,
+    ) -> Result<(), TypeError> {
         if lhs == rhs {
             return Ok(());
         }
 
-        let res = match (self.apply(lhs, 0), self.apply(rhs, 0)) {
+        let res = match (self.apply(lhs, 0, context), self.apply(rhs, 0, context)) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
-                self.merge_type_vars(v1, v2);
+                self.merge_type_vars(v1, v2, context);
 
                 Ok(())
             }
 
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
-                let v = self.normalize(&v);
+                let v = self.normalize(&v, context);
 
                 if let TypeVarKind::CanonicalTypeParameter(_) = &v.kind {
                     tracing::warn!(
@@ -164,7 +181,7 @@ impl Substitutions {
                     );
                 }
 
-                if self.occurs_check(&v, &ty) {
+                if self.occurs_check(&v, &ty, context) {
                     Err(TypeError::OccursConflict)
                 } else {
                     self.insert(v.clone(), ty.clone());
@@ -176,19 +193,19 @@ impl Substitutions {
                 Ty::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    self.unify(lhs, &rhs)?;
+                    self.unify(lhs, &rhs, context)?;
                 }
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
-                    self.unify(lhs, &rhs)?;
+                    self.unify(lhs, &rhs, context)?;
                 }
 
-                self.unify(&lhs_returning, &rhs_returning)?;
+                self.unify(&lhs_returning, &rhs_returning, context)?;
 
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                self.unify(&lhs_func, &rhs_func)?;
+                self.unify(&lhs_func, &rhs_func, context)?;
 
                 Ok(())
             }
@@ -196,7 +213,7 @@ impl Substitutions {
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
-                self.unify(&func, &closure)?;
+                self.unify(&func, &closure, context)?;
 
                 Ok(())
             }
@@ -204,7 +221,7 @@ impl Substitutions {
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    self.unify(lhs, &rhs)?;
+                    self.unify(lhs, &rhs, context)?;
                 }
 
                 Ok(())
@@ -212,14 +229,14 @@ impl Substitutions {
             (Ty::Enum(_, enum_types), Ty::EnumVariant(_, variant_types))
             | (Ty::EnumVariant(_, variant_types), Ty::Enum(_, enum_types)) => {
                 for (e_ty, v_ty) in enum_types.iter().zip(variant_types) {
-                    self.unify(e_ty, &v_ty)?;
+                    self.unify(e_ty, &v_ty, context)?;
                 }
 
                 Ok(())
             }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
                 for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    self.unify(lhs, &rhs)?;
+                    self.unify(lhs, &rhs, context)?;
                 }
 
                 Ok(())
@@ -240,37 +257,30 @@ impl Substitutions {
                     self,
                 );
 
-                self.unify(&ret, &specialized_ty)?;
+                self.unify(&ret, &specialized_ty, context)?;
 
                 Ok(())
             }
-            _ => {
-                tracing::error!(
-                    "Mismatch: {:?} and {:?}",
-                    self.apply(lhs, 0),
-                    self.apply(rhs, 0)
-                );
-                Err(TypeError::Mismatch(
-                    self.apply(lhs, 0).to_string(),
-                    self.apply(rhs, 0).to_string(),
-                ))
-            }
+            _ => Err(TypeError::Mismatch(
+                self.apply(lhs, 0, context).to_string(),
+                self.apply(rhs, 0, context).to_string(),
+            )),
         };
 
         tracing::debug!(
             "∪ {:?} <> {:?} = {:?} <> {:?}",
             lhs,
             rhs,
-            self.apply(lhs, 0),
-            self.apply(rhs, 0)
+            self.apply(lhs, 0, context),
+            self.apply(rhs, 0, context)
         );
 
         res
     }
 
     /// Returns true if `v` occurs inside `ty`
-    fn occurs_check(&mut self, v: &TypeVarID, ty: &Ty) -> bool {
-        let ty = self.apply(ty, 0);
+    fn occurs_check(&mut self, v: &TypeVarID, ty: &Ty, context: &mut TypeVarContext) -> bool {
+        let ty = self.apply(ty, 0, context);
         match &ty {
             Ty::TypeVar(tv) => tv == v,
             Ty::Func(params, returning, generics)
@@ -279,21 +289,25 @@ impl Substitutions {
                 ..
             } => {
                 // check each parameter and the return type
-                let oh = params.iter().any(|param| self.occurs_check(v, param))
-                    || self.occurs_check(v, returning)
-                    || generics.iter().any(|generic| self.occurs_check(v, generic));
+                let oh = params
+                    .iter()
+                    .any(|param| self.occurs_check(v, param, context))
+                    || self.occurs_check(v, returning, context)
+                    || generics
+                        .iter()
+                        .any(|generic| self.occurs_check(v, generic, context));
                 if oh {
                     tracing::error!("occur check failed: {ty:?}");
                 }
 
                 oh
             }
-            Ty::Enum(_name, generics) => {
-                generics.iter().any(|generic| self.occurs_check(v, generic))
-            }
-            Ty::EnumVariant(_enum_id, values) => {
-                values.iter().any(|value| self.occurs_check(v, value))
-            }
+            Ty::Enum(_name, generics) => generics
+                .iter()
+                .any(|generic| self.occurs_check(v, generic, context)),
+            Ty::EnumVariant(_enum_id, values) => values
+                .iter()
+                .any(|value| self.occurs_check(v, value, context)),
             _ => false,
         }
     }

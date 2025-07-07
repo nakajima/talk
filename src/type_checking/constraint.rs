@@ -5,6 +5,7 @@ use crate::{
     ty::Ty,
     type_checker::Scheme,
     type_defs::protocol_def::Conformance,
+    type_var_context::TypeVarContext,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -130,20 +131,28 @@ impl Constraint {
         }
     }
 
-    pub fn replacing(&self, substitutions: &mut Substitutions) -> Constraint {
+    pub fn replacing(
+        &self,
+        substitutions: &mut Substitutions,
+        context: &mut TypeVarContext,
+    ) -> Constraint {
         match self {
-            Constraint::Equality(id, ty, ty1) => {
-                Constraint::Equality(*id, substitutions.apply(ty, 0), substitutions.apply(ty1, 0))
-            }
+            Constraint::Equality(id, ty, ty1) => Constraint::Equality(
+                *id,
+                substitutions.apply(ty, 0, context),
+                substitutions.apply(ty1, 0, context),
+            ),
             Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
                 *id,
-                substitutions.apply(ty, 0),
+                substitutions.apply(ty, 0, context),
                 name.clone(),
-                substitutions.apply(ty1, 0),
+                substitutions.apply(ty1, 0, context),
             ),
-            Constraint::UnqualifiedMember(id, name, ty) => {
-                Constraint::UnqualifiedMember(*id, name.clone(), substitutions.apply(ty, 0))
-            }
+            Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
+                *id,
+                name.clone(),
+                substitutions.apply(ty, 0, context),
+            ),
             Constraint::InitializerCall {
                 expr_id,
                 initializes_id,
@@ -153,9 +162,12 @@ impl Constraint {
             } => Constraint::InitializerCall {
                 expr_id: *expr_id,
                 initializes_id: *initializes_id,
-                args: args.iter().map(|a| substitutions.apply(a, 0)).collect(),
-                func_ty: substitutions.apply(func_ty, 0),
-                result_ty: substitutions.apply(result_ty, 0),
+                args: args
+                    .iter()
+                    .map(|a| substitutions.apply(a, 0, context))
+                    .collect(),
+                func_ty: substitutions.apply(func_ty, 0, context),
+                result_ty: substitutions.apply(result_ty, 0, context),
             },
             Constraint::VariantMatch {
                 expr_id,
@@ -164,11 +176,11 @@ impl Constraint {
                 field_tys,
             } => Constraint::VariantMatch {
                 expr_id: *expr_id,
-                scrutinee_ty: substitutions.apply(scrutinee_ty, 0),
+                scrutinee_ty: substitutions.apply(scrutinee_ty, 0, context),
                 variant_name: variant_name.clone(),
                 field_tys: field_tys
                     .iter()
-                    .map(|ty| substitutions.apply(ty, 0))
+                    .map(|ty| substitutions.apply(ty, 0, context))
                     .collect(),
             },
             Constraint::InstanceOf {
@@ -178,10 +190,10 @@ impl Constraint {
                 scheme,
             } => Constraint::InstanceOf {
                 expr_id: *expr_id,
-                ty: substitutions.apply(ty, 0),
+                ty: substitutions.apply(ty, 0, context),
                 symbol_id: *symbol_id,
                 scheme: Scheme {
-                    ty: substitutions.apply(&scheme.ty, 0),
+                    ty: substitutions.apply(&scheme.ty, 0, context),
                     unbound_vars: scheme.unbound_vars.clone(),
                 },
             },
@@ -191,18 +203,18 @@ impl Constraint {
                 conformance,
             } => Constraint::ConformsTo {
                 expr_id: *expr_id,
-                ty: substitutions.apply(ty, 0),
+                ty: substitutions.apply(ty, 0, context),
                 conformance: Conformance {
                     protocol_id: conformance.protocol_id,
                     associated_types: conformance
                         .associated_types
                         .iter()
-                        .map(|t| substitutions.apply(t, 0))
+                        .map(|t| substitutions.apply(t, 0, context))
                         .collect(),
                 },
             },
             Constraint::Retry(c, retries) => {
-                Constraint::Retry(c.replacing(substitutions).clone().into(), *retries)
+                Constraint::Retry(c.replacing(substitutions, context).clone().into(), *retries)
             }
         }
     }

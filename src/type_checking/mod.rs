@@ -16,12 +16,14 @@ pub mod synthesis;
 pub mod ty;
 pub mod type_checker;
 pub mod type_checker_hoisting;
-#[cfg(test)]
-pub mod type_checker_tests;
 pub mod type_constraint;
 pub mod type_defs;
+pub mod type_var_context;
 pub mod type_var_id;
 pub mod typed_expr;
+
+#[cfg(test)]
+pub mod type_checker_tests;
 
 #[cfg(test)]
 #[derive(Debug)]

@@ -12,6 +12,7 @@ use crate::{
     ty::Ty,
     type_checker::TypeError,
     type_defs::{TypeDef, enum_def::EnumDef, protocol_def::ProtocolDef, struct_def::StructDef},
+    type_var_context::TypeVarContext,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -37,11 +38,11 @@ pub type TypedExprs = HashMap<ExprID, TypedExpr>;
 #[derive(Debug, Clone)]
 pub struct Environment {
     pub typed_exprs: TypedExprs,
-    pub type_var_id: TypeVarID,
     constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
     pub types: HashMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
+    pub context: TypeVarContext,
     next_id: i32,
 }
 
@@ -49,12 +50,12 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             typed_exprs: HashMap::new(),
-            type_var_id: TypeVarID::new(0, TypeVarKind::Blank),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
             next_id: 0,
             selfs: vec![],
+            context: TypeVarContext::default(),
         }
     }
 }
@@ -64,10 +65,14 @@ impl Environment {
         Self::default()
     }
 
-    pub fn next_id(&mut self) -> ExprID {
+    pub fn next_expr_id(&mut self) -> ExprID {
         let res = self.next_id;
         self.next_id += 1;
         res
+    }
+
+    pub fn next_type_var_id(&self) -> usize {
+        self.context.next_id()
     }
 
     #[track_caller]
@@ -172,7 +177,7 @@ impl Environment {
         let mut new_constraints = vec![];
         let mut new_constraint;
         for constraint in self.constraints.iter() {
-            new_constraint = constraint.replacing(substitutions);
+            new_constraint = constraint.replacing(substitutions, &mut self.context);
             new_constraints.push(new_constraint);
         }
         self.constraints = new_constraints;
@@ -280,7 +285,7 @@ impl Environment {
         }
 
         for constraint in constraints_to_copy {
-            let new_constraint = constraint.replacing(&mut var_map);
+            let new_constraint = constraint.replacing(&mut var_map, &mut self.context);
             self.constrain(new_constraint);
         }
 
@@ -326,19 +331,19 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
-        self.type_var_id = TypeVarID::new(self.type_var_id.id + 1, kind);
+        let type_var_id = self.context.new_var(kind);
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
             tracing::trace!(
                 "+ {:?} from {}:{}",
-                Ty::TypeVar(self.type_var_id.clone()),
+                Ty::TypeVar(type_var_id.clone()),
                 loc.file(),
                 loc.line()
             );
         }
 
-        self.type_var_id.clone()
+        type_var_id
     }
 
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
