@@ -157,7 +157,8 @@ impl<'a> ConstraintSolver<'a> {
                 let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
                 let unifications = conformance_checker.check()?;
                 for (lhs, rhs) in unifications {
-                    self.unify(&lhs, &rhs, substitutions)?;
+                    let delta = self.unify(&lhs, &rhs, substitutions)?;
+                    *substitutions = delta.compose(substitutions);
                 }
                 Self::normalize_substitutions(substitutions);
             }
@@ -165,10 +166,11 @@ impl<'a> ConstraintSolver<'a> {
                 let lhs = Self::apply(lhs, substitutions, 0);
                 let rhs = Self::apply(rhs, substitutions, 0);
 
-                self.unify(&lhs, &rhs, substitutions).map_err(|err| {
+                let delta = self.unify(&lhs, &rhs, substitutions).map_err(|err| {
                     tracing::error!("{err:?}");
                     err
                 })?;
+                *substitutions = delta.compose(substitutions);
 
                 Self::normalize_substitutions(substitutions);
             }
@@ -182,7 +184,8 @@ impl<'a> ConstraintSolver<'a> {
                 }
                 let instantiated_ty = Self::substitute_ty_with_map(ty, &mapping);
 
-                self.unify(ty, &instantiated_ty, substitutions)?;
+                let delta = self.unify(ty, &instantiated_ty, substitutions)?;
+                *substitutions = delta.compose(substitutions);
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
@@ -200,7 +203,8 @@ impl<'a> ConstraintSolver<'a> {
                             .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
-                            self.unify(&result_ty, &variant.ty, substitutions)?;
+                            let delta = self.unify(&result_ty, &variant.ty, substitutions)?;
+                            *substitutions = delta.compose(substitutions);
                         }
                     }
                     // A variant with values
@@ -224,7 +228,8 @@ impl<'a> ConstraintSolver<'a> {
                             .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
-                            self.unify(&result_ty, &variant.ty, substitutions)?;
+                            let delta = self.unify(&result_ty, &variant.ty, substitutions)?;
+                            *substitutions = delta.compose(substitutions);
                         }
                     }
                     _ => (),
@@ -237,7 +242,8 @@ impl<'a> ConstraintSolver<'a> {
                 let checker = SatisfiesChecker::new(self.env, &ty, constraints);
                 let unifications = checker.check()?;
                 for (lhs, rhs) in unifications {
-                    self.unify(&lhs, &rhs, substitutions)?;
+                    let delta = self.unify(&lhs, &rhs, substitutions)?;
+                    *substitutions = delta.compose(substitutions);
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
@@ -467,7 +473,8 @@ impl<'a> ConstraintSolver<'a> {
 
                 let specialized_ty =
                     Self::substitute_ty_with_map(&member_ty, &member_substitutions);
-                self.unify(&result_ty, &specialized_ty, substitutions)?;
+                let delta = self.unify(&result_ty, &specialized_ty, substitutions)?;
+                *substitutions = delta.compose(substitutions);
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::InitializerCall {
@@ -498,17 +505,20 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 for (param, arg) in params.iter().zip(args) {
-                    self.unify(param, arg, substitutions)?;
+                    let delta = self.unify(param, arg, substitutions)?;
+                    *substitutions = delta.compose(substitutions);
                 }
 
-                self.unify(&initializer.ty, func_ty, substitutions)?;
+                let delta = self.unify(&initializer.ty, func_ty, substitutions)?;
+                *substitutions = delta.compose(substitutions);
 
                 let struct_with_generics =
                     Ty::Struct(*initializes_id, struct_def.canonical_type_parameters());
 
                 let specialized_struct = Self::apply(&struct_with_generics, substitutions, 0);
 
-                self.unify(result_ty, &specialized_struct, substitutions)?;
+                let delta = self.unify(result_ty, &specialized_struct, substitutions)?;
+                *substitutions = delta.compose(substitutions);
 
                 Self::normalize_substitutions(substitutions);
             }
@@ -564,7 +574,8 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
-                    self.unify(specialized_ty, pattern_ty, substitutions)?;
+                    let delta = self.unify(specialized_ty, pattern_ty, substitutions)?;
+                    *substitutions = delta.compose(substitutions);
                 }
 
                 Self::normalize_substitutions(substitutions);
@@ -686,7 +697,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn unify(
+    fn unify_mut(
         &mut self,
         lhs: &Ty,
         rhs: &Ty,
@@ -737,20 +748,20 @@ impl<'a> ConstraintSolver<'a> {
                 Ty::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    self.unify(lhs, &rhs, substitutions)?;
+                    self.unify_mut(lhs, &rhs, substitutions)?;
                 }
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
-                    self.unify(lhs, &rhs, substitutions)?;
+                    self.unify_mut(lhs, &rhs, substitutions)?;
                 }
 
-                self.unify(&lhs_returning, &rhs_returning, substitutions)?;
+                self.unify_mut(&lhs_returning, &rhs_returning, substitutions)?;
                 Self::normalize_substitutions(substitutions);
 
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                self.unify(&lhs_func, &rhs_func, substitutions)?;
+                self.unify_mut(&lhs_func, &rhs_func, substitutions)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -758,7 +769,7 @@ impl<'a> ConstraintSolver<'a> {
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
-                self.unify(&func, &closure, substitutions)?;
+                self.unify_mut(&func, &closure, substitutions)?;
                 Self::normalize_substitutions(substitutions);
                 Ok(())
             }
@@ -766,7 +777,7 @@ impl<'a> ConstraintSolver<'a> {
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    self.unify(lhs, &rhs, substitutions)?;
+                    self.unify_mut(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
                 }
 
@@ -775,14 +786,14 @@ impl<'a> ConstraintSolver<'a> {
             (Ty::Enum(_, enum_types), Ty::EnumVariant(_, variant_types))
             | (Ty::EnumVariant(_, variant_types), Ty::Enum(_, enum_types)) => {
                 for (e_ty, v_ty) in enum_types.iter().zip(variant_types) {
-                    self.unify(e_ty, &v_ty, substitutions)?;
+                    self.unify_mut(e_ty, &v_ty, substitutions)?;
                 }
 
                 Ok(())
             }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
                 for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    self.unify(lhs, &rhs, substitutions)?;
+                    self.unify_mut(lhs, &rhs, substitutions)?;
                     Self::normalize_substitutions(substitutions);
                 }
 
@@ -809,7 +820,7 @@ impl<'a> ConstraintSolver<'a> {
                     substitutions,
                 );
 
-                self.unify(&ret, &specialized_ty, substitutions)?;
+                self.unify_mut(&ret, &specialized_ty, substitutions)?;
                 Self::normalize_substitutions(substitutions);
 
                 Ok(())
@@ -836,6 +847,28 @@ impl<'a> ConstraintSolver<'a> {
         );
 
         res
+    }
+
+    pub fn unify(
+        &mut self,
+        lhs: &Ty,
+        rhs: &Ty,
+        substitutions: &Substitutions,
+    ) -> Result<Substitutions, TypeError> {
+        let mut working = substitutions.clone();
+        self.unify_mut(lhs, rhs, &mut working)?;
+
+        let mut delta = Substitutions::new();
+        for (var, ty) in working.iter() {
+            match substitutions.get(var) {
+                Some(existing) if existing == ty => {}
+                _ => {
+                    delta.insert(var.clone(), ty.clone());
+                }
+            }
+        }
+
+        Ok(delta)
     }
 
     /// Returns true if `v` occurs inside `ty`
