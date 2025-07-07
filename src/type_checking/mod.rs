@@ -10,7 +10,6 @@ pub mod constraint;
 pub mod constraint_solver;
 pub mod environment;
 pub mod name_resolver;
-pub mod satisfies_checker;
 pub mod scope_tree;
 pub mod substitutions;
 pub mod synthesis;

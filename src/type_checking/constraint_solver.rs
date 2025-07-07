@@ -6,7 +6,6 @@ use crate::{
     expr::Expr,
     name::Name,
     parser::ExprID,
-    satisfies_checker::SatisfiesChecker,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
@@ -228,16 +227,6 @@ impl<'a> ConstraintSolver<'a> {
                         }
                     }
                     _ => (),
-                }
-            }
-            Constraint::Satisfies {
-                ty, constraints, ..
-            } => {
-                let ty = Self::apply(ty, substitutions, 0);
-                let checker = SatisfiesChecker::new(self.env, &ty, constraints);
-                let unifications = checker.check()?;
-                for (lhs, rhs) in unifications {
-                    self.unify(&lhs, &rhs, substitutions)?;
                 }
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {

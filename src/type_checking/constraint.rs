@@ -5,7 +5,6 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
-    type_constraint::TypeConstraint,
     type_defs::protocol_def::Conformance,
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -40,11 +39,6 @@ pub enum Constraint {
         ty: Ty,
         conformance: Conformance,
     },
-    Satisfies {
-        expr_id: ExprID,
-        ty: Ty,
-        constraints: Vec<TypeConstraint>,
-    },
     Retry(Box<Constraint>, usize),
 }
 
@@ -58,7 +52,6 @@ impl Constraint {
             Self::VariantMatch { expr_id, .. } => expr_id,
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
-            Self::Satisfies { expr_id, .. } => expr_id,
             Self::Retry(c, _) => c.expr_id(),
         }
     }
@@ -84,7 +77,6 @@ impl Constraint {
                 ..
             } => f(scrutinee_ty) || field_tys.iter().any(f),
             Constraint::InstanceOf { scheme, ty, .. } => f(&scheme.ty) || f(ty),
-            Constraint::Satisfies { ty, .. } => f(ty),
             Constraint::ConformsTo {
                 ty, conformance, ..
             } => f(ty) || conformance.associated_types.iter().any(f),
@@ -121,7 +113,6 @@ impl Constraint {
             Constraint::InstanceOf { scheme, ty, .. } => {
                 has_canonical_type_var(&scheme.ty) || has_canonical_type_var(ty)
             }
-            Constraint::Satisfies { ty, .. } => has_canonical_type_var(ty),
             Constraint::ConformsTo { conformance, .. } => conformance
                 .associated_types
                 .iter()
@@ -217,15 +208,6 @@ impl Constraint {
                         .map(|t| ConstraintSolver::apply(t, substitutions, 0))
                         .collect(),
                 },
-            },
-            Constraint::Satisfies {
-                expr_id,
-                ty,
-                constraints,
-            } => Constraint::Satisfies {
-                expr_id: *expr_id,
-                ty: ConstraintSolver::apply(ty, substitutions, 0),
-                constraints: constraints.clone(),
             },
             Constraint::Retry(c, retries) => {
                 Constraint::Retry(c.replacing(substitutions).clone().into(), *retries)
