@@ -144,7 +144,7 @@ impl<'a> ConstraintSolver<'a> {
         constraint: &Constraint,
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
-        tracing::info!(
+        tracing::debug!(
             "Solving constraint: {:?}",
             constraint.replacing(substitutions, &mut self.env.context)
         );
@@ -175,11 +175,11 @@ impl<'a> ConstraintSolver<'a> {
                             ConformanceChecker::new(&type_def_ty, conformance, self.env);
                         match conformance_checker.check() {
                             Ok(unifications) => {
-                                substitutions.insert(type_var.clone(), type_def_ty);
+                                //substitutions.insert(type_var.clone(), type_def_ty);
 
-                                for (lhs, rhs) in unifications {
-                                    substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
-                                }
+                                //for (lhs, rhs) in unifications {
+                                //    substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
+                                //}
 
                                 return Ok(());
                             }

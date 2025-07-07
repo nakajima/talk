@@ -7,7 +7,6 @@ use crate::SymbolInfo;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
-use crate::compiling::driver::DriverConfig;
 use crate::diagnostic::Diagnostic;
 use crate::expr::Expr;
 use crate::expr::Expr::*;
@@ -483,8 +482,6 @@ impl NameResolver {
                                             NameResolverError::UnresolvedName(raw_name_str),
                                         ))
                                     }
-
-                                    panic!("unresolved name");
 
                                     return;
                                 }

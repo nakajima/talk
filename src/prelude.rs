@@ -36,7 +36,6 @@ pub fn _compile_prelude() -> Prelude {
         PathBuf::from("./core/Optional.tlk"),
         PathBuf::from("./core/Array.tlk"),
         PathBuf::from("./core/String.tlk"),
-        PathBuf::from("./core/Printable.tlk"),
     ] {
         #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
@@ -56,6 +55,16 @@ pub fn _compile_prelude() -> Prelude {
     let environment = unit.env.clone();
     let module = unit.module();
     let symbols = driver.symbol_table;
+
+    #[allow(clippy::panic)]
+    if let Ok(session) = driver.session.lock()
+        && !session.diagnostics.is_empty()
+    {
+        panic!(
+            "Prelude did not compile cleanly: {:#?}",
+            session.diagnostics
+        )
+    }
 
     #[allow(clippy::unwrap_used)]
     if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
@@ -112,4 +121,14 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Operators", "Optional", "Array", "String", "Printable");
+stdlib_modules!("Operators", "Optional", "Array", "String");
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::compile_prelude;
+
+    #[test]
+    fn compiles_clean() {
+        compile_prelude();
+    }
+}
