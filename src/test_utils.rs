@@ -188,7 +188,8 @@ pub mod trace {
             .with_ansi(true)
             .without_time()
             .with_target(false)
-            // .with_file(false)
+            .with_file(true)
+            .with_line_number(true)
             .with_filter(EnvFilter::from_default_env());
         // .with_filter(SuppressPrelude);
 

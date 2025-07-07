@@ -323,6 +323,16 @@ pub fn default_env_scope() -> BTreeMap<SymbolID, Scheme> {
     scope
 }
 
+pub fn builtin_symbol(name: &str) -> Option<SymbolID> {
+    for builtin in builtins() {
+        if builtin.info.name == *name {
+            return Some(SymbolID(builtin.id));
+        }
+    }
+
+    None
+}
+
 pub fn default_name_scope() -> BTreeMap<String, SymbolID> {
     let mut scope = BTreeMap::new();
     for builtin in builtins() {

@@ -228,7 +228,7 @@ impl<'a> TypeChecker<'a> {
                             ..
                         }) = &source_file.get(func_id)
                         else {
-                            unreachable!()
+                            unreachable!("wtf {:?}", &source_file.get(func_id))
                         };
 
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(

@@ -13,7 +13,7 @@ use crate::{
     source_file,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DriverConfig {
     pub executable: bool,
     pub include_prelude: bool,
@@ -60,7 +60,12 @@ impl Driver {
         let environment = config.new_environment();
 
         Self {
-            units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
+            units: vec![CompilationUnit::new(
+                session.clone(),
+                vec![],
+                environment,
+                config.clone(),
+            )],
             symbol_table: if config.include_prelude {
                 crate::prelude::compile_prelude().symbols.clone()
             } else {

@@ -70,6 +70,7 @@ where
     pub stage: Stage,
     pub env: Environment,
     pub session: SharedCompilationSession,
+    pub config: DriverConfig,
 }
 
 impl<S: StageTrait> CompilationUnit<S> {
@@ -79,13 +80,19 @@ impl<S: StageTrait> CompilationUnit<S> {
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(session: SharedCompilationSession, input: Vec<PathBuf>, env: Environment) -> Self {
+    pub fn new(
+        session: SharedCompilationSession,
+        input: Vec<PathBuf>,
+        env: Environment,
+        config: DriverConfig,
+    ) -> Self {
         Self {
             src_cache: Default::default(),
             input,
             stage: Raw {},
             env,
             session,
+            config,
         }
     }
 
@@ -122,6 +129,7 @@ impl CompilationUnit<Raw> {
             stage: Parsed { files },
             env: self.env,
             session: self.session,
+            config: self.config,
         }
     }
 
@@ -155,7 +163,7 @@ impl CompilationUnit<Parsed> {
         let mut files = vec![];
         for file in self.stage.files {
             let resolved =
-                NameResolver::new(symbol_table, self.session.clone()).resolve(file, symbol_table);
+                NameResolver::new(&self.config, self.session.clone()).resolve(file, symbol_table);
             files.push(resolved);
         }
 
@@ -165,6 +173,7 @@ impl CompilationUnit<Parsed> {
             stage: Resolved { files },
             env: self.env,
             session: self.session,
+            config: self.config,
         }
     }
 }
@@ -225,6 +234,7 @@ impl CompilationUnit<Resolved> {
             stage: Typed { files },
             env: self.env,
             session: self.session,
+            config: self.config,
         }
     }
 }
@@ -263,6 +273,7 @@ impl CompilationUnit<Typed> {
             },
             env: self.env,
             session: self.session,
+            config: self.config,
         }
     }
 }
