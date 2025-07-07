@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     ops::IndexMut,
 };
 
@@ -18,7 +18,7 @@ use crate::{
 
 use super::{type_checker::Scheme, typed_expr::TypedExpr};
 
-pub type Scope = HashMap<SymbolID, Scheme>;
+pub type Scope = BTreeMap<SymbolID, Scheme>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RawTypeParameter {
@@ -33,14 +33,14 @@ pub struct TypeParameter {
     pub type_var: TypeVarID,
 }
 
-pub type TypedExprs = HashMap<ExprID, TypedExpr>;
+pub type TypedExprs = BTreeMap<ExprID, TypedExpr>;
 
 #[derive(Debug, Clone)]
 pub struct Environment {
     pub typed_exprs: TypedExprs,
     constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
-    pub types: HashMap<SymbolID, TypeDef>,
+    pub types: BTreeMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
     pub context: TypeVarContext,
     next_id: i32,
@@ -49,7 +49,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
-            typed_exprs: HashMap::new(),
+            typed_exprs: BTreeMap::new(),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
             types: crate::builtins::default_env_types(),
@@ -199,12 +199,6 @@ impl Environment {
             .insert(symbol_id, scheme);
 
         Ok(())
-    }
-
-    pub fn declare_in_parent(&mut self, symbol_id: SymbolID, scheme: Scheme) {
-        self.scopes
-            .index_mut(self.scopes.len() - 2)
-            .insert(symbol_id, scheme);
     }
 
     pub fn start_scope(&mut self) {
@@ -594,7 +588,7 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
 /// *after* applying the current substitutions.  We exclude
 /// each scheme's own quantified vars.
 pub fn free_type_vars_in_env(
-    scopes: &[HashMap<SymbolID, Scheme>],
+    scopes: &[BTreeMap<SymbolID, Scheme>],
     ignoring: SymbolID,
 ) -> HashSet<TypeVarID> {
     let mut s = HashSet::new();

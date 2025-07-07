@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     SymbolID,
     ty::Ty,
@@ -32,7 +30,7 @@ pub struct ProtocolDef {
     pub associated_types: TypeParams,
     pub conformances: Vec<Conformance>,
     pub properties: Vec<Property>,
-    pub methods: HashSet<Method>,
+    pub methods: Vec<Method>,
     pub initializers: Vec<Initializer>,
     pub method_requirements: Vec<Method>,
 }
@@ -45,7 +43,7 @@ impl ProtocolDef {
         associated_types: TypeParams,
         conformances: Vec<Conformance>,
         properties: Vec<Property>,
-        methods: HashSet<Method>,
+        methods: Vec<Method>,
         initializers: Vec<Initializer>,
         method_requirements: Vec<Method>,
     ) -> Self {

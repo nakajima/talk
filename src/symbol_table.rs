@@ -1,8 +1,8 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{Phase, SourceFile, parser::ExprID, span::Span};
 
-#[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
 
 impl std::fmt::Debug for SymbolID {
@@ -98,10 +98,10 @@ pub struct TypeTable {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolTable {
-    symbols: HashMap<SymbolID, SymbolInfo>,
+    symbols: BTreeMap<SymbolID, SymbolInfo>,
     next_id: i32,
-    pub types: HashMap<SymbolID, TypeTable>,
-    pub symbol_map: HashMap<Span, SymbolID>,
+    pub types: BTreeMap<SymbolID, TypeTable>,
+    pub symbol_map: BTreeMap<Span, SymbolID>,
 }
 
 impl SymbolTable {
@@ -141,7 +141,7 @@ impl SymbolTable {
     }
 
     // Convert symbols to initial name scope
-    pub fn build_name_scope(&self) -> HashMap<String, SymbolID> {
+    pub fn build_name_scope(&self) -> BTreeMap<String, SymbolID> {
         let mut scope = crate::builtins::default_name_scope(); // Builtins like Int, Float
 
         // Add all symbols to name->id mapping
@@ -152,7 +152,7 @@ impl SymbolTable {
         scope
     }
 
-    pub fn all(&self) -> HashMap<SymbolID, SymbolInfo> {
+    pub fn all(&self) -> BTreeMap<SymbolID, SymbolInfo> {
         self.symbols.clone()
     }
 
@@ -188,6 +188,8 @@ impl SymbolTable {
                 loc.line()
             );
         }
+
+        tracing::info!("add symbol: {name} next_id: {}", self.next_id);
 
         self.next_id += 1;
         let symbol_id = SymbolID(self.next_id);

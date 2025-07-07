@@ -25,6 +25,10 @@ impl TypeVarID {
         Self { id, kind }
     }
 
+    pub fn is_canonical(&self) -> bool {
+        matches!(self.kind, TypeVarKind::CanonicalTypeParameter(_))
+    }
+
     pub fn canonicalized(&self) -> Option<TypeVarID> {
         if let TypeVarKind::Instantiated(parent_id) = self.kind {
             return Some(TypeVarID {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
@@ -302,8 +302,8 @@ pub fn builtin_type_def(symbol_id: &SymbolID) -> TypeDef {
     unreachable!()
 }
 
-pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
-    let mut result = HashMap::default();
+pub fn default_env_types() -> BTreeMap<SymbolID, TypeDef> {
+    let mut result = BTreeMap::default();
     for builtin in builtins() {
         if let Some(def) = builtin.type_def {
             result.insert(SymbolID(builtin.id), def);
@@ -312,8 +312,8 @@ pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
     result
 }
 
-pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
-    let mut scope = HashMap::new();
+pub fn default_env_scope() -> BTreeMap<SymbolID, Scheme> {
+    let mut scope = BTreeMap::new();
     for builtin in builtins() {
         scope.insert(
             SymbolID(builtin.id),
@@ -323,8 +323,8 @@ pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
     scope
 }
 
-pub fn default_name_scope() -> HashMap<String, SymbolID> {
-    let mut scope = HashMap::new();
+pub fn default_name_scope() -> BTreeMap<String, SymbolID> {
+    let mut scope = BTreeMap::new();
     for builtin in builtins() {
         scope.insert(builtin.info.name, SymbolID(builtin.id));
     }

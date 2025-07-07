@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     SymbolID,
     parser::ExprID,
@@ -27,7 +25,7 @@ pub struct EnumDef {
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub variants: Vec<EnumVariant>,
-    pub methods: HashSet<Method>,
+    pub methods: Vec<Method>,
     pub conformances: Vec<Conformance>,
 }
 

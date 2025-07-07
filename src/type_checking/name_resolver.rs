@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::Definition;
 use crate::NameResolved;
@@ -40,7 +40,7 @@ impl NameResolverError {
 }
 
 pub struct NameResolver {
-    scopes: Vec<HashMap<String, SymbolID>>,
+    scopes: Vec<BTreeMap<String, SymbolID>>,
 
     // For resolving `self` references
     type_symbol_stack: Vec<SymbolID>,
@@ -1063,6 +1063,10 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) -> SymbolID {
+        if self.lookup(&name).is_some() {
+            tracing::warn!("Already declared name: {name}");
+        }
+
         let Some(meta) = source_file.meta.get(expr_id) else {
             return SymbolID(0);
         };
@@ -1105,7 +1109,7 @@ impl NameResolver {
     }
 
     fn start_scope(&mut self, source_file: &mut SourceFile, span: Span) {
-        tracing::trace!("scope started: {:?}", self.scopes);
+        tracing::trace!("scope started: {:#?}", self.scopes);
 
         self.scope_tree_ids.push(
             source_file
