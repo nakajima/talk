@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
     SymbolID, conformance_checker::ConformanceError, constraint_solver::ConstraintSolver,
     environment::Environment, ty::Ty, type_checker::TypeError, type_constraint::TypeConstraint,

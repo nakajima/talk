@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,

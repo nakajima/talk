@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{
     SymbolID, SymbolTable,
     conformance_checker::{ConformanceChecker, ConformanceError},
@@ -675,7 +673,7 @@ impl<'a> ConstraintSolver<'a> {
             let mut updates = Vec::new();
 
             for (var_id, ty) in substitutions.iter() {
-                let normalized = Self::apply(&ty, substitutions, 0);
+                let normalized = Self::apply(ty, substitutions, 0);
                 if normalized != *ty {
                     updates.push((var_id.clone(), normalized));
                     changed = true;
