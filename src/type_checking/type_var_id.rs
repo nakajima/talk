@@ -2,7 +2,7 @@ use crate::{SymbolID, name::Name, token_kind::TokenKind};
 
 #[derive(Clone)]
 pub struct TypeVarID {
-    pub id: i32,
+    pub id: u32,
     pub kind: TypeVarKind,
 }
 
@@ -16,12 +16,12 @@ impl Eq for TypeVarID {}
 
 impl std::hash::Hash for TypeVarID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_i32(self.id);
+        state.write_u32(self.id);
     }
 }
 
 impl TypeVarID {
-    pub fn new(id: i32, kind: TypeVarKind) -> Self {
+    pub fn new(id: u32, kind: TypeVarKind) -> Self {
         Self { id, kind }
     }
 
@@ -103,9 +103,9 @@ pub enum TypeVarKind {
     PatternBind(Name),
     CanonicalTypeParameter(String),
     Placeholder(String),
-    Instantiated(i32),
-    Canonicalized(i32),
+    Instantiated(u32),
+    Canonicalized(u32),
     BinaryOperand(TokenKind),
-    Combined(i32, i32),
+    Combined(u32, u32),
     Unbound,
 }

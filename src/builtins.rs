@@ -108,12 +108,12 @@ fn builtins() -> Vec<Builtin> {
                 vec![Ty::Int /* capacity */],
                 Ty::Pointer.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -5,
+                    id: u32::MAX - 5,
                     kind: TypeVarKind::Element,
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -5,
+                id: u32::MAX - 5,
                 kind: TypeVarKind::Element,
             }],
             type_def: None,
@@ -131,12 +131,12 @@ fn builtins() -> Vec<Builtin> {
                 vec![Ty::Pointer, Ty::Int],
                 Ty::Pointer.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -4,
+                    id: u32::MAX - 4,
                     kind: TypeVarKind::Element,
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -4,
+                id: u32::MAX - 4,
                 kind: TypeVarKind::Element,
             }],
             type_def: None,
@@ -168,18 +168,18 @@ fn builtins() -> Vec<Builtin> {
                     Ty::Pointer,
                     Ty::Int,
                     Ty::TypeVar(TypeVarID {
-                        id: -8,
+                        id: u32::MAX - 8,
                         kind: TypeVarKind::Element,
                     }),
                 ],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -8,
+                    id: u32::MAX - 8,
                     kind: TypeVarKind::Element,
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -8,
+                id: u32::MAX - 8,
                 kind: TypeVarKind::Element,
             }],
             type_def: None,
@@ -196,17 +196,17 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::Pointer, Ty::Int],
                 Ty::TypeVar(TypeVarID {
-                    id: -9,
+                    id: u32::MAX - 9,
                     kind: TypeVarKind::Element,
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -9,
+                    id: u32::MAX - 9,
                     kind: TypeVarKind::Element,
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -9,
+                id: u32::MAX - 9,
                 kind: TypeVarKind::Element,
             }],
             type_def: None,
@@ -223,17 +223,17 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Func(
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -11,
+                    id: u32::MAX - 11,
                     kind: TypeVarKind::FuncParam("printable".into()),
                 })],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -11,
+                    id: u32::MAX - 11,
                     kind: TypeVarKind::FuncParam("printable".into()),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -11,
+                id: u32::MAX - 11,
                 kind: TypeVarKind::FuncParam("printable".into()),
             }],
             type_def: None,
@@ -250,17 +250,17 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::string()],
                 Ty::TypeVar(TypeVarID {
-                    id: -12,
+                    id: u32::MAX - 12,
                     kind: TypeVarKind::CallReturn,
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -12,
+                    id: u32::MAX - 12,
                     kind: TypeVarKind::CallReturn,
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -12,
+                id: u32::MAX - 12,
                 kind: TypeVarKind::CallReturn,
             }],
             type_def: None,

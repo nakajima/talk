@@ -530,7 +530,7 @@ impl<'a> TypeChecker<'a> {
             env.selfs.pop();
         }
 
-        env.replace_constraint_values(&substitutions);
+        env.replace_constraint_values(&mut substitutions);
         env.replace_typed_exprs_values(&substitutions);
 
         Ok(())
@@ -606,7 +606,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         env.replace_typed_exprs_values(&placeholder_substitutions);
-        env.replace_constraint_values(&placeholder_substitutions);
+        env.replace_constraint_values(&mut placeholder_substitutions);
 
         Ok(results)
     }
@@ -672,7 +672,7 @@ impl<'a> TypeChecker<'a> {
             )?;
         }
 
-        env.replace_constraint_values(&placeholder_substitutions);
+        env.replace_constraint_values(&mut placeholder_substitutions);
 
         Ok(results)
     }

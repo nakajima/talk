@@ -1827,7 +1827,39 @@ mod protocol_tests {
 
 #[cfg(test)]
 mod operator_tests {
-    use crate::{check, ty::Ty};
+    use crate::{check, expr::Expr, ty::Ty};
+
+    #[test]
+    fn infers_basic() {
+        let checked = check(
+            "
+        func add(x) {
+            x + 1
+        }
+        ",
+        )
+        .unwrap();
+
+        // assert_eq!(checked.nth(1).unwrap(), Ty::Int);
+        let Some(Expr::Func { body, .. }) = checked.source_file.get(&checked.root_ids()[0]) else {
+            panic!("no func");
+        };
+
+        let Some(Expr::Block(body_ids)) = checked.source_file.get(body) else {
+            unreachable!()
+        };
+
+        let Some(Expr::Binary(lhs, _, _)) = checked.source_file.get(&body_ids[0]) else {
+            unreachable!()
+        };
+
+        assert_eq!(checked.type_for(lhs).unwrap(), Ty::Int);
+
+        assert_eq!(
+            checked.nth(0).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+        );
+    }
 
     #[test]
     fn add_op() {

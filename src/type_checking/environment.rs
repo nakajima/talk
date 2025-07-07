@@ -168,7 +168,7 @@ impl Environment {
         }
     }
 
-    pub fn replace_constraint_values(&mut self, substitutions: &Substitutions) {
+    pub fn replace_constraint_values(&mut self, substitutions: &mut Substitutions) {
         let mut new_constraints = vec![];
         let mut new_constraint;
         for constraint in self.constraints.iter() {
@@ -280,7 +280,7 @@ impl Environment {
         }
 
         for constraint in constraints_to_copy {
-            let new_constraint = constraint.replacing(&var_map);
+            let new_constraint = constraint.replacing(&mut var_map);
             self.constrain(new_constraint);
         }
 
@@ -627,12 +627,12 @@ mod generalize_tests {
     use std::collections::HashSet;
 
     // Helper to create a blank type variable.
-    fn new_tv(id: i32) -> TypeVarID {
+    fn new_tv(id: u32) -> TypeVarID {
         TypeVarID::new(id, TypeVarKind::Blank)
     }
 
     // Helper to create a Ty::TypeVar.
-    fn ty_var(id: i32) -> Ty {
+    fn ty_var(id: u32) -> Ty {
         Ty::TypeVar(new_tv(id))
     }
 

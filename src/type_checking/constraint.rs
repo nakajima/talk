@@ -1,6 +1,5 @@
 use crate::{
     SymbolID,
-    constraint_solver::ConstraintSolver,
     parser::ExprID,
     substitutions::Substitutions,
     ty::Ty,
@@ -131,24 +130,20 @@ impl Constraint {
         }
     }
 
-    pub fn replacing(&self, substitutions: &Substitutions) -> Constraint {
+    pub fn replacing(&self, substitutions: &mut Substitutions) -> Constraint {
         match self {
-            Constraint::Equality(id, ty, ty1) => Constraint::Equality(
-                *id,
-                ConstraintSolver::apply(ty, substitutions, 0),
-                ConstraintSolver::apply(ty1, substitutions, 0),
-            ),
+            Constraint::Equality(id, ty, ty1) => {
+                Constraint::Equality(*id, substitutions.apply(ty, 0), substitutions.apply(ty1, 0))
+            }
             Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
                 *id,
-                ConstraintSolver::apply(ty, substitutions, 0),
+                substitutions.apply(ty, 0),
                 name.clone(),
-                ConstraintSolver::apply(ty1, substitutions, 0),
+                substitutions.apply(ty1, 0),
             ),
-            Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
-                *id,
-                name.clone(),
-                ConstraintSolver::apply(ty, substitutions, 0),
-            ),
+            Constraint::UnqualifiedMember(id, name, ty) => {
+                Constraint::UnqualifiedMember(*id, name.clone(), substitutions.apply(ty, 0))
+            }
             Constraint::InitializerCall {
                 expr_id,
                 initializes_id,
@@ -158,12 +153,9 @@ impl Constraint {
             } => Constraint::InitializerCall {
                 expr_id: *expr_id,
                 initializes_id: *initializes_id,
-                args: args
-                    .iter()
-                    .map(|a| ConstraintSolver::apply(a, substitutions, 0))
-                    .collect(),
-                func_ty: ConstraintSolver::apply(func_ty, substitutions, 0),
-                result_ty: ConstraintSolver::apply(result_ty, substitutions, 0),
+                args: args.iter().map(|a| substitutions.apply(a, 0)).collect(),
+                func_ty: substitutions.apply(func_ty, 0),
+                result_ty: substitutions.apply(result_ty, 0),
             },
             Constraint::VariantMatch {
                 expr_id,
@@ -172,11 +164,11 @@ impl Constraint {
                 field_tys,
             } => Constraint::VariantMatch {
                 expr_id: *expr_id,
-                scrutinee_ty: ConstraintSolver::apply(scrutinee_ty, substitutions, 0),
+                scrutinee_ty: substitutions.apply(scrutinee_ty, 0),
                 variant_name: variant_name.clone(),
                 field_tys: field_tys
                     .iter()
-                    .map(|ty| ConstraintSolver::apply(ty, substitutions, 0))
+                    .map(|ty| substitutions.apply(ty, 0))
                     .collect(),
             },
             Constraint::InstanceOf {
@@ -186,10 +178,10 @@ impl Constraint {
                 scheme,
             } => Constraint::InstanceOf {
                 expr_id: *expr_id,
-                ty: ConstraintSolver::apply(ty, substitutions, 0),
+                ty: substitutions.apply(ty, 0),
                 symbol_id: *symbol_id,
                 scheme: Scheme {
-                    ty: ConstraintSolver::apply(&scheme.ty, substitutions, 0),
+                    ty: substitutions.apply(&scheme.ty, 0),
                     unbound_vars: scheme.unbound_vars.clone(),
                 },
             },
@@ -199,13 +191,13 @@ impl Constraint {
                 conformance,
             } => Constraint::ConformsTo {
                 expr_id: *expr_id,
-                ty: ConstraintSolver::apply(ty, substitutions, 0),
+                ty: substitutions.apply(ty, 0),
                 conformance: Conformance {
                     protocol_id: conformance.protocol_id,
                     associated_types: conformance
                         .associated_types
                         .iter()
-                        .map(|t| ConstraintSolver::apply(t, substitutions, 0))
+                        .map(|t| substitutions.apply(t, 0))
                         .collect(),
                 },
             },
