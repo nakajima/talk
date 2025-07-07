@@ -157,7 +157,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .resolved(&mut driver.symbol_table);
+            .resolved(&mut driver.symbol_table, &driver.config);
         let source_file = resolved.source_file(&PathBuf::from("-")).unwrap().clone();
 
         (source_file, driver.symbol_table, resolved.env)

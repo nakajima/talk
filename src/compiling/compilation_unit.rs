@@ -1,10 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    NameResolved, SourceFile, SymbolTable,
+    NameResolved, SourceFile, SymbolID, SymbolTable,
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
@@ -132,7 +132,7 @@ impl CompilationUnit<Raw> {
         module: IRModule,
     ) -> CompilationUnit<Lowered> {
         let parsed = self.parse(driver_config.include_comments);
-        let resolved = parsed.resolved(symbol_table);
+        let resolved = parsed.resolved(symbol_table, driver_config);
         let typed = resolved.typed(symbol_table, driver_config);
         typed.lower(symbol_table, driver_config, module)
     }
@@ -151,18 +151,35 @@ impl StageTrait for Parsed {
 }
 
 impl CompilationUnit<Parsed> {
-    pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
+    pub fn resolved(
+        self,
+        symbol_table: &mut SymbolTable,
+        config: &DriverConfig,
+    ) -> CompilationUnit<Resolved> {
         let mut files = vec![];
+        let mut global_scope = if config.include_prelude {
+            crate::prelude::compile_prelude().global_scope.clone()
+        } else {
+            crate::builtins::default_name_scope() // Builtins like Int, Float
+        };
         for file in self.stage.files {
-            let resolved =
-                NameResolver::new(symbol_table, self.session.clone()).resolve(file, symbol_table);
+            let mut resolver = NameResolver::new(global_scope.clone(), self.session.clone());
+            let resolved = resolver.resolve(file, symbol_table);
+
+            for (name, symbol) in resolver.scopes[0].clone().into_iter() {
+                global_scope.insert(name, symbol);
+            }
+
             files.push(resolved);
         }
 
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Resolved { files },
+            stage: Resolved {
+                global_scope,
+                files,
+            },
             env: self.env,
             session: self.session,
         }
@@ -172,6 +189,7 @@ impl CompilationUnit<Parsed> {
 #[derive(Debug)]
 pub struct Resolved {
     files: Vec<SourceFile<NameResolved>>,
+    pub global_scope: BTreeMap<String, SymbolID>,
 }
 impl StageTrait for Resolved {
     type SourceFilePhase = source_file::NameResolved;

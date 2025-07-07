@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
-use std::{path::PathBuf, process::exit};
+use std::{collections::BTreeMap, path::PathBuf, process::exit};
 
 use crate::{
-    SymbolTable,
+    SymbolID, SymbolTable,
     compiling::driver::{Driver, DriverConfig},
     environment::Environment,
     lowering::ir_module::IRModule,
@@ -12,6 +12,7 @@ pub struct Prelude {
     pub symbols: SymbolTable,
     pub environment: Environment,
     pub module: IRModule,
+    pub global_scope: BTreeMap<String, SymbolID>,
 }
 
 lazy_static! {
@@ -42,7 +43,16 @@ pub fn _compile_prelude() -> Prelude {
     }
 
     #[allow(clippy::unwrap_used)]
-    let unit = driver.lower().into_iter().next().unwrap();
+    let resolved = driver
+        .parse()
+        .into_iter()
+        .next()
+        .unwrap()
+        .resolved(&mut driver.symbol_table, &driver.config);
+    let global_scope = resolved.stage.global_scope.clone();
+    let unit = resolved
+        .typed(&mut driver.symbol_table, &driver.config)
+        .lower(&mut driver.symbol_table, &driver.config, IRModule::new());
     let environment = unit.env.clone();
     let module = unit.module();
     let symbols = driver.symbol_table;
@@ -84,6 +94,7 @@ pub fn _compile_prelude() -> Prelude {
     Prelude {
         symbols,
         environment,
+        global_scope,
         module,
     }
 }

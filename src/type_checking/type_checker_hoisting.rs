@@ -5,6 +5,7 @@ use crate::{
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
     expr::Expr,
+    lsp::formatter::Formatter,
     name::Name,
     parser::ExprID,
     substitutions::Substitutions,
@@ -228,7 +229,7 @@ impl<'a> TypeChecker<'a> {
                             ..
                         }) = &source_file.get(func_id)
                         else {
-                            unreachable!()
+                            unreachable!("didn't get resolved init: {:?}", source_file.get(func_id))
                         };
 
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(

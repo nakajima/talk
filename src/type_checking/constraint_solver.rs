@@ -78,7 +78,7 @@ impl<'a> ConstraintSolver<'a> {
                                 ),
                             );
                         } else {
-                            // unsolved_constraints.push(*constraint.clone());
+                            unsolved_constraints.push(*constraint.clone());
                             errors.push((*constraint.expr_id(), err))
                         }
                     } else {

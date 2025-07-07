@@ -140,18 +140,6 @@ impl SymbolTable {
         self.types.get(symbol_id).map(|t| &t.properties)
     }
 
-    // Convert symbols to initial name scope
-    pub fn build_name_scope(&self) -> BTreeMap<String, SymbolID> {
-        let mut scope = crate::builtins::default_name_scope(); // Builtins like Int, Float
-
-        // Add all symbols to name->id mapping
-        for (id, info) in &self.symbols {
-            scope.insert(info.name.to_string(), *id);
-        }
-
-        scope
-    }
-
     pub fn all(&self) -> BTreeMap<SymbolID, SymbolInfo> {
         self.symbols.clone()
     }

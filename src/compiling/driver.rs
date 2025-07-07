@@ -117,7 +117,7 @@ impl Driver {
 
         for unit in self.units.clone() {
             let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table);
+            let resolved = parsed.resolved(&mut self.symbol_table, &self.config);
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
 
             let module = if self.config.include_prelude {
@@ -136,7 +136,7 @@ impl Driver {
         let mut result = vec![];
         for unit in self.units.clone() {
             let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table);
+            let resolved = parsed.resolved(&mut self.symbol_table, &self.config);
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
             result.push(typed);
         }
@@ -268,7 +268,7 @@ impl Driver {
         for unit in self.units.clone() {
             let typed = unit
                 .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table)
+                .resolved(&mut self.symbol_table, &self.config)
                 .typed(&mut self.symbol_table, &self.config);
             for file in typed.stage.files {
                 if *path == file.path {
@@ -287,7 +287,7 @@ impl Driver {
         for unit in self.units.clone() {
             let typed = unit
                 .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table);
+                .resolved(&mut self.symbol_table, &self.config);
             if let Some(file) = typed.source_file(&PathBuf::from(path)) {
                 return Some(file.clone());
             }

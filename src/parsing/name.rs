@@ -36,7 +36,7 @@ impl Name {
     pub fn symbol_id(&self) -> Result<SymbolID, TypeError> {
         match self {
             #[allow(clippy::panic)]
-            Name::Raw(name_str) => Err(TypeError::Unknown(format!(
+            Name::Raw(name_str) => Err(TypeError::Unknown(panic!(
                 "Cannot get symbol ID from unresolved {name_str:?}"
             ))),
             Name::Resolved(symbol_id, _) => Ok(*symbol_id),
