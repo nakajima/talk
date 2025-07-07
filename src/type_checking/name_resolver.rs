@@ -864,7 +864,7 @@ impl NameResolver {
 
                 symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
             }
-            self.hoist_enum_members(&body, source_file, symbol_table);
+
             self.type_symbol_stack.pop();
         }
     }
