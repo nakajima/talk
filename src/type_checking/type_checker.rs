@@ -4,7 +4,7 @@ use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
     compiling::compilation_session::SharedCompilationSession,
     conformance_checker::ConformanceError,
-    constraint::{Constraint, Substitutions},
+    constraint::Constraint,
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     expr::{Expr, IncompleteExpr, Pattern},
@@ -12,6 +12,7 @@ use crate::{
     name_resolver::NameResolverError,
     parser::ExprID,
     source_file::SourceFile,
+    substitutions::Substitutions,
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
@@ -1390,7 +1391,7 @@ impl<'a> TypeChecker<'a> {
                         // We need to substitute the enum's type parameters with the actual type args
 
                         // Create substitution map: enum type param -> concrete type arg
-                        let mut substitutions: HashMap<TypeVarID, Ty> = HashMap::new();
+                        let mut substitutions = Substitutions::new();
                         for (param, arg_ty) in enum_def.type_parameters.iter().zip(type_args.iter())
                         {
                             substitutions.insert(param.type_var.clone(), arg_ty.clone());

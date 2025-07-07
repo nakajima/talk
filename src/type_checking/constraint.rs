@@ -4,6 +4,7 @@ use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
     parser::ExprID,
+    substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
     type_constraint::TypeConstraint,
@@ -48,8 +49,6 @@ pub enum Constraint {
     },
     Retry(Box<Constraint>, usize),
 }
-
-pub type Substitutions = HashMap<TypeVarID, Ty>;
 
 impl Constraint {
     pub fn expr_id(&self) -> &ExprID {
@@ -143,7 +142,7 @@ impl Constraint {
         }
     }
 
-    pub fn replacing(&self, substitutions: &HashMap<TypeVarID, Ty>) -> Constraint {
+    pub fn replacing(&self, substitutions: &Substitutions) -> Constraint {
         match self {
             Constraint::Equality(id, ty, ty1) => Constraint::Equality(
                 *id,

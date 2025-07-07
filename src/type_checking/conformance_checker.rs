@@ -4,6 +4,7 @@ use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
     environment::{Environment, free_type_vars},
+    substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
     type_defs::{
@@ -54,7 +55,7 @@ impl<'a> ConformanceChecker<'a> {
         };
 
         // Replace the protocol's associated types with the conformance's
-        let mut substitutions = HashMap::new();
+        let mut substitutions = Substitutions::new();
         for (canonical, conforming) in protocol
             .canonical_associated_type_vars()
             .into_iter()

@@ -4,6 +4,7 @@ use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
     environment::{Environment, TypeParameter},
+    substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
     type_defs::{
@@ -78,7 +79,7 @@ impl TypeDef {
                 env.lookup_type(&conformance.protocol_id).cloned()
                 && let Some(ty) = protocol_def.member_ty(name).cloned()
             {
-                let mut subst = HashMap::new();
+                let mut subst = Substitutions::new();
                 for (param, arg) in protocol_def
                     .associated_types
                     .iter()

@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use crate::{
     SymbolID, SymbolTable,
     conformance_checker::{ConformanceChecker, ConformanceError},
-    constraint::{Constraint, Substitutions},
+    constraint::Constraint,
     environment::{Environment, TypeParameter},
     expr::Expr,
     name::Name,
     parser::ExprID,
     satisfies_checker::SatisfiesChecker,
+    substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
     type_defs::TypeDef,
@@ -37,7 +38,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     pub fn solve(&mut self) -> ConstraintSolverSolution {
-        let mut substitutions = HashMap::<TypeVarID, Ty>::new();
+        let mut substitutions = Substitutions::new();
         let mut errors = vec![];
         let mut unsolved_constraints = vec![];
 
@@ -135,7 +136,7 @@ impl<'a> ConstraintSolver<'a> {
     fn solve_constraint(
         &mut self,
         constraint: &Constraint,
-        substitutions: &mut HashMap<TypeVarID, Ty>,
+        substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         tracing::info!(
             "Solving constraint: {:?}",
@@ -174,7 +175,7 @@ impl<'a> ConstraintSolver<'a> {
                 Self::normalize_substitutions(substitutions);
             }
             Constraint::InstanceOf { scheme, ty, .. } => {
-                let mut mapping = HashMap::new();
+                let mut mapping = Substitutions::new();
                 for unbound_var in &scheme.unbound_vars {
                     mapping.insert(
                         unbound_var.clone(),
@@ -543,7 +544,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 // Create a substitution map to specialize the variant's types.
                 // This maps the enum's generic parameters (e.g., T) to the scrutinee's concrete types (e.g., Int).
-                let mut local_substitutions = HashMap::new();
+                let mut local_substitutions = Substitutions::new();
                 for (type_param, concrete_arg) in
                     enum_def.type_parameters.iter().zip(concrete_type_args)
                 {
@@ -575,14 +576,14 @@ impl<'a> ConstraintSolver<'a> {
         Ok(())
     }
 
-    fn apply_multiple(types: &[Ty], substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Vec<Ty> {
+    fn apply_multiple(types: &[Ty], substitutions: &Substitutions, depth: u32) -> Vec<Ty> {
         types
             .iter()
             .map(|ty| Self::apply(ty, substitutions, depth))
             .collect()
     }
 
-    pub fn apply(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>, depth: u32) -> Ty {
+    pub fn apply(ty: &Ty, substitutions: &Substitutions, depth: u32) -> Ty {
         if depth > 20 {
             tracing::error!("Hit 100 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
@@ -667,15 +668,15 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    fn normalize_substitutions(substitutions: &mut HashMap<TypeVarID, Ty>) {
+    fn normalize_substitutions(substitutions: &mut Substitutions) {
         let mut changed = true;
         while changed {
             changed = false;
             let mut updates = Vec::new();
 
             for (var_id, ty) in substitutions.iter() {
-                let normalized = Self::apply(ty, substitutions, 0);
-                if &normalized != ty {
+                let normalized = Self::apply(&ty, substitutions, 0);
+                if normalized != *ty {
                     updates.push((var_id.clone(), normalized));
                     changed = true;
                 }
@@ -691,7 +692,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         lhs: &Ty,
         rhs: &Ty,
-        substitutions: &mut HashMap<TypeVarID, Ty>,
+        substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         if lhs == rhs {
             return Ok(());
@@ -840,7 +841,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Returns true if `v` occurs inside `ty`
-    fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> bool {
+    fn occurs_check(v: &TypeVarID, ty: &Ty, substitutions: &Substitutions) -> bool {
         let ty = Self::apply(ty, substitutions, 0);
         match &ty {
             Ty::TypeVar(tv) => tv == v,
@@ -874,7 +875,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
-    pub fn substitute_ty_with_map(ty: &Ty, substitutions: &HashMap<TypeVarID, Ty>) -> Ty {
+    pub fn substitute_ty_with_map(ty: &Ty, substitutions: &Substitutions) -> Ty {
         match ty {
             Ty::TypeVar(type_var_id) => {
                 if let Some(substituted_ty) = substitutions.get(type_var_id) {

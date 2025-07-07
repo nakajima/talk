@@ -70,7 +70,7 @@ impl<'a> SatisfiesChecker<'a> {
                         // type arguments provided in `self.ty` so we can
                         // substitute them into the conformance's associated
                         // types.
-                        let subst: HashMap<_, _> = type_def
+                        let subst = type_def
                             .type_parameters()
                             .iter()
                             .map(|p| p.type_var.clone())

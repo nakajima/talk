@@ -12,6 +12,7 @@ pub mod environment;
 pub mod name_resolver;
 pub mod satisfies_checker;
 pub mod scope_tree;
+pub mod substitutions;
 pub mod synthesis;
 pub mod ty;
 pub mod type_checker;

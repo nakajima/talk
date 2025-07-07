@@ -5,9 +5,10 @@ use std::{
 
 use crate::{
     SymbolID, SymbolTable,
-    constraint::{Constraint, Substitutions},
+    constraint::Constraint,
     constraint_solver::ConstraintSolver,
     parser::ExprID,
+    substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
     type_defs::{TypeDef, enum_def::EnumDef, protocol_def::ProtocolDef, struct_def::StructDef},
@@ -132,7 +133,7 @@ impl Environment {
     pub fn flush_constraints(
         &mut self,
         symbol_table: &mut SymbolTable,
-    ) -> Result<HashMap<TypeVarID, Ty>, TypeError> {
+    ) -> Result<Substitutions, TypeError> {
         let mut solver = ConstraintSolver::new(self, symbol_table);
         let solution = solver.solve();
 
@@ -260,7 +261,7 @@ impl Environment {
 
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
-        let mut var_map: HashMap<TypeVarID, Ty> = HashMap::new();
+        let mut var_map = Substitutions::new();
         let mut constraints_to_copy = vec![];
         for old in &scheme.unbound_vars {
             constraints_to_copy.extend(
@@ -475,7 +476,7 @@ impl Environment {
     }
 }
 
-fn walk(ty: &Ty, map: &HashMap<TypeVarID, Ty>) -> Ty {
+fn walk(ty: &Ty, map: &Substitutions) -> Ty {
     match ty {
         Ty::TypeVar(tv) => {
             if let Some(new_tv) = map.get(tv).cloned() {

@@ -4,11 +4,12 @@ use tracing::info_span;
 
 use crate::{
     NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
-    constraint::{Constraint, Substitutions},
+    constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
     expr::Expr,
     name::Name,
     parser::ExprID,
+    substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeChecker, TypeError},
     type_defs::{
@@ -584,7 +585,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
-        let mut placeholder_substitutions = HashMap::new();
+        let mut placeholder_substitutions = Substitutions::new();
         let mut results = vec![];
 
         for (expr_id, symbol_id, placeholder) in func_ids {
@@ -657,7 +658,7 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
         tracing::trace!("infer lets");
 
-        let mut placeholder_substitutions = HashMap::new();
+        let mut placeholder_substitutions = Substitutions::new();
         let mut results = vec![];
 
         for (id, symbol, type_var) in let_ids {
