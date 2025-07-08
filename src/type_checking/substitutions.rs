@@ -93,7 +93,7 @@ impl Substitutions {
                 // {
                 //     Ty::TypeVar(TypeVarID::new(i, TypeVarKind::Instantiated(type_var.id)))
                 } else {
-                    ty.clone()
+                    Ty::TypeVar(type_var)
                 }
             }
             Ty::Enum(name, generics) => {
