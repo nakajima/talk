@@ -555,7 +555,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 let specialized_ty =
-                    Self::substitute_ty_with_map(&member_ty, &member_substitutions);
+                    member_substitutions.apply(&member_ty, 0, &mut self.env.context);
                 substitutions.unify(&result_ty, &specialized_ty, &mut self.env.context)?;
             }
             Constraint::InitializerCall {

@@ -139,11 +139,24 @@ impl TypeVarContext {
     }
 
     pub fn unify(&mut self, a: TypeVarID, b: TypeVarID) {
-        if a.is_canonical() || b.is_canonical() {
+        if a == b {
             return;
         }
 
+        let canonical_kind = if a.is_canonical() {
+            Some(a.kind.clone())
+        } else if b.is_canonical() {
+            Some(b.kind.clone())
+        } else {
+            None
+        };
+
         self.table.union(VarKey(a.id), VarKey(b.id));
+
+        if let Some(kind) = canonical_kind {
+            let root = self.table.find(VarKey(a.id));
+            self.kinds[root.0 as usize] = kind;
+        }
     }
 
     pub fn kind(&self, var: TypeVarID) -> TypeVarKind {

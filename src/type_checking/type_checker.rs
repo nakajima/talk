@@ -790,7 +790,7 @@ impl<'a> TypeChecker<'a> {
 
                 if !struct_def.type_parameters.is_empty() {
                     for (i, type_arg) in struct_def.type_parameters.iter().enumerate() {
-                        type_args.push(if inferred_type_args.len().saturating_sub(1) > i {
+                        type_args.push(if i < inferred_type_args.len() {
                             inferred_type_args[i].clone()
                         } else {
                             env.placeholder(
