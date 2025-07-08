@@ -1238,8 +1238,14 @@ impl<'a> TypeChecker<'a> {
             .map(|id| self.infer_node(id, env, &Some(pattern_ty.clone()), source_file))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // TODO: Make sure the return type is the same for all arms
-        let ret_ty = arms_ty.last().cloned().unwrap_or(Ty::Void);
+        let ret_ty = arms_ty.first().cloned().unwrap_or(Ty::Void);
+
+        // Make sure the return type is the same for all arms
+        if arms_ty.len() > 1 {
+            for (i, arm_ty) in arms_ty[1..].iter().enumerate() {
+                env.constrain(Constraint::Equality(arms[i + 1], ret_ty.clone(), arm_ty.clone()));
+            }
+        }
 
         Ok(ret_ty)
     }
