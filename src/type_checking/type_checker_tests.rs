@@ -1099,15 +1099,6 @@ mod tests {
             panic!("didn't get enum_ty");
         };
 
-        // assert!(
-        //     matches!(
-        //         type_params[0],
-        //         Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(Name::Resolved(_, _)),),),
-        //     ),
-        //     "{:?}",
-        //     type_params[0]
-        // );
-
         assert_eq!(*symbol_id, SymbolID::resolved(1));
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
