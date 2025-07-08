@@ -420,8 +420,7 @@ impl Environment {
             }
 
             return Err(TypeError::Unresolved(format!(
-                "Did not find symbol {:?} in scope",
-                symbol_id
+                "Did not find symbol {symbol_id:?} in scope",
             )));
         };
 
