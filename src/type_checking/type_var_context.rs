@@ -134,7 +134,21 @@ impl TypeVarContext {
             return;
         }
 
-        self.table.union(VarKey(a.id), VarKey(b.id));
+        let ra = self.table.find(VarKey(a.id));
+        let rb = self.table.find(VarKey(b.id));
+
+        let kind_a = self.kinds[ra.0 as usize].clone();
+        let kind_b = self.kinds[rb.0 as usize].clone();
+
+        self.table.union(ra, rb);
+
+        let root = self.table.find(ra);
+        let new_kind = match (&kind_a, &kind_b) {
+            (TypeVarKind::Placeholder(_), _) => kind_a,
+            (_, TypeVarKind::Placeholder(_)) => kind_b,
+            _ => kind_a,
+        };
+        self.kinds[root.0 as usize] = new_kind;
     }
 
     pub fn kind(&self, var: TypeVarID) -> TypeVarKind {
