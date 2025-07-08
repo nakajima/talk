@@ -670,7 +670,7 @@ mod tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![IRType::TypeVar("T7".into())], IRType::Int.into()),
+                            IRType::Func(vec![IRType::TypeVar("T12".into())], IRType::Int.into()),
                             RefKind::Func("@_3_get".into())
                         ),
                         Instr::Alloc {
@@ -743,7 +743,7 @@ mod tests {
                             callee: Callee::Name("@_4_Person_getAge".into()),
                             args: RegisterList(vec![TypedRegister::new(
                                 IRType::Pointer {
-                                    hint: Some("T7".into())
+                                    hint: Some("T12".into())
                                 },
                                 Register(0)
                             )])
@@ -774,7 +774,7 @@ mod tests {
         .unwrap();
 
         let mono = Monomorphizer::new(&env).run(lowered);
-        let t3 = IRType::TypeVar("T3".to_string());
+        let t3 = IRType::TypeVar("T9".to_string());
 
         assert_lowered_function!(
             mono,

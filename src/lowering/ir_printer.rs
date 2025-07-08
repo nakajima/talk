@@ -187,20 +187,19 @@ mod tests {
     fn prints_func() {
         let program = lower(
             "
-        func add(x: Int) { x + 1 }
+        func add(x: Int) -> Int { x + 1 }
         ",
         )
         .unwrap();
 
         let func = print(&program);
-        println!("{func}");
         assert_eq!(
             func.trim(),
             format!(
                 r#"func @_{}_add(int %0) int
   entry:
     %1 = int 1;
-    %2 = add int %1, %0;
+    %2 = add int %0, %1;
     ret int %2;
 
 func @main() void
