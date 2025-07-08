@@ -103,7 +103,6 @@ pub mod trace {
     use tracing::{Metadata, Subscriber};
     use tracing_subscriber::{
         EnvFilter,
-        fmt::format::FmtSpan,
         layer::Filter,
         registry::{LookupSpan, SpanRef},
     };
@@ -179,18 +178,26 @@ pub mod trace {
 
     pub fn init() {
         use tracing_subscriber::prelude::*;
-        use tracing_subscriber::{fmt, registry};
+        use tracing_subscriber::registry;
 
-        // Build the fmt layer with filtering logic
-        let fmt_layer = fmt::layer()
-            .with_test_writer()
-            .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
-            .with_ansi(true)
-            .without_time()
-            .with_target(false)
-            .with_file(false)
-            .with_filter(EnvFilter::from_default_env())
-            .with_filter(SuppressPrelude);
-        registry().with(MarkPreludeSpan).with(fmt_layer).init();
+        // // Build the fmt layer with filtering logic
+        // let fmt_layer = fmt::layer()
+        //     .with_test_writer()
+        //     // .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
+        //     .with_ansi(true)
+        //     .without_time()
+        //     .with_target(false)
+        //     .with_file(false)
+        //     .with_filter(EnvFilter::from_default_env())
+        //     .with_filter(SuppressPrelude);
+
+        registry()
+            .with(MarkPreludeSpan)
+            .with(
+                tracing_tree::HierarchicalLayer::new(2)
+                    .with_filter(EnvFilter::from_default_env())
+                    .with_filter(SuppressPrelude),
+            )
+            .init();
     }
 }

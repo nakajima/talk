@@ -216,17 +216,7 @@ impl CompilationUnit<Resolved> {
                     .infer_without_prelude(&mut self.env, file)
             };
             let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
-            let mut solution = solver.solve();
-
-            // Give it one more time, for good luck
-            if !solution.unsolved_constraints.is_empty() {
-                for constraint in solution.unsolved_constraints.iter() {
-                    self.env.constrain(constraint.clone());
-                }
-
-                let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
-                solution = solver.solve();
-            }
+            let solution = solver.solve();
 
             for (expr_id, err) in solution.errors {
                 if let Ok(session) = &mut self.session.lock() {

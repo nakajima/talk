@@ -1,5 +1,7 @@
 use std::{collections::HashMap, hash::Hash};
 
+use tracing::Level;
+
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
     compiling::compilation_session::SharedCompilationSession,
@@ -200,6 +202,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
+    #[tracing::instrument(level = Level::TRACE, skip(self, env, source_file), fields(result))]
     pub fn infer_node(
         &mut self,
         id: &ExprID,
@@ -1243,7 +1246,11 @@ impl<'a> TypeChecker<'a> {
         // Make sure the return type is the same for all arms
         if arms_ty.len() > 1 {
             for (i, arm_ty) in arms_ty[1..].iter().enumerate() {
-                env.constrain(Constraint::Equality(arms[i + 1], ret_ty.clone(), arm_ty.clone()));
+                env.constrain(Constraint::Equality(
+                    arms[i + 1],
+                    ret_ty.clone(),
+                    arm_ty.clone(),
+                ));
             }
         }
 

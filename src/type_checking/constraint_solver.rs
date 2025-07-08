@@ -144,10 +144,6 @@ impl<'a> ConstraintSolver<'a> {
         constraint: &Constraint,
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
-        tracing::debug!(
-            "Solving constraint: {:?}",
-            constraint.replacing(substitutions, &mut self.env.context)
-        );
         match &constraint.replacing(substitutions, &mut self.env.context) {
             Constraint::Retry(c, _) => {
                 self.solve_constraint(c, substitutions)?;
@@ -155,48 +151,97 @@ impl<'a> ConstraintSolver<'a> {
             Constraint::ConformsTo {
                 ty, conformance, ..
             } => {
-                if let Ty::TypeVar(_type_var) = ty {
-                    // This is all commented out because it broke a bunch of stuff when we introduced ena..
-                    //
+                if let Ty::TypeVar(type_var) = ty {
                     // There has to be a better way to figure out the conforming type...
-                    //
-                    // let types: Vec<_> = self
-                    //     .env
-                    //     .types
-                    //     .values()
-                    //     .filter(|t| {
-                    //         t.conformances()
-                    //             .iter()
-                    //             .any(|c| c.protocol_id == conformance.protocol_id)
-                    //     })
-                    //     .cloned()
-                    //     .collect();
-                    // for type_def in types {
-                    //     let type_def_ty = type_def.ty();
+                    let types: Vec<_> = self
+                        .env
+                        .types
+                        .values()
+                        .filter_map(|t| {
+                            let c = t
+                                .conformances()
+                                .iter()
+                                .find(|c| c.protocol_id == conformance.protocol_id)?;
 
-                    //     let conformance_checker =
-                    //         ConformanceChecker::new(&type_def_ty, conformance, self.env);
-                    //     match conformance_checker.check() {
-                    //         Ok(_unifications) => {
-                    //             substitutions.insert(type_var.clone(), type_def_ty);
+                            if conformance
+                                .associated_types
+                                .iter()
+                                .zip(c.associated_types.iter())
+                                .all(|(provided, required)| {
+                                    substitutions.unifiable(provided, required)
+                                })
+                            {
+                                Some((t.clone(), c.clone()))
+                            } else {
+                                None
+                            }
+                            // .map(|c| )
+                        })
+                        .collect();
 
-                    //             for (lhs, rhs) in unifications {
-                    //                 substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
-                    //             }
+                    tracing::warn!("Possible conforming types: {types:?}");
 
-                    //             return Ok(());
-                    //         }
-                    //         Err(e) => {
-                    //             tracing::error!("e is {e:?}");
-                    //             continue;
-                    //         }
-                    //     }
-                    // }
+                    let mut conforming_candidates = vec![];
+                    for (type_def, type_def_conformance) in types {
+                        let type_def_ty = type_def.ty();
 
-                    // Not enough info yet
-                    return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
-                        ty.to_string(),
-                    )));
+                        let conformance_checker =
+                            ConformanceChecker::new(&type_def_ty, &type_def_conformance, self.env);
+                        match conformance_checker.check() {
+                            Ok(unifications) => {
+                                conforming_candidates.push((
+                                    type_def_ty,
+                                    unifications,
+                                    type_def_conformance,
+                                ));
+                            }
+                            Err(e) => {
+                                tracing::error!("e is {e:?}");
+                                continue;
+                            }
+                        }
+                    }
+
+                    match conforming_candidates.len() {
+                        0 => {
+                            // Not enough info yet
+                            return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+                                ty.to_string(),
+                            )));
+                        }
+                        1 => {
+                            let (candidate_ty, candidate_unifications, type_def_conformances) =
+                                &conforming_candidates[0];
+
+                            // Probably a good bet?
+                            substitutions.unify(
+                                &Ty::TypeVar(type_var.clone()),
+                                candidate_ty,
+                                &mut self.env.context,
+                            )?;
+
+                            for (provided, required) in conformance
+                                .associated_types
+                                .iter()
+                                .zip(type_def_conformances.associated_types.iter())
+                            {
+                                substitutions.unify(provided, required, &mut self.env.context)?;
+                            }
+
+                            for (lhs, rhs) in candidate_unifications {
+                                substitutions.unify(lhs, rhs, &mut self.env.context)?;
+                            }
+
+                            return Ok(());
+                        }
+                        _ => {
+                            // Could have conflicting options, shouldn't go for it
+                            // Not enough info yet
+                            return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+                                ty.to_string(),
+                            )));
+                        }
+                    }
                 }
 
                 let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
@@ -605,6 +650,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
+    #[tracing::instrument(fields(result))]
     pub fn substitute_ty_with_map(ty: &Ty, substitutions: &Substitutions) -> Ty {
         match ty {
             Ty::TypeVar(type_var_id) => {

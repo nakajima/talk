@@ -1,3 +1,5 @@
+use tracing::Level;
+
 use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
@@ -41,6 +43,7 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = Level::TRACE, skip(self), fields(result))]
     pub fn check(mut self) -> Result<Vec<(Ty, Ty)>, TypeError> {
         let Some(protocol) = self
             .env
@@ -48,7 +51,7 @@ impl<'a> ConformanceChecker<'a> {
             .cloned()
         else {
             return Err(TypeError::Unknown(
-                "Cannot find enum for conformance check".into(),
+                "Cannot find protocol for conformance check".into(),
             ));
         };
 
@@ -60,6 +63,17 @@ impl<'a> ConformanceChecker<'a> {
             .zip(self.conformance.associated_types.iter())
         {
             substitutions.insert(canonical, conforming.clone());
+        }
+
+        self.check_conformance_of_ty(&protocol);
+
+        for (provided, required) in self
+            .conformance
+            .associated_types
+            .iter()
+            .zip(protocol.associated_types.iter())
+        {
+            tracing::debug!("Checking provided: {provided:?} required: {required:?}");
         }
 
         let mut unifications = vec![];
@@ -128,6 +142,7 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = Level::TRACE, skip(self, protocol), fields(result))]
     fn find_property(
         &self,
         protocol: &ProtocolDef,
@@ -144,6 +159,7 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = Level::TRACE, skip(self, protocol), fields(result))]
     fn find_method(
         &mut self,
         protocol: &ProtocolDef,
@@ -185,5 +201,75 @@ impl<'a> ConformanceChecker<'a> {
             Ty::Pointer => self.env.lookup_type(&SymbolID::POINTER),
             _ => None,
         }
+    }
+
+    fn check_conformance_of_ty(&mut self, protocol_def: &ProtocolDef) {
+        let Some(type_def) = self.ty.type_def(self.env) else {
+            return;
+        };
+
+        if !type_def
+            .conformances()
+            .iter()
+            .any(|c| c.protocol_id == protocol_def.symbol_id)
+        {
+            self.errors.push(ConformanceError::TypeDoesNotConform(
+                type_def.name().to_string(),
+                protocol_def.name_str.to_string(),
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        check, conformance_checker::ConformanceChecker, ty::Ty,
+        type_defs::protocol_def::Conformance,
+    };
+
+    #[test]
+    fn checks_basic() {
+        let mut setup = check(
+            "
+        protocol Countable {}
+        extend Int: Countable {}
+        ",
+        )
+        .unwrap();
+
+        let protocol = setup
+            .env
+            .types
+            .values()
+            .find(|t| t.name() == "Countable")
+            .unwrap();
+
+        let conformance = Conformance::new(protocol.symbol_id(), vec![]);
+        let checker = ConformanceChecker::new(&Ty::Int, &conformance, &mut setup.env);
+        let result = checker.check();
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn errors_with_no_conformance() {
+        let mut setup = check(
+            "
+        protocol Countable {}
+        ",
+        )
+        .unwrap();
+
+        let protocol = setup
+            .env
+            .types
+            .values()
+            .find(|t| t.name() == "Countable")
+            .unwrap();
+
+        let conformance = Conformance::new(protocol.symbol_id(), vec![]);
+        let checker = ConformanceChecker::new(&Ty::Int, &conformance, &mut setup.env);
+        let result = checker.check();
+        assert!(result.is_err(), "{result:?}");
     }
 }

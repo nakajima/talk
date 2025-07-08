@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use tracing::Level;
+
 use crate::{
     constraint_solver::ConstraintSolver,
     ty::Ty,
@@ -151,6 +153,14 @@ impl Substitutions {
         context.find(type_var)
     }
 
+    pub fn unifiable(&self, lhs: &Ty, rhs: &Ty) -> bool {
+        match (lhs, rhs) {
+            (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => true,
+            _ => lhs == rhs,
+        }
+    }
+
+    #[tracing::instrument(level = Level::TRACE, skip(self, context), fields(result))]
     pub fn unify(
         &mut self,
         lhs: &Ty,

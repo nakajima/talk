@@ -132,6 +132,7 @@ impl Environment {
         self.constraints.push(constraint)
     }
 
+    #[tracing::instrument(skip(self, symbol_table))]
     pub fn flush_constraints(
         &mut self,
         symbol_table: &mut SymbolTable,

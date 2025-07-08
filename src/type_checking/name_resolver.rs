@@ -101,6 +101,7 @@ impl NameResolver {
         source_file.to_resolved()
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn resolve_nodes(
         &mut self,
         node_ids: &[ExprID],
@@ -632,6 +633,7 @@ impl NameResolver {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn resolve_func(
         &mut self,
         name: &Option<Name>,
@@ -676,6 +678,7 @@ impl NameResolver {
         self.func_stack.pop();
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_funcs(
         &mut self,
         node_ids: &[ExprID],
@@ -754,6 +757,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoise_structs(
         &mut self,
         node_ids: &[ExprID],
@@ -860,6 +864,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_enums(
         &mut self,
         node_ids: &[ExprID],
@@ -908,6 +913,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn resolve_pattern(
         &mut self,
         pattern: &Pattern,
@@ -957,6 +963,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_protocols(
         &mut self,
         items: &[ExprID],
@@ -1003,6 +1010,7 @@ impl NameResolver {
     }
 
     // New helper method to hoist enum variants
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_enum_members(
         &mut self,
         body_expr_id: &ExprID,
@@ -1048,6 +1056,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn declare(
         &mut self,
         name: String,
