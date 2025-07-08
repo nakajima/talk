@@ -774,7 +774,7 @@ mod tests {
         .unwrap();
 
         let mono = Monomorphizer::new(&env).run(lowered);
-        let t2 = IRType::TypeVar("T2".to_string());
+        let t3 = IRType::TypeVar("T3".to_string());
 
         assert_lowered_function!(
             mono,
@@ -788,7 +788,7 @@ mod tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![t2.clone(), t2.clone()], t2.clone().into()),
+                            IRType::Func(vec![t3.clone(), t3.clone()], t3.clone().into()),
                             RefKind::Func("@_1_rec".into())
                         ),
                         Instr::ConstantInt(Register(1), 0),
