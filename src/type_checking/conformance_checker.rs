@@ -67,15 +67,6 @@ impl<'a> ConformanceChecker<'a> {
 
         self.check_conformance_of_ty(&protocol);
 
-        for (provided, required) in self
-            .conformance
-            .associated_types
-            .iter()
-            .zip(protocol.associated_types.iter())
-        {
-            tracing::debug!("Checking provided: {provided:?} required: {required:?}");
-        }
-
         let mut unifications = vec![];
 
         for method in protocol.methods.iter() {

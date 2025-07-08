@@ -153,8 +153,11 @@ impl Substitutions {
         context.find(type_var)
     }
 
-    pub fn unifiable(&self, lhs: &Ty, rhs: &Ty) -> bool {
-        match (lhs, rhs) {
+    pub fn unifiable(&mut self, lhs: &Ty, rhs: &Ty, context: &mut TypeVarContext) -> bool {
+        let lhs = self.apply(lhs, 0, context);
+        let rhs = self.apply(rhs, 0, context);
+
+        match (&lhs, &rhs) {
             (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => true,
             _ => lhs == rhs,
         }

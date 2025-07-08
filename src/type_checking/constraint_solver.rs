@@ -168,7 +168,11 @@ impl<'a> ConstraintSolver<'a> {
                                 .iter()
                                 .zip(c.associated_types.iter())
                                 .all(|(provided, required)| {
-                                    substitutions.unifiable(provided, required)
+                                    substitutions.unifiable(
+                                        provided,
+                                        required,
+                                        &mut self.env.context,
+                                    )
                                 })
                             {
                                 Some((t.clone(), c.clone()))

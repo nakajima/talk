@@ -878,7 +878,6 @@ impl<'a> TypeChecker<'a> {
                     ty: ty.clone(),
                     conformance: Conformance::new(protocol_id, associated_types),
                 };
-                tracing::error!("Constraining type repr: {ty}, {constraint:?}");
                 env.constrain(constraint)
             }
 
