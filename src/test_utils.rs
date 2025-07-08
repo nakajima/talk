@@ -100,10 +100,10 @@ macro_rules! assert_lowered_function {
 }
 
 pub mod trace {
-    use tracing::{Metadata, Subscriber};
+    use tracing::{Event, Metadata, Subscriber};
     use tracing_subscriber::{
-        EnvFilter,
-        layer::Filter,
+        EnvFilter, filter,
+        layer::{Context, Filter},
         registry::{LookupSpan, SpanRef},
     };
 
@@ -171,33 +171,30 @@ pub mod trace {
                     current = span.parent();
                 }
             }
-
             true
         }
     }
 
     pub fn init() {
-        use tracing_subscriber::prelude::*;
-        use tracing_subscriber::registry;
+        // use tracing_subscriber::prelude::*;
+        // use tracing_subscriber::registry;
 
-        // // Build the fmt layer with filtering logic
-        // let fmt_layer = fmt::layer()
-        //     .with_test_writer()
-        //     // .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
-        //     .with_ansi(true)
-        //     .without_time()
-        //     .with_target(false)
-        //     .with_file(false)
+        // registry()
+        //     .with(MarkPreludeSpan)
+        //     .with(filter::filter_fn(SuppressPrelude)) // now a
+        //     .with(tracing_tree::HierarchicalLayer::new(2))
         //     .with_filter(EnvFilter::from_default_env())
-        //     .with_filter(SuppressPrelude);
+        //     .init();
+        use tracing_subscriber::{EnvFilter, prelude::*, registry};
+
+        // one env-driven filter for log levels, plus your custom span-aware filter
+        let tree = tracing_tree::HierarchicalLayer::new(2)
+            .with_filter(EnvFilter::from_default_env()) // ordinary RUST_LOG filtering
+            .with_filter(SuppressPrelude); // kills everything inside a prelude span
 
         registry()
-            .with(MarkPreludeSpan)
-            .with(
-                tracing_tree::HierarchicalLayer::new(2)
-                    .with_filter(EnvFilter::from_default_env())
-                    .with_filter(SuppressPrelude),
-            )
+            .with(MarkPreludeSpan) // sets the PreludeMarker
+            .with(tree)
             .init();
     }
 }

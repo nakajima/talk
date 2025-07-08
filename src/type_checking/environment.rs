@@ -125,6 +125,10 @@ impl Environment {
         self.constraints.push(constraint)
     }
 
+    pub fn clear_constraints(&mut self) {
+        self.constraints.clear()
+    }
+
     #[tracing::instrument(skip(self, symbol_table))]
     pub fn flush_constraints(
         &mut self,

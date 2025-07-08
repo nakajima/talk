@@ -65,6 +65,11 @@ impl<'a> ConformanceChecker<'a> {
             substitutions.insert(canonical, conforming.clone());
         }
 
+        tracing::info!(
+            "Conformance Provided Generics: {:?}",
+            self.provided_type_arguments()
+        );
+
         self.check_conformance_of_ty(&protocol);
 
         let mut unifications = vec![];
@@ -116,7 +121,10 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            unifications.push((property.ty.clone(), ty_property.ty.clone()));
+            unifications.push((
+                ConstraintSolver::substitute_ty_with_map(&property.ty, &substitutions),
+                ConstraintSolver::substitute_ty_with_map(&ty_property.ty, &substitutions),
+            ));
         }
 
         for _initializer in protocol.initializers.iter() {}
@@ -178,6 +186,15 @@ impl<'a> ConformanceChecker<'a> {
                 protocol: protocol.symbol_id,
                 member: method_name.to_string(),
             })
+        }
+    }
+
+    fn provided_type_arguments(&self) -> Option<&Vec<Ty>> {
+        match self.ty {
+            Ty::Struct(_, generics) | Ty::Enum(_, generics) | Ty::Protocol(_, generics) => {
+                Some(generics)
+            }
+            _ => None,
         }
     }
 

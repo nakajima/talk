@@ -24,7 +24,7 @@ pub fn compile_prelude() -> &'static Prelude {
 }
 
 pub fn _compile_prelude() -> Prelude {
-    let _span = tracing::info_span!("compile_prelude", prelude = true).entered();
+    let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
 
     let mut driver = Driver::new(DriverConfig {
         executable: false,
@@ -52,7 +52,7 @@ pub fn _compile_prelude() -> Prelude {
     let unit = resolved
         .typed(&mut driver.symbol_table, &driver.config)
         .lower(&mut driver.symbol_table, &driver.config, IRModule::new());
-    let environment = unit.env.clone();
+    let mut environment = unit.env.clone();
     let module = unit.module();
     let symbols = driver.symbol_table;
 
@@ -99,6 +99,8 @@ pub fn _compile_prelude() -> Prelude {
 
         exit(0)
     }
+
+    environment.clear_constraints();
 
     Prelude {
         symbols,
