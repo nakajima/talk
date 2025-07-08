@@ -1,6 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::{SymbolID, check, expr::Expr, ty::Ty, typed_expr::TypedExpr};
+    use crate::{
+        SymbolID, check,
+        diagnostic::{Diagnostic, DiagnosticKind},
+        expr::Expr,
+        ty::Ty,
+        type_checker::TypeError,
+        type_defs::TypeDef,
+        type_var_id::{TypeVarID, TypeVarKind},
+        typed_expr::TypedExpr,
+    };
 
     #[test]
     fn checks_initializer() {
@@ -175,19 +184,6 @@ mod tests {
 
         assert!(!checked.diagnostics().is_empty());
     }
-}
-
-#[cfg(test)]
-mod type_tests {
-    use crate::{
-        SymbolID, check,
-        diagnostic::{Diagnostic, DiagnosticKind},
-        expr::Expr,
-        ty::Ty,
-        type_checker::TypeError,
-        type_defs::TypeDef,
-        type_var_id::{TypeVarID, TypeVarKind},
-    };
 
     #[test]
     fn checks_an_int() {
