@@ -192,10 +192,23 @@ impl Substitutions {
             (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
                 let v = self.normalize(&v, context);
 
-                if let TypeVarKind::CanonicalTypeParameter(_) = &v.kind {
-                    tracing::warn!(
-                        "Attempting to unify canonical type parameter {v:?} with {ty:?}. Consider instantiating."
-                    );
+                // Canonical type parameters (quantified variables) must not be unified with
+                // concrete types. They should be instantiated instead at the use-site.
+                if matches!(v.kind, TypeVarKind::CanonicalTypeParameter(_)) {
+                    // If both sides are *the same* canonical parameter, consider it trivially unified.
+                    if let Ty::TypeVar(other_v) = &ty {
+                        let other_v = self.normalize(other_v, context);
+                        if v == other_v {
+                            return Ok(());
+                        }
+                    }
+
+                    // Otherwise, we cannot unify a canonical parameter with a concrete type – that
+                    // would violate its universally quantified nature.
+                    return Err(TypeError::Mismatch(
+                        self.apply(&lhs, 0, context).to_string(),
+                        self.apply(&rhs, 0, context).to_string(),
+                    ));
                 }
 
                 if self.occurs_check(&v, &ty, context) {

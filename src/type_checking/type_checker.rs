@@ -1133,8 +1133,25 @@ impl<'a> TypeChecker<'a> {
             }
             Name::Resolved(symbol_id, _) => {
                 let scheme = env.lookup_symbol(symbol_id)?.clone();
-                let ty = env.instantiate(&scheme);
-                Ok(ty)
+
+                // If the symbol refers to a generic type parameter that is already represented
+                // by a canonical / placeholder type-variable, we should NOT create a fresh
+                // instantiation every time it is referenced inside the same scope. Doing so
+                // would break the expected equality between occurrences (e.g. the return type
+                // of `fizz<T>` must be the same `T` that appears in its parameter list).
+                // Instead, we use the scheme's own type directly.
+
+                match scheme.ty() {
+                    Ty::TypeVar(ref tv)
+                        if matches!(
+                            tv.kind,
+                            TypeVarKind::CanonicalTypeParameter(_) | TypeVarKind::Placeholder(_)
+                        ) =>
+                    {
+                        Ok(scheme.ty())
+                    }
+                    _ => Ok(env.instantiate(&scheme)),
+                }
             }
             Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
             Name::SelfType => env

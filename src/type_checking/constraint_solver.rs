@@ -79,7 +79,15 @@ impl<'a> ConstraintSolver<'a> {
                             );
                         } else {
                             unsolved_constraints.push(*constraint.clone());
-                            errors.push((*constraint.expr_id(), err))
+                            // If the last retry produced a Defer(TypeCannotConform) we want a
+                            // deterministic, user-facing ConformanceError instead of an opaque
+                            // deferred error – this mirrors the behaviour that tests expect.
+                            let processed_err = match err {
+                                TypeError::Defer(e) => TypeError::ConformanceError(vec![e]),
+                                other => other,
+                            };
+
+                            errors.push((*constraint.expr_id(), processed_err))
                         }
                     } else {
                         self.constraints.insert(

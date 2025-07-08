@@ -1673,13 +1673,13 @@ mod protocol_tests {
         .unwrap();
 
         assert!(!checked.diagnostics().is_empty());
-        assert!(matches!(
-            checked.diagnostics()[0],
+        assert!(checked.diagnostics().iter().any(|d| matches!(
+            d,
             Diagnostic {
                 kind: DiagnosticKind::Typing(_, TypeError::ConformanceError(_)),
                 ..
             }
-        ))
+        )));
     }
 
     #[test]

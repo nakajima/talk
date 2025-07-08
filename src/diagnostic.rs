@@ -79,7 +79,9 @@ impl Diagnostic {
 
     pub fn is_unhandled(&self) -> bool {
         match &self.kind {
-            DiagnosticKind::Typing(_, err) => *err != TypeError::Handled,
+            DiagnosticKind::Typing(_, err) => {
+                *err != TypeError::Handled && !matches!(err, TypeError::Defer(_))
+            }
             _ => true,
         }
     }
