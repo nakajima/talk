@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use tracing::{Level, trace_span};
+use tracing::trace_span;
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
@@ -10,6 +10,7 @@ use crate::{
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     expr::{Expr, IncompleteExpr, Pattern},
+    lsp::formatter::Formatter,
     name::Name,
     name_resolver::NameResolverError,
     parser::ExprID,
@@ -219,7 +220,6 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
-    #[tracing::instrument(level = Level::TRACE, skip(self, env, source_file), fields(result))]
     pub fn infer_node(
         &mut self,
         id: &ExprID,
@@ -238,7 +238,15 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unknown(format!("No expr found with id {id}")));
         };
 
-        tracing::trace!("⋈ Infer [{id}]: {expr:?}");
+        #[cfg(debug_assertions)]
+        {
+            let _s = trace_span!(
+                "infer_node",
+                expr = Formatter::format_single_expr(&source_file.as_parsed(), id)
+            )
+            .entered();
+        }
+
         let mut ty = match &expr {
             Expr::Incomplete(expr_id) => {
                 self.handle_incomplete(expr_id, expected, env, source_file)
@@ -540,7 +548,13 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Parameters are monomorphic inside the function body
-        let scheme = Scheme::new(param_ty.clone(), vec![], vec![]);
+        let constraints = env
+            .constraints()
+            .iter()
+            .filter(|c| c.contains_ty(&param_ty))
+            .cloned()
+            .collect();
+        let scheme = Scheme::new(param_ty.clone(), vec![], constraints);
         env.declare(name.symbol_id()?, scheme)?;
 
         Ok(param_ty)
@@ -789,16 +803,22 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                tracing::trace!(
-                    "Maybe we need to figure out constraints here? {:?} {type_args:?} {:#?}",
-                    struct_def.canonical_type_parameters(),
-                    env.constraints()
-                );
+                let constraints = env
+                    .constraints()
+                    .iter()
+                    .filter(|c| {
+                        struct_def
+                            .canonical_type_parameters()
+                            .iter()
+                            .any(|p| c.contains_ty(p))
+                    })
+                    .cloned()
+                    .collect::<Vec<Constraint>>();
 
                 ret_var = env.instantiate(&Scheme::new(
                     Ty::Struct(*symbol_id, type_args),
                     struct_def.canonical_type_vars(),
-                    vec![],
+                    constraints,
                 ));
 
                 env.constrain(Constraint::InitializerCall {
@@ -1002,15 +1022,15 @@ impl<'a> TypeChecker<'a> {
         let mut inferred_generics = vec![];
         for generic in generics {
             if let Some(Expr::TypeRepr {
-                name: Name::Resolved(symbol_id, _),
+                name: Name::Resolved(_symbol_id, _),
                 ..
             }) = source_file.get(generic).cloned()
             {
                 let _s = trace_span!("infer_func generic").entered();
                 let ty = self.infer_node(generic, env, &None, source_file)?;
                 inferred_generics.push(ty.clone());
-                let scheme = Scheme::new(ty.clone(), vec![], vec![]);
-                env.declare(symbol_id, scheme)?;
+                // let scheme = Scheme::new(ty.clone(), vec![], vec![]);
+                // env.declare(symbol_id, scheme)?;
             } else {
                 return Err(TypeError::Unresolved(
                     "could not resolve generic symbol".into(),
@@ -1057,15 +1077,16 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
+            let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
+                tracing::warn!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
+                existing_scheme.ty = inferred_ty.clone();
+                existing_scheme.clone()
+            } else {
+                Scheme::new(inferred_ty.clone(), vec![], vec![])
+            };
+
             // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
-            env.declare(
-                *symbol_id,
-                Scheme {
-                    ty: inferred_ty.clone(),
-                    unbound_vars: vec![],
-                    constraints: vec![],
-                },
-            )?;
+            env.declare(*symbol_id, new_scheme)?;
         }
 
         Ok(inferred_ty)

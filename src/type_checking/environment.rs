@@ -80,8 +80,8 @@ impl Environment {
         symbol_id: &SymbolID,
         constraints: Vec<Constraint>,
     ) -> Ty {
-        let usage_placeholder =
-            Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name.clone())));
+        let type_var = self.new_type_variable(TypeVarKind::Placeholder(name.clone()));
+        let usage_placeholder = Ty::TypeVar(type_var);
 
         self.constrain(Constraint::InstanceOf {
             scheme: Scheme::new(usage_placeholder.clone(), vec![], constraints),
@@ -238,15 +238,7 @@ impl Environment {
     #[tracing::instrument(skip(self), fields(result))]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
         let mut var_map = Substitutions::new();
-        let mut constraints_to_copy = vec![];
         for old in &scheme.unbound_vars() {
-            constraints_to_copy.extend(
-                self.constraints
-                    .iter()
-                    .filter(|c| c.contains_ty(&Ty::TypeVar(old.clone())))
-                    .cloned(),
-            );
-
             if let Some(arg_ty) = args.get(old) {
                 var_map.insert(old.clone(), arg_ty.clone());
             } else {
@@ -255,7 +247,7 @@ impl Environment {
             }
         }
 
-        for constraint in constraints_to_copy {
+        for constraint in scheme.constraints() {
             let new_constraint = constraint.replacing(&mut var_map, &mut self.context);
             self.constrain(new_constraint);
         }
@@ -408,6 +400,32 @@ impl Environment {
                 symbol_id, self.scopes
             )))
         }
+    }
+
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn lookup_symbol_mut(&mut self, symbol_id: &SymbolID) -> Result<&mut Scheme, TypeError> {
+        let Some(scheme) = self
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|frame| frame.get_mut(symbol_id))
+        else {
+            if cfg!(debug_assertions) {
+                let loc = std::panic::Location::caller();
+                tracing::warn!(
+                    "Did not find symbol {symbol_id:?}: {}:{}",
+                    loc.file(),
+                    loc.line()
+                );
+            }
+
+            return Err(TypeError::Unresolved(format!(
+                "Did not find symbol {:?} in scope",
+                symbol_id
+            )));
+        };
+
+        Ok(scheme)
     }
 
     pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {
