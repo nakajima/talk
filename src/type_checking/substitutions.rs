@@ -170,11 +170,16 @@ impl Substitutions {
         rhs: &Ty,
         context: &mut TypeVarContext,
     ) -> Result<(), TypeError> {
+        let lhs = self.apply(lhs, 0, context);
+        let rhs = self.apply(rhs, 0, context);
+
         if lhs == rhs {
             return Ok(());
         }
 
-        let res = match (self.apply(lhs, 0, context), self.apply(rhs, 0, context)) {
+        tracing::trace!("lhs = {lhs:?}, rhs = {rhs:?}");
+
+        let res = match (lhs.clone(), rhs.clone()) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
 
@@ -274,8 +279,8 @@ impl Substitutions {
                 Ok(())
             }
             _ => Err(TypeError::Mismatch(
-                self.apply(lhs, 0, context).to_string(),
-                self.apply(rhs, 0, context).to_string(),
+                self.apply(&lhs, 0, context).to_string(),
+                self.apply(&rhs, 0, context).to_string(),
             )),
         };
 
@@ -283,8 +288,8 @@ impl Substitutions {
             "∪ {:?} <> {:?} = {:?} <> {:?}",
             lhs,
             rhs,
-            self.apply(lhs, 0, context),
-            self.apply(rhs, 0, context)
+            self.apply(&lhs, 0, context),
+            self.apply(&rhs, 0, context)
         );
 
         res

@@ -8,7 +8,7 @@ use crate::{
     parser::ExprID,
     substitutions::Substitutions,
     ty::Ty,
-    type_checker::TypeError,
+    type_checker::{Scheme, TypeError},
     type_defs::TypeDef,
     type_var_id::TypeVarKind,
 };
@@ -580,6 +580,9 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 for (param, arg) in params.iter().zip(args) {
+                    let param = &substitutions.apply(param, 0, &mut self.env.context);
+                    let arg = &substitutions.apply(arg, 0, &mut self.env.context);
+
                     substitutions.unify(param, arg, &mut self.env.context)?;
                 }
 
@@ -588,10 +591,14 @@ impl<'a> ConstraintSolver<'a> {
                 let struct_with_generics =
                     Ty::Struct(*initializes_id, struct_def.canonical_type_parameters());
 
-                let specialized_struct =
-                    substitutions.apply(&struct_with_generics, 0, &mut self.env.context);
+                let specialized_struct = self.env.instantiate(&Scheme::new(
+                    struct_with_generics,
+                    struct_def.canonical_type_vars(),
+                ));
 
                 substitutions.unify(result_ty, &specialized_struct, &mut self.env.context)?;
+
+                // TODO: Make sure we're chill with our conformances
             }
             Constraint::VariantMatch {
                 scrutinee_ty,
