@@ -189,8 +189,8 @@ pub mod trace {
             .without_time()
             .with_target(false)
             // .with_file(false)
-            .with_filter(EnvFilter::from_default_env());
-        // .with_filter(SuppressPrelude);
+            .with_filter(EnvFilter::from_default_env())
+            .with_filter(SuppressPrelude);
 
         registry().with(MarkPreludeSpan).with(fmt_layer).init();
     }

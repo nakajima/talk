@@ -5,7 +5,6 @@ use crate::{
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
     expr::Expr,
-    lsp::formatter::Formatter,
     name::Name,
     parser::ExprID,
     substitutions::Substitutions,

@@ -8,7 +8,6 @@ use crate::{
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     expr::{Expr, IncompleteExpr, Pattern},
-    lsp::formatter::Formatter,
     name::Name,
     name_resolver::NameResolverError,
     parser::ExprID,

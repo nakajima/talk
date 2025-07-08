@@ -645,7 +645,7 @@ impl NameResolver {
         &mut self,
         name: &Option<Name>,
         node_id: &ExprID,
-        params: &Vec<ExprID>,
+        params: &[ExprID],
         generics: &[ExprID],
         body: Option<&ExprID>,
         ret: &Option<ExprID>,
@@ -670,7 +670,7 @@ impl NameResolver {
         self.resolve_nodes(generics, source_file, symbol_table);
         self.resolve_nodes(params, source_file, symbol_table);
 
-        let mut to_resolve = params.clone();
+        let mut to_resolve = params.to_owned();
 
         if let Some(body) = body {
             to_resolve.push(*body);

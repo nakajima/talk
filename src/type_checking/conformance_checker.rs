@@ -1,5 +1,6 @@
 use crate::{
     SymbolID,
+    constraint_solver::ConstraintSolver,
     environment::{Environment, free_type_vars},
     substitutions::Substitutions,
     ty::Ty,
@@ -81,8 +82,8 @@ impl<'a> ConformanceChecker<'a> {
             }
 
             unifications.push((
-                substitutions.apply(&method.ty, 0, &mut self.env.context),
-                substitutions.apply(&ty_method, 0, &mut self.env.context),
+                ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
+                ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
             ));
         }
 
@@ -96,8 +97,8 @@ impl<'a> ConformanceChecker<'a> {
             };
 
             unifications.push((
-                substitutions.apply(&method.ty, 0, &mut self.env.context),
-                substitutions.apply(&ty_method, 0, &mut self.env.context),
+                ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
+                ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
             ));
         }
 

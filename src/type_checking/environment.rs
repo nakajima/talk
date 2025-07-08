@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    ops::IndexMut,
-};
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{
     SymbolID, SymbolTable,

@@ -122,10 +122,18 @@ impl TypeVarContext {
     }
 
     pub fn unify_value(&mut self, a: TypeVarID, b: Ty) {
+        if a.is_canonical() {
+            return;
+        }
+
         self.table.union_value(VarKey(a.id), b);
     }
 
     pub fn unify(&mut self, a: TypeVarID, b: TypeVarID) {
+        if a.is_canonical() || b.is_canonical() {
+            return;
+        }
+
         self.table.union(VarKey(a.id), VarKey(b.id));
     }
 
