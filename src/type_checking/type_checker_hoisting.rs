@@ -86,7 +86,7 @@ impl<'a> TypeChecker<'a> {
         // Generalize what we can
         for (symbol_id, _) in to_generalize {
             let scheme = env.lookup_symbol(&symbol_id)?.clone();
-            let scheme = env.generalize(&scheme.ty, &symbol_id);
+            let scheme = env.generalize(&scheme.ty(), &symbol_id);
             env.declare(symbol_id, scheme)?;
         }
 
@@ -142,10 +142,11 @@ impl<'a> TypeChecker<'a> {
 
                 env.declare(
                     *symbol_id,
-                    Scheme {
-                        ty: Ty::TypeVar(type_param.clone()),
-                        unbound_vars: vec![type_param.clone()],
-                    },
+                    Scheme::new(
+                        Ty::TypeVar(type_param.clone()),
+                        vec![type_param.clone()],
+                        vec![],
+                    ),
                 )
                 .map_err(|e| (id, e))?;
 
@@ -178,7 +179,7 @@ impl<'a> TypeChecker<'a> {
             };
 
             if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_)) {
-                let scheme = Scheme::new(ty, unbound_vars);
+                let scheme = Scheme::new(ty, unbound_vars, vec![]);
                 env.declare(symbol_id, scheme).map_err(|e| (*id, e))?;
             }
 
@@ -209,10 +210,7 @@ impl<'a> TypeChecker<'a> {
                         ) else {
                             unreachable!()
                         };
-                        let scheme = Scheme {
-                            ty: placeholder.clone(),
-                            unbound_vars: vec![],
-                        };
+                        let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
                         env.declare(*prop_id, scheme).map_err(|e| (*id, e))?;
 
                         ty_placeholders.properties.push(RawProperty {
@@ -239,10 +237,7 @@ impl<'a> TypeChecker<'a> {
                         ) else {
                             unreachable!()
                         };
-                        let scheme = Scheme {
-                            ty: placeholder.clone(),
-                            unbound_vars: vec![],
-                        };
+                        let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
                         env.declare(*symbol_id, scheme).map_err(|e| (*id, e))?;
 
                         ty_placeholders.initializers.push(RawInitializer {
@@ -272,10 +267,7 @@ impl<'a> TypeChecker<'a> {
                         ) else {
                             unreachable!()
                         };
-                        let scheme = Scheme {
-                            ty: placeholder.clone(),
-                            unbound_vars: vec![],
-                        };
+                        let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
                         env.declare(*func_id, scheme).map_err(|e| (*id, e))?;
 
                         ty_placeholders.methods.push(RawMethod {
@@ -296,10 +288,7 @@ impl<'a> TypeChecker<'a> {
                         ) else {
                             unreachable!()
                         };
-                        let scheme = Scheme {
-                            ty: placeholder.clone(),
-                            unbound_vars: vec![],
-                        };
+                        let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
                         env.declare(*func_id, scheme).map_err(|e| (*id, e))?;
 
                         ty_placeholders.method_requirements.push(RawMethod {
@@ -565,13 +554,7 @@ impl<'a> TypeChecker<'a> {
             // Stash this func ID so we can fully infer it in the next loop
             func_ids.push((*id, symbol_id, type_var.clone()));
 
-            env.declare(
-                symbol_id,
-                Scheme {
-                    ty: placeholder.clone(),
-                    unbound_vars: vec![],
-                },
-            )?;
+            env.declare(symbol_id, Scheme::new(placeholder.clone(), vec![], vec![]))?;
         }
 
         Ok(func_ids)
@@ -593,13 +576,7 @@ impl<'a> TypeChecker<'a> {
                 &Some(Ty::TypeVar(placeholder.clone())),
                 source_file,
             )?;
-            env.declare(
-                *symbol_id,
-                Scheme {
-                    ty: ty.clone(),
-                    unbound_vars: vec![],
-                },
-            )?;
+            env.declare(*symbol_id, Scheme::new(ty.clone(), vec![], vec![]))?;
 
             placeholder_substitutions.insert(placeholder.clone(), ty.clone());
             results.push((*symbol_id, ty))
@@ -637,10 +614,7 @@ impl<'a> TypeChecker<'a> {
                 unreachable!()
             };
 
-            let scheme = Scheme {
-                ty: placeholder.clone(),
-                unbound_vars: vec![],
-            };
+            let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
             env.declare(*symbol_id, scheme).map_err(|e| (*id, e))?;
             result.push((*id, *symbol_id, type_var.clone()));
         }
@@ -663,13 +637,7 @@ impl<'a> TypeChecker<'a> {
             let ty = self.infer_node(id, env, &None, source_file)?;
             placeholder_substitutions.insert(type_var.clone(), ty.clone());
             results.push((*symbol, ty.clone()));
-            env.declare(
-                *symbol,
-                Scheme {
-                    ty,
-                    unbound_vars: vec![],
-                },
-            )?;
+            env.declare(*symbol, Scheme::new(ty, vec![], vec![]))?;
         }
 
         env.replace_constraint_values(&mut placeholder_substitutions);

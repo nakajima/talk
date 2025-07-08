@@ -46,14 +46,14 @@ impl TypeDef {
     }
 
     pub fn instantiate(&self, env: &mut Environment) -> Ty {
-        let scheme = Scheme {
-            ty: self.ty(),
-            unbound_vars: self
-                .type_parameters()
+        let scheme = Scheme::new(
+            self.ty(),
+            self.type_parameters()
                 .iter()
                 .map(|p| p.type_var.clone())
                 .collect(),
-        };
+            vec![],
+        );
 
         env.instantiate(&scheme)
     }

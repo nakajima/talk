@@ -267,7 +267,7 @@ impl<'a> ConstraintSolver<'a> {
             }
             Constraint::InstanceOf { scheme, ty, .. } => {
                 let mut mapping = Substitutions::new();
-                for unbound_var in &scheme.unbound_vars {
+                for unbound_var in &scheme.unbound_vars() {
                     mapping.insert(
                         unbound_var.clone(),
                         Ty::TypeVar(self.env.new_type_variable(TypeVarKind::Unbound)),
@@ -452,7 +452,7 @@ impl<'a> ConstraintSolver<'a> {
                                     };
 
                                     let associated_types = scheme
-                                        .unbound_vars
+                                        .unbound_vars()
                                         .iter()
                                         .map(|t| Ty::TypeVar(t.clone()))
                                         .collect();
@@ -594,6 +594,7 @@ impl<'a> ConstraintSolver<'a> {
                 let specialized_struct = self.env.instantiate(&Scheme::new(
                     struct_with_generics,
                     struct_def.canonical_type_vars(),
+                    vec![],
                 ));
 
                 substitutions.unify(result_ty, &specialized_struct, &mut self.env.context)?;

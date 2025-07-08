@@ -1273,26 +1273,17 @@ impl<'a> Lowerer<'a> {
                             .unwrap_or_else(|_| {
                                 let sym = capture_types[i];
                                 let Some(info) = self.symbol_table.get(&sym) else {
-                                    return Scheme {
-                                        ty: Ty::Void,
-                                        unbound_vars: vec![],
-                                    };
+                                    return Scheme::new(Ty::Void, vec![], vec![]);
                                 };
                                 let Some(typed_expr) =
                                     self.source_file.typed_expr(&info.expr_id, self.env)
                                 else {
-                                    return Scheme {
-                                        ty: Ty::Void,
-                                        unbound_vars: vec![],
-                                    };
+                                    return Scheme::new(Ty::Void, vec![], vec![]);
                                 };
 
-                                Scheme {
-                                    ty: typed_expr.ty,
-                                    unbound_vars: vec![],
-                                }
+                                Scheme::new(typed_expr.ty, vec![], vec![])
                             })
-                            .ty;
+                            .ty();
                         captured_ir_types.push(capture_ty.to_ir(self));
                     }
                 }

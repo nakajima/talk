@@ -76,7 +76,7 @@ impl Constraint {
                 field_tys,
                 ..
             } => f(scrutinee_ty) || field_tys.iter().any(f),
-            Constraint::InstanceOf { scheme, ty, .. } => f(&scheme.ty) || f(ty),
+            Constraint::InstanceOf { scheme, ty, .. } => f(&scheme.ty()) || f(ty),
             Constraint::ConformsTo {
                 ty, conformance, ..
             } => f(ty) || conformance.associated_types.iter().any(f),
@@ -111,7 +111,7 @@ impl Constraint {
                 has_canonical_type_var(scrutinee_ty) || field_tys.iter().any(has_canonical_type_var)
             }
             Constraint::InstanceOf { scheme, ty, .. } => {
-                has_canonical_type_var(&scheme.ty) || has_canonical_type_var(ty)
+                has_canonical_type_var(&scheme.ty()) || has_canonical_type_var(ty)
             }
             Constraint::ConformsTo { conformance, .. } => conformance
                 .associated_types
@@ -125,7 +125,7 @@ impl Constraint {
         match self {
             Constraint::Equality(_, ty, ty1) => ty != ty1,
             Constraint::InstanceOf { scheme, ty, .. } => {
-                !scheme.unbound_vars.is_empty() || &scheme.ty != ty
+                !scheme.unbound_vars().is_empty() || &scheme.ty() != ty
             }
             _ => true,
         }
@@ -192,10 +192,11 @@ impl Constraint {
                 expr_id: *expr_id,
                 ty: substitutions.apply(ty, 0, context),
                 symbol_id: *symbol_id,
-                scheme: Scheme {
-                    ty: substitutions.apply(&scheme.ty, 0, context),
-                    unbound_vars: scheme.unbound_vars.clone(),
-                },
+                scheme: Scheme::new(
+                    substitutions.apply(&scheme.ty(), 0, context),
+                    scheme.unbound_vars().clone(),
+                    scheme.constraints().clone(),
+                ),
             },
             Constraint::ConformsTo {
                 expr_id,

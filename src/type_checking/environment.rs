@@ -84,18 +84,11 @@ impl Environment {
             Ty::TypeVar(self.new_type_variable(TypeVarKind::Placeholder(name.clone())));
 
         self.constrain(Constraint::InstanceOf {
-            scheme: Scheme {
-                ty: usage_placeholder.clone(),
-                unbound_vars: vec![],
-            },
+            scheme: Scheme::new(usage_placeholder.clone(), vec![], constraints),
             expr_id: *expr_id,
             ty: usage_placeholder.clone(),
             symbol_id: *symbol_id,
         });
-
-        for constraint in constraints {
-            self.constrain(constraint);
-        }
 
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
@@ -160,13 +153,13 @@ impl Environment {
 
         for scope in self.scopes.iter_mut() {
             for scheme in scope.values_mut() {
-                let replaced = substitutions.apply(&scheme.ty, 0, &mut self.context);
+                let replaced = substitutions.apply(&scheme.ty(), 0, &mut self.context);
 
-                if scheme.ty == replaced {
+                if scheme.ty() == replaced {
                     continue;
                 }
 
-                scheme.ty = replaced;
+                *scheme = Scheme::new(replaced, scheme.unbound_vars(), scheme.constraints())
             }
         }
     }
@@ -189,6 +182,18 @@ impl Environment {
             loc.file(),
             loc.line()
         );
+
+        if let Some(scheme) = self
+            .scopes
+            .last()
+            .ok_or(TypeError::Unknown(format!(
+                "Unable to declare symbol {symbol_id:?} without scope"
+            )))?
+            .get(&symbol_id)
+        {
+            tracing::warn!("Already declared {symbol_id:?} in scope: {scheme:?}");
+        }
+
         self.scopes
             .last_mut()
             .ok_or(TypeError::Unknown(format!(
@@ -212,55 +217,29 @@ impl Environment {
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
 
         // Apply constraints to generalized
-        // for var in &mut unbound_vars {
-        //     let new_constraint = self
-        //         .constraints
-        //         .iter()
-        //         .filter(|c| c.contains(|ty| ty == &Ty::TypeVar(var.clone())))
-        //         .collect::<Vec<&Constraint>>();
-        //     let mut collected = vec![];
-        //     self.constraints.retain(|c| {
-        //         if let Constraint::Satisfies {
-        //             ty: Ty::TypeVar(tv),
-        //             constraints,
-        //             ..
-        //         } = c
-        //             && tv == var
-        //         {
-        //             collected.extend(constraints.clone());
-        //             return false; // remove from env.constraints
-        //         }
-        //         true
-        //     });
+        let mut constraints = vec![];
+        for var in &unbound_vars {
+            let collected = self
+                .constraints
+                .iter()
+                .filter(|c| c.contains(|ty| ty == &Ty::TypeVar(var.clone())))
+                .cloned()
+                .collect::<Vec<Constraint>>();
+            constraints.extend(collected);
+        }
 
-        //     for constraint in collected {
-
-        //     }
-        //     var.constraints.extend(collected);
-        // }
-
-        Scheme::new(t.clone(), unbound_vars)
+        Scheme::new(t.clone(), unbound_vars, constraints)
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!(
-                "★ Instantiate {:?} from {}:{}",
-                scheme,
-                loc.file(),
-                loc.line()
-            );
-        }
         self.instantiate_with_args(scheme, Default::default())
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
+    #[tracing::instrument(skip(self), fields(result))]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
         let mut var_map = Substitutions::new();
         let mut constraints_to_copy = vec![];
-        for old in &scheme.unbound_vars {
+        for old in &scheme.unbound_vars() {
             constraints_to_copy.extend(
                 self.constraints
                     .iter()
@@ -281,7 +260,7 @@ impl Environment {
             self.constrain(new_constraint);
         }
 
-        walk(&scheme.ty, &var_map)
+        walk(&scheme.ty(), &var_map)
     }
 
     pub fn end_scope(&mut self) {
@@ -301,7 +280,7 @@ impl Environment {
                 tracing::warn!("-> Ditching constraints: {constraints:?}");
             }
 
-            scheme.ty.clone()
+            scheme.ty()
         } else {
             self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };
@@ -364,10 +343,11 @@ impl Environment {
     pub fn register_enum(&mut self, def: &EnumDef) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
-            Scheme {
-                ty: Ty::Enum(def.symbol_id, def.canonical_type_parameters()),
-                unbound_vars: def.canonical_type_vars(),
-            },
+            Scheme::new(
+                Ty::Enum(def.symbol_id, def.canonical_type_parameters()),
+                def.canonical_type_vars(),
+                vec![],
+            ),
         )?;
         self.types
             .insert(def.clone().symbol_id, TypeDef::Enum(def.clone()));
@@ -377,10 +357,11 @@ impl Environment {
     pub fn register_struct(&mut self, def: &StructDef) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
-            Scheme {
-                ty: Ty::Struct(def.symbol_id, def.canonical_type_parameters()),
-                unbound_vars: def.canonical_type_vars(),
-            },
+            Scheme::new(
+                Ty::Struct(def.symbol_id, def.canonical_type_parameters()),
+                def.canonical_type_vars(),
+                vec![],
+            ),
         )?;
         self.types
             .insert(def.symbol_id, TypeDef::Struct(def.clone()));
@@ -391,10 +372,11 @@ impl Environment {
     pub fn register_protocol(&mut self, def: &ProtocolDef) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
-            Scheme {
-                ty: Ty::Protocol(def.symbol_id, def.canonical_associated_types()),
-                unbound_vars: def.canonical_associated_type_vars(),
-            },
+            Scheme::new(
+                Ty::Protocol(def.symbol_id, def.canonical_associated_types()),
+                def.canonical_associated_type_vars(),
+                vec![],
+            ),
         )?;
         self.types
             .insert(def.symbol_id, TypeDef::Protocol(def.clone()));
@@ -597,10 +579,10 @@ pub fn free_type_vars_in_env(
                 continue;
             }
 
-            let mut ftv = free_type_vars(&scheme.ty);
+            let mut ftv = free_type_vars(&scheme.ty());
 
             // remove those vars that the scheme already quantifies
-            for q in &scheme.unbound_vars {
+            for q in &scheme.unbound_vars() {
                 ftv.remove(q);
             }
 
@@ -643,8 +625,8 @@ mod generalize_tests {
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme's unbound_vars should contain both tv1 and tv2.
-        assert_eq!(scheme.ty, ty_to_generalize);
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        assert_eq!(scheme.ty(), ty_to_generalize);
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }
@@ -661,10 +643,7 @@ mod generalize_tests {
         let mut initial_scope = Scope::new();
         initial_scope.insert(
             SymbolID(0),
-            Scheme {
-                unbound_vars: vec![],
-                ty: Ty::TypeVar(tv_a.clone()),
-            },
+            Scheme::new(Ty::TypeVar(tv_a.clone()), vec![], vec![]),
         );
         env.scopes = vec![initial_scope];
 
@@ -673,8 +652,8 @@ mod generalize_tests {
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should only bind `b` (tv2). `a` remains free.
-        assert_eq!(scheme.ty, ty_to_generalize);
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        assert_eq!(scheme.ty(), ty_to_generalize);
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(2)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }
@@ -688,14 +667,15 @@ mod generalize_tests {
         let tv_a = new_tv(1);
 
         // Create a scheme for `id: forall a. a -> a`.
-        let id_scheme = Scheme {
-            unbound_vars: vec![tv_a.clone()],
-            ty: Ty::Func(
+        let id_scheme = Scheme::new(
+            Ty::Func(
                 vec![Ty::TypeVar(tv_a.clone())],
                 Box::new(Ty::TypeVar(tv_a.clone())),
                 vec![],
             ),
-        };
+            vec![tv_a.clone()],
+            vec![],
+        );
 
         let mut initial_scope = Scope::new();
         initial_scope.insert(SymbolID(0), id_scheme);
@@ -705,8 +685,8 @@ mod generalize_tests {
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should bind `b` (tv2) and `c` (tv3).
-        assert_eq!(scheme.ty, ty_to_generalize);
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        assert_eq!(scheme.ty(), ty_to_generalize);
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(2), new_tv(3)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }
@@ -721,10 +701,7 @@ mod generalize_tests {
         let mut initial_scope = Scope::new();
         initial_scope.insert(
             SymbolID(0),
-            Scheme {
-                unbound_vars: vec![],
-                ty: Ty::TypeVar(tv_a.clone()),
-            },
+            Scheme::new(Ty::TypeVar(tv_a.clone()), vec![], vec![]),
         );
         env.scopes = vec![initial_scope];
 
@@ -732,8 +709,8 @@ mod generalize_tests {
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should bind nothing new.
-        assert!(scheme.unbound_vars.is_empty());
-        assert_eq!(scheme.ty, ty_to_generalize);
+        assert!(scheme.unbound_vars().is_empty());
+        assert_eq!(scheme.ty(), ty_to_generalize);
     }
 
     #[test]
@@ -744,7 +721,7 @@ mod generalize_tests {
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }
@@ -757,7 +734,7 @@ mod generalize_tests {
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }
@@ -770,7 +747,7 @@ mod generalize_tests {
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(1), new_tv(2)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }
@@ -804,10 +781,7 @@ mod generalize_tests {
         let mut initial_scope = Scope::new();
         initial_scope.insert(
             SymbolID(0),
-            Scheme {
-                unbound_vars: vec![],
-                ty: Ty::TypeVar(tv_a.clone()),
-            },
+            Scheme::new(Ty::TypeVar(tv_a.clone()), vec![], vec![]),
         );
         env.scopes = vec![initial_scope];
 
@@ -818,7 +792,7 @@ mod generalize_tests {
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // Should bind `b` and `c`, but not `a`.
-        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars.into_iter().collect();
+        let bound_vars: HashSet<TypeVarID> = scheme.unbound_vars().into_iter().collect();
         let expected_vars: HashSet<TypeVarID> = [new_tv(2), new_tv(3)].into_iter().collect();
         assert_eq!(bound_vars, expected_vars);
     }

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use tracing::Level;
+use tracing::{Level, trace_span};
 
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
@@ -79,13 +79,30 @@ impl TypeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme {
-    pub ty: Ty,
-    pub unbound_vars: Vec<TypeVarID>,
+    ty: Ty,
+    unbound_vars: Vec<TypeVarID>,
+    constraints: Vec<Constraint>,
 }
 
 impl Scheme {
-    pub fn new(ty: Ty, unbound_vars: Vec<TypeVarID>) -> Self {
-        Self { ty, unbound_vars }
+    pub fn new(ty: Ty, unbound_vars: Vec<TypeVarID>, constraints: Vec<Constraint>) -> Self {
+        Self {
+            ty,
+            unbound_vars,
+            constraints,
+        }
+    }
+
+    pub fn ty(&self) -> Ty {
+        self.ty.clone()
+    }
+
+    pub fn unbound_vars(&self) -> Vec<TypeVarID> {
+        self.unbound_vars.clone()
+    }
+
+    pub fn constraints(&self) -> Vec<Constraint> {
+        self.constraints.clone()
     }
 }
 
@@ -523,7 +540,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Parameters are monomorphic inside the function body
-        let scheme = Scheme::new(param_ty.clone(), vec![]);
+        let scheme = Scheme::new(param_ty.clone(), vec![], vec![]);
         env.declare(name.symbol_id()?, scheme)?;
 
         Ok(param_ty)
@@ -772,10 +789,17 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                ret_var = env.instantiate(&Scheme {
-                    ty: Ty::Struct(*symbol_id, type_args),
-                    unbound_vars: struct_def.canonical_type_vars(),
-                });
+                tracing::trace!(
+                    "Maybe we need to figure out constraints here? {:?} {type_args:?} {:#?}",
+                    struct_def.canonical_type_parameters(),
+                    env.constraints()
+                );
+
+                ret_var = env.instantiate(&Scheme::new(
+                    Ty::Struct(*symbol_id, type_args),
+                    struct_def.canonical_type_vars(),
+                    vec![],
+                ));
 
                 env.constrain(Constraint::InitializerCall {
                     expr_id: *callee,
@@ -872,6 +896,8 @@ impl<'a> TypeChecker<'a> {
                 unreachable!()
             };
 
+            let mut constraints = vec![];
+
             for (id, protocol_id, associated_types) in conformance_data {
                 let constraint = Constraint::ConformsTo {
                     expr_id: *id,
@@ -880,15 +906,13 @@ impl<'a> TypeChecker<'a> {
                 };
 
                 tracing::info!("Constraining type repr {constraint:?}");
+                constraints.push(constraint.clone());
                 env.constrain(constraint)
             }
 
             unbound_vars.push(type_var_id.clone());
 
-            let scheme = Scheme {
-                ty: ty.clone(),
-                unbound_vars,
-            };
+            let scheme = Scheme::new(ty.clone(), unbound_vars, constraints);
 
             env.declare(symbol_id, scheme.clone())?;
 
@@ -982,9 +1006,10 @@ impl<'a> TypeChecker<'a> {
                 ..
             }) = source_file.get(generic).cloned()
             {
+                let _s = trace_span!("infer_func generic").entered();
                 let ty = self.infer_node(generic, env, &None, source_file)?;
                 inferred_generics.push(ty.clone());
-                let scheme = Scheme::new(ty.clone(), vec![]);
+                let scheme = Scheme::new(ty.clone(), vec![], vec![]);
                 env.declare(symbol_id, scheme)?;
             } else {
                 return Err(TypeError::Unresolved(
@@ -1038,6 +1063,7 @@ impl<'a> TypeChecker<'a> {
                 Scheme {
                     ty: inferred_ty.clone(),
                     unbound_vars: vec![],
+                    constraints: vec![],
                 },
             )?;
         }
@@ -1062,7 +1088,7 @@ impl<'a> TypeChecker<'a> {
             Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
         };
 
-        let scheme = Scheme::new(rhs_ty.clone(), vec![]);
+        let scheme = Scheme::new(rhs_ty.clone(), vec![], vec![]);
         env.declare(symbol_id, scheme)?;
 
         Ok(rhs_ty)
@@ -1368,10 +1394,7 @@ impl<'a> TypeChecker<'a> {
                 tracing::info!("inferring bind pattern: {name:?}");
                 if let Name::Resolved(symbol_id, _) = name {
                     // Use the expected type for this binding
-                    let scheme = Scheme {
-                        ty: expected.clone(),
-                        unbound_vars: vec![],
-                    };
+                    let scheme = Scheme::new(expected.clone(), vec![], vec![]);
                     env.declare(*symbol_id, scheme)?;
                 }
             }

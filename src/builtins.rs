@@ -317,7 +317,7 @@ pub fn default_env_scope() -> BTreeMap<SymbolID, Scheme> {
     for builtin in builtins() {
         scope.insert(
             SymbolID(builtin.id),
-            Scheme::new(builtin.ty, builtin.unbound_vars),
+            Scheme::new(builtin.ty, builtin.unbound_vars, vec![]),
         );
     }
     scope

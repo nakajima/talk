@@ -1686,23 +1686,23 @@ mod protocol_tests {
     fn errors_on_wrong_associated_type() {
         let checked = check(
             "
-        protocol Aged<T> {
-            let age: T
+        protocol Countable<ShouldBeInt> {
+            let count: ShouldBeInt
         }
 
-        struct Person<U>: Aged<U> {
-            let age: U
+        struct Person<PersonGeneric>: Countable<PersonGeneric> {
+            let count: PersonGeneric
 
-            init(age) {
-                self.age = age
+            init(personCountParam) {
+                self.count = personCountParam
             }
         }
 
-        func getInt<V: Aged<Int>>(aged: V) {
-            aged.age
+        func getInt<GetIntParam: Countable<Int>>(countable: GetIntParam) {
+            countable.count
         }
 
-        getInt(Person(age: 1.23))
+        getInt(Person(personCountParam: \"Nope\"))
         ",
         )
         .unwrap();
