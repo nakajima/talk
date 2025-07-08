@@ -376,7 +376,7 @@ impl CurrentFunction {
             });
         }
 
-        tracing::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
+        tracing::trace!("EXPORING FUNC: {} {:?}", name, self.registers);
 
         IRFunction {
             ty,

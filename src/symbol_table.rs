@@ -243,9 +243,7 @@ impl SymbolTable {
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
-        tracing::warn!("Lookup: {name:?}");
         for (id, info) in &self.symbols {
-            tracing::warn!("Looking up: {id:?}, {info:?}");
             if info.name == name {
                 return Some(*id);
             }

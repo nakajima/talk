@@ -191,7 +191,7 @@ impl<'a> ConstraintSolver<'a> {
                         })
                         .collect();
 
-                    tracing::warn!("Possible conforming types: {types:?}");
+                    tracing::trace!("Possible conforming types: {types:?}");
 
                     let mut conforming_candidates = vec![];
                     for (type_def, type_def_conformance) in types {

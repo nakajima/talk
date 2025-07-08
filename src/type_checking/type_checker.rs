@@ -1080,7 +1080,7 @@ impl<'a> TypeChecker<'a> {
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
             let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
-                tracing::warn!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
+                tracing::trace!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
                 existing_scheme.ty = inferred_ty.clone();
                 existing_scheme.clone()
             } else {
