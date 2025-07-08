@@ -116,7 +116,10 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
-            unifications.push((property.ty.clone(), ty_property.ty.clone()));
+            unifications.push((
+                ConstraintSolver::substitute_ty_with_map(&property.ty, &substitutions),
+                ConstraintSolver::substitute_ty_with_map(&ty_property.ty, &substitutions),
+            ));
         }
 
         for _initializer in protocol.initializers.iter() {}

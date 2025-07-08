@@ -9,7 +9,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::TypeDef,
+    type_defs::{TypeDef, protocol_def::Conformance},
     type_var_id::TypeVarKind,
 };
 
@@ -553,6 +553,7 @@ impl<'a> ConstraintSolver<'a> {
                 substitutions.unify(&result_ty, &specialized_ty, &mut self.env.context)?;
             }
             Constraint::InitializerCall {
+                expr_id,
                 initializes_id,
                 args,
                 func_ty,
@@ -590,6 +591,36 @@ impl<'a> ConstraintSolver<'a> {
 
                 let specialized_struct =
                     substitutions.apply(&struct_with_generics, 0, &mut self.env.context);
+
+                // After specializing, ensure each argument matches its property type
+                for (arg, property) in args.iter().zip(struct_def.properties.iter()) {
+                    let property_ty =
+                        substitutions.apply(&property.ty, 0, &mut self.env.context);
+                    substitutions.unify(arg, &property_ty, &mut self.env.context)?;
+                }
+
+                // Enforce the struct's conformances on the specialized type arguments
+                for conformance in &struct_def.conformances {
+                    let specialized_associated = conformance
+                        .associated_types
+                        .iter()
+                        .map(|t| substitutions.apply(t, 0, &mut self.env.context))
+                        .collect();
+
+                    let specialized_conformance = Conformance {
+                        protocol_id: conformance.protocol_id,
+                        associated_types: specialized_associated,
+                    };
+
+                    self.constraints.insert(
+                        0,
+                        Constraint::ConformsTo {
+                            expr_id: *expr_id,
+                            ty: specialized_struct.clone(),
+                            conformance: specialized_conformance,
+                        },
+                    );
+                }
 
                 substitutions.unify(result_ty, &specialized_struct, &mut self.env.context)?;
             }

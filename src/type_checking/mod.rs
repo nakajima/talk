@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::{
     SourceFile, SymbolTable, Typed, compiling::compilation_session::SharedCompilationSession,
-    diagnostic::Diagnostic, environment::Environment, expr::Expr, parser::ExprID, ty::Ty,
+    diagnostic::{Diagnostic, DiagnosticKind}, environment::Environment, expr::Expr, parser::ExprID, ty::Ty,
     type_checker::TypeError, typed_expr::TypedExpr,
 };
 
@@ -67,11 +67,18 @@ impl CheckResult {
             .cloned();
 
         if let Some(diagnostics) = diagnostics {
-            diagnostics
+            let mut collected: Vec<_> = diagnostics
                 .iter()
                 .filter(|d| d.is_unhandled())
                 .cloned()
-                .collect()
+                .collect();
+
+            collected.sort_by_key(|d| match &d.kind {
+                DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)) => 0,
+                _ => 1,
+            });
+
+            collected
         } else {
             vec![]
         }
