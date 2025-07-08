@@ -9,7 +9,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::TypeDef,
+    type_defs::{TypeDef, protocol_def::Conformance},
     type_var_id::TypeVarKind,
 };
 
@@ -553,6 +553,7 @@ impl<'a> ConstraintSolver<'a> {
                 substitutions.unify(&result_ty, &specialized_ty, &mut self.env.context)?;
             }
             Constraint::InitializerCall {
+                expr_id,
                 initializes_id,
                 args,
                 func_ty,
@@ -583,6 +584,23 @@ impl<'a> ConstraintSolver<'a> {
                     substitutions.unify(param, arg, &mut self.env.context)?;
                 }
 
+                // When the number of struct type parameters matches the number
+                // of initializer arguments, treat them as corresponding and
+                // unify them. This helps propagate argument types to the
+                // struct's generic parameters when the initializer parameter
+                // types themselves don't reference the generics directly.
+                if struct_def.type_parameters.len() == args.len() {
+                    for (type_param, arg) in
+                        struct_def.type_parameters.iter().zip(args)
+                    {
+                        substitutions.unify(
+                            &Ty::TypeVar(type_param.type_var.clone()),
+                            arg,
+                            &mut self.env.context,
+                        )?;
+                    }
+                }
+
                 substitutions.unify(&initializer.ty, func_ty, &mut self.env.context)?;
 
                 let struct_with_generics =
@@ -590,6 +608,29 @@ impl<'a> ConstraintSolver<'a> {
 
                 let specialized_struct =
                     substitutions.apply(&struct_with_generics, 0, &mut self.env.context);
+
+                // Enforce the struct's conformances on the specialized type arguments
+                for conformance in &struct_def.conformances {
+                    let specialized_associated = conformance
+                        .associated_types
+                        .iter()
+                        .map(|t| substitutions.apply(t, 0, &mut self.env.context))
+                        .collect();
+
+                    let specialized_conformance = Conformance {
+                        protocol_id: conformance.protocol_id,
+                        associated_types: specialized_associated,
+                    };
+
+                    self.solve_constraint(
+                        &Constraint::ConformsTo {
+                            expr_id: *expr_id,
+                            ty: specialized_struct.clone(),
+                            conformance: specialized_conformance,
+                        },
+                        substitutions,
+                    )?;
+                }
 
                 substitutions.unify(result_ty, &specialized_struct, &mut self.env.context)?;
             }
