@@ -48,8 +48,6 @@ impl Substitutions {
         rhs: TypeVarID,
         context: &mut TypeVarContext,
     ) {
-        let lhs = self.normalize(&lhs, context);
-        let rhs = self.normalize(&rhs, context);
         context.unify(lhs, rhs);
     }
 
@@ -80,8 +78,22 @@ impl Substitutions {
 
                 if let Some(ty) = self.get(&type_var).cloned() {
                     self.apply(&ty, depth + 1, context)
+                // } else if let TypeVarID {
+                //     kind: TypeVarKind::Instantiated(i),
+                //     ..
+                // } = type_var
+                // {
+                //     let parent_type_var =
+                //         TypeVarID::new(i, TypeVarKind::Canonicalized(type_var.id));
+                //     self.apply(&Ty::TypeVar(parent_type_var), depth + 1, context)
+                // } else if let TypeVarID {
+                //     kind: TypeVarKind::Canonicalized(i),
+                //     ..
+                // } = type_var
+                // {
+                //     Ty::TypeVar(TypeVarID::new(i, TypeVarKind::Instantiated(type_var.id)))
                 } else {
-                    Ty::TypeVar(type_var)
+                    ty.clone()
                 }
             }
             Ty::Enum(name, generics) => {

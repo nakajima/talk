@@ -150,28 +150,24 @@ impl NameResolver {
                         );
                     }
                 },
-                Struct {
-                    name,
-                    generics,
-                    body,
-                    conformances,
-                } => {
-                    match name {
-                        Name::Resolved(symbol_id, _) => {
-                            self.type_symbol_stack.push(symbol_id);
-                        }
-                        _ => {
-                            tracing::error!("trying to resolve un-hoisted struct");
-                            continue;
-                        }
-                    }
+                Struct { .. } => {
+                    // Handled by hoisting
+                    //    match name {
+                    //        Name::Resolved(symbol_id, _) => {
+                    //            self.type_symbol_stack.push(symbol_id);
+                    //        }
+                    //        _ => {
+                    //            tracing::error!("trying to resolve un-hoisted struct");
+                    //            continue;
+                    //        }
+                    //    }
 
-                    let tok = self.start_scope(source_file, source_file.span(node_id));
-                    self.resolve_nodes(&generics, source_file, symbol_table);
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-                    self.resolve_nodes(&[body], source_file, symbol_table);
-                    self.type_symbol_stack.pop();
-                    self.end_scope(tok);
+                    //    let tok = self.start_scope(source_file, source_file.span(node_id));
+                    //    self.resolve_nodes(&generics, source_file, symbol_table);
+                    //    self.resolve_nodes(&conformances, source_file, symbol_table);
+                    //    self.resolve_nodes(&[body], source_file, symbol_table);
+                    //    self.type_symbol_stack.pop();
+                    //    self.end_scope(tok);
                 }
                 Extend {
                     name,
@@ -446,10 +442,6 @@ impl NameResolver {
                     conformances,
                     introduces_type,
                 } => {
-                    tracing::trace!(
-                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {introduces_type}"
-                    );
-
                     let resolved_name_for_node = match name.clone() {
                         Name::Raw(raw_name_str) => {
                             if introduces_type {
@@ -490,8 +482,6 @@ impl NameResolver {
                         Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name, // Already resolved, no change needed to the name itself.
                     };
 
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-
                     // Update the existing TypeRepr node with the resolved name.
                     // The node type remains TypeRepr.
                     source_file.nodes.insert(
@@ -506,6 +496,7 @@ impl NameResolver {
 
                     // Recursively resolve any type arguments within this TypeRepr.
                     self.resolve_nodes(&generics, source_file, symbol_table);
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
                 }
                 FuncTypeRepr(args, ret, _) => {
                     self.resolve_nodes(&args, source_file, symbol_table);
@@ -814,6 +805,7 @@ impl NameResolver {
 
             symbol_table.initialize_type_table(struct_symbol);
             let tok = self.start_scope(source_file, source_file.span(id));
+            self.type_symbol_stack.push(struct_symbol);
 
             self.resolve_nodes(&generics, source_file, symbol_table);
             self.resolve_nodes(&conformances, source_file, symbol_table);
@@ -823,8 +815,6 @@ impl NameResolver {
                 tracing::error!("Didn't get struct body");
                 return;
             };
-
-            self.type_symbol_stack.push(struct_symbol);
 
             // Get properties for the struct so we can synthesize stuff before
             // type checking
@@ -854,28 +844,6 @@ impl NameResolver {
                         },
                     );
                 }
-
-                if let Some(Func {
-                    name,
-                    params,
-                    generics,
-                    body,
-                    ret,
-                    ..
-                }) = &expr
-                {
-                    self.resolve_func(
-                        name,
-                        id,
-                        params,
-                        generics,
-                        Some(body),
-                        ret,
-                        symbol_table,
-                        source_file,
-                    );
-                }
-
                 if let Some(Init(None, func_id)) = &expr {
                     symbol_table.add_initializer(struct_symbol, *id);
                     self.resolve_nodes(&[*func_id], source_file, symbol_table);
@@ -885,7 +853,7 @@ impl NameResolver {
                 }
             }
 
-            self.hoist_funcs(&ids, source_file, symbol_table);
+            self.resolve_nodes(&[body], source_file, symbol_table);
 
             self.type_symbol_stack.pop();
             self.end_scope(tok);

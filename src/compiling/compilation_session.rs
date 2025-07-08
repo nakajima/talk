@@ -35,7 +35,7 @@ impl CompilationSession {
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         if diagnostic.is_unhandled() {
-            tracing::info!("adding diagnostic to {:?}: {diagnostic:?}", diagnostic.path);
+            tracing::warn!("adding diagnostic to {:?}: {diagnostic:?}", diagnostic.path);
             self.diagnostics
                 .entry(diagnostic.path.clone())
                 .or_default()
