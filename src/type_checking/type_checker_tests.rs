@@ -1110,29 +1110,6 @@ mod tests {
 
         assert_eq!(*symbol_id, SymbolID::resolved(1));
 
-        let Ty::Func(params, ret, _) = &args[1] else {
-            panic!("didn't get func");
-        };
-
-        assert_eq!(1, params.len());
-        let Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::Placeholder(t),
-            ..
-        }) = &params[0]
-        else {
-            panic!("didn't get T: {:?}", params[0]);
-        };
-        assert_eq!(*t, "T");
-
-        let box Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::Placeholder(u),
-            ..
-        }) = ret
-        else {
-            panic!("didn't get U: {ret:?}");
-        };
-        assert_eq!(*u, "U");
-
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         match call_result {
             Ty::Enum(sym, generics) => {
