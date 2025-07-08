@@ -137,7 +137,7 @@ impl Substitutions {
         }
     }
 
-    fn apply_multiple(
+    pub fn apply_multiple(
         &mut self,
         types: &[Ty],
         depth: u32,

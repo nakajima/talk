@@ -45,6 +45,9 @@ pub struct Environment {
 
 impl Default for Environment {
     fn default() -> Self {
+        let mut context = TypeVarContext::default();
+        context.import_builtins();
+
         Self {
             typed_exprs: BTreeMap::new(),
             constraints: vec![],
@@ -52,7 +55,7 @@ impl Default for Environment {
             types: crate::builtins::default_env_types(),
             next_id: 0,
             selfs: vec![],
-            context: TypeVarContext::default(),
+            context,
         }
     }
 }

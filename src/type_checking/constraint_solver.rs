@@ -216,42 +216,40 @@ impl<'a> ConstraintSolver<'a> {
 
                     match conforming_candidates.len() {
                         0 => {
-                            // Not enough info yet
+                            // Still no information: keep deferring.
                             return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
                                 ty.to_string(),
                             )));
                         }
                         1 => {
-                            let (candidate_ty, candidate_unifications, type_def_conformances) =
+                            // Exactly one candidate, we can solve this bad boy.
+                            let (candidate_ty, candidate_unifs, type_def_conf) =
                                 &conforming_candidates[0];
 
-                            // Probably a good bet?
                             substitutions.unify(
                                 &Ty::TypeVar(type_var.clone()),
                                 candidate_ty,
                                 &mut self.env.context,
                             )?;
 
-                            for (provided, required) in conformance
+                            for (prov, req) in conformance
                                 .associated_types
                                 .iter()
-                                .zip(type_def_conformances.associated_types.iter())
+                                .zip(type_def_conf.associated_types.iter())
                             {
-                                substitutions.unify(provided, required, &mut self.env.context)?;
+                                substitutions.unify(prov, req, &mut self.env.context)?;
                             }
 
-                            for (lhs, rhs) in candidate_unifications {
+                            for (lhs, rhs) in candidate_unifs {
                                 substitutions.unify(lhs, rhs, &mut self.env.context)?;
                             }
 
                             return Ok(());
                         }
                         _ => {
-                            // Could have conflicting options, shouldn't go for it
-                            // Not enough info yet
-                            return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
-                                ty.to_string(),
-                            )));
+                            // Multiple candidates: do **not** raise an error.
+                            // Keep the constraint around for later but mark it as processed.
+                            return Ok(()); // <- leave generic
                         }
                     }
                 }
@@ -565,6 +563,7 @@ impl<'a> ConstraintSolver<'a> {
                 args,
                 func_ty,
                 result_ty,
+                type_args,
                 ..
             } => {
                 let Some(struct_def) = self.env.lookup_struct(initializes_id).cloned() else {
@@ -596,8 +595,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 substitutions.unify(&initializer.ty, func_ty, &mut self.env.context)?;
 
-                let struct_with_generics =
-                    Ty::Struct(*initializes_id, struct_def.canonical_type_parameters());
+                let struct_with_generics = Ty::Struct(*initializes_id, type_args.clone());
 
                 let specialized_struct = self.env.instantiate(&Scheme::new(
                     struct_with_generics,

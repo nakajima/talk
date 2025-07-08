@@ -1214,6 +1214,21 @@ mod tests {
     }
 
     #[test]
+    fn checks_array_get() {
+        let checked = check(
+            "
+            [1,2,3].get
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.type_for(&checked.root_ids()[0]).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+        );
+    }
+
+    #[test]
     fn checks_array_builtin() {
         let checked = check("func c(a: Array<Int>) { a }").unwrap();
         let root = checked.typed_expr(&checked.root_ids()[0]).unwrap();
@@ -1228,16 +1243,38 @@ mod tests {
     }
 
     #[test]
-    fn checks_array_get() {
+    fn checks_generic_load() {
         let checked = check(
             "
-        let a = [1,2,3]
-        a.get(0)
+            struct Loader<T> {
+                func load(addr: Pointer) {
+                    __load<T>(addr, 1)
+                }
+            }
+
+            Loader<Int>().load(__alloc(0))
         ",
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert!(checked.diagnostics().is_empty());
+        assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
+    }
+
+    #[test]
+    fn checks_array_get_local() {
+        let checked = check(
+            "
+        let a = [1,2,3]
+        a.get
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.type_for(&checked.root_ids()[1]).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+        );
     }
 
     #[test]

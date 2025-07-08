@@ -1853,7 +1853,7 @@ mod protocol_lowering_tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![IRType::TypeVar("T7".into())], IRType::Int.into()),
+                            IRType::Func(vec![IRType::TypeVar("T6".into())], IRType::Int.into()),
                             RefKind::Func("@_3_get".into())
                         ),
                         Instr::Alloc {

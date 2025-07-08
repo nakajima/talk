@@ -20,6 +20,7 @@ pub enum Constraint {
         args: Vec<Ty>,
         func_ty: Ty,
         result_ty: Ty,
+        type_args: Vec<Ty>,
     },
     VariantMatch {
         expr_id: ExprID,
@@ -159,6 +160,7 @@ impl Constraint {
                 args,
                 func_ty,
                 result_ty,
+                type_args,
             } => Constraint::InitializerCall {
                 expr_id: *expr_id,
                 initializes_id: *initializes_id,
@@ -168,6 +170,7 @@ impl Constraint {
                     .collect(),
                 func_ty: substitutions.apply(func_ty, 0, context),
                 result_ty: substitutions.apply(result_ty, 0, context),
+                type_args: substitutions.apply_multiple(type_args, 0, context),
             },
             Constraint::VariantMatch {
                 expr_id,

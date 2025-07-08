@@ -100,10 +100,9 @@ macro_rules! assert_lowered_function {
 }
 
 pub mod trace {
-    use tracing::{Event, Metadata, Subscriber};
+    use tracing::{Metadata, Subscriber};
     use tracing_subscriber::{
-        EnvFilter, filter,
-        layer::{Context, Filter},
+        layer::Filter,
         registry::{LookupSpan, SpanRef},
     };
 
@@ -189,8 +188,8 @@ pub mod trace {
 
         // one env-driven filter for log levels, plus your custom span-aware filter
         let tree = tracing_tree::HierarchicalLayer::new(2)
-            .with_filter(EnvFilter::from_default_env()) // ordinary RUST_LOG filtering
-            .with_filter(SuppressPrelude); // kills everything inside a prelude span
+            .with_filter(SuppressPrelude) // kills everything inside a prelude span
+            .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
 
         registry()
             .with(MarkPreludeSpan) // sets the PreludeMarker

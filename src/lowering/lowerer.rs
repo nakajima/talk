@@ -7,6 +7,7 @@ use crate::{
         function_analysis_pass::FunctionAnalysisPass,
     },
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
+    constraint::Constraint,
     diagnostic::Diagnostic,
     environment::Environment,
     expr::{Expr, ExprMeta, Pattern},
@@ -27,7 +28,7 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{TypeDef, struct_def::StructDef},
+    type_defs::{TypeDef, protocol_def::Conformance, struct_def::StructDef},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::TypedExpr,
 };
@@ -2458,37 +2459,52 @@ impl<'a> Lowerer<'a> {
                     struct_id.0, struct_def.name_str, method.name
                 ))
             }
-            // Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
-            //     let mut result = None;
-            //     for constraint in &type_var.constraints {
-            //         let TypeConstraint::Conforms { protocol_id, .. } = constraint else {
-            //             continue;
-            //         };
+            Ty::Enum(enum_id, _) => {
+                let def = self.env.lookup_enum(enum_id)?;
+                let method = def.methods.iter().find(|m| m.name == name)?;
+                Some(format!("@_{}_{}_{}", enum_id.0, def.name_str, method.name))
+            }
+            Ty::TypeVar(_type_var)
+                if let conformances = self
+                    .env
+                    .constraints()
+                    .iter()
+                    .filter_map(|c| {
+                        if let Constraint::ConformsTo { conformance, .. } = c {
+                            Some(conformance)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<&Conformance>>()
+                    && !conformances.is_empty() =>
+            {
+                let mut result = None;
+                for conformance in &conformances {
+                    let protocol_def = self.env.lookup_protocol(&conformance.protocol_id)?;
+                    if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
+                        result = Some(format!(
+                            "@_{}_{}_{}",
+                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
+                        ));
 
-            //         let protocol_def = self.env.lookup_protocol(protocol_id)?;
-            //         if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
-            //             result = Some(format!(
-            //                 "@_{}_{}_{}",
-            //                 protocol_def.symbol_id.0, protocol_def.name_str, method.name
-            //             ));
+                        break;
+                    } else if let Some(method) = protocol_def
+                        .method_requirements
+                        .iter()
+                        .find(|m| m.name == name)
+                    {
+                        result = Some(format!(
+                            "@_{}_{}_{}",
+                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
+                        ));
 
-            //             break;
-            //         } else if let Some(method) = protocol_def
-            //             .method_requirements
-            //             .iter()
-            //             .find(|m| m.name == name)
-            //         {
-            //             result = Some(format!(
-            //                 "@_{}_{}_{}",
-            //                 protocol_def.symbol_id.0, protocol_def.name_str, method.name
-            //             ));
+                        break;
+                    }
+                }
 
-            //             break;
-            //         }
-            //     }
-
-            //     result
-            // }
+                result
+            }
             _ => None,
         };
 

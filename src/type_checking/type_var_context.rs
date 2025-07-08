@@ -2,7 +2,6 @@ use ena::unify::{InPlace, InPlaceUnificationTable, NoError, Snapshot, UnifyKey, 
 
 use crate::{
     builtins,
-    environment::free_type_vars,
     ty::Ty,
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -51,9 +50,19 @@ pub struct TypeVarContext {
 impl TypeVarContext {
     pub fn import_builtins(&mut self) {
         for builtin in builtins::builtins() {
-            let type_vars = free_type_vars(&builtin.ty);
-            for var in type_vars {
-                self.kinds.push(var.kind);
+            for var in builtin.unbound_vars {
+                let kind = &var.kind;
+                let key = self.table.new_key(Ty::TypeVar(TypeVarID {
+                    id: self.kinds.len() as u32,
+                    kind: kind.clone(),
+                }));
+
+                assert!(
+                    key.0 == var.id,
+                    "Builtin type vars are not in sync: {var:?} <> {key:?}"
+                );
+
+                self.kinds.push(kind.clone());
             }
         }
     }

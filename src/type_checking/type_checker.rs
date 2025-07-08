@@ -816,7 +816,7 @@ impl<'a> TypeChecker<'a> {
                     .collect::<Vec<Constraint>>();
 
                 ret_var = env.instantiate(&Scheme::new(
-                    Ty::Struct(*symbol_id, type_args),
+                    Ty::Struct(*symbol_id, type_args.clone()),
                     struct_def.canonical_type_vars(),
                     constraints,
                 ));
@@ -825,11 +825,13 @@ impl<'a> TypeChecker<'a> {
                     expr_id: *callee,
                     initializes_id: *symbol_id,
                     args: arg_tys.clone(),
+                    type_args,
                     func_ty: placeholder.clone(),
                     result_ty: ret_var.clone(),
                 });
             }
             _ => {
+                let _s = tracing::trace_span!("non-struct call").entered();
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
