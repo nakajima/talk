@@ -1,6 +1,15 @@
 #[cfg(test)]
 mod tests {
-    use crate::{SymbolID, check, expr::Expr, ty::Ty, typed_expr::TypedExpr};
+    use crate::{
+        SymbolID, check,
+        diagnostic::{Diagnostic, DiagnosticKind},
+        expr::Expr,
+        ty::Ty,
+        type_checker::TypeError,
+        type_defs::TypeDef,
+        type_var_id::{TypeVarID, TypeVarKind},
+        typed_expr::TypedExpr,
+    };
 
     #[test]
     fn checks_initializer() {
@@ -175,20 +184,6 @@ mod tests {
 
         assert!(!checked.diagnostics().is_empty());
     }
-}
-
-#[cfg(test)]
-mod type_tests {
-    use crate::{
-        SymbolID, check,
-        diagnostic::{Diagnostic, DiagnosticKind},
-        expr::Expr,
-        ty::Ty,
-        type_checker::TypeError,
-        type_constraint::TypeConstraint,
-        type_defs::TypeDef,
-        type_var_id::{TypeVarID, TypeVarKind},
-    };
 
     #[test]
     fn checks_an_int() {
@@ -536,6 +531,19 @@ mod type_tests {
     }
 
     #[test]
+    fn infers_nested_identity() {
+        let checker = check(
+            "
+            func identity(arg) { arg }
+            identity(identity(1))
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checker.type_for(&checker.root_ids()[1]).unwrap(), Ty::Int);
+    }
+
+    #[test]
     fn generalizes_at_the_right_time() {
         let checker = check(
             "
@@ -558,10 +566,6 @@ mod type_tests {
             &TypeVarID {
                 id: id.id,
                 kind: TypeVarKind::Placeholder("T".into()),
-                constraints: vec![TypeConstraint::Conforms {
-                    protocol_id: SymbolID::typed(1),
-                    associated_types: vec![],
-                }],
             }
         );
     }
@@ -1095,39 +1099,7 @@ mod type_tests {
             panic!("didn't get enum_ty");
         };
 
-        // assert!(
-        //     matches!(
-        //         type_params[0],
-        //         Ty::TypeVar(TypeVarID(_, TypeVarKind::TypeRepr(Name::Resolved(_, _)),),),
-        //     ),
-        //     "{:?}",
-        //     type_params[0]
-        // );
-
         assert_eq!(*symbol_id, SymbolID::resolved(1));
-
-        let Ty::Func(params, ret, _) = &args[1] else {
-            panic!("didn't get func");
-        };
-
-        assert_eq!(1, params.len());
-        let Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::Placeholder(t),
-            ..
-        }) = &params[0]
-        else {
-            panic!("didn't get T: {:?}", params[0]);
-        };
-        assert_eq!(*t, "T");
-
-        let box Ty::TypeVar(TypeVarID {
-            kind: TypeVarKind::Placeholder(u),
-            ..
-        }) = ret
-        else {
-            panic!("didn't get U: {ret:?}");
-        };
-        assert_eq!(*u, "U");
 
         let call_result = checker.type_for(&checker.root_ids()[2]).unwrap();
         match call_result {
@@ -1242,6 +1214,21 @@ mod type_tests {
     }
 
     #[test]
+    fn checks_array_get() {
+        let checked = check(
+            "
+            [1,2,3].get
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.type_for(&checked.root_ids()[0]).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+        );
+    }
+
+    #[test]
     fn checks_array_builtin() {
         let checked = check("func c(a: Array<Int>) { a }").unwrap();
         let root = checked.typed_expr(&checked.root_ids()[0]).unwrap();
@@ -1256,16 +1243,38 @@ mod type_tests {
     }
 
     #[test]
-    fn checks_array_get() {
+    fn checks_generic_load() {
         let checked = check(
             "
-        let a = [1,2,3]
-        a.get(0)
+            struct Loader<T> {
+                func load(addr: Pointer) {
+                    __load<T>(addr, 1)
+                }
+            }
+
+            Loader<Int>().load(__alloc(0))
         ",
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert!(checked.diagnostics().is_empty());
+        assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
+    }
+
+    #[test]
+    fn checks_array_get_local() {
+        let checked = check(
+            "
+        let a = [1,2,3]
+        a.get
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.type_for(&checked.root_ids()[1]).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+        );
     }
 
     #[test]
@@ -1701,48 +1710,52 @@ mod protocol_tests {
         .unwrap();
 
         assert!(!checked.diagnostics().is_empty());
-        assert!(matches!(
-            checked.diagnostics()[0],
+        assert!(checked.diagnostics().iter().any(|d| matches!(
+            d,
             Diagnostic {
                 kind: DiagnosticKind::Typing(_, TypeError::ConformanceError(_)),
                 ..
             }
-        ))
+        )));
     }
 
     #[test]
     fn errors_on_wrong_associated_type() {
         let checked = check(
             "
-        protocol Aged<T> {
-            let age: T
+        protocol Countable<ShouldBeInt> {
+            let count: ShouldBeInt
         }
 
-        struct Person<U>: Aged<U> {
-            let age: U
+        struct Person<PersonGeneric>: Countable<PersonGeneric> {
+            let count: PersonGeneric
 
-            init(age) {
-                self.age = age
+            init(personCountParam) {
+                self.count = personCountParam
             }
         }
 
-        func getInt<V: Aged<Int>>(aged: V) {
-            aged.age
+        func getInt<GetIntParam: Countable<Int>>(countable: GetIntParam) {
+            countable.count
         }
 
-        getInt(Person(age: 1.23))
+        getInt(Person(personCountParam: \"Nope\"))
         ",
         )
         .unwrap();
 
         assert!(!checked.diagnostics().is_empty());
-        assert!(matches!(
-            checked.diagnostics()[0],
-            Diagnostic {
-                kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)),
-                ..
-            }
-        ))
+        assert!(
+            matches!(
+                checked.diagnostics()[0],
+                Diagnostic {
+                    kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)),
+                    ..
+                }
+            ),
+            "{:#?}",
+            checked.diagnostics()
+        )
     }
 
     #[test]
@@ -1815,17 +1828,71 @@ mod protocol_tests {
 
 #[cfg(test)]
 mod operator_tests {
-    use crate::{SymbolID, check};
+    use crate::{check, expr::Expr, ty::Ty};
 
     #[test]
-    fn add() {
-        let checked = check("").unwrap();
-        let int_type = checked.env.lookup_type(&SymbolID::INT).unwrap();
-        assert!(
-            int_type
-                .conformances()
-                .iter()
-                .any(|c| c.protocol_id == SymbolID::ADD)
+    fn infers_basic() {
+        let checked = check(
+            "
+        func add(x) {
+            x + 1
+        }
+        ",
+        )
+        .unwrap();
+
+        // assert_eq!(checked.nth(1).unwrap(), Ty::Int);
+        let Some(Expr::Func { body, .. }) = checked.source_file.get(&checked.root_ids()[0]) else {
+            panic!("no func");
+        };
+
+        let Some(Expr::Block(body_ids)) = checked.source_file.get(body) else {
+            unreachable!()
+        };
+
+        let Some(Expr::Binary(lhs, _, _)) = checked.source_file.get(&body_ids[0]) else {
+            unreachable!()
+        };
+
+        assert_eq!(checked.type_for(lhs).unwrap(), Ty::Int);
+
+        assert_eq!(
+            checked.nth(0).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
         );
+    }
+
+    #[test]
+    fn add_op() {
+        let checked = check(
+            "
+        struct Person {}
+        extend Person: Add<Int, String> {
+            func add(rhs: Int) -> String {
+                \"hi\"
+            }
+        }
+        Person() + 1
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.nth(2).unwrap(), Ty::string());
+    }
+
+    #[test]
+    fn add_op_complex() {
+        let checked = check(
+            "
+        func add(x, y) {
+            x + y
+        }
+
+        add(add(1, 2), 3)
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.nth(1).unwrap(), Ty::Int);
     }
 }

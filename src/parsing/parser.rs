@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use tracing::info_span;
+
 #[cfg(test)]
 use crate::filler::FullExpr;
 use crate::{
@@ -107,7 +109,8 @@ impl ParserError {
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(env.session.clone(), lexer, file_path, &mut env);
+    let session = SharedCompilationSession::default();
+    let mut parser = Parser::new(session.clone(), lexer, file_path, &mut env);
 
     parser.parse();
     parser.parse_tree
@@ -117,7 +120,8 @@ pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
 pub fn parse_fill(code: &str) -> Vec<FullExpr> {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(env.session.clone(), lexer, PathBuf::from("-"), &mut env);
+    let session = SharedCompilationSession::default();
+    let mut parser = Parser::new(session.clone(), lexer, PathBuf::from("-"), &mut env);
 
     parser.parse();
 
@@ -132,7 +136,12 @@ pub fn parse_fill(code: &str) -> Vec<FullExpr> {
 pub fn parse_with_comments(code: &str) -> SourceFile {
     let lexer = Lexer::preserving_comments(code);
     let mut env = Environment::default();
-    let mut parser = Parser::new(env.session.clone(), lexer, PathBuf::from("-"), &mut env);
+    let mut parser = Parser::new(
+        SharedCompilationSession::default(),
+        lexer,
+        PathBuf::from("-"),
+        &mut env,
+    );
 
     parser.parse();
     parser.parse_tree
@@ -145,7 +154,7 @@ pub fn parse_with_session(
 ) -> (SourceFile, SharedCompilationSession) {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
-    let session = env.session.clone();
+    let session = SharedCompilationSession::default();
     let mut parser = Parser::new(session.clone(), lexer, file_path, &mut env);
 
     parser.parse();
@@ -173,6 +182,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) {
+        let _s = info_span!("parsing", path = self.parse_tree.path.to_str()).entered();
         // Prime the pump
         self.advance();
         self.advance();
@@ -185,12 +195,12 @@ impl<'a> Parser<'a> {
                 return;
             }
 
-            log::trace!("{current:?}");
+            tracing::trace!("{current:?}");
 
             match self.parse_with_precedence(Precedence::Assignment) {
                 Ok(expr) => self.parse_tree.push_root(expr),
                 Err(err) => {
-                    log::error!("{}", err.message());
+                    tracing::error!("{}", err.message());
                     self.add_diagnostic(Diagnostic::parser(
                         self.parse_tree.path.clone(),
                         current,
@@ -211,7 +221,7 @@ impl<'a> Parser<'a> {
     }
 
     fn recover(&mut self) {
-        log::trace!("Recovering parser: {:?}", self.current);
+        tracing::trace!("Recovering parser: {:?}", self.current);
 
         while let Some(current) = &self.current {
             use TokenKind::*;
@@ -237,7 +247,7 @@ impl<'a> Parser<'a> {
 
     fn skip_semicolons_and_newlines(&mut self) {
         while self.peek_is(TokenKind::Semicolon) || self.peek_is(TokenKind::Newline) {
-            log::trace!("Skipping {:?}", self.current);
+            tracing::trace!("Skipping {:?}", self.current);
             self.advance();
         }
     }
@@ -277,9 +287,9 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        let next_id = self.env.next_id();
+        let next_id = self.env.next_expr_id();
 
-        log::trace!("Add [{next_id}] {expr:?}");
+        tracing::trace!("Add [{next_id}] {expr:?}");
 
         Ok(self.parse_tree.add(next_id, expr, expr_meta))
     }
@@ -304,7 +314,7 @@ impl<'a> Parser<'a> {
 
     #[must_use]
     fn push_source_location(&mut self) -> LocToken {
-        log::trace!("push_source_location: {:?}", self.current);
+        tracing::trace!("push_source_location: {:?}", self.current);
         #[allow(clippy::unwrap_used)]
         let start = SourceLocationStart {
             token: self.current.clone().unwrap(),
@@ -400,7 +410,7 @@ impl<'a> Parser<'a> {
     fn struct_body(&mut self) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
-        log::info!("in struct body: {:?}", self.current);
+        tracing::info!("in struct body: {:?}", self.current);
         self.consume(TokenKind::LeftBrace)?;
         self.skip_semicolons_and_newlines();
 
@@ -459,7 +469,7 @@ impl<'a> Parser<'a> {
 
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_semicolons_and_newlines();
-            log::info!("in struct body: {:?}", self.current);
+            tracing::info!("in struct body: {:?}", self.current);
             match self.current {
                 some_kind!(Let) => {
                     members.push(self.property()?);
@@ -670,12 +680,12 @@ impl<'a> Parser<'a> {
                 return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             };
 
-            log::debug!("unqualified variant");
+            tracing::debug!("unqualified variant");
 
             let mut fields: Vec<ExprID> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
-                    log::trace!("adding arg: {:?}", self.current);
+                    tracing::trace!("adding arg: {:?}", self.current);
                     let tok = self.push_source_location();
                     let pattern = self.parse_match_pattern()?;
                     fields.push(self.add_expr(Expr::Pattern(pattern), tok)?);
@@ -1276,7 +1286,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
-        log::trace!(
+        tracing::trace!(
             "Parsing {:?} with precedence: {:?}",
             self.current,
             precedence

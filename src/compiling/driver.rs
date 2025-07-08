@@ -10,7 +10,6 @@ use crate::{
     },
     environment::Environment,
     lowering::ir_module::IRModule,
-    prelude::compile_prelude,
     source_file,
 };
 
@@ -22,11 +21,11 @@ pub struct DriverConfig {
 }
 
 impl DriverConfig {
-    pub fn new_environment(&self, session: SharedCompilationSession) -> Environment {
+    pub fn new_environment(&self) -> Environment {
         if self.include_prelude {
-            compile_prelude().environment.clone()
+            crate::prelude::compile_prelude().environment.clone()
         } else {
-            Environment::new(session)
+            Environment::new()
         }
     }
 }
@@ -58,12 +57,12 @@ impl Default for Driver {
 impl Driver {
     pub fn new(config: DriverConfig) -> Self {
         let session = SharedCompilationSession::new(CompilationSession::new().into());
-        let environment = config.new_environment(session.clone());
+        let environment = config.new_environment();
 
         Self {
             units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
             symbol_table: if config.include_prelude {
-                compile_prelude().symbols.clone()
+                crate::prelude::compile_prelude().symbols.clone()
             } else {
                 SymbolTable::base()
             },
@@ -98,7 +97,7 @@ impl Driver {
         }
 
         // We don't have this file, so add it to the default unit
-        log::info!("adding {path:?} to default unit");
+        tracing::info!("adding {path:?} to default unit");
         self.units[0].input.push(path.to_path_buf());
         self.units[0]
             .src_cache
@@ -118,11 +117,11 @@ impl Driver {
 
         for unit in self.units.clone() {
             let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table);
+            let resolved = parsed.resolved(&mut self.symbol_table, &self.config);
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
 
             let module = if self.config.include_prelude {
-                compile_prelude().module.clone()
+                crate::prelude::compile_prelude().module.clone()
             } else {
                 IRModule::new()
             };
@@ -137,7 +136,7 @@ impl Driver {
         let mut result = vec![];
         for unit in self.units.clone() {
             let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table);
+            let resolved = parsed.resolved(&mut self.symbol_table, &self.config);
             let typed = resolved.typed(&mut self.symbol_table, &self.config);
             result.push(typed);
         }
@@ -173,7 +172,7 @@ impl Driver {
         if let Ok(session) = &mut self.session.lock() {
             session.clear_diagnostics()
         } else {
-            log::error!("Unable to clear diagnostics")
+            tracing::error!("Unable to clear diagnostics")
         }
 
         while result.is_empty() && round < 3 {
@@ -211,7 +210,7 @@ impl Driver {
     ) -> Option<Vec<Diagnostic>> {
         let mut result = vec![];
         for unit in units {
-            log::info!("checking for diagnostics in {path:?}");
+            tracing::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
                 && let Some(diagnostics) = self.session.lock().ok()?.diagnostics_for(path)
@@ -269,7 +268,7 @@ impl Driver {
         for unit in self.units.clone() {
             let typed = unit
                 .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table)
+                .resolved(&mut self.symbol_table, &self.config)
                 .typed(&mut self.symbol_table, &self.config);
             for file in typed.stage.files {
                 if *path == file.path {
@@ -288,7 +287,7 @@ impl Driver {
         for unit in self.units.clone() {
             let typed = unit
                 .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table);
+                .resolved(&mut self.symbol_table, &self.config);
             if let Some(file) = typed.source_file(&PathBuf::from(path)) {
                 return Some(file.clone());
             }

@@ -1,21 +1,25 @@
 use std::{collections::HashMap, hash::Hash};
 
+use tracing::trace_span;
+
 use crate::{
     NameResolved, SymbolID, SymbolTable, Typed,
     compiling::compilation_session::SharedCompilationSession,
     conformance_checker::ConformanceError,
-    constraint_solver::{Constraint, ConstraintSolver, Substitutions},
+    constraint::Constraint,
+    constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     expr::{Expr, IncompleteExpr, Pattern},
+    lsp::formatter::Formatter,
     name::Name,
     name_resolver::NameResolverError,
     parser::ExprID,
     source_file::SourceFile,
+    substitutions::Substitutions,
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
-    type_constraint::TypeConstraint,
-    type_defs::TypeDef,
+    type_defs::{TypeDef, protocol_def::Conformance},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -35,6 +39,7 @@ pub enum TypeError {
     UnexpectedType(String, String),
     Mismatch(String, String),
     ArgumentError(String),
+    Defer(ConformanceError),
     Handled, // If we've already reported it
     OccursConflict,
     ConformanceError(Vec<ConformanceError>),
@@ -45,6 +50,7 @@ pub enum TypeError {
 impl TypeError {
     pub fn message(&self) -> String {
         match self {
+            Self::Defer(err) => format!("{err:?}"),
             Self::Unresolved(name) => format!("Unresolved name: {name}"),
             Self::NameResolution(e) => e.message(),
             Self::UnknownEnum(name) => format!("No enum named {}", name.name_str()),
@@ -74,13 +80,30 @@ impl TypeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme {
-    pub ty: Ty,
-    pub unbound_vars: Vec<TypeVarID>,
+    ty: Ty,
+    unbound_vars: Vec<TypeVarID>,
+    constraints: Vec<Constraint>,
 }
 
 impl Scheme {
-    pub fn new(ty: Ty, unbound_vars: Vec<TypeVarID>) -> Self {
-        Self { ty, unbound_vars }
+    pub fn new(ty: Ty, unbound_vars: Vec<TypeVarID>, constraints: Vec<Constraint>) -> Self {
+        Self {
+            ty,
+            unbound_vars,
+            constraints,
+        }
+    }
+
+    pub fn ty(&self) -> Ty {
+        self.ty.clone()
+    }
+
+    pub fn unbound_vars(&self) -> Vec<TypeVarID> {
+        self.unbound_vars.clone()
+    }
+
+    pub fn constraints(&self) -> Vec<Constraint> {
+        self.constraints.clone()
     }
 }
 
@@ -100,7 +123,7 @@ macro_rules! indented_println {
     ($env:expr, $fmt:literal $(, $args:expr)*) => {
         // Expander:
         // This is the code that will be generated.
-        log::trace!(
+        tracing::trace!(
             // `concat!` joins the initial indent placeholder "{}" with your format string.
             // e.g., concat!("{}", "Infer node {}: {:?}") -> "{}Infer node {}: {:?}"
             concat!("{}", $fmt),
@@ -207,7 +230,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(typed_expr) = env.typed_exprs.get(id)
             && expected.is_none()
         {
-            log::trace!("{typed_expr:?}, returning from cache");
+            tracing::trace!("{typed_expr:?}, returning from cache");
             return Ok(typed_expr.ty.clone());
         }
 
@@ -215,7 +238,15 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unknown(format!("No expr found with id {id}")));
         };
 
-        log::trace!("⋈ Infer [{id}]: {expr:?}");
+        #[cfg(debug_assertions)]
+        {
+            let _s = trace_span!(
+                "infer_node",
+                expr = Formatter::format_single_expr(&source_file.as_parsed(), id)
+            )
+            .entered();
+        }
+
         let mut ty = match &expr {
             Expr::Incomplete(expr_id) => {
                 self.handle_incomplete(expr_id, expected, env, source_file)
@@ -382,7 +413,7 @@ impl<'a> TypeChecker<'a> {
                 env.typed_exprs.insert(*id, typed_expr);
             }
             Err(e) => {
-                log::error!("error inferring {:?}: {:?}", source_file.get(id), e);
+                tracing::error!("error inferring {:?}: {:?}", source_file.get(id), e);
                 if let Ok(mut lock) = self.session.lock() {
                     lock.add_diagnostic(Diagnostic::typing(
                         source_file.path.clone(),
@@ -397,6 +428,7 @@ impl<'a> TypeChecker<'a> {
         ty
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn handle_incomplete(
         &mut self,
         expr: &IncompleteExpr,
@@ -413,6 +445,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_protocol(
         &mut self,
         name: &Name,
@@ -438,6 +471,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Protocol(*symbol_id, inferred_associated_types))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_property(
         &mut self,
         expr_id: &ExprID,
@@ -471,6 +505,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, _source_file))]
     fn infer_enum_decl(
         &self,
         enum_id: &SymbolID,
@@ -482,6 +517,7 @@ impl<'a> TypeChecker<'a> {
         Ok(scheme.ty.clone())
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_enum_variant(
         &mut self,
         _name: &Name,
@@ -497,6 +533,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::EnumVariant(*enum_id, values))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_parameter(
         &mut self,
         name: &Name,
@@ -507,16 +544,23 @@ impl<'a> TypeChecker<'a> {
         let param_ty = if let Some(param_ty) = &param_ty {
             self.infer_node(param_ty, env, &None, source_file)?
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), vec![]))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str())))
         };
 
         // Parameters are monomorphic inside the function body
-        let scheme = Scheme::new(param_ty.clone(), vec![]);
+        let constraints = env
+            .constraints()
+            .iter()
+            .filter(|c| c.contains_ty(&param_ty))
+            .cloned()
+            .collect();
+        let scheme = Scheme::new(param_ty.clone(), vec![], constraints);
         env.declare(name.symbol_id()?, scheme)?;
 
         Ok(param_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_init(
         &mut self,
         struct_id: &SymbolID,
@@ -543,6 +587,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_extension(
         &mut self,
         name: &Name,
@@ -573,6 +618,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_struct(
         &mut self,
         name: &Name,
@@ -602,6 +648,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Struct(*symbol_id, inferred_generics))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_array(
         &mut self,
         items: &[ExprID],
@@ -618,11 +665,12 @@ impl<'a> TypeChecker<'a> {
         let ty = tys
             .into_iter()
             .last()
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element, vec![])));
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
 
         Ok(Ty::Struct(SymbolID::ARRAY, vec![ty]))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_return(
         &mut self,
         rhs: &Option<ExprID>,
@@ -637,6 +685,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_loop(
         &mut self,
         cond: &Option<ExprID>,
@@ -653,6 +702,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Void)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_if(
         &mut self,
         condition: &ExprID,
@@ -676,6 +726,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_call(
         &mut self,
@@ -691,7 +742,7 @@ impl<'a> TypeChecker<'a> {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn, vec![]);
+            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn);
             Ty::TypeVar(call_return_var)
         };
 
@@ -739,7 +790,7 @@ impl<'a> TypeChecker<'a> {
 
                 if !struct_def.type_parameters.is_empty() {
                     for (i, type_arg) in struct_def.type_parameters.iter().enumerate() {
-                        type_args.push(if inferred_type_args.len().saturating_sub(1) > i {
+                        type_args.push(if i < inferred_type_args.len() {
                             inferred_type_args[i].clone()
                         } else {
                             env.placeholder(
@@ -752,20 +803,35 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
-                ret_var = env.instantiate(&Scheme {
-                    ty: Ty::Struct(*symbol_id, type_args),
-                    unbound_vars: struct_def.canonical_type_vars(),
-                });
+                let constraints = env
+                    .constraints()
+                    .iter()
+                    .filter(|c| {
+                        struct_def
+                            .canonical_type_parameters()
+                            .iter()
+                            .any(|p| c.contains_ty(p))
+                    })
+                    .cloned()
+                    .collect::<Vec<Constraint>>();
+
+                ret_var = env.instantiate(&Scheme::new(
+                    Ty::Struct(*symbol_id, type_args.clone()),
+                    struct_def.canonical_type_vars(),
+                    constraints,
+                ));
 
                 env.constrain(Constraint::InitializerCall {
                     expr_id: *callee,
                     initializes_id: *symbol_id,
                     args: arg_tys.clone(),
+                    type_args,
                     func_ty: placeholder.clone(),
                     result_ty: ret_var.clone(),
                 });
             }
             _ => {
+                let _s = tracing::trace_span!("non-struct call").entered();
                 let callee_ty = self.infer_node(callee, env, &None, source_file)?;
                 let expected_callee_ty =
                     Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
@@ -780,6 +846,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ret_var)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_assignment(
         &mut self,
         env: &mut Environment,
@@ -797,6 +864,7 @@ impl<'a> TypeChecker<'a> {
         Ok(rhs_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_type_repr(
         &mut self,
@@ -825,7 +893,7 @@ impl<'a> TypeChecker<'a> {
 
         if *is_type_parameter {
             let mut unbound_vars = vec![];
-            let mut type_constraints = vec![];
+            let mut conformance_data = vec![];
 
             for id in conformances {
                 let ty = self.infer_node(id, env, &None, source_file)?;
@@ -841,24 +909,32 @@ impl<'a> TypeChecker<'a> {
                     }
                 }));
 
-                type_constraints.push(TypeConstraint::Conforms {
-                    protocol_id,
-                    associated_types: associated_types.clone(),
-                });
+                conformance_data.push((id, protocol_id, associated_types));
             }
 
             let ref ty @ Ty::TypeVar(ref type_var_id) =
-                env.placeholder(id, name.name_str(), &symbol_id, type_constraints)
+                env.placeholder(id, name.name_str(), &symbol_id, vec![])
             else {
                 unreachable!()
             };
 
+            let mut constraints = vec![];
+
+            for (id, protocol_id, associated_types) in conformance_data {
+                let constraint = Constraint::ConformsTo {
+                    expr_id: *id,
+                    ty: ty.clone(),
+                    conformance: Conformance::new(protocol_id, associated_types),
+                };
+
+                tracing::info!("Constraining type repr {constraint:?}");
+                constraints.push(constraint.clone());
+                env.constrain(constraint)
+            }
+
             unbound_vars.push(type_var_id.clone());
 
-            let scheme = Scheme {
-                ty: ty.clone(),
-                unbound_vars,
-            };
+            let scheme = Scheme::new(ty.clone(), unbound_vars, constraints);
 
             env.declare(symbol_id, scheme.clone())?;
 
@@ -868,7 +944,7 @@ impl<'a> TypeChecker<'a> {
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
-                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), vec![]))
+                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id)))
             } else {
                 env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
             };
@@ -890,6 +966,7 @@ impl<'a> TypeChecker<'a> {
         Ok(instantiated)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_func_type_repr(
         &mut self,
         env: &mut Environment,
@@ -908,6 +985,7 @@ impl<'a> TypeChecker<'a> {
         Ok(ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_tuple_type_repr(
         &mut self,
         env: &mut Environment,
@@ -922,6 +1000,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Tuple(inferred_types))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &mut self,
@@ -945,14 +1024,15 @@ impl<'a> TypeChecker<'a> {
         let mut inferred_generics = vec![];
         for generic in generics {
             if let Some(Expr::TypeRepr {
-                name: Name::Resolved(symbol_id, _),
+                name: Name::Resolved(_symbol_id, _),
                 ..
             }) = source_file.get(generic).cloned()
             {
+                let _s = trace_span!("infer_func generic").entered();
                 let ty = self.infer_node(generic, env, &None, source_file)?;
                 inferred_generics.push(ty.clone());
-                let scheme = Scheme::new(ty.clone(), vec![]);
-                env.declare(symbol_id, scheme)?;
+                // let scheme = Scheme::new(ty.clone(), vec![], vec![]);
+                // env.declare(symbol_id, scheme)?;
             } else {
                 return Err(TypeError::Unresolved(
                     "could not resolve generic symbol".into(),
@@ -960,7 +1040,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let expected_ret_ty = if let Some(ret) = ret {
+        let annotated_ret_ty = if let Some(ret) = ret {
             Some(self.infer_node(ret, env, &None, source_file)?)
         } else {
             None
@@ -972,18 +1052,18 @@ impl<'a> TypeChecker<'a> {
             param_vars.push(param_ty);
         }
 
-        let body_ty = self.infer_node(body, env, &expected_ret_ty, source_file)?;
-        let mut ret_ty = body_ty.clone();
+        let mut ret_ty = self.infer_node(body, env, &annotated_ret_ty, source_file)?;
 
-        if let Some(expected_ret_ty) = &expected_ret_ty
+        if let Some(annotated_ret_ty) = &annotated_ret_ty
             && let Some(ret_id) = ret
         {
-            ret_ty = expected_ret_ty.clone();
             env.constrain(Constraint::Equality(
                 *ret_id,
-                body_ty.clone(),
-                expected_ret_ty.clone(),
+                ret_ty.clone(),
+                annotated_ret_ty.clone(),
             ));
+
+            ret_ty = annotated_ret_ty.clone();
         }
 
         env.end_scope();
@@ -999,19 +1079,22 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
+            let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
+                tracing::trace!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
+                existing_scheme.ty = inferred_ty.clone();
+                existing_scheme.clone()
+            } else {
+                Scheme::new(inferred_ty.clone(), vec![], vec![])
+            };
+
             // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
-            env.declare(
-                *symbol_id,
-                Scheme {
-                    ty: inferred_ty.clone(),
-                    unbound_vars: vec![],
-                },
-            )?;
+            env.declare(*symbol_id, new_scheme)?;
         }
 
         Ok(inferred_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_let(
         &mut self,
         env: &mut Environment,
@@ -1025,24 +1108,24 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(expected) = expected {
             expected.clone()
         } else {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, vec![]))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::Let))
         };
 
-        let scheme = Scheme::new(rhs_ty.clone(), vec![]);
+        let scheme = Scheme::new(rhs_ty.clone(), vec![], vec![]);
         env.declare(symbol_id, scheme)?;
 
         Ok(rhs_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env))]
     fn infer_variable(&self, env: &mut Environment, name: &Name) -> Result<Ty, TypeError> {
         match name {
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     if let Ty::Protocol(symbol_id, _) = self_ {
-                        Ok(Ty::TypeVar(env.new_type_variable(
-                            TypeVarKind::SelfVar(*symbol_id),
-                            vec![],
-                        )))
+                        Ok(Ty::TypeVar(
+                            env.new_type_variable(TypeVarKind::SelfVar(*symbol_id)),
+                        ))
                     } else {
                         Ok(self_.clone())
                     }
@@ -1052,20 +1135,36 @@ impl<'a> TypeChecker<'a> {
             }
             Name::Resolved(symbol_id, _) => {
                 let scheme = env.lookup_symbol(symbol_id)?.clone();
-                let ty = env.instantiate(&scheme);
-                Ok(ty)
+
+                // If the symbol refers to a generic type parameter that is already represented
+                // by a canonical / placeholder type-variable, we should NOT create a fresh
+                // instantiation every time it is referenced inside the same scope. Doing so
+                // would break the expected equality between occurrences (e.g. the return type
+                // of `fizz<T>` must be the same `T` that appears in its parameter list).
+                // Instead, we use the scheme's own type directly.
+
+                match scheme.ty() {
+                    Ty::TypeVar(ref tv)
+                        if matches!(
+                            tv.kind,
+                            TypeVarKind::CanonicalTypeParameter(_) | TypeVarKind::Placeholder(_)
+                        ) =>
+                    {
+                        Ok(scheme.ty())
+                    }
+                    _ => Ok(env.instantiate(&scheme)),
+                }
             }
             Name::Raw(name_str) => Err(TypeError::Unresolved(name_str.clone())),
-            Name::SelfType => {
-                log::error!("Self variable inferred: {:?}", env.selfs.last());
-                env.selfs
-                    .last()
-                    .cloned()
-                    .ok_or(TypeError::Unknown("No type found for Self".to_string()))
-            }
+            Name::SelfType => env
+                .selfs
+                .last()
+                .cloned()
+                .ok_or(TypeError::Unknown("No type found for Self".to_string())),
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_tuple(
         &mut self,
         types: &[ExprID],
@@ -1084,6 +1183,7 @@ impl<'a> TypeChecker<'a> {
         Ok(Ty::Tuple(inferred_types))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_unary(
         &mut self,
         rhs: &ExprID,
@@ -1094,25 +1194,39 @@ impl<'a> TypeChecker<'a> {
         self.infer_node(rhs, env, expected, source_file)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     #[allow(clippy::too_many_arguments)]
     fn infer_binary(
         &mut self,
-        _id: &ExprID,
+        id: &ExprID,
         lhs_id: &ExprID,
         rhs_id: &ExprID,
         op: &TokenKind,
-        _expected: &Option<Ty>,
+        expected: &Option<Ty>,
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Ty, TypeError> {
         let lhs = self.infer_node(lhs_id, env, &None, source_file)?;
         let rhs = self.infer_node(rhs_id, env, &None, source_file)?;
 
-        env.constrain(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
-
-        // TODO: For now we're just gonna hardcode these
         use TokenKind::*;
         match op {
+            Plus => {
+                let ret_ty = expected.clone().unwrap_or_else(|| {
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone())))
+                });
+                env.constrain(Constraint::ConformsTo {
+                    expr_id: *id,
+                    ty: lhs,
+                    conformance: Conformance {
+                        protocol_id: SymbolID::ADD,
+                        associated_types: vec![rhs, ret_ty.clone()],
+                    },
+                });
+
+                Ok(ret_ty)
+            }
+
             // Bool ops
             EqualsEquals => Ok(Ty::Bool),
             BangEquals => Ok(Ty::Bool),
@@ -1122,10 +1236,14 @@ impl<'a> TypeChecker<'a> {
             LessEquals => Ok(Ty::Bool),
 
             // Same type ops
-            _ => Ok(lhs),
+            _ => {
+                env.constrain(Constraint::Equality(*lhs_id, lhs.clone(), rhs));
+                Ok(lhs)
+            }
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_block(
         &mut self,
         id: &ExprID,
@@ -1176,6 +1294,7 @@ impl<'a> TypeChecker<'a> {
         Ok(block_return_ty.unwrap_or(Ty::Void))
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, source_file))]
     fn infer_match(
         &mut self,
         env: &mut Environment,
@@ -1189,12 +1308,23 @@ impl<'a> TypeChecker<'a> {
             .map(|id| self.infer_node(id, env, &Some(pattern_ty.clone()), source_file))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // TODO: Make sure the return type is the same for all arms
-        let ret_ty = arms_ty.last().cloned().unwrap_or(Ty::Void);
+        let ret_ty = arms_ty.first().cloned().unwrap_or(Ty::Void);
+
+        // Make sure the return type is the same for all arms
+        if arms_ty.len() > 1 {
+            for (i, arm_ty) in arms_ty[1..].iter().enumerate() {
+                env.constrain(Constraint::Equality(
+                    arms[i + 1],
+                    ret_ty.clone(),
+                    arm_ty.clone(),
+                ));
+            }
+        }
 
         Ok(ret_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_match_arm(
         &mut self,
         env: &mut Environment,
@@ -1210,10 +1340,12 @@ impl<'a> TypeChecker<'a> {
         Ok(body_ty)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, _env))]
     fn infer_pattern_variant(&self, _id: &ExprID, _env: &mut Environment) -> Result<Ty, TypeError> {
         Ok(Ty::Void)
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_member(
         &mut self,
         id: &ExprID,
@@ -1231,7 +1363,7 @@ impl<'a> TypeChecker<'a> {
                     expected.clone()
                 } else {
                     let member_var =
-                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]);
+                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()));
                     Ty::TypeVar(member_var.clone())
                 };
 
@@ -1247,8 +1379,8 @@ impl<'a> TypeChecker<'a> {
                 // Qualified: Option.some
                 let receiver_ty = self.infer_node(receiver_id, env, &None, source_file)?;
 
-                let member_var =                     Ty::TypeVar(
-                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), vec![]),
+                let member_var = Ty::TypeVar(
+                    env.new_type_variable(TypeVarKind::Member(member_name.to_string())),
                 );
 
                 // Add a constraint that links the receiver type to the member
@@ -1264,6 +1396,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_pattern_expr(
         &mut self,
         id: &ExprID,
@@ -1282,6 +1415,7 @@ impl<'a> TypeChecker<'a> {
         Ok(expected.clone())
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
     fn infer_pattern(
         &mut self,
         _id: &ExprID,
@@ -1290,20 +1424,17 @@ impl<'a> TypeChecker<'a> {
         expected: &Ty,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
-        log::trace!("Inferring pattern: {pattern:?}");
+        tracing::trace!("Inferring pattern: {pattern:?}");
         match pattern {
             Pattern::LiteralInt(_) => (),
             Pattern::LiteralFloat(_) => (),
             Pattern::LiteralTrue => (),
             Pattern::LiteralFalse => (),
             Pattern::Bind(name) => {
-                log::info!("inferring bind pattern: {name:?}");
+                tracing::info!("inferring bind pattern: {name:?}");
                 if let Name::Resolved(symbol_id, _) = name {
                     // Use the expected type for this binding
-                    let scheme = Scheme {
-                        ty: expected.clone(),
-                        unbound_vars: vec![],
-                    };
+                    let scheme = Scheme::new(expected.clone(), vec![], vec![]);
                     env.declare(*symbol_id, scheme)?;
                 }
             }
@@ -1337,7 +1468,7 @@ impl<'a> TypeChecker<'a> {
                         // We need to substitute the enum's type parameters with the actual type args
 
                         // Create substitution map: enum type param -> concrete type arg
-                        let mut substitutions: HashMap<TypeVarID, Ty> = HashMap::new();
+                        let mut substitutions = Substitutions::new();
                         for (param, arg_ty) in enum_def.type_parameters.iter().zip(type_args.iter())
                         {
                             substitutions.insert(param.type_var.clone(), arg_ty.clone());
@@ -1347,10 +1478,7 @@ impl<'a> TypeChecker<'a> {
                         let concrete_field_types: Vec<Ty> = values
                             .iter()
                             .map(|field_ty| {
-                                ConstraintSolver::<NameResolved>::substitute_ty_with_map(
-                                    field_ty,
-                                    &substitutions,
-                                )
+                                ConstraintSolver::substitute_ty_with_map(field_ty, &substitutions)
                             })
                             .collect();
 
@@ -1385,14 +1513,13 @@ impl<'a> TypeChecker<'a> {
                         for field_pattern in fields {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
-                                vec![],
                             ));
 
                             self.infer_node(field_pattern, env, &Some(field_ty), source_file)
                                 .unwrap_or(Ty::Void);
                         }
                     }
-                    _ => log::error!(
+                    _ => tracing::error!(
                         "Unhandled pattern variant: {pattern:?}, expected: {expected:?}"
                     ),
                 }

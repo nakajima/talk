@@ -35,7 +35,7 @@ fn lower_free(
     _typed_callee: &TypedExpr,
     _args: &[ExprID],
 ) -> Result<Option<Register>, IRError> {
-    log::warn!("TODO: lower __free");
+    tracing::warn!("TODO: lower __free");
 
     Ok(None)
 }

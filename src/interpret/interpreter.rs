@@ -24,6 +24,7 @@ pub enum InterpreterError {
     UnreachableReached,
     IRError(IRError),
     Unknown(String),
+    InvalidProgram,
 }
 
 #[derive(Debug)]
@@ -60,7 +61,7 @@ impl IRInterpreter {
     }
 
     pub fn run(mut self) -> Result<Value, InterpreterError> {
-        log::info!("Monomorphizing module");
+        tracing::info!("Monomorphizing module");
 
         #[allow(clippy::print_with_newline)]
         if std::env::var("IR").is_ok() {
@@ -94,7 +95,7 @@ impl IRInterpreter {
                 }
             }
             Err(err) => {
-                log::error!("{err:?}");
+                tracing::error!("{err:?}");
                 self.dump();
                 return Err(err);
             }
@@ -140,9 +141,9 @@ impl IRInterpreter {
     }
 
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
-        log::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
+        tracing::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
         let frame = self.call_stack.last().unwrap();
-        log::info!(
+        tracing::info!(
             "\n{}:{}\n{:?}\n{}\n\t{:?}",
             frame.function.name,
             frame
@@ -200,14 +201,14 @@ impl IRInterpreter {
 
                 for (reg, pred) in &predecessors.0 {
                     if frame.pred == Some(*pred) {
-                        log::trace!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
+                        tracing::trace!("Phi check {:?}: {:?} ({:?})", reg, pred, frame.pred);
                         self.set_register_value(&dest, self.register_value(reg));
                         self.call_stack.last_mut().unwrap().pc += 1;
                         return Ok(None);
                     }
                 }
 
-                log::error!("Phi failed from {:?}: {:?}", predecessors, frame.pred);
+                tracing::error!("Phi failed from {:?}: {:?}", predecessors, frame.pred);
 
                 return Err(InterpreterError::PredecessorNotFound);
             }
@@ -218,7 +219,7 @@ impl IRInterpreter {
                     .iter()
                     .position(|f| f.name == name)
                     .unwrap_or_else(|| {
-                        log::error!(
+                        tracing::error!(
                             "couldn't find ref {} in {:?}",
                             name,
                             self.program
@@ -476,7 +477,7 @@ impl IRInterpreter {
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
-        log::trace!("set {register:?} to {value:?}");
+        tracing::trace!("set {register:?} to {value:?}");
         let frame = self.call_stack.last_mut().expect("Stack underflow");
         let stack = self
             .memory
@@ -548,9 +549,12 @@ mod tests {
         let unit = driver.lower().into_iter().next().unwrap();
 
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let module = unit.module();
 
+        if !diagnostics.is_empty() {
+            return Err(InterpreterError::InvalidProgram);
+        }
+
+        let module = unit.module();
         let mono = Monomorphizer::new(&unit.env).run(module);
 
         IRInterpreter::new(mono).run()

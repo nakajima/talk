@@ -2,7 +2,9 @@ use std::fmt::Display;
 
 use crate::{
     SymbolID,
+    environment::Environment,
     type_checker::{FuncParams, FuncReturning},
+    type_defs::TypeDef,
     type_var_id::TypeVarID,
 };
 
@@ -105,6 +107,19 @@ impl Ty {
 
     pub fn is_concrete(&self) -> bool {
         !matches!(self, Ty::TypeVar(_))
+    }
+
+    pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
+        let sym = match self {
+            Ty::Struct(sym, _) | Ty::Enum(sym, _) | Ty::Protocol(sym, _) => sym,
+            Ty::Int => &SymbolID::INT,
+            Ty::Float => &SymbolID::FLOAT,
+            Ty::Bool => &SymbolID::BOOL,
+            Ty::Pointer => &SymbolID::POINTER,
+            _ => return None,
+        };
+
+        env.lookup_type(sym)
     }
 
     pub fn replace<F: Fn(&Ty) -> bool>(&self, replacement: Ty, f: &F) -> Ty {

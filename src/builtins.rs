@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
@@ -9,15 +9,15 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-struct Builtin {
+pub struct Builtin {
     id: i32,
     info: SymbolInfo,
-    ty: Ty,
-    unbound_vars: Vec<TypeVarID>,
+    pub ty: Ty,
+    pub unbound_vars: Vec<TypeVarID>,
     type_def: Option<TypeDef>,
 }
 
-fn builtins() -> Vec<Builtin> {
+pub fn builtins() -> Vec<Builtin> {
     vec![
         Builtin {
             id: -1,
@@ -108,15 +108,13 @@ fn builtins() -> Vec<Builtin> {
                 vec![Ty::Int /* capacity */],
                 Ty::Pointer.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -5,
+                    id: 0,
                     kind: TypeVarKind::Element,
-                    constraints: vec![],
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -5,
+                id: 0,
                 kind: TypeVarKind::Element,
-                constraints: vec![],
             }],
             type_def: None,
         },
@@ -133,15 +131,13 @@ fn builtins() -> Vec<Builtin> {
                 vec![Ty::Pointer, Ty::Int],
                 Ty::Pointer.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -4,
+                    id: 1,
                     kind: TypeVarKind::Element,
-                    constraints: vec![],
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -4,
+                id: 1,
                 kind: TypeVarKind::Element,
-                constraints: vec![],
             }],
             type_def: None,
         },
@@ -172,22 +168,19 @@ fn builtins() -> Vec<Builtin> {
                     Ty::Pointer,
                     Ty::Int,
                     Ty::TypeVar(TypeVarID {
-                        id: -8,
+                        id: 2,
                         kind: TypeVarKind::Element,
-                        constraints: vec![],
                     }),
                 ],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -8,
+                    id: 2,
                     kind: TypeVarKind::Element,
-                    constraints: vec![],
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -8,
+                id: 2,
                 kind: TypeVarKind::Element,
-                constraints: vec![],
             }],
             type_def: None,
         },
@@ -203,21 +196,18 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::Pointer, Ty::Int],
                 Ty::TypeVar(TypeVarID {
-                    id: -9,
+                    id: 3,
                     kind: TypeVarKind::Element,
-                    constraints: vec![],
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -9,
+                    id: 3,
                     kind: TypeVarKind::Element,
-                    constraints: vec![],
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -9,
+                id: 3,
                 kind: TypeVarKind::Element,
-                constraints: vec![],
             }],
             type_def: None,
         },
@@ -233,21 +223,18 @@ fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Func(
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -11,
+                    id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
-                    constraints: vec![],
                 })],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -11,
+                    id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
-                    constraints: vec![],
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -11,
+                id: 4,
                 kind: TypeVarKind::FuncParam("printable".into()),
-                constraints: vec![],
             }],
             type_def: None,
         },
@@ -263,21 +250,18 @@ fn builtins() -> Vec<Builtin> {
             ty: Ty::Func(
                 vec![Ty::string()],
                 Ty::TypeVar(TypeVarID {
-                    id: -12,
+                    id: 5,
                     kind: TypeVarKind::CallReturn,
-                    constraints: vec![],
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
-                    id: -12,
+                    id: 5,
                     kind: TypeVarKind::CallReturn,
-                    constraints: vec![],
                 })],
             ),
             unbound_vars: vec![TypeVarID {
-                id: -12,
+                id: 5,
                 kind: TypeVarKind::CallReturn,
-                constraints: vec![],
             }],
             type_def: None,
         },
@@ -318,8 +302,8 @@ pub fn builtin_type_def(symbol_id: &SymbolID) -> TypeDef {
     unreachable!()
 }
 
-pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
-    let mut result = HashMap::default();
+pub fn default_env_types() -> BTreeMap<SymbolID, TypeDef> {
+    let mut result = BTreeMap::default();
     for builtin in builtins() {
         if let Some(def) = builtin.type_def {
             result.insert(SymbolID(builtin.id), def);
@@ -328,19 +312,19 @@ pub fn default_env_types() -> HashMap<SymbolID, TypeDef> {
     result
 }
 
-pub fn default_env_scope() -> HashMap<SymbolID, Scheme> {
-    let mut scope = HashMap::new();
+pub fn default_env_scope() -> BTreeMap<SymbolID, Scheme> {
+    let mut scope = BTreeMap::new();
     for builtin in builtins() {
         scope.insert(
             SymbolID(builtin.id),
-            Scheme::new(builtin.ty, builtin.unbound_vars),
+            Scheme::new(builtin.ty, builtin.unbound_vars, vec![]),
         );
     }
     scope
 }
 
-pub fn default_name_scope() -> HashMap<String, SymbolID> {
-    let mut scope = HashMap::new();
+pub fn default_name_scope() -> BTreeMap<String, SymbolID> {
+    let mut scope = BTreeMap::new();
     for builtin in builtins() {
         scope.insert(builtin.info.name, SymbolID(builtin.id));
     }

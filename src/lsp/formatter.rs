@@ -101,6 +101,12 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    pub fn format_single_expr(source_file: &'a SourceFile, expr_id: &'a ExprID) -> String {
+        let formatter = Self::new(source_file);
+        let doc = formatter.format_expr(*expr_id);
+        Self::render_doc(doc, 80)
+    }
+
     pub fn format(&self, width: usize) -> String {
         let mut output = String::new();
         let mut last_meta: Option<&ExprMeta> = None;

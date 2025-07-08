@@ -27,7 +27,7 @@ macro_rules! assert_lowered_functions {
 
                     use prettydiff::{diff_chars, diff_lines};
                     use $crate::lowering::ir_printer::print;
-                    log::error!(
+                    tracing::error!(
                         "{}",
                         diff_chars(
                             &format!("{:?}", &left_val.functions),
@@ -97,4 +97,95 @@ macro_rules! assert_lowered_function {
             }
         }
     };
+}
+
+pub mod trace {
+    use tracing::{Metadata, Subscriber};
+    use tracing_subscriber::{
+        fmt::TestWriter,
+        layer::Filter,
+        registry::{LookupSpan, SpanRef},
+    };
+
+    #[derive(Debug)]
+    struct PreludeMarker;
+    struct MarkPreludeSpan;
+
+    impl<S> tracing_subscriber::Layer<S> for MarkPreludeSpan
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if let Some(span) = ctx.span(id) {
+                let mut extensions = span.extensions_mut();
+                let mut visitor = HasPreludeField(false);
+                attrs.record(&mut visitor);
+                if visitor.has_prelude_field() {
+                    extensions.insert(PreludeMarker);
+                }
+            }
+        }
+    }
+
+    struct HasPreludeField(bool);
+
+    impl tracing::field::Visit for HasPreludeField {
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            if field.name() == "prelude" && value {
+                self.0 = true;
+            }
+        }
+
+        fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+    }
+
+    impl HasPreludeField {
+        fn has_prelude_field(&self) -> bool {
+            self.0
+        }
+    }
+
+    struct SuppressPrelude;
+
+    impl<S> Filter<S> for SuppressPrelude
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn enabled(
+            &self,
+            _metadata: &Metadata<'_>,
+            ctx: &tracing_subscriber::layer::Context<'_, S>,
+        ) -> bool {
+            if let Some(span) = ctx.lookup_current() {
+                // Walk up the span tree to see if we're inside a prelude span
+                let mut current: Option<SpanRef<S>> = Some(span);
+                while let Some(span) = current {
+                    if span.extensions().get::<PreludeMarker>().is_some() {
+                        return false; // suppress this log
+                    }
+                    current = span.parent();
+                }
+            }
+            true
+        }
+    }
+
+    pub fn init() {
+        use tracing_subscriber::{EnvFilter, prelude::*, registry};
+
+        let tree = tracing_tree::HierarchicalLayer::new(2)
+            .with_writer(TestWriter::new())
+            .with_filter(SuppressPrelude) // kills everything inside a prelude span
+            .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
+
+        registry()
+            .with(MarkPreludeSpan) // sets the PreludeMarker
+            .with(tree)
+            .init();
+    }
 }

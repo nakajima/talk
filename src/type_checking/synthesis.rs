@@ -13,7 +13,7 @@ pub fn synthesize_inits(
 ) {
     for (sym, table) in symbol_table.types.clone() {
         if table.initializers.is_empty() {
-            log::trace!("Synthesizing init for {sym:?}");
+            tracing::trace!("Synthesizing init for {sym:?}");
             let mut body_exprs: Vec<ExprID> = vec![];
 
             // We need to generate an initializer for this struct
@@ -27,29 +27,29 @@ pub fn synthesize_inits(
                 );
 
                 let assignment_receiver = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Variable(Name::_Self(sym), None),
                     ExprMeta::generated(),
                 );
                 let assignment_lhs = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Member(Some(assignment_receiver), property.name.clone()),
                     ExprMeta::generated(),
                 );
                 let assignment_rhs = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Variable(Name::Resolved(param_sym, property.name.clone()), None),
                     ExprMeta::generated(),
                 );
                 let assignment = source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Assignment(assignment_lhs, assignment_rhs),
                     ExprMeta::generated(),
                 );
                 body_exprs.push(assignment);
 
                 params.push(source_file.add(
-                    env.next_id(),
+                    env.next_expr_id(),
                     Expr::Parameter(
                         Name::Resolved(param_sym, property.name.to_string()),
                         property.type_id,
@@ -60,21 +60,21 @@ pub fn synthesize_inits(
 
             // Make sure the func always returns self
             let self_ret = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Variable(Name::_Self(sym), None),
                 ExprMeta::generated(),
             );
             body_exprs.push(self_ret);
 
             let body = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Block(body_exprs),
                 ExprMeta::generated(),
             );
 
             let name = Some(Name::Raw("PLACEHOLD".into()));
             let init_func = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Func {
                     name,
                     generics: vec![],
@@ -93,7 +93,7 @@ pub fn synthesize_inits(
                 .expect("didn't get struct for struct???");
 
             let init_expr = source_file.add(
-                env.next_id(),
+                env.next_expr_id(),
                 Expr::Init(Some(sym), init_func),
                 ExprMeta::generated(),
             );
@@ -120,7 +120,7 @@ pub fn synthesize_inits(
 
             let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
             else {
-                log::error!(
+                tracing::error!(
                     "didn't get struct from expr id: {:?}",
                     source_file.get(&struct_info.expr_id)
                 );
@@ -128,7 +128,7 @@ pub fn synthesize_inits(
             };
 
             let Some(Expr::Block(existing_body_ids)) = source_file.get_mut(&body) else {
-                log::error!("didn't get block body");
+                tracing::error!("didn't get block body");
                 return;
             };
 
@@ -157,7 +157,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .resolved(&mut driver.symbol_table);
+            .resolved(&mut driver.symbol_table, &driver.config);
         let source_file = resolved.source_file(&PathBuf::from("-")).unwrap().clone();
 
         (source_file, driver.symbol_table, resolved.env)

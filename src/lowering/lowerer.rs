@@ -7,6 +7,7 @@ use crate::{
         function_analysis_pass::FunctionAnalysisPass,
     },
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
+    constraint::Constraint,
     diagnostic::Diagnostic,
     environment::Environment,
     expr::{Expr, ExprMeta, Pattern},
@@ -27,8 +28,7 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
-    type_constraint::TypeConstraint,
-    type_defs::{TypeDef, struct_def::StructDef},
+    type_defs::{TypeDef, protocol_def::Conformance, struct_def::StructDef},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::TypedExpr,
 };
@@ -103,7 +103,7 @@ impl Ty {
             },
             Ty::Struct(symbol_id, generics) => {
                 let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
-                    log::error!("Unable to determine definition of struct: {symbol_id:?}");
+                    tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
                 };
 
@@ -293,7 +293,7 @@ impl CurrentFunction {
     fn new(env_ty: Option<IRType>) -> Self {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
+            tracing::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
         }
         Self {
             next_block_id: BasicBlockID(0),
@@ -335,7 +335,7 @@ impl CurrentFunction {
     fn register_symbol(&mut self, symbol_id: SymbolID, register: SymbolValue) {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "register symbol {:?}: {:?} from {}:{}",
                 symbol_id,
                 register,
@@ -376,7 +376,7 @@ impl CurrentFunction {
             });
         }
 
-        log::warn!("EXPORING FUNC: {} {:?}", name, self.registers);
+        tracing::trace!("EXPORING FUNC: {} {:?}", name, self.registers);
 
         IRFunction {
             ty,
@@ -399,7 +399,7 @@ struct RegisterAllocator {
 
 impl RegisterAllocator {
     fn new() -> Self {
-        log::trace!("new register allocator");
+        tracing::trace!("new register allocator");
         Self { next_id: 0 }
     }
 
@@ -949,7 +949,7 @@ impl<'a> Lowerer<'a> {
                     continue;
                 }
                 _ => {
-                    log::warn!("unhandled struct member: {:?}", typed_member.expr);
+                    tracing::warn!("unhandled struct member: {:?}", typed_member.expr);
                     continue;
                 }
             }
@@ -975,7 +975,7 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        log::trace!("Lowering extension for {type_def:?}");
+        tracing::trace!("Lowering extension for {type_def:?}");
 
         let Some(Expr::Block(member_ids)) = self.source_file.get(body_id) else {
             self.add_diagnostic(Diagnostic::lowering(
@@ -1003,7 +1003,7 @@ impl<'a> Lowerer<'a> {
                     continue;
                 }
                 _ => {
-                    log::warn!("unhandled struct member: {:?}", typed_member.expr);
+                    tracing::warn!("unhandled struct member: {:?}", typed_member.expr);
                     continue;
                 }
             }
@@ -1018,17 +1018,17 @@ impl<'a> Lowerer<'a> {
         func_id: &ExprID,
     ) -> Option<(IRType, TypeDef, TypedExpr, Register, Option<IRValue>)> {
         let Some(type_def) = self.env.lookup_type(symbol_id).cloned() else {
-            log::error!("Cannot setup self context for {symbol_id:?}");
+            tracing::error!("Cannot setup self context for {symbol_id:?}");
             return None;
         };
 
         let Some(typed_func) = self.source_file.typed_expr(func_id, self.env) else {
-            log::error!("Did not get typed function for func_id: {func_id}");
+            tracing::error!("Did not get typed function for func_id: {func_id}");
             return None;
         };
 
         let Expr::Func { params, body, .. } = &typed_func.expr else {
-            log::error!("Typed expr not a func: {typed_func:?}");
+            tracing::error!("Typed expr not a func: {typed_func:?}");
             return None;
         };
 
@@ -1160,7 +1160,6 @@ impl<'a> Lowerer<'a> {
         let type_var = Ty::TypeVar(TypeVarID::new(
             0,
             TypeVarKind::SelfVar(name.symbol_id().ok()?),
-            vec![],
         ));
 
         // Insert the self env param
@@ -1275,26 +1274,17 @@ impl<'a> Lowerer<'a> {
                             .unwrap_or_else(|_| {
                                 let sym = capture_types[i];
                                 let Some(info) = self.symbol_table.get(&sym) else {
-                                    return Scheme {
-                                        ty: Ty::Void,
-                                        unbound_vars: vec![],
-                                    };
+                                    return Scheme::new(Ty::Void, vec![], vec![]);
                                 };
                                 let Some(typed_expr) =
                                     self.source_file.typed_expr(&info.expr_id, self.env)
                                 else {
-                                    return Scheme {
-                                        ty: Ty::Void,
-                                        unbound_vars: vec![],
-                                    };
+                                    return Scheme::new(Ty::Void, vec![], vec![]);
                                 };
 
-                                Scheme {
-                                    ty: typed_expr.ty,
-                                    unbound_vars: vec![],
-                                }
+                                Scheme::new(typed_expr.ty, vec![], vec![])
                             })
-                            .ty;
+                            .ty();
                         captured_ir_types.push(capture_ty.to_ir(self));
                     }
                 }
@@ -1329,7 +1319,7 @@ impl<'a> Lowerer<'a> {
             Some(closure_ptr)
         };
 
-        log::trace!("lowering {name:?}");
+        tracing::trace!("lowering {name:?}");
 
         let Some(Expr::Block(body_exprs)) = self.source_file.get(body).cloned() else {
             self.push_err("Did not get body", *body);
@@ -1459,7 +1449,7 @@ impl<'a> Lowerer<'a> {
         );
         self.set_current_block(then_block_id);
         let Some(body_ret_reg) = self.lower_expr(&body_id) else {
-            log::error!(
+            tracing::error!(
                 "Did not get body return: {:?}",
                 self.source_file.get(&body_id)
             );
@@ -2161,7 +2151,7 @@ impl<'a> Lowerer<'a> {
         }
         | Ty::Init(_, params)) = &callee_typed_expr.ty
         else {
-            log::error!("didn't get callable: {callee_typed_expr:?}");
+            tracing::error!("didn't get callable: {callee_typed_expr:?}");
             return None;
         };
 
@@ -2432,17 +2422,17 @@ impl<'a> Lowerer<'a> {
         mut arg_registers: Vec<TypedRegister>,
     ) -> Option<Register> {
         let Some(receiver_id) = receiver_id else {
-            log::error!("no receiver for member expr");
+            tracing::error!("no receiver for member expr");
             return None;
         };
 
         let Some(receiver_ty) = self.source_file.typed_expr(receiver_id, self.env) else {
-            log::error!("could not determine type of receiver");
+            tracing::error!("could not determine type of receiver");
             return None;
         };
 
         let Some(receiver) = self.lower_expr(receiver_id) else {
-            log::error!("could not lower member receiver: {callee_typed_expr:?}");
+            tracing::error!("could not lower member receiver: {callee_typed_expr:?}");
             return None;
         };
 
@@ -2469,14 +2459,29 @@ impl<'a> Lowerer<'a> {
                     struct_id.0, struct_def.name_str, method.name
                 ))
             }
-            Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
+            Ty::Enum(enum_id, _) => {
+                let def = self.env.lookup_enum(enum_id)?;
+                let method = def.methods.iter().find(|m| m.name == name)?;
+                Some(format!("@_{}_{}_{}", enum_id.0, def.name_str, method.name))
+            }
+            Ty::TypeVar(_type_var)
+                if let conformances = self
+                    .env
+                    .constraints()
+                    .iter()
+                    .filter_map(|c| {
+                        if let Constraint::ConformsTo { conformance, .. } = c {
+                            Some(conformance)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<&Conformance>>()
+                    && !conformances.is_empty() =>
+            {
                 let mut result = None;
-                for constraint in &type_var.constraints {
-                    let TypeConstraint::Conforms { protocol_id, .. } = constraint else {
-                        continue;
-                    };
-
-                    let protocol_def = self.env.lookup_protocol(protocol_id)?;
+                for conformance in &conformances {
+                    let protocol_def = self.env.lookup_protocol(&conformance.protocol_id)?;
                     if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
                         result = Some(format!(
                             "@_{}_{}_{}",
@@ -2732,7 +2737,7 @@ fn find_or_create_main(
     // We didn't find a main, we have to generate one
     let body = Expr::Block(source_file.root_ids());
     let body_id = source_file.add(
-        env.next_id(),
+        env.next_expr_id(),
         body,
         ExprMeta {
             start: Token::GENERATED,
@@ -2761,7 +2766,7 @@ fn find_or_create_main(
     );
 
     source_file.add(
-        env.next_id(),
+        env.next_expr_id(),
         func_expr.clone(),
         ExprMeta {
             start: Token::GENERATED,

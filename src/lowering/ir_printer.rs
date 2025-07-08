@@ -187,7 +187,7 @@ mod tests {
     fn prints_func() {
         let program = lower(
             "
-        func add(x) { 1 + x }
+        func add(x: Int) -> Int { x + 1 }
         ",
         )
         .unwrap();
@@ -199,7 +199,7 @@ mod tests {
                 r#"func @_{}_add(int %0) int
   entry:
     %1 = int 1;
-    %2 = add int %1, %0;
+    %2 = add int %0, %1;
     ret int %2;
 
 func @main() void

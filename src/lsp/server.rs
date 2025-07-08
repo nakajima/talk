@@ -120,7 +120,7 @@ impl LanguageServer for ServerState {
             .uri
             .to_file_path()
         else {
-            log::error!(
+            tracing::error!(
                 "no file path from: {:?}",
                 params.text_document_position_params.text_document.uri
             );
@@ -171,7 +171,7 @@ impl LanguageServer for ServerState {
         &mut self,
         params: CompletionParams,
     ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
-        log::info!("completions requested: {params:?}");
+        tracing::info!("completions requested: {params:?}");
 
         let Ok(path) = params
             .text_document_position
@@ -179,7 +179,7 @@ impl LanguageServer for ServerState {
             .uri
             .to_file_path()
         else {
-            log::error!(
+            tracing::error!(
                 "no file path from: {:?}",
                 params.text_document_position.text_document.uri
             );
@@ -204,7 +204,7 @@ impl LanguageServer for ServerState {
                 .unwrap_or(false),
         };
         let completion_items = completion.get_completions();
-        log::info!("completion_items: {completion_items:?}");
+        tracing::info!("completion_items: {completion_items:?}");
         Box::pin(async move {
             if completion_items.is_empty() {
                 Ok(None)
@@ -219,7 +219,7 @@ impl LanguageServer for ServerState {
         params: DocumentDiagnosticParams,
     ) -> BoxFuture<'static, Result<DocumentDiagnosticReportResult, Self::Error>> {
         let Ok(path) = params.text_document.uri.to_file_path() else {
-            log::error!("no file path from: {:?}", params.text_document.uri);
+            tracing::error!("no file path from: {:?}", params.text_document.uri);
             return Box::pin(async {
                 Ok(DocumentDiagnosticReportResult::Report(
                     DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
@@ -232,9 +232,9 @@ impl LanguageServer for ServerState {
             });
         };
 
-        log::info!("Getting diagnostics for {path:?}");
+        tracing::info!("Getting diagnostics for {path:?}");
         let diagnostics = self.driver.refresh_diagnostics_for(&path);
-        log::info!(
+        tracing::info!(
             "Got {:#?} diagnostics",
             self.driver
                 .session
@@ -261,12 +261,12 @@ impl LanguageServer for ServerState {
         params: SemanticTokensParams,
     ) -> BoxFuture<'static, Result<Option<SemanticTokensResult>, Self::Error>> {
         let Ok(path) = params.text_document.uri.to_file_path() else {
-            log::error!("no file path from: {:?}", params.text_document.uri);
+            tracing::error!("no file path from: {:?}", params.text_document.uri);
             return Box::pin(async { Ok(None) });
         };
 
         let Some(source_file) = self.driver.parsed_source_file(&path) else {
-            log::error!("Failed to find parsed file: {:?}", params.text_document.uri);
+            tracing::error!("Failed to find parsed file: {:?}", params.text_document.uri);
             return Box::pin(async { Ok(None) });
         };
 
@@ -291,7 +291,7 @@ impl LanguageServer for ServerState {
             .uri
             .to_file_path()
         else {
-            log::error!(
+            tracing::error!(
                 "no file path from: {:?}",
                 params.text_document_position_params.text_document.uri
             );
@@ -313,7 +313,7 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let mut env = Environment::new(self.driver.session.clone());
+        let mut env = Environment::new();
         let lexer = Lexer::new(&code);
         let mut parser = Parser::new(self.driver.session.clone(), lexer, path, &mut env);
         parser.parse();
@@ -356,7 +356,7 @@ impl LanguageServer for ServerState {
 
     fn did_save(&mut self, params: DidSaveTextDocumentParams) -> Self::NotifyResult {
         let Ok(path) = params.text_document.uri.to_file_path() else {
-            log::error!("no file path from: {:?}", params.text_document.uri);
+            tracing::error!("no file path from: {:?}", params.text_document.uri);
             return ControlFlow::Continue(());
         };
 
@@ -371,7 +371,7 @@ impl LanguageServer for ServerState {
 
     fn did_change(&mut self, params: DidChangeTextDocumentParams) -> Self::NotifyResult {
         let Ok(path) = params.text_document.uri.to_file_path() else {
-            log::error!("no file path from: {:?}", params.text_document.uri);
+            tracing::error!("no file path from: {:?}", params.text_document.uri);
             return ControlFlow::Continue(());
         };
 
@@ -420,14 +420,14 @@ impl ServerState {
     }
 
     fn on_tick(&mut self, _: TickEvent) -> ControlFlow<async_lsp::Result<()>> {
-        // log::info!("tick");
+        // tracing::info!("tick");
         self.counter += 1;
         ControlFlow::Continue(())
     }
 
     fn fetch(&mut self, url: &Url) -> Option<String> {
         let Ok(path) = url.to_file_path() else {
-            log::error!("no file path from: {url:?}");
+            tracing::error!("no file path from: {url:?}");
             return None;
         };
 
@@ -443,7 +443,7 @@ impl ServerState {
 }
 
 pub async fn start() {
-    log::info!("Starting LSP…");
+    tracing::info!("Starting LSP…");
 
     let (server, _) = async_lsp::MainLoop::new_server(|client| {
         tokio::spawn({

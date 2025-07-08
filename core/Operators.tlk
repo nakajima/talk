@@ -5,7 +5,7 @@ protocol Divide<RHS, Ret> { func divide(rhs: RHS) -> Ret }
 
 extend Int: Add<Int, Int> {
   func add(rhs: Int) -> Int {
-    __ir_instr("$? = add int %0, %1;")
+    __ir_instr<Int>("$? = add int %0, %1;")
   }
 }
 

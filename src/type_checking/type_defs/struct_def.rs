@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{
     SymbolID,
     parser::ExprID,
@@ -80,7 +78,7 @@ pub struct StructDef {
     pub name_str: String,
     pub type_parameters: TypeParams,
     pub properties: Vec<Property>,
-    pub methods: HashSet<Method>,
+    pub methods: Vec<Method>,
     pub initializers: Vec<Initializer>,
     pub conformances: Vec<Conformance>,
 }

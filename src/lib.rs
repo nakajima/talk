@@ -3,6 +3,7 @@
 #![feature(assert_matches)]
 #![feature(iter_advance_by)]
 #![feature(if_let_guard)]
+#![feature(hash_set_entry)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![cfg_attr(not(test), warn(clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::panic))]
@@ -33,14 +34,10 @@ pub mod lsp;
 pub mod prelude;
 
 #[cfg(test)]
-#[ctor::ctor]
-fn init_logger() {
-    // .is_test(true) silences the “already initialized” panic
-    let _ = env_logger::builder()
-        .format_timestamp(None)
-        .format_target(false)
-        .is_test(true)
-        .try_init();
-}
-
 pub mod test_utils;
+
+#[cfg(test)]
+#[ctor::ctor]
+pub fn init_tracing() {
+    test_utils::trace::init()
+}

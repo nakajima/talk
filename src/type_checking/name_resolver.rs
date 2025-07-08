@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::Definition;
 use crate::NameResolved;
@@ -27,6 +27,9 @@ pub enum NameResolverError {
     Redeclaration(String, SymbolInfo),
 }
 
+// Just to make sure we're always ending scopes we started
+struct ScopeTok;
+
 impl NameResolverError {
     pub fn message(&self) -> String {
         match self {
@@ -40,7 +43,7 @@ impl NameResolverError {
 }
 
 pub struct NameResolver {
-    scopes: Vec<HashMap<String, SymbolID>>,
+    pub scopes: Vec<BTreeMap<String, SymbolID>>,
 
     // For resolving `self` references
     type_symbol_stack: Vec<SymbolID>,
@@ -54,9 +57,10 @@ pub struct NameResolver {
 }
 
 impl NameResolver {
-    pub fn new(symbol_table: &mut SymbolTable, session: SharedCompilationSession) -> Self {
-        let initial_scope = symbol_table.build_name_scope();
-
+    pub fn new(
+        initial_scope: BTreeMap<String, SymbolID>,
+        session: SharedCompilationSession,
+    ) -> Self {
         NameResolver {
             scopes: vec![initial_scope],
             type_symbol_stack: vec![],
@@ -67,7 +71,7 @@ impl NameResolver {
     }
 
     pub fn resolve(
-        mut self,
+        &mut self,
         mut source_file: SourceFile,
         symbol_table: &mut SymbolTable,
     ) -> SourceFile<NameResolved> {
@@ -97,6 +101,7 @@ impl NameResolver {
         source_file.to_resolved()
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn resolve_nodes(
         &mut self,
         node_ids: &[ExprID],
@@ -112,7 +117,7 @@ impl NameResolver {
             let Some(expr) = &mut source_file.get_mut(node_id) else {
                 continue;
             };
-            log::trace!("Resolving: {expr:?}");
+            tracing::trace!("Resolving: {expr:?}");
             match expr.clone() {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
@@ -146,39 +151,24 @@ impl NameResolver {
                         );
                     }
                 },
-                Struct {
-                    name,
-                    generics,
-                    body,
-                    conformances,
-                } => {
-                    match name {
-                        Name::Raw(name_str) => {
-                            let symbol_id = self.declare(
-                                name_str.clone(),
-                                SymbolKind::Struct,
-                                node_id,
-                                source_file,
-                                symbol_table,
-                            );
-                            self.type_symbol_stack.push(symbol_id);
-                            source_file.nodes.insert(
-                                *node_id,
-                                Struct {
-                                    name: Name::Resolved(symbol_id, name_str),
-                                    generics: generics.clone(),
-                                    conformances: conformances.clone(),
-                                    body,
-                                },
-                            );
-                        }
-                        _ => continue,
-                    }
+                Struct { .. } => {
+                    // Handled by hoisting
+                    //    match name {
+                    //        Name::Resolved(symbol_id, _) => {
+                    //            self.type_symbol_stack.push(symbol_id);
+                    //        }
+                    //        _ => {
+                    //            tracing::error!("trying to resolve un-hoisted struct");
+                    //            continue;
+                    //        }
+                    //    }
 
-                    self.resolve_nodes(&generics, source_file, symbol_table);
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-                    self.resolve_nodes(&[body], source_file, symbol_table);
-                    self.type_symbol_stack.pop();
+                    //    let tok = self.start_scope(source_file, source_file.span(node_id));
+                    //    self.resolve_nodes(&generics, source_file, symbol_table);
+                    //    self.resolve_nodes(&conformances, source_file, symbol_table);
+                    //    self.resolve_nodes(&[body], source_file, symbol_table);
+                    //    self.type_symbol_stack.pop();
+                    //    self.end_scope(tok);
                 }
                 Extend {
                     name,
@@ -188,7 +178,7 @@ impl NameResolver {
                 } => match name {
                     Name::Raw(name_str) => {
                         let Some(symbol_id) = self.lookup(&name_str) else {
-                            log::error!("Did not find symbol for {name_str}");
+                            tracing::error!("Did not find symbol for {name_str}");
                             if let Ok(mut session) = self.session.lock() {
                                 session.add_diagnostic(Diagnostic::resolve(
                                     source_file.path.clone(),
@@ -199,7 +189,7 @@ impl NameResolver {
                             return;
                         };
 
-                        log::trace!("Resolving extension {name_str} {symbol_id:?}");
+                        tracing::trace!("Resolving extension {name_str} {symbol_id:?}");
 
                         let symbol_id = symbol_id.0;
                         self.type_symbol_stack.push(symbol_id);
@@ -223,7 +213,7 @@ impl NameResolver {
                 Break => (),
                 Init(_, func_id) => {
                     let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
-                        log::error!("no type found for initializer");
+                        tracing::error!("no type found for initializer");
                         return;
                     };
 
@@ -335,10 +325,10 @@ impl NameResolver {
                     self.resolve_nodes(&items, source_file, symbol_table);
                 }
                 Block(items) => {
-                    self.start_scope(source_file, source_file.span(node_id));
+                    let tok = self.start_scope(source_file, source_file.span(node_id));
                     self.hoist_funcs(&items, source_file, symbol_table);
                     self.resolve_nodes(&items, source_file, symbol_table);
-                    self.end_scope();
+                    self.end_scope(tok);
                 }
                 Func {
                     generics,
@@ -363,29 +353,23 @@ impl NameResolver {
                     self.resolve_nodes(&[value], source_file, symbol_table);
                 }
                 Parameter(name, ty_repr) => {
+                    if let Name::Raw(name) = &name {
+                        let symbol_id = self.declare(
+                            name.clone(),
+                            SymbolKind::Param,
+                            node_id,
+                            source_file,
+                            symbol_table,
+                        );
+
+                        source_file.nodes.insert(
+                            *node_id,
+                            Parameter(Name::Resolved(symbol_id, name.clone()), ty_repr),
+                        );
+                    }
+
                     if let Some(ty_repr) = ty_repr {
                         self.resolve_nodes(&[ty_repr], source_file, symbol_table);
-                    };
-
-                    match name {
-                        Name::Raw(name_str) => {
-                            let Some((symbol_id, _)) = self.lookup(&name_str) else {
-                                if let Ok(mut session) = self.session.lock() {
-                                    session.add_diagnostic(Diagnostic::resolve(
-                                        source_file.path.clone(),
-                                        *node_id,
-                                        NameResolverError::UnresolvedName(name_str),
-                                    ))
-                                }
-                                return;
-                            };
-                            symbol_table.add_map(source_file, node_id, &symbol_id);
-                            source_file.nodes.insert(
-                                *node_id,
-                                Parameter(Name::Resolved(symbol_id, name_str), ty_repr),
-                            );
-                        }
-                        Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
                     }
                 }
                 Variable(name, _) => match name {
@@ -417,7 +401,7 @@ impl NameResolver {
 
                                 return;
                             };
-                            log::info!("Replacing variable {name_str} with {symbol_id:?}");
+                            tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
 
                             symbol_table.add_map(source_file, node_id, &symbol_id);
 
@@ -436,7 +420,7 @@ impl NameResolver {
                                 if let Some(Name::Resolved(_, func_name)) = name
                                     && func_name == &name_str
                                 {
-                                    log::trace!("the same: {func_name:?} <> {name_str:?}");
+                                    tracing::trace!("the same: {func_name:?} <> {name_str:?}");
                                 } else {
                                     if !captures.contains(&symbol_id) {
                                         (*captures).push(symbol_id);
@@ -459,10 +443,6 @@ impl NameResolver {
                     conformances,
                     introduces_type,
                 } => {
-                    log::trace!(
-                        "Resolving TypeRepr: {name:?}, generics: {generics:?}, is_param_decl: {introduces_type}"
-                    );
-
                     let resolved_name_for_node = match name.clone() {
                         Name::Raw(raw_name_str) => {
                             if introduces_type {
@@ -503,8 +483,6 @@ impl NameResolver {
                         Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name, // Already resolved, no change needed to the name itself.
                     };
 
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-
                     // Update the existing TypeRepr node with the resolved name.
                     // The node type remains TypeRepr.
                     source_file.nodes.insert(
@@ -519,6 +497,7 @@ impl NameResolver {
 
                     // Recursively resolve any type arguments within this TypeRepr.
                     self.resolve_nodes(&generics, source_file, symbol_table);
+                    self.resolve_nodes(&conformances, source_file, symbol_table);
                 }
                 FuncTypeRepr(args, ret, _) => {
                     self.resolve_nodes(&args, source_file, symbol_table);
@@ -591,10 +570,10 @@ impl NameResolver {
                     self.resolve_nodes(&arms, source_file, symbol_table);
                 }
                 MatchArm(pattern, body) => {
-                    self.start_scope(source_file, source_file.span(node_id));
+                    let tok = self.start_scope(source_file, source_file.span(node_id));
                     self.resolve_nodes(&[pattern], source_file, symbol_table);
                     self.resolve_nodes(&[body], source_file, symbol_table);
-                    self.end_scope();
+                    self.end_scope(tok);
                 }
                 Pattern(pattern) => {
                     let pattern =
@@ -654,11 +633,12 @@ impl NameResolver {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn resolve_func(
         &mut self,
         name: &Option<Name>,
         node_id: &ExprID,
-        params: &Vec<ExprID>,
+        params: &[ExprID],
         generics: &[ExprID],
         body: Option<&ExprID>,
         ret: &Option<ExprID>,
@@ -678,37 +658,12 @@ impl NameResolver {
         }
 
         self.func_stack.push((*node_id, self.scopes.len()));
-        self.start_scope(source_file, source_file.span(node_id));
+        let tok = self.start_scope(source_file, source_file.span(node_id));
 
         self.resolve_nodes(generics, source_file, symbol_table);
+        self.resolve_nodes(params, source_file, symbol_table);
 
-        for param in params {
-            let Some(Parameter(Name::Raw(name), ty_id)) = source_file.get(param).cloned() else {
-                if let Ok(mut lock) = self.session.lock() {
-                    lock.add_diagnostic(Diagnostic::resolve(
-                        source_file.path.clone(),
-                        *node_id,
-                        NameResolverError::Unknown("Params must be variables".to_string()),
-                    ));
-                }
-
-                continue;
-            };
-
-            self.declare(
-                name.clone(),
-                SymbolKind::Param,
-                node_id,
-                source_file,
-                symbol_table,
-            );
-
-            if let Some(ty_id) = ty_id {
-                self.resolve_nodes(&[ty_id], source_file, symbol_table);
-            }
-        }
-
-        let mut to_resolve = params.clone();
+        let mut to_resolve = params.to_owned();
 
         if let Some(body) = body {
             to_resolve.push(*body);
@@ -719,10 +674,11 @@ impl NameResolver {
         }
 
         self.resolve_nodes(&to_resolve, source_file, symbol_table);
-        self.end_scope();
+        self.end_scope(tok);
         self.func_stack.pop();
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_funcs(
         &mut self,
         node_ids: &[ExprID],
@@ -761,24 +717,37 @@ impl NameResolver {
             }
 
             if let Some(FuncSignature {
-                name: Name::Raw(name),
+                name,
                 generics,
                 params,
                 ret,
             }) = source_file.get(id).cloned()
             {
-                let symbol_id = self.declare(
-                    name.clone(),
-                    SymbolKind::FuncDef,
-                    id,
-                    source_file,
-                    symbol_table,
-                );
+                let name = if let Name::Raw(name) = name {
+                    let symbol_id = self.declare(
+                        name.clone(),
+                        SymbolKind::FuncDef,
+                        id,
+                        source_file,
+                        symbol_table,
+                    );
+                    Name::Resolved(symbol_id, name)
+                } else {
+                    name
+                };
+
+                let tok = self.start_scope(source_file, source_file.span(id));
+
+                self.resolve_nodes(&generics, source_file, symbol_table);
+                self.resolve_nodes(&params, source_file, symbol_table);
+                self.resolve_nodes(&[ret], source_file, symbol_table);
+
+                self.end_scope(tok);
 
                 source_file.nodes.insert(
                     *id,
                     FuncSignature {
-                        name: Name::Resolved(symbol_id, name),
+                        name,
                         generics,
                         params,
                         ret,
@@ -788,6 +757,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoise_structs(
         &mut self,
         node_ids: &[ExprID],
@@ -827,48 +797,74 @@ impl NameResolver {
                 symbol_table,
             );
 
-            symbol_table.initialize_type_table(struct_symbol);
-
-            self.resolve_nodes(&generics, source_file, symbol_table);
-            self.resolve_nodes(&conformances, source_file, symbol_table);
-
             source_file.nodes.insert(
                 *id,
                 Struct {
                     name: Name::Resolved(struct_symbol, name_str),
-                    generics,
-                    conformances,
+                    generics: generics.clone(),
+                    conformances: conformances.clone(),
                     body,
                 },
             );
 
+            symbol_table.initialize_type_table(struct_symbol);
+            let tok = self.start_scope(source_file, source_file.span(id));
+            self.type_symbol_stack.push(struct_symbol);
+
+            self.resolve_nodes(&generics, source_file, symbol_table);
+            self.resolve_nodes(&conformances, source_file, symbol_table);
+
             // Hoist properties
-            let Some(Block(ids)) = source_file.get(&body) else {
-                log::error!("Didn't get struct body");
+            let Some(Block(ids)) = source_file.get(&body).cloned() else {
+                tracing::error!("Didn't get struct body");
                 return;
             };
 
-            self.type_symbol_stack.push(struct_symbol);
-
             // Get properties for the struct so we can synthesize stuff before
             // type checking
-            for id in ids {
-                let Some(Property {
+            for id in &ids {
+                let expr = source_file.get(id).cloned();
+
+                if let Some(Property {
                     name: Name::Raw(name_str),
                     type_repr: ty,
                     default_value: val,
-                }) = source_file.get(id)
-                else {
-                    continue;
-                };
-
-                symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
+                }) = &expr
+                {
+                    symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
+                    let property_symbol = self.declare(
+                        name_str.clone(),
+                        SymbolKind::Property,
+                        id,
+                        source_file,
+                        symbol_table,
+                    );
+                    source_file.nodes.insert(
+                        *id,
+                        Property {
+                            name: Name::Resolved(property_symbol, name_str.clone()),
+                            type_repr: *ty,
+                            default_value: *val,
+                        },
+                    );
+                }
+                if let Some(Init(None, func_id)) = &expr {
+                    symbol_table.add_initializer(struct_symbol, *id);
+                    self.resolve_nodes(&[*func_id], source_file, symbol_table);
+                    source_file
+                        .nodes
+                        .insert(*id, Init(Some(struct_symbol), *func_id));
+                }
             }
-            self.hoist_enum_members(&body, source_file, symbol_table);
+
+            self.resolve_nodes(&[body], source_file, symbol_table);
+
             self.type_symbol_stack.pop();
+            self.end_scope(tok);
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_enums(
         &mut self,
         node_ids: &[ExprID],
@@ -895,6 +891,7 @@ impl NameResolver {
                 symbol_table,
             );
 
+            let tok = self.start_scope(source_file, source_file.span(id));
             self.resolve_nodes(&generics, source_file, symbol_table);
             self.resolve_nodes(&conformances, source_file, symbol_table);
 
@@ -912,9 +909,11 @@ impl NameResolver {
             self.type_symbol_stack.push(enum_symbol);
             self.hoist_enum_members(&body, source_file, symbol_table);
             self.type_symbol_stack.pop();
+            self.end_scope(tok);
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn resolve_pattern(
         &mut self,
         pattern: &Pattern,
@@ -964,6 +963,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_protocols(
         &mut self,
         items: &[ExprID],
@@ -989,13 +989,13 @@ impl NameResolver {
                 symbol_table,
             );
 
-            self.start_scope(source_file, source_file.span(id));
+            let tok = self.start_scope(source_file, source_file.span(id));
             self.type_symbol_stack.push(symbol_id);
             self.resolve_nodes(&associated_types, source_file, symbol_table);
             self.resolve_nodes(&conformances, source_file, symbol_table);
             self.resolve_nodes(&[body], source_file, symbol_table);
             self.type_symbol_stack.pop();
-            self.end_scope();
+            self.end_scope(tok);
 
             source_file.nodes.insert(
                 *id,
@@ -1010,6 +1010,7 @@ impl NameResolver {
     }
 
     // New helper method to hoist enum variants
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_enum_members(
         &mut self,
         body_expr_id: &ExprID,
@@ -1055,6 +1056,7 @@ impl NameResolver {
         }
     }
 
+    #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn declare(
         &mut self,
         name: String,
@@ -1063,6 +1065,10 @@ impl NameResolver {
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) -> SymbolID {
+        if self.lookup(&name).is_some() {
+            tracing::warn!("Already declared name: {name}");
+        }
+
         let Some(meta) = source_file.meta.get(expr_id) else {
             return SymbolID(0);
         };
@@ -1076,7 +1082,7 @@ impl NameResolver {
 
         let symbol_id = symbol_table.add(&name, kind.clone(), *expr_id, Some(definition));
 
-        log::info!("Replacing {kind:?} {name} with {symbol_id:?}");
+        tracing::info!("Replacing {kind:?} {name} with {symbol_id:?}");
 
         if let Some(scope_id) = self.scope_tree_ids.last() {
             source_file
@@ -1104,18 +1110,19 @@ impl NameResolver {
         None
     }
 
-    fn start_scope(&mut self, source_file: &mut SourceFile, span: Span) {
-        log::trace!("scope started: {:?}", self.scopes);
-
+    #[must_use]
+    fn start_scope(&mut self, source_file: &mut SourceFile, span: Span) -> ScopeTok {
         self.scope_tree_ids.push(
             source_file
                 .scope_tree
                 .new_scope(self.scope_tree_ids.last().copied(), span),
         );
         self.scopes.push(Default::default());
+
+        ScopeTok
     }
 
-    fn end_scope(&mut self) {
+    fn end_scope(&mut self, _tok: ScopeTok) {
         self.scopes.pop();
         self.scope_tree_ids.pop();
     }
@@ -1148,7 +1155,7 @@ mod tests {
         let file = driver.units[0]
             .clone()
             .parse(false)
-            .resolved(&mut driver.symbol_table)
+            .resolved(&mut driver.symbol_table, &driver.config)
             .source_file(&PathBuf::from("-"))
             .unwrap()
             .clone();

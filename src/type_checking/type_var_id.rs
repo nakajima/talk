@@ -1,10 +1,9 @@
-use crate::{SymbolID, name::Name, type_constraint::TypeConstraint};
+use crate::{SymbolID, name::Name, token_kind::TokenKind};
 
 #[derive(Clone)]
 pub struct TypeVarID {
-    pub id: i32,
+    pub id: u32,
     pub kind: TypeVarKind,
-    pub constraints: Vec<TypeConstraint>,
 }
 
 impl PartialEq for TypeVarID {
@@ -17,17 +16,17 @@ impl Eq for TypeVarID {}
 
 impl std::hash::Hash for TypeVarID {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_i32(self.id);
+        state.write_u32(self.id);
     }
 }
 
 impl TypeVarID {
-    pub fn new(id: i32, kind: TypeVarKind, constraints: Vec<TypeConstraint>) -> Self {
-        Self {
-            id,
-            kind,
-            constraints,
-        }
+    pub fn new(id: u32, kind: TypeVarKind) -> Self {
+        Self { id, kind }
+    }
+
+    pub fn is_canonical(&self) -> bool {
+        matches!(self.kind, TypeVarKind::CanonicalTypeParameter(_))
     }
 
     pub fn canonicalized(&self) -> Option<TypeVarID> {
@@ -35,7 +34,6 @@ impl TypeVarID {
             return Some(TypeVarID {
                 id: parent_id,
                 kind: TypeVarKind::Unbound,
-                constraints: self.constraints.clone(),
             });
         }
 
@@ -45,55 +43,48 @@ impl TypeVarID {
 
 impl std::fmt::Debug for TypeVarID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let constraints_str = if self.constraints.is_empty() {
-            "".into()
-        } else {
-            format!(
-                ": {}",
-                self.constraints
-                    .iter()
-                    .map(|i| format!("{i:?}"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
-        };
-
         match &self.kind {
-            TypeVarKind::Blank => write!(f, "T{}[blank{}]", self.id, constraints_str),
-            TypeVarKind::CallArg => write!(f, "T{}[arg{}]", self.id, constraints_str),
-            TypeVarKind::CallReturn => write!(f, "T{}[ret{}]", self.id, constraints_str),
-            TypeVarKind::FuncParam(name) => {
-                write!(f, "T{}[param({}){}]", self.id, name, constraints_str)
+            TypeVarKind::BinaryOperand(op) => {
+                write!(f, "T{}[{}]", self.id, op.as_str())
             }
-            TypeVarKind::FuncType => write!(f, "T{}[func{}]", self.id, constraints_str),
+            TypeVarKind::Blank => write!(f, "T{}[blank]", self.id),
+            TypeVarKind::CallArg => write!(f, "T{}[arg]", self.id),
+            TypeVarKind::CallReturn => write!(f, "T{}[ret]", self.id),
+            TypeVarKind::FuncParam(name) => {
+                write!(f, "T{}[param({})]", self.id, name)
+            }
+            TypeVarKind::FuncType => write!(f, "T{}[func]", self.id),
             TypeVarKind::SelfVar(sym) => write!(f, "T{}[self{sym:?}]", self.id),
             TypeVarKind::FuncNameVar(symbol_id) => {
-                write!(f, "T{}[${}{}]", self.id, symbol_id.0, constraints_str)
+                write!(f, "T{}[${}]", self.id, symbol_id.0)
             }
-            TypeVarKind::FuncBody => write!(f, "T{}[body{}]", self.id, constraints_str),
-            TypeVarKind::Let => write!(f, "T{}[let{}]", self.id, constraints_str),
+            TypeVarKind::FuncBody => write!(f, "T{}[body]", self.id),
+            TypeVarKind::Let => write!(f, "T{}[let]", self.id),
             TypeVarKind::TypeRepr(name) => {
-                write!(f, "T{}[<{:?}>{}]", self.id, name, constraints_str)
+                write!(f, "T{}[<{:?}>]", self.id, name)
             }
-            TypeVarKind::Member(name) => write!(f, "T{}[.{}{}]", self.id, name, constraints_str),
-            TypeVarKind::Element => write!(f, "T{}[E{}]", self.id, constraints_str),
-            TypeVarKind::VariantValue => write!(f, "T{}[variant{}]", self.id, constraints_str),
+            TypeVarKind::Member(name) => write!(f, "T{}[.{}]", self.id, name),
+            TypeVarKind::Element => write!(f, "T{}[E]", self.id),
+            TypeVarKind::VariantValue => write!(f, "T{}[variant]", self.id),
             TypeVarKind::PatternBind(name) => {
-                write!(f, "T{}[->{}{}]", self.id, name.name_str(), constraints_str)
+                write!(f, "T{}[->{}]", self.id, name.name_str())
             }
             TypeVarKind::CanonicalTypeParameter(name) => {
                 write!(f, "T{}[{}']", self.id, name)
             }
             TypeVarKind::Placeholder(name) => {
-                write!(f, "T{}[Placeholder {}{}]", self.id, name, constraints_str)
+                write!(f, "T{}[Placeholder {}]", self.id, name)
             }
             TypeVarKind::Instantiated(from) => {
-                write!(f, "T{}[Inst.({}){}]", self.id, from, constraints_str)
+                write!(f, "T{}[Inst.({})]", self.id, from)
             }
             TypeVarKind::Canonicalized(to) => {
-                write!(f, "T{}[Can.({}){}]", self.id, to, constraints_str)
+                write!(f, "T{}[Can.({})]", self.id, to)
             }
-            TypeVarKind::Unbound => write!(f, "T{}[?{}]", self.id, constraints_str),
+            TypeVarKind::Combined(v1, v2) => {
+                write!(f, "T{}[{}&{}]", self.id, v1, v2)
+            }
+            TypeVarKind::Unbound => write!(f, "T{}[?]", self.id),
         }
     }
 }
@@ -116,7 +107,9 @@ pub enum TypeVarKind {
     PatternBind(Name),
     CanonicalTypeParameter(String),
     Placeholder(String),
-    Instantiated(i32),
-    Canonicalized(i32),
+    Instantiated(u32),
+    Canonicalized(u32),
+    BinaryOperand(TokenKind),
+    Combined(u32, u32),
     Unbound,
 }

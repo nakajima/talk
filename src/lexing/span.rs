@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::diagnostic::Position;
 
-#[derive(Default, Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Default, Debug, Eq, PartialEq, Hash, Clone, PartialOrd, Ord)]
 pub struct Span {
     pub start: u32,
     pub end: u32,

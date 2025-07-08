@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
-use std::{path::PathBuf, process::exit};
+use std::{collections::BTreeMap, path::PathBuf, process::exit};
 
 use crate::{
-    SymbolTable,
+    SymbolID, SymbolTable,
     compiling::driver::{Driver, DriverConfig},
     environment::Environment,
     lowering::ir_module::IRModule,
@@ -12,6 +12,7 @@ pub struct Prelude {
     pub symbols: SymbolTable,
     pub environment: Environment,
     pub module: IRModule,
+    pub global_scope: BTreeMap<String, SymbolID>,
 }
 
 lazy_static! {
@@ -23,6 +24,8 @@ pub fn compile_prelude() -> &'static Prelude {
 }
 
 pub fn _compile_prelude() -> Prelude {
+    let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
+
     let mut driver = Driver::new(DriverConfig {
         executable: false,
         include_prelude: false,
@@ -33,17 +36,35 @@ pub fn _compile_prelude() -> Prelude {
         PathBuf::from("./core/Optional.tlk"),
         PathBuf::from("./core/Array.tlk"),
         PathBuf::from("./core/String.tlk"),
-        PathBuf::from("./core/Printable.tlk"),
     ] {
         #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
     }
 
     #[allow(clippy::unwrap_used)]
-    let unit = driver.lower().into_iter().next().unwrap();
-    let environment = unit.env.clone();
+    let resolved = driver
+        .parse()
+        .into_iter()
+        .next()
+        .unwrap()
+        .resolved(&mut driver.symbol_table, &driver.config);
+    let global_scope = resolved.stage.global_scope.clone();
+    let unit = resolved
+        .typed(&mut driver.symbol_table, &driver.config)
+        .lower(&mut driver.symbol_table, &driver.config, IRModule::new());
+    let mut environment = unit.env.clone();
     let module = unit.module();
     let symbols = driver.symbol_table;
+
+    #[allow(clippy::panic)]
+    if let Ok(session) = driver.session.lock()
+        && !session.diagnostics.is_empty()
+    {
+        panic!(
+            "Prelude did not compile cleanly: {:#?}",
+            session.diagnostics
+        )
+    }
 
     #[allow(clippy::unwrap_used)]
     if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
@@ -79,9 +100,12 @@ pub fn _compile_prelude() -> Prelude {
         exit(0)
     }
 
+    environment.clear_constraints();
+
     Prelude {
         symbols,
         environment,
+        global_scope,
         module,
     }
 }
@@ -99,4 +123,14 @@ macro_rules! stdlib_modules {
   };
 }
 
-stdlib_modules!("Operators", "Optional", "Array", "String", "Printable");
+stdlib_modules!("Operators", "Optional", "Array", "String");
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::compile_prelude;
+
+    #[test]
+    fn compiles_clean() {
+        compile_prelude();
+    }
+}

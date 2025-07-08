@@ -1,8 +1,8 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::{Phase, SourceFile, parser::ExprID, prelude::compile_prelude, span::Span};
+use crate::{Phase, SourceFile, parser::ExprID, span::Span};
 
-#[derive(Default, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
 
 impl std::fmt::Debug for SymbolID {
@@ -37,12 +37,12 @@ impl SymbolID {
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude().symbols.max_id())
+        SymbolID(index + crate::prelude::compile_prelude().symbols.max_id())
     }
 
     // Remove the prelude's symbol offset
     pub fn typed(index: i32) -> SymbolID {
-        SymbolID(index + compile_prelude().symbols.max_id())
+        SymbolID(index + crate::prelude::compile_prelude().symbols.max_id())
     }
 }
 
@@ -98,10 +98,10 @@ pub struct TypeTable {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolTable {
-    symbols: HashMap<SymbolID, SymbolInfo>,
+    symbols: BTreeMap<SymbolID, SymbolInfo>,
     next_id: i32,
-    pub types: HashMap<SymbolID, TypeTable>,
-    pub symbol_map: HashMap<Span, SymbolID>,
+    pub types: BTreeMap<SymbolID, TypeTable>,
+    pub symbol_map: BTreeMap<Span, SymbolID>,
 }
 
 impl SymbolTable {
@@ -140,19 +140,7 @@ impl SymbolTable {
         self.types.get(symbol_id).map(|t| &t.properties)
     }
 
-    // Convert symbols to initial name scope
-    pub fn build_name_scope(&self) -> HashMap<String, SymbolID> {
-        let mut scope = crate::builtins::default_name_scope(); // Builtins like Int, Float
-
-        // Add all symbols to name->id mapping
-        for (id, info) in &self.symbols {
-            scope.insert(info.name.to_string(), *id);
-        }
-
-        scope
-    }
-
-    pub fn all(&self) -> HashMap<SymbolID, SymbolInfo> {
+    pub fn all(&self) -> BTreeMap<SymbolID, SymbolInfo> {
         self.symbols.clone()
     }
 
@@ -178,7 +166,7 @@ impl SymbolTable {
     ) -> SymbolID {
         if cfg!(debug_assertions) {
             let loc = std::panic::Location::caller();
-            log::trace!(
+            tracing::trace!(
                 "add symbol {:?} {:?} {:?} {:?} from {}:{}",
                 name,
                 kind,
@@ -188,6 +176,8 @@ impl SymbolTable {
                 loc.line()
             );
         }
+
+        tracing::info!("add symbol: {name} next_id: {}", self.next_id);
 
         self.next_id += 1;
         let symbol_id = SymbolID(self.next_id);
@@ -253,9 +243,7 @@ impl SymbolTable {
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
-        log::warn!("Lookup: {name:?}");
         for (id, info) in &self.symbols {
-            log::warn!("Looking up: {id:?}, {info:?}");
             if info.name == name {
                 return Some(*id);
             }

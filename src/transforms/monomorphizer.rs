@@ -73,7 +73,7 @@ impl<'a> Monomorphizer<'a> {
         module: &IRModule,
         substitutions: &mut HashMap<IRType, IRType>,
     ) -> IRFunction {
-        log::trace!(
+        tracing::trace!(
             "Detecting monomorphization opportunities in {:?}",
             function.name
         );
@@ -101,7 +101,7 @@ impl<'a> Monomorphizer<'a> {
                         && let Some(first_arg) = &args.0.first()
                     {
                         // it's a protocol method, we need to specialize it
-                        log::info!("Detected protocol method, specializing: {args:?}");
+                        tracing::info!("Detected protocol method, specializing: {args:?}");
                         let Some(concrete) =
                             Self::find_concrete_type(first_arg, substitutions, self.env)
                         else {
@@ -187,7 +187,7 @@ impl<'a> Monomorphizer<'a> {
         self.currently_monomorphizing_stack
             .push(function.name.clone());
 
-        log::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
+        tracing::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
@@ -208,7 +208,7 @@ impl<'a> Monomorphizer<'a> {
 
         monomorphized_function.ty = Self::apply_type(&monomorphized_function.ty, substitutions);
 
-        log::info!(
+        tracing::info!(
             "monomorphized {} ({}): {:?}, {:#?}",
             mangled_name,
             Self::is_generic(&monomorphized_function),
@@ -670,7 +670,7 @@ mod tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![IRType::TypeVar("T7".into())], IRType::Int.into()),
+                            IRType::Func(vec![IRType::TypeVar("T12".into())], IRType::Int.into()),
                             RefKind::Func("@_3_get".into())
                         ),
                         Instr::Alloc {
@@ -743,7 +743,7 @@ mod tests {
                             callee: Callee::Name("@_4_Person_getAge".into()),
                             args: RegisterList(vec![TypedRegister::new(
                                 IRType::Pointer {
-                                    hint: Some("T7".into())
+                                    hint: Some("T12".into())
                                 },
                                 Register(0)
                             )])
@@ -774,7 +774,7 @@ mod tests {
         .unwrap();
 
         let mono = Monomorphizer::new(&env).run(lowered);
-        let t2 = IRType::TypeVar("T2".to_string());
+        let t3 = IRType::TypeVar("T9".to_string());
 
         assert_lowered_function!(
             mono,
@@ -788,7 +788,7 @@ mod tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![t2.clone(), t2.clone()], t2.clone().into()),
+                            IRType::Func(vec![t3.clone(), t3.clone()], t3.clone().into()),
                             RefKind::Func("@_1_rec".into())
                         ),
                         Instr::ConstantInt(Register(1), 0),

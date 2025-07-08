@@ -1,12 +1,13 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    NameResolved, SourceFile, SymbolTable,
+    NameResolved, SourceFile, SymbolID, SymbolTable,
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     constraint_solver::ConstraintSolver,
+    diagnostic::Diagnostic,
     environment::Environment,
     lexer::{Lexer, LexerError},
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
@@ -95,12 +96,12 @@ impl CompilationUnit<Raw> {
             self.session
                 .lock()
                 .map(|mut t| t.clear_diagnostics())
-                .unwrap_or_else(|e| log::error!("could not clear diagnostics: {e:?}"));
+                .unwrap_or_else(|e| tracing::error!("could not clear diagnostics: {e:?}"));
 
             let source = match self.read(&path) {
                 Ok(source) => source.to_string(),
                 Err(e) => {
-                    log::error!("read error: {e:?}");
+                    tracing::error!("read error: {e:?}");
                     continue;
                 }
             };
@@ -131,7 +132,7 @@ impl CompilationUnit<Raw> {
         module: IRModule,
     ) -> CompilationUnit<Lowered> {
         let parsed = self.parse(driver_config.include_comments);
-        let resolved = parsed.resolved(symbol_table);
+        let resolved = parsed.resolved(symbol_table, driver_config);
         let typed = resolved.typed(symbol_table, driver_config);
         typed.lower(symbol_table, driver_config, module)
     }
@@ -150,18 +151,35 @@ impl StageTrait for Parsed {
 }
 
 impl CompilationUnit<Parsed> {
-    pub fn resolved(self, symbol_table: &mut SymbolTable) -> CompilationUnit<Resolved> {
+    pub fn resolved(
+        self,
+        symbol_table: &mut SymbolTable,
+        config: &DriverConfig,
+    ) -> CompilationUnit<Resolved> {
         let mut files = vec![];
+        let mut global_scope = if config.include_prelude {
+            crate::prelude::compile_prelude().global_scope.clone()
+        } else {
+            crate::builtins::default_name_scope() // Builtins like Int, Float
+        };
         for file in self.stage.files {
-            let resolved =
-                NameResolver::new(symbol_table, self.session.clone()).resolve(file, symbol_table);
+            let mut resolver = NameResolver::new(global_scope.clone(), self.session.clone());
+            let resolved = resolver.resolve(file, symbol_table);
+
+            for (name, symbol) in resolver.scopes[0].clone().into_iter() {
+                global_scope.insert(name, symbol);
+            }
+
             files.push(resolved);
         }
 
         CompilationUnit {
             src_cache: self.src_cache,
             input: self.input,
-            stage: Resolved { files },
+            stage: Resolved {
+                global_scope,
+                files,
+            },
             env: self.env,
             session: self.session,
         }
@@ -171,6 +189,7 @@ impl CompilationUnit<Parsed> {
 #[derive(Debug)]
 pub struct Resolved {
     files: Vec<SourceFile<NameResolved>>,
+    pub global_scope: BTreeMap<String, SymbolID>,
 }
 impl StageTrait for Resolved {
     type SourceFilePhase = source_file::NameResolved;
@@ -188,19 +207,23 @@ impl CompilationUnit<Resolved> {
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
         for file in self.stage.files {
-            let mut typed = if driver_config.include_prelude {
+            let path = file.path.clone();
+
+            let typed = if driver_config.include_prelude {
                 TypeChecker::new(self.session.clone(), symbol_table).infer(file, &mut self.env)
             } else {
                 TypeChecker::new(self.session.clone(), symbol_table)
                     .infer_without_prelude(&mut self.env, file)
             };
-            let mut solver = ConstraintSolver::new(
-                self.session.clone(),
-                &mut typed,
-                &mut self.env,
-                symbol_table,
-            );
-            solver.solve();
+            let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
+            let solution = solver.solve();
+
+            for (expr_id, err) in solution.errors {
+                if let Ok(session) = &mut self.session.lock() {
+                    session.add_diagnostic(Diagnostic::typing(path.clone(), expr_id, err));
+                }
+            }
+
             files.push(typed);
         }
 
