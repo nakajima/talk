@@ -146,9 +146,9 @@ impl Environment {
         Ok(solution.substitutions)
     }
 
-    pub fn replace_typed_exprs_values(&mut self, substitutions: &Substitutions) {
+    pub fn replace_typed_exprs_values(&mut self, substitutions: &mut Substitutions) {
         for (_, typed_expr) in self.typed_exprs.iter_mut() {
-            let replaced = ConstraintSolver::substitute_ty_with_map(&typed_expr.ty, substitutions);
+            let replaced = substitutions.apply(&typed_expr.ty, 0, &mut self.context); // ConstraintSolver::substitute_ty_with_map(&typed_expr.ty, substitutions);
 
             if typed_expr.ty == replaced {
                 continue;
@@ -159,7 +159,7 @@ impl Environment {
 
         for scope in self.scopes.iter_mut() {
             for scheme in scope.values_mut() {
-                let replaced = ConstraintSolver::substitute_ty_with_map(&scheme.ty, substitutions);
+                let replaced = substitutions.apply(&scheme.ty, 0, &mut self.context);
 
                 if scheme.ty == replaced {
                     continue;

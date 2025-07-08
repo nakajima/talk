@@ -78,10 +78,10 @@ impl<'a> TypeChecker<'a> {
         to_generalize.extend(self.infer_funcs(&func_results, env, source_file)?);
 
         // Solve what we can
-        let substitutions = env.flush_constraints(self.symbol_table)?;
+        let mut substitutions = env.flush_constraints(self.symbol_table)?;
 
         // Update typed exprs
-        env.replace_typed_exprs_values(&substitutions);
+        env.replace_typed_exprs_values(&mut substitutions);
 
         // Generalize what we can
         for (symbol_id, _) in to_generalize {
@@ -531,7 +531,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         env.replace_constraint_values(&mut substitutions);
-        env.replace_typed_exprs_values(&substitutions);
+        env.replace_typed_exprs_values(&mut substitutions);
 
         Ok(())
     }
@@ -605,7 +605,7 @@ impl<'a> TypeChecker<'a> {
             results.push((*symbol_id, ty))
         }
 
-        env.replace_typed_exprs_values(&placeholder_substitutions);
+        env.replace_typed_exprs_values(&mut placeholder_substitutions);
         env.replace_constraint_values(&mut placeholder_substitutions);
 
         Ok(results)
