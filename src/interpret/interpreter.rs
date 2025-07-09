@@ -95,10 +95,10 @@ impl IRInterpreter {
         // If the program's entry point returns a struct but the interpreter
         // represented it as a pointer, load the value from memory using the
         // function's return type.
-        if let Value::Pointer(ptr) = &result {
-            if ret_ty != IRType::POINTER {
-                return self.memory.load(ptr, &ret_ty);
-            }
+        if let Value::Pointer(ptr) = &result
+            && ret_ty != IRType::POINTER
+        {
+            return self.memory.load(ptr, &ret_ty);
         }
 
         Ok(result)
@@ -904,7 +904,7 @@ mod tests {
             a.append("hello ")
             a.append("world")
             a
-        "#
+        "#,
         )
         .unwrap() else {
             panic!("did not get struct");
