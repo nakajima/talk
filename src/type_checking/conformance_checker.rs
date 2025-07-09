@@ -106,6 +106,14 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
+            // Find self references in the protocol's type and replace them with
+            // our concrete type
+            for type_var in free_type_vars(&ty_method) {
+                if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
+                    unifications.push((Ty::TypeVar(type_var), self.ty.clone()));
+                }
+            }
+
             unifications.push((
                 ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
                 ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
@@ -120,6 +128,14 @@ impl<'a> ConformanceChecker<'a> {
                     continue;
                 }
             };
+
+            // Find self references in the protocol's type and replace them with
+            // our concrete type
+            for type_var in free_type_vars(&ty_property.ty) {
+                if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
+                    unifications.push((Ty::TypeVar(type_var), self.ty.clone()));
+                }
+            }
 
             unifications.push((
                 ConstraintSolver::substitute_ty_with_map(&property.ty, &substitutions),

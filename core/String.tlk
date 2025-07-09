@@ -8,4 +8,37 @@ struct String {
 		self.capacity = capacity
 		self.storage = __alloc<Byte>(capacity)
   }
+
+  func append(other: String) {
+    print("\n\nappending\n\n")
+    let newCapacity = self.length + other.length
+    let newStorage = __alloc<Byte>(newCapacity)
+    let currentLength = self.length
+    let i = 0
+    loop i < currentLength {
+      let ch = __load(self.storage, i)
+      print(ch)
+      __store(newStorage, i, ch)
+      i = i + 1
+    }
+
+    i = 0
+    loop i + currentLength < newCapacity {
+      __store(other.storage, currentLength + i, __load(other.storage, i))
+      i = i + 1
+    }
+
+    self.length = newCapacity
+    self.capacity = newCapacity
+    self.storage = newStorage
+  }
+}
+
+extend String: Add<String, String> {
+  func add(rhs: String) -> String {
+    let res = ""
+    res.append(self)
+    res.append(rhs)
+    res
+  }
 }

@@ -157,28 +157,28 @@ fn lower_store(
     };
 
     let Some(Expr::CallArg { value: ptr, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
-        unreachable!("didn't get call arg for store")
+        return Err(IRError::Unknown("Didn't get __store pointer".into()));
     };
 
     let Some(ptr) = lowerer.lower_expr(&ptr) else {
-        unreachable!("didn't get ptr for store")
+        return Err(IRError::Unknown("Didn't get __store pointer".into()));
     };
 
     let Some(Expr::CallArg { value: offset, .. }) = lowerer.source_file.get(&args[1]).cloned()
     else {
-        unreachable!("didn't get offset arg for store")
+        return Err(IRError::Unknown("Didn't get __store offset".into()));
     };
 
     let Some(offset) = lowerer.lower_expr(&offset) else {
-        unreachable!("didn't get offset for store")
+        return Err(IRError::Unknown("Didn't get __store offset".into()));
     };
 
     let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[2]).cloned() else {
-        unreachable!("didn't get call arg for store")
+        return Err(IRError::Unknown("Didn't get __store argument".into()));
     };
 
     let Some(value) = lowerer.lower_expr(&value) else {
-        unreachable!("didn't get value");
+        return Err(IRError::Unknown("Didn't get __store value".into()));
     };
 
     let location = lowerer.allocate_register();

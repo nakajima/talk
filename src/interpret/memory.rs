@@ -2,7 +2,7 @@ use std::{fmt::Display, ops::Add};
 
 use crate::{
     SymbolID,
-    interpret::value::Value,
+    interpret::{interpreter::InterpreterError, value::Value},
     lowering::{ir_module::IRConstantData, ir_type::IRType},
 };
 
@@ -120,7 +120,7 @@ impl Memory {
 
     #[allow(clippy::panic)]
     #[allow(clippy::unwrap_used)]
-    pub fn load(&self, pointer: &Pointer, ty: &IRType) -> Value {
+    pub fn load(&self, pointer: &Pointer, ty: &IRType) -> Result<Value, InterpreterError> {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
         #[allow(clippy::unwrap_used)]
         match ty {
@@ -147,20 +147,20 @@ impl Memory {
                         );
                     };
 
-                    assert_eq!(
-                        buf.len(),
-                        length as usize,
-                        "string buffer/length mismatch: {buf:?}"
-                    );
+                    if buf.len() != length as usize {
+                        return Err(InterpreterError::Unknown(format!(
+                            "string buffer/length mismatch: {buf:?}"
+                        )));
+                    }
 
-                    Value::String(String::from_utf8(buf).unwrap())
+                    Ok(Value::String(String::from_utf8(buf).unwrap()))
                 }
-                _ => Value::Struct(
+                _ => Ok(Value::Struct(
                     self.storage[range]
                         .iter()
                         .map(|c| c.clone().unwrap())
                         .collect(),
-                ),
+                )),
             },
             // Value::Enum { tag, values } => {
             //     let mut vals: Vec<Option<Value>> =
@@ -173,13 +173,13 @@ impl Memory {
                     .iter()
                     .map(|c| c.clone().unwrap())
                     .collect();
-                Value::Buffer {
+                Ok(Value::Buffer {
                     elements: elements.clone(),
                     count: elements.len(),
                     capacity: elements.len(),
-                }
+                })
             }
-            _ => self.storage[pointer.addr].clone().unwrap(),
+            _ => Ok(self.storage[pointer.addr].clone().unwrap()),
         }
     }
 

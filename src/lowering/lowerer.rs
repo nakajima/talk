@@ -711,7 +711,7 @@ impl<'a> Lowerer<'a> {
     fn lower_string(&mut self, _expr_id: &ExprID, string: String) -> Option<Register> {
         // Allocate the storage
         let chars_bytes = string.as_bytes();
-        self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
+        let static_addr = self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
 
         let string_struct_reg = self.allocate_register();
         self.push_instr(Instr::Alloc {
@@ -757,7 +757,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::Const {
             dest: static_ptr_reg,
             ty: IRType::RawBuffer,
-            val: IRValue::ImmediateInt(0),
+            val: IRValue::ImmediateInt(static_addr as i64),
         });
         self.push_instr(Instr::Store {
             ty: IRType::POINTER,
@@ -2602,8 +2602,10 @@ impl<'a> Lowerer<'a> {
         });
     }
 
-    fn push_constant(&mut self, constant: IRConstantData) {
-        self.constants.push(constant)
+    fn push_constant(&mut self, constant: IRConstantData) -> usize {
+        let cur = self.constants.len();
+        self.constants.push(constant);
+        cur
     }
 
     pub(super) fn push_instr(&mut self, instr: Instr) {

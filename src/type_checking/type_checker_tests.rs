@@ -1895,4 +1895,16 @@ mod operator_tests {
 
         assert_eq!(checked.nth(1).unwrap(), Ty::Int);
     }
+
+    #[test]
+    fn add_strings() {
+        let checked = check(
+            r#"
+            "hello " + "world"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(checked.first().unwrap(), Ty::string());
+    }
 }

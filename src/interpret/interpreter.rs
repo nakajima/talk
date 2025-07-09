@@ -402,7 +402,7 @@ impl IRInterpreter {
             },
             Instr::Load { dest, addr, ty } => match self.register_value(&addr) {
                 Value::Pointer(ptr) => {
-                    let val = self.memory.load(&ptr, &ty);
+                    let val = self.memory.load(&ptr, &ty)?;
                     self.set_register_value(&dest, val.clone());
                 }
                 _ => {
@@ -865,6 +865,25 @@ mod tests {
             )
             .unwrap(),
             Value::Int(5)
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn interprets_string_append() {
+        assert_eq!(
+            interpret(
+                r#"
+                print("oh hi")
+                let a = ""
+                print("ok we have an empty string")
+                a.append("hello ")
+                a.append("world")
+                a
+            "#
+            )
+            .unwrap(),
+            Value::String("hello world".to_string())
         )
     }
 }

@@ -1228,12 +1228,12 @@ pub mod lowering_tests {
 
     #[test]
     fn lowers_strings() {
-        let lowered = lower("\"sup\"").unwrap();
+        let lowered = lower("\"sup \"").unwrap();
 
         assert_eq!(lowered.constants.len(), 1);
         assert_eq!(
             lowered.constants[0],
-            IRConstantData::RawBuffer("sup".as_bytes().to_vec())
+            IRConstantData::RawBuffer("sup ".as_bytes().to_vec())
         );
 
         assert_lowered_function!(
@@ -1261,7 +1261,7 @@ pub mod lowering_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: IRValue::ImmediateInt(3),
+                            val: IRValue::ImmediateInt(4),
                             location: Register(1)
                         },
                         // Set the capacity
@@ -1273,7 +1273,7 @@ pub mod lowering_tests {
                         },
                         Instr::Store {
                             ty: IRType::Int,
-                            val: IRValue::ImmediateInt(3),
+                            val: IRValue::ImmediateInt(4),
                             location: Register(2)
                         },
                         // Set the storage

@@ -9,6 +9,12 @@ use crate::lowering::{
 
 pub fn print(program: &IRModule) -> String {
     let mut printer = IRPrinter::default();
+    printer.puts("Constants:");
+    printer.indent_level = 2;
+    for constant in program.constants.iter() {
+        printer.puts(&format!("- {constant:?}",));
+    }
+    printer.indent_level = 0;
     for func in &program.functions {
         print_func(func, &mut printer);
     }
@@ -196,7 +202,8 @@ mod tests {
         assert_eq!(
             func.trim(),
             format!(
-                r#"func @_{}_add(int %0) int
+                r#"Constants:
+func @_{}_add(int %0) int
   entry:
     %1 = int 1;
     %2 = add int %0, %1;
