@@ -179,6 +179,14 @@ impl BasicBlock {
     fn _push_instr(&mut self, instr: Instr) {
         self.instructions.push(instr)
     }
+
+    pub fn label(&self) -> String {
+        if self.id.0 == 0 {
+            "entry".to_string()
+        } else {
+            format!("{}", self.id)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -713,6 +721,7 @@ impl<'a> Lowerer<'a> {
         let chars_bytes = string.as_bytes();
         let static_addr = self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
 
+        // 1. allocate the String struct on the heap
         let string_struct_reg = self.allocate_register();
         self.push_instr(Instr::Alloc {
             dest: string_struct_reg,
@@ -720,6 +729,7 @@ impl<'a> Lowerer<'a> {
             count: None,
         });
 
+        // 2. fill the fields (length, capacity, storage pointer)
         let length_reg = self.allocate_register();
         self.push_instr(Instr::GetElementPointer {
             dest: length_reg,
@@ -765,14 +775,8 @@ impl<'a> Lowerer<'a> {
             location: storage_reg,
         });
 
-        let dest = self.allocate_register();
-        self.push_instr(Instr::Load {
-            dest,
-            ty: IRType::string(),
-            addr: string_struct_reg,
-        });
-
-        Some(dest)
+        // RETURN THE POINTER, **not** the loaded struct.
+        Some(string_struct_reg)
     }
 
     fn lower_array(&mut self, expr_id: &ExprID, ty: Ty, items: Vec<ExprID>) -> Option<Register> {

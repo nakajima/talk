@@ -39,6 +39,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 ena = "0.14.3"
 tracing-tree = "0.4.0"
+inkwell = { version = "0.6.0", features = ["llvm18-1"] }
 
 
 [features]
