@@ -100,6 +100,32 @@ impl<'a> Parser<'a> {
         while let Some(current) = self.current.clone() {
             self.skip_newlines();
 
+            if let Some(Token {
+                kind: Tokind::Identifier(name),
+                ..
+            }) = &self.current
+                && name == "Constants"
+            {
+                self.advance();
+                self.consume(Tokind::Colon).ok();
+
+                // Skip everything until we hit the first function or EOF. The
+                // lexer does not currently understand constant data, so any
+                // tokens we encounter here are ignored.
+                loop {
+                    self.skip_newlines();
+                    match self.current.clone() {
+                        Some(Token {
+                            kind: Tokind::Func, ..
+                        })
+                        | None => break,
+                        Some(_) => {
+                            self.advance();
+                        }
+                    }
+                }
+            }
+
             if current.kind == Tokind::EOF {
                 break;
             }
