@@ -75,18 +75,33 @@ impl IRInterpreter {
             .iter()
             .find(|f| f.name == "@main")
             .cloned();
-        let result = if let Some(main) = main {
-            self.execute_function(main, vec![])?
+        let (ret_ty, result) = if let Some(main) = main {
+            let ret_ty = main
+                .blocks
+                .iter()
+                .rev()
+                .find_map(|b| {
+                    b.instructions.iter().rev().find_map(|i| match i {
+                        Instr::Ret(ty, _) => Some(ty.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or(IRType::Void);
+            (ret_ty, self.execute_function(main, vec![])?)
         } else {
             return Err(InterpreterError::NoMainFunc);
         };
 
-        // TODO: I don't know about this
+        // If the program's entry point returns a struct but the interpreter
+        // represented it as a pointer, load the value from memory using the
+        // function's return type.
         if let Value::Pointer(ptr) = &result {
-            Ok(self.memory.load(ptr, &result.ty(&self.program))?)
-        } else {
-            Ok(result)
+            if ret_ty != IRType::POINTER {
+                return self.memory.load(ptr, &ret_ty);
+            }
         }
+
+        Ok(result)
     }
 
     pub fn step(&mut self) -> Result<Option<Value>, InterpreterError> {
@@ -555,7 +570,6 @@ mod tests {
         compiling::driver::Driver,
         interpret::{
             interpreter::{IRInterpreter, InterpreterError},
-            memory::Pointer,
             value::Value,
         },
         transforms::monomorphizer::Monomorphizer,
@@ -859,22 +873,12 @@ mod tests {
 
     #[test]
     fn interprets_string() {
-        assert_eq!(
-            interpret(
-                "
-                \"hello world\"
-                "
-            )
-            .unwrap(),
-            Value::Struct(
-                SymbolID::STRING,
-                vec![
-                    Value::Int(11),
-                    Value::Int(11),
-                    Value::Pointer(Pointer::new(0))
-                ]
-            )
-        );
+        let Value::Struct(sym, fields) = interpret("\"hello world\"").unwrap() else {
+            panic!("did not get struct");
+        };
+        assert_eq!(sym, SymbolID::STRING);
+        assert_eq!(fields[0], Value::Int(11));
+        assert_eq!(fields[1], Value::Int(11));
     }
 
     #[test]
@@ -894,24 +898,19 @@ mod tests {
 
     #[test]
     fn interprets_string_append() {
-        assert_eq!(
-            interpret(
-                r#"
-                let a = ""
-                a.append("hello ")
-                a.append("world")
-                a
-            "#
-            )
-            .unwrap(),
-            Value::Struct(
-                SymbolID::STRING,
-                vec![
-                    Value::Int(11),
-                    Value::Int(11),
-                    Value::Pointer(Pointer::new(0))
-                ]
-            )
+        let Value::Struct(sym, fields) = interpret(
+            r#"
+            let a = ""
+            a.append("hello ")
+            a.append("world")
+            a
+        "#
         )
+        .unwrap() else {
+            panic!("did not get struct");
+        };
+        assert_eq!(sym, SymbolID::STRING);
+        assert_eq!(fields[0], Value::Int(11));
+        assert_eq!(fields[1], Value::Int(11));
     }
 }

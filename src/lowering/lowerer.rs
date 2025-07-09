@@ -1085,7 +1085,7 @@ impl<'a> Lowerer<'a> {
         let func = current_function.export(
             init_func_ty.to_ir(self),
             Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
-            Some(IRType::POINTER),
+            Some(type_def.ty().to_ir(self)),
             Some(env),
         );
 
@@ -1122,7 +1122,7 @@ impl<'a> Lowerer<'a> {
             typed_func.ty.to_ir(self),
             Name::Resolved(*symbol_id, format!("{}_{name}", type_def.name()))
                 .mangled(&typed_func.ty),
-            Some(IRType::POINTER),
+            Some(type_def.ty().to_ir(self)),
             Some(env),
         );
 
