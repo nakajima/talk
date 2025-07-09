@@ -9,6 +9,7 @@ use crate::{
         ir_function::IRFunction,
         ir_module::IRModule,
         ir_printer::{self},
+        ir_type::IRType,
         ir_value::IRValue,
         lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList},
         register::Register,
@@ -447,8 +448,11 @@ impl IRInterpreter {
                 let pointer = base + index as usize;
                 self.set_register_value(&dest, Value::Pointer(pointer));
             }
-            Instr::MakeStruct { dest, values, .. } => {
-                let structure = Value::Struct(self.register_values(&values));
+            Instr::MakeStruct { dest, values, ty } => {
+                let IRType::Struct(sym, _, _) = ty else {
+                    return Err(InterpreterError::Unknown("Didn't get struct".into()));
+                };
+                let structure = Value::Struct(sym, self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
             #[allow(clippy::print_with_newline)]
@@ -536,9 +540,11 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{
+        SymbolID,
         compiling::driver::Driver,
         interpret::{
             interpreter::{IRInterpreter, InterpreterError},
+            memory::Pointer,
             value::Value,
         },
         transforms::monomorphizer::Monomorphizer,
@@ -789,7 +795,7 @@ mod tests {
         "
             )
             .unwrap(),
-            Value::Struct(vec![Value::Int(3), Value::Int(2)]),
+            Value::Struct(SymbolID::TUPLE, vec![Value::Int(3), Value::Int(2)]),
         )
     }
 
@@ -849,7 +855,14 @@ mod tests {
                 "
             )
             .unwrap(),
-            Value::String("hello world".to_string())
+            Value::Struct(
+                SymbolID::STRING,
+                vec![
+                    Value::Int(11),
+                    Value::Int(11),
+                    Value::Pointer(Pointer::new(0))
+                ]
+            )
         );
     }
 
@@ -869,21 +882,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn interprets_string_append() {
         assert_eq!(
             interpret(
                 r#"
-                print("oh hi")
                 let a = ""
-                print("ok we have an empty string")
                 a.append("hello ")
                 a.append("world")
                 a
             "#
             )
             .unwrap(),
-            Value::String("hello world".to_string())
+            Value::Struct(
+                SymbolID::STRING,
+                vec![
+                    Value::Int(11),
+                    Value::Int(11),
+                    Value::Pointer(Pointer::new(0))
+                ]
+            )
         )
     }
 }

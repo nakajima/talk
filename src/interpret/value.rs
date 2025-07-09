@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::interpret::{interpreter::InterpreterError, memory::Pointer};
+use crate::{
+    SymbolID,
+    interpret::{interpreter::InterpreterError, memory::Pointer},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -12,11 +15,10 @@ pub enum Value {
         values: Vec<Value>,
     },
     Void,
-    Struct(Vec<Value>),
+    Struct(SymbolID, Vec<Value>),
     Pointer(Pointer),
     Func(usize),
     RawBuffer(Vec<u8>),
-    String(String),
     Array(Vec<Value>),
     Buffer {
         elements: Vec<Value>,
@@ -33,19 +35,32 @@ impl Display for Value {
             Value::Bool(i) => write!(f, "{i}"),
             Value::Enum { tag, values } => write!(f, ".{tag}({values:?})"),
             Value::Void => write!(f, "void"),
-            Value::Struct(values) => write!(
-                f,
-                "Struct({})",
-                values
-                    .iter()
-                    .map(|v| format!("{v}"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
+            Value::Struct(sym, values) => {
+                if *sym == SymbolID::STRING {
+                    write!(
+                        f,
+                        "String({})",
+                        values
+                            .iter()
+                            .map(|v| format!("{v}"))
+                            .collect::<Vec<String>>()
+                            .join(",")
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Struct({})",
+                        values
+                            .iter()
+                            .map(|v| format!("{v}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                }
+            }
             Value::Pointer(pointer) => write!(f, "0x{pointer}"),
             Value::Func(func) => write!(f, "@{func:?}()"),
             Value::RawBuffer(b) => write!(f, "{b:?}"),
-            Value::String(string) => write!(f, "{string}"),
             Value::Array(values) => write!(
                 f,
                 "[{}]",

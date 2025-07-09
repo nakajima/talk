@@ -612,11 +612,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(2).into()))
                     ]
                 }],
-                env_ty: Some(IRType::Struct(
-                    SymbolID::ARRAY,
-                    vec![IRType::Int, IRType::Int, IRType::POINTER],
-                    vec![IRType::Int]
-                )),
+                env_ty: Some(IRType::POINTER),
                 env_reg: Some(Register(0)),
                 size: 6,
             }

@@ -10,14 +10,12 @@ struct String {
   }
 
   func append(other: String) {
-    print("\n\nappending\n\n")
     let newCapacity = self.length + other.length
     let newStorage = __alloc<Byte>(newCapacity)
     let currentLength = self.length
     let i = 0
     loop i < currentLength {
       let ch = __load(self.storage, i)
-      print(ch)
       __store(newStorage, i, ch)
       i = i + 1
     }

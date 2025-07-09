@@ -1,7 +1,6 @@
 use std::{fmt::Display, ops::Add};
 
 use crate::{
-    SymbolID,
     interpret::{interpreter::InterpreterError, value::Value},
     lowering::{ir_module::IRConstantData, ir_type::IRType},
 };
@@ -97,16 +96,10 @@ impl Memory {
     pub fn store(&mut self, pointer: Pointer, val: Value, ty: &IRType) {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
         match val {
-            Value::Struct(vals) => {
+            Value::Struct(_, vals) => {
                 let vals: Vec<Option<Value>> = vals.iter().cloned().map(Option::Some).collect();
                 self.storage[range].clone_from_slice(&vals)
             }
-            // Value::Enum { tag, values } => {
-            //     let mut vals: Vec<Option<Value>> =
-            //         values.iter().cloned().map(Option::Some).collect();
-            //     vals.resize(range.into_iter().len() + 1, None);
-            //     self.storage[range].clone_from_slice(&vals)
-            // }
             Value::Buffer { elements, .. } => {
                 let elements: Vec<Option<Value>> =
                     elements.iter().cloned().map(Option::Some).collect();
@@ -125,49 +118,13 @@ impl Memory {
         #[allow(clippy::unwrap_used)]
         match ty {
             // Special case some stuff
-            IRType::Struct(struct_id, _, _) => match *struct_id {
-                SymbolID::STRING => {
-                    let string_struct_props: Vec<Value> = self.storage[range]
-                        .iter()
-                        .map(|c| c.clone().unwrap())
-                        .collect();
-
-                    let Value::Int(length) = string_struct_props[0] else {
-                        panic!("Didn't get length");
-                    };
-
-                    let Value::Pointer(Pointer { addr }) = string_struct_props[2] else {
-                        panic!("didn't get storage")
-                    };
-
-                    let Some(Value::RawBuffer(buf)) = self.storage[addr].clone() else {
-                        panic!(
-                            "didn't get string storage ({addr}): {:?}",
-                            self.storage[addr],
-                        );
-                    };
-
-                    if buf.len() != length as usize {
-                        return Err(InterpreterError::Unknown(format!(
-                            "string buffer/length mismatch: {buf:?}"
-                        )));
-                    }
-
-                    Ok(Value::String(String::from_utf8(buf).unwrap()))
-                }
-                _ => Ok(Value::Struct(
-                    self.storage[range]
-                        .iter()
-                        .map(|c| c.clone().unwrap())
-                        .collect(),
-                )),
-            },
-            // Value::Enum { tag, values } => {
-            //     let mut vals: Vec<Option<Value>> =
-            //         values.iter().cloned().map(Option::Some).collect();
-            //     vals.resize(range.into_iter().len() + 1, None);
-            //     self.storage[range].clone_from_slice(&vals)
-            // }
+            IRType::Struct(sym, _, _) => Ok(Value::Struct(
+                *sym,
+                self.storage[range]
+                    .iter()
+                    .map(|c| c.clone().unwrap())
+                    .collect(),
+            )),
             IRType::TypedBuffer { .. } => {
                 let elements: Vec<Value> = self.storage[range]
                     .iter()
