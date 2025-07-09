@@ -115,6 +115,11 @@ impl Memory {
     #[allow(clippy::unwrap_used)]
     pub fn load(&self, pointer: &Pointer, ty: &IRType) -> Result<Value, InterpreterError> {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
+
+        tracing::debug!(
+            "load range: {range:?}, {:?}",
+            self.storage[range.clone()].to_vec()
+        );
         #[allow(clippy::unwrap_used)]
         match ty {
             // Special case some stuff

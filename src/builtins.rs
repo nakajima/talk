@@ -512,6 +512,12 @@ mod array_tests {
     }
 
     #[test]
+    fn gets_typed_get() {
+        let checked = crate::type_checking::check("[1,2,3].get(0)").unwrap();
+        assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::Int);
+    }
+
+    #[test]
     fn gets_count() {
         let checked = crate::type_checking::check("[1,2,3].count").unwrap();
         assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::Int);

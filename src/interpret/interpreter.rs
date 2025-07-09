@@ -75,10 +75,17 @@ impl IRInterpreter {
             .iter()
             .find(|f| f.name == "@main")
             .cloned();
-        if let Some(main) = main {
-            self.execute_function(main, vec![])
+        let result = if let Some(main) = main {
+            self.execute_function(main, vec![])?
         } else {
-            Err(InterpreterError::NoMainFunc)
+            return Err(InterpreterError::NoMainFunc);
+        };
+
+        // TODO: I don't know about this
+        if let Value::Pointer(ptr) = &result {
+            Ok(self.memory.load(ptr, &result.ty(&self.program))?)
+        } else {
+            Ok(result)
         }
     }
 
@@ -326,10 +333,14 @@ impl IRInterpreter {
                     Value::Bool(self.register_value(&op1) != self.register_value(&op2)),
                 );
             }
-            Instr::TagVariant(dest, _, tag, values) => {
+            Instr::TagVariant(dest, ty, tag, values) => {
+                let IRType::Enum(symbol_id, _) = ty else {
+                    unreachable!()
+                };
                 self.set_register_value(
                     &dest,
                     Value::Enum {
+                        symbol_id,
                         tag,
                         values: values
                             .0

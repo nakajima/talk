@@ -178,14 +178,23 @@ pub mod trace {
     pub fn init() {
         use tracing_subscriber::{EnvFilter, prelude::*, registry};
 
-        let tree = tracing_tree::HierarchicalLayer::new(2)
-            .with_writer(TestWriter::new())
-            .with_filter(SuppressPrelude) // kills everything inside a prelude span
-            .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
-
-        registry()
-            .with(MarkPreludeSpan) // sets the PreludeMarker
-            .with(tree)
-            .init();
+        if std::env::var("LOG_PRELUDE").is_ok() {
+            let tree = tracing_tree::HierarchicalLayer::new(2)
+                .with_writer(TestWriter::new())
+                .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
+            registry()
+                .with(MarkPreludeSpan) // sets the PreludeMarker
+                .with(tree)
+                .init();
+        } else {
+            let tree = tracing_tree::HierarchicalLayer::new(2)
+                .with_writer(TestWriter::new())
+                .with_filter(SuppressPrelude) // kills everything inside a prelude span
+                .with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
+            registry()
+                .with(MarkPreludeSpan) // sets the PreludeMarker
+                .with(tree)
+                .init();
+        };
     }
 }

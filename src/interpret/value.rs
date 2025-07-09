@@ -3,6 +3,7 @@ use std::fmt::Display;
 use crate::{
     SymbolID,
     interpret::{interpreter::InterpreterError, memory::Pointer},
+    lowering::{ir_module::IRModule, ir_type::IRType},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -11,6 +12,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Enum {
+        symbol_id: SymbolID,
         tag: u16,
         values: Vec<Value>,
     },
@@ -33,7 +35,7 @@ impl Display for Value {
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(i) => write!(f, "{i}"),
             Value::Bool(i) => write!(f, "{i}"),
-            Value::Enum { tag, values } => write!(f, ".{tag}({values:?})"),
+            Value::Enum { tag, values, .. } => write!(f, ".{tag}({values:?})"),
             Value::Void => write!(f, "void"),
             Value::Struct(sym, values) => {
                 if *sym == SymbolID::STRING {
@@ -44,7 +46,7 @@ impl Display for Value {
                             .iter()
                             .map(|v| format!("{v}"))
                             .collect::<Vec<String>>()
-                            .join(",")
+                            .join(", ")
                     )
                 } else {
                     write!(
@@ -138,6 +140,36 @@ impl Value {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
             _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+        }
+    }
+
+    pub fn ty(&self, module: &IRModule) -> IRType {
+        match self {
+            Value::Int(_) => IRType::Int,
+            Value::Float(_) => IRType::Float,
+            Value::Bool(_) => IRType::Bool,
+            Value::Enum {
+                symbol_id, values, ..
+            } => IRType::Enum(*symbol_id, values.iter().map(|v| v.ty(module)).collect()),
+            Value::Void => IRType::Void,
+            Value::Struct(symbol_id, values) => IRType::Struct(
+                *symbol_id,
+                values.iter().map(|v| v.ty(module)).collect(),
+                vec![],
+            ),
+            Value::Pointer(_) => IRType::POINTER,
+            Value::Func(idx) => module.functions[*idx].ty.clone(),
+            Value::RawBuffer(_) => IRType::RawBuffer,
+            Value::Array(v) => {
+                IRType::array(v.first().map(|v| v.ty(module)).unwrap_or(IRType::Void))
+            }
+            Value::Buffer { elements, .. } => IRType::TypedBuffer {
+                element: elements
+                    .first()
+                    .map(|v| v.ty(module))
+                    .unwrap_or(IRType::Void)
+                    .into(),
+            },
         }
     }
 }

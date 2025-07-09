@@ -187,7 +187,7 @@ impl<'a> Monomorphizer<'a> {
         self.currently_monomorphizing_stack
             .push(function.name.clone());
 
-        tracing::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
+        tracing::info!("monomorphizing: {mangled_name} -> {expected_ret:?} {substitutions:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
@@ -443,6 +443,7 @@ fn contains_type_var(ty: &IRType) -> bool {
         }
         IRType::Enum(_, params) => params.iter().any(contains_type_var),
         IRType::TypedBuffer { element } => contains_type_var(element),
+        IRType::Pointer { hint } => hint.is_some(),
         _ => false,
     }
 }
@@ -567,8 +568,8 @@ mod tests {
     fn monomorphs_array_get() {
         let mut driver = Driver::with_str(
             "
-      let a = [1,2,3]
-      a.get(0)
+        let a = [1,2,3]
+        a.get(0)
       ",
         );
 
