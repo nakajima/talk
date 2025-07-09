@@ -1,5 +1,6 @@
 use crate::{
     interpret::{
+        io::InterpreterIO,
         memory::{Memory, Pointer},
         value::Value,
     },
@@ -43,21 +44,23 @@ impl StackFrame {
     }
 }
 
-pub struct IRInterpreter {
-    program: IRModule,
+pub struct IRInterpreter<'a, IO: InterpreterIO> {
+    pub(super) program: IRModule,
     call_stack: Vec<StackFrame>,
-    memory: Memory,
+    pub(super) memory: Memory,
+    io: &'a mut IO,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
-impl IRInterpreter {
-    pub fn new(program: IRModule) -> Self {
+impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
+    pub fn new(program: IRModule, io: &'a mut IO) -> Self {
         let memory = Memory::new(&program.constants);
         Self {
             program,
             call_stack: vec![],
             memory,
+            io,
         }
     }
 
@@ -482,9 +485,17 @@ impl IRInterpreter {
                 self.set_register_value(&dest, structure);
             }
             #[allow(clippy::print_with_newline)]
-            Instr::Print { val } => {
+            Instr::Print { ty, val } => {
                 let val = self.value(&val);
-                print!("{val}\n");
+
+                let val = if let Value::Pointer(ptr) = val {
+                    self.memory.load(&ptr, &ty)?
+                } else {
+                    val
+                };
+
+                self.io
+                    .write_all(format!("{}\n", val.to_string(self)).as_bytes());
             }
             Instr::GetValueOf { .. } => (),
         }
@@ -570,12 +581,18 @@ mod tests {
         compiling::driver::Driver,
         interpret::{
             interpreter::{IRInterpreter, InterpreterError},
+            io::test_io::TestIO,
             value::Value,
         },
         transforms::monomorphizer::Monomorphizer,
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
+        let mut io = TestIO::new();
+        interpret_io(code, &mut io)
+    }
+
+    fn interpret_io(code: &'static str, io: &mut TestIO) -> Result<Value, InterpreterError> {
         let mut driver = Driver::with_str(code);
         let unit = driver.lower().into_iter().next().unwrap();
 
@@ -588,7 +605,7 @@ mod tests {
         let module = unit.module();
         let mono = Monomorphizer::new(&unit.env).run(module);
 
-        IRInterpreter::new(mono).run()
+        IRInterpreter::new(mono, io).run()
     }
 
     #[test]
@@ -912,5 +929,25 @@ mod tests {
         assert_eq!(sym, SymbolID::STRING);
         assert_eq!(fields[0], Value::Int(11));
         assert_eq!(fields[1], Value::Int(11));
+    }
+
+    #[test]
+    fn interprets_io() {
+        let mut io = TestIO::new();
+        interpret_io("print(123)", &mut io).unwrap();
+        assert_eq!("123\n".as_bytes(), io.stdout)
+    }
+
+    #[test]
+    fn interprets_string_special_case() {
+        let mut io = TestIO::new();
+        interpret_io(
+            r#"
+            print("hello world")
+            "#,
+            &mut io,
+        )
+        .unwrap();
+        assert_eq!("hello world\n", str::from_utf8(&io.stdout).unwrap())
     }
 }

@@ -1,8 +1,10 @@
-use std::fmt::Display;
-
 use crate::{
     SymbolID,
-    interpret::{interpreter::InterpreterError, memory::Pointer},
+    interpret::{
+        interpreter::{IRInterpreter, InterpreterError},
+        io::InterpreterIO,
+        memory::Pointer,
+    },
     lowering::{ir_module::IRModule, ir_type::IRType},
 };
 
@@ -29,51 +31,51 @@ pub enum Value {
     },
 }
 
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Value {
+    #[allow(clippy::unwrap_used)]
+    pub fn to_string<IO: InterpreterIO>(&self, interpreter: &IRInterpreter<IO>) -> String {
         match self {
-            Value::Int(i) => write!(f, "{i}"),
-            Value::Float(i) => write!(f, "{i}"),
-            Value::Bool(i) => write!(f, "{i}"),
-            Value::Enum { tag, values, .. } => write!(f, ".{tag}({values:?})"),
-            Value::Void => write!(f, "void"),
+            Value::Int(i) => format!("{i}"),
+            Value::Float(i) => format!("{i}"),
+            Value::Bool(i) => format!("{i}"),
+            Value::Enum { tag, values, .. } => format!(".{tag}({values:?})"),
+            Value::Void => "void".to_string(),
             Value::Struct(sym, values) => {
                 if *sym == SymbolID::STRING {
-                    write!(
-                        f,
-                        "String({})",
-                        values
-                            .iter()
-                            .map(|v| format!("{v}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    let Value::Pointer(ptr) = &values[2] else {
+                        unreachable!()
+                    };
+
+                    let loaded = interpreter.memory.load(ptr, &IRType::RawBuffer).unwrap();
+
+                    let Value::RawBuffer(bytes) = loaded else {
+                        unreachable!("didn't get raw buffer: {loaded:?}");
+                    };
+                    String::from_utf8(bytes).unwrap()
                 } else {
-                    write!(
-                        f,
+                    format!(
                         "Struct({})",
                         values
                             .iter()
-                            .map(|v| format!("{v}"))
+                            .map(|v| v.to_string(interpreter))
                             .collect::<Vec<String>>()
                             .join(", ")
                     )
                 }
             }
-            Value::Pointer(pointer) => write!(f, "0x{pointer}"),
-            Value::Func(func) => write!(f, "@{func:?}()"),
-            Value::RawBuffer(b) => write!(f, "{b:?}"),
-            Value::Array(values) => write!(
-                f,
+            Value::Pointer(pointer) => format!("{pointer}"),
+            Value::Func(func) => format!("@{func:?}()"),
+            Value::RawBuffer(b) => format!("{b:?}"),
+            Value::Array(values) => format!(
                 "[{}]",
                 values
                     .iter()
-                    .map(|v| format!("{v}"))
+                    .map(|v| v.to_string(interpreter))
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
 
-            Value::Buffer { .. } => write!(f, "buf"),
+            Value::Buffer { .. } => "buf".to_string(),
         }
     }
 }
