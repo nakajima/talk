@@ -216,7 +216,10 @@ impl<'a> Monomorphizer<'a> {
             substitutions
         );
 
-        self.cache.insert(mangled_name.clone());
+        let is_generic = Self::is_generic(&monomorphized_function);
+        if !is_generic {
+            self.cache.insert(mangled_name.clone());
+        }
 
         monomorphized_function =
             self.detect_monomorphizations_in(monomorphized_function.clone(), module, substitutions);
