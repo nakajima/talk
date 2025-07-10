@@ -149,7 +149,7 @@ fn lower_print(
     };
 
     lowerer.push_instr(Instr::Print {
-        ty: typed_expr.ty.to_ir(&lowerer),
+        ty: typed_expr.ty.to_ir(lowerer),
         val: reg.into(),
     });
 
