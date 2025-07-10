@@ -56,12 +56,12 @@ impl<'a> Monomorphizer<'a> {
             let func = self.detect_monomorphizations_in(func, &module, &mut HashMap::default());
             final_functions.push(func);
         }
-
-        final_functions.extend(
-            self.generic_functions
-                .into_iter()
-                .filter_map(|f| if Self::is_generic(&f) { None } else { Some(f) }),
-        );
+        // Keep any specialized functions even if they still contain type
+        // variables. Recursively monomorphized functions may reference their own
+        // return type before constraints fully resolve, so filtering them out
+        // would drop required definitions.
+        // TODO: ideally we wouldn't need this.
+        final_functions.extend(self.generic_functions.into_iter());
 
         module.functions = final_functions;
         module
