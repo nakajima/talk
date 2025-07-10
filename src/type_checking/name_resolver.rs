@@ -1130,7 +1130,7 @@ impl NameResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, path::PathBuf};
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{compiling::driver::Driver, diagnostic::DiagnosticKind, expr::Expr};
@@ -1376,12 +1376,12 @@ mod tests {
         let (tree, session) = resolve_with_session("{ let x = 123 }; x");
 
         let session = session.lock().unwrap();
-        let diagnostics = session.diagnostics_for(&tree.path).unwrap();
+        let diagnostics = session.diagnostics_for(&tree.path);
         assert!(!diagnostics.is_empty());
         let Diagnostic {
             path: _,
             kind: DiagnosticKind::Resolve(_, NameResolverError::UnresolvedName(name)),
-        } = diagnostics.iter().find(|_| true).unwrap().clone()
+        } = diagnostics.iter().find(|_| true).unwrap()
         else {
             panic!("didn't get diagnostic");
         };
@@ -1529,7 +1529,6 @@ mod tests {
                 .lock()
                 .unwrap()
                 .diagnostics_for(&PathBuf::from("-"))
-                .unwrap()
                 .is_empty()
         )
     }
@@ -1799,10 +1798,7 @@ mod tests {
         );
 
         let ses = session.lock().unwrap();
-        let diagnostics = ses
-            .diagnostics_for(&PathBuf::from("-"))
-            .cloned()
-            .unwrap_or(HashSet::new());
+        let diagnostics = ses.diagnostics_for(&PathBuf::from("-"));
         assert_eq!(diagnostics.len(), 1);
 
         let Diagnostic {

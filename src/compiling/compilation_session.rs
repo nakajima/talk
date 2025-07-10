@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -11,7 +11,7 @@ pub type SharedCompilationSession = Arc<Mutex<CompilationSession>>;
 // A shared object for all of compilation, across units
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct CompilationSession {
-    pub(crate) diagnostics: HashMap<PathBuf, HashSet<Diagnostic>>,
+    pub(crate) diagnostics: HashSet<Diagnostic>,
 }
 
 impl CompilationSession {
@@ -25,21 +25,21 @@ impl CompilationSession {
         self.diagnostics.clear();
     }
 
-    pub fn diagnostics_for(&self, path: &PathBuf) -> Option<&HashSet<Diagnostic>> {
-        self.diagnostics.get(path)
+    pub fn diagnostics_for(&self, path: &PathBuf) -> HashSet<&Diagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.path == *path)
+            .collect()
     }
 
-    pub fn _diagnostics(&self) -> &HashMap<PathBuf, HashSet<Diagnostic>> {
+    pub fn _diagnostics(&self) -> &HashSet<Diagnostic> {
         &self.diagnostics
     }
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         if diagnostic.is_unhandled() {
             tracing::warn!("adding diagnostic to {:?}: {diagnostic:?}", diagnostic.path);
-            self.diagnostics
-                .entry(diagnostic.path.clone())
-                .or_default()
-                .insert(diagnostic);
+            self.diagnostics.insert(diagnostic);
         }
     }
 }

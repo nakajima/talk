@@ -471,8 +471,11 @@ impl ServerState {
             tracing::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
                 && let Some(source_file) = unit.source_file(path)
-                && let Some(diagnostics) = self.driver.session.lock().ok()?.diagnostics_for(path)
             {
+                let Ok(session) = self.driver.session.lock() else {
+                    return None;
+                };
+                let diagnostics = session.diagnostics_for(path);
                 for diag in diagnostics {
                     if &diag.path != path {
                         // This is definitely the wrong place to be doing this filtering...

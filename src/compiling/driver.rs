@@ -179,12 +179,13 @@ impl Driver {
 
         self.lower();
 
-        if let Ok(session) = self.session.lock()
-            && let Some(diagnostics) = session.diagnostics_for(path)
-        {
-            Ok(diagnostics.clone())
-        } else {
-            Err(CompilationError::UnknownError("Could not lock session"))
+        #[allow(clippy::unwrap_used)]
+        match self.session.lock() {
+            Ok(session) => Ok(session.diagnostics_for(path).into_iter().cloned().collect()),
+            Err(err) => {
+                tracing::error!("Could not lock session: {err:?}");
+                Err(CompilationError::UnknownError("Could not lock session"))
+            }
         }
     }
 

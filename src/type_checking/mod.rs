@@ -59,22 +59,23 @@ impl CheckResult {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         use std::path::PathBuf;
 
-        let diagnostics = self
-            .session
-            .lock()
-            .unwrap()
-            .diagnostics_for(&PathBuf::from("-"))
-            .cloned();
+        let Ok(session) = self.session.lock() else {
+            tracing::error!("Could not unlock session");
+            return vec![];
+        };
 
-        if let Some(diagnostics) = diagnostics {
-            diagnostics
-                .iter()
-                .filter(|d| d.is_unhandled())
-                .cloned()
-                .collect()
-        } else {
-            vec![]
-        }
+        let diagnostics = session.diagnostics_for(&PathBuf::from("-"));
+
+        diagnostics
+            .into_iter()
+            .filter_map(|d| {
+                if d.is_unhandled() {
+                    Some(d.to_owned())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn root_ids(&self) -> Vec<ExprID> {
@@ -101,13 +102,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
 
-    for diagnostic in driver
-        .session
-        .lock()
-        .unwrap()
-        .diagnostics_for(path)
-        .unwrap_or(&Default::default())
-    {
+    for diagnostic in driver.session.lock().unwrap().diagnostics_for(path) {
         tracing::error!("{diagnostic:?}");
     }
 

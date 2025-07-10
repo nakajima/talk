@@ -28,15 +28,13 @@ impl InterpreterIO for InterpreterStdIO {
 
 #[cfg(test)]
 pub mod test_io {
-    use std::collections::VecDeque;
-
     use crate::interpret::io::InterpreterIO;
 
     #[derive(Default)]
     pub struct TestIO {
         pub stdout: Vec<u8>,
         pub stderr: Vec<u8>,
-        pub stdin: VecDeque<u8>,
+        pub stdin: Vec<u8>,
     }
 
     impl TestIO {
@@ -55,7 +53,7 @@ pub mod test_io {
             self.stderr.extend_from_slice(buf);
         }
 
-        fn read_exact(&mut self, buf: &mut Vec<u8>) {
+        fn read(&mut self, buf: &mut Vec<u8>) {
             buf.copy_from_slice(&self.stdin);
         }
     }
