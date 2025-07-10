@@ -247,15 +247,10 @@ impl LanguageServer for ServerState {
             return Box::pin(async { Ok(None) });
         };
 
-        let Some(source_file) = self.driver.parsed_source_file(&path) else {
-            tracing::error!("Failed to find parsed file: {:?}", params.text_document.uri);
-            return Box::pin(async { Ok(None) });
-        };
-
         let response = Ok(Some(SemanticTokensResult::Tokens(
             SemanticTokens {
                 result_id: None,
-                data: semantic_tokens::collect(source_file, self.driver.contents(&path)),
+                data: semantic_tokens::collect(self.driver.contents(&path)),
             }
             .clone(),
         )));

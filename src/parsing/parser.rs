@@ -105,7 +105,6 @@ impl ParserError {
     }
 }
 
-#[cfg(test)]
 pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
