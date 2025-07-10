@@ -1,2 +1,10 @@
 print("hello 🌎")
 print(123)
+
+// Print a person????
+struct Person {
+  let name: String
+  let age: Int
+}
+
+print(Person(name: "Pat", age: 100))
