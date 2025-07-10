@@ -61,7 +61,7 @@ impl<'a> Monomorphizer<'a> {
         // return type before constraints fully resolve, so filtering them out
         // would drop required definitions.
         // TODO: ideally we wouldn't need this.
-        final_functions.extend(self.generic_functions.into_iter());
+        final_functions.extend(self.generic_functions);
 
         module.functions = final_functions;
         module
