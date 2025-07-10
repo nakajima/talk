@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 pub trait InterpreterIO {
     fn write_all(&mut self, buf: &[u8]);
     fn write_all_err(&mut self, buf: &[u8]);
-    fn read_exact(&mut self, buf: &mut [u8]);
+    fn read(&mut self, buf: &mut Vec<u8>);
 }
 
 #[derive(Default)]
@@ -21,8 +21,8 @@ impl InterpreterIO for InterpreterStdIO {
         std::io::stderr().flush().unwrap();
     }
 
-    fn read_exact(&mut self, buf: &mut [u8]) {
-        std::io::stdin().read_exact(buf).unwrap();
+    fn read(&mut self, buf: &mut Vec<u8>) {
+        std::io::stdin().read_to_end(buf).unwrap();
     }
 }
 
@@ -55,10 +55,8 @@ pub mod test_io {
             self.stderr.extend_from_slice(buf);
         }
 
-        fn read_exact(&mut self, buf: &mut [u8]) {
-            for i in buf {
-                *i = self.stdin.pop_front().unwrap()
-            }
+        fn read_exact(&mut self, buf: &mut Vec<u8>) {
+            buf.copy_from_slice(&self.stdin);
         }
     }
 }

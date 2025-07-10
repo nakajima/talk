@@ -47,7 +47,7 @@ impl<'a> CompletionContext<'a> {
 
         if let Some(type_def) = self
             .driver
-            .symbol_from_position(position_before_dot, &self.source_file.path)
+            .symbol_from_position(position_before_dot.into(), &self.source_file.path)
             .and_then(|sym| self.driver.symbol_table.get(sym))
             .and_then(|info| info.definition.clone())
             .and_then(|definition| definition.sym)

@@ -1,4 +1,5 @@
 pub mod completion;
-pub mod formatter;
 pub mod semantic_tokens;
+
+#[cfg(feature = "cli")]
 pub mod server;

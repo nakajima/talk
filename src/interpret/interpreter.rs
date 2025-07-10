@@ -604,7 +604,7 @@ mod tests {
         let mut driver = Driver::with_str(code);
         let unit = driver.lower().into_iter().next().unwrap();
 
-        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
 
         if !diagnostics.is_empty() {
             return Err(InterpreterError::InvalidProgram);

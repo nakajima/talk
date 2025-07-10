@@ -23,14 +23,23 @@ pub fn compile_prelude() -> &'static Prelude {
     &PRELUDE_TYPED
 }
 
-pub fn _compile_prelude() -> Prelude {
-    let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
+#[cfg(feature = "wasm")]
+fn load_files(driver: &mut Driver) {
+    for (path, contents) in [
+        (
+            "./core/Operators.tlk",
+            include_str!("../core/Operators.tlk"),
+        ),
+        ("./core/Optional.tlk", include_str!("../core/Optional.tlk")),
+        ("./core/Array.tlk", include_str!("../core/Array.tlk")),
+        ("./core/String.tlk", include_str!("../core/String.tlk")),
+    ] {
+        driver.update_file(&PathBuf::from(path), contents.to_string());
+    }
+}
 
-    let mut driver = Driver::new(DriverConfig {
-        executable: false,
-        include_prelude: false,
-        include_comments: false,
-    });
+#[cfg(not(feature = "wasm"))]
+fn load_files(driver: &mut Driver) {
     for file in [
         PathBuf::from("./core/Operators.tlk"),
         PathBuf::from("./core/Optional.tlk"),
@@ -40,6 +49,18 @@ pub fn _compile_prelude() -> Prelude {
         #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
     }
+}
+
+pub fn _compile_prelude() -> Prelude {
+    let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
+
+    let mut driver = Driver::new(DriverConfig {
+        executable: false,
+        include_prelude: false,
+        include_comments: false,
+    });
+
+    load_files(&mut driver);
 
     #[allow(clippy::unwrap_used)]
     let resolved = driver
@@ -109,21 +130,6 @@ pub fn _compile_prelude() -> Prelude {
         module,
     }
 }
-
-macro_rules! stdlib_modules {
-  ($($name:literal),*) => {
-      pub fn load_stdlib_module(name: &str) -> Option<&'static str> {
-          match name {
-              $(
-                  $name => Some(include_str!(concat!("../core/", $name, ".tlk"))),
-              )*
-              _ => None,
-          }
-      }
-  };
-}
-
-stdlib_modules!("Operators", "Optional", "Array", "String");
 
 #[cfg(test)]
 mod tests {

@@ -27,7 +27,7 @@ async-lsp = { version = "0.2.2", optional = true, features = [
 ] }
 futures = { version = "0.3.31", optional = true }
 tower = { version = "0.5.2", optional = true }
-tokio = { version = "1.45.1", features = [
+tokio = { version = "1.45.1", optional = true, features = [
   "macros",
   "io-util",
   "rt-multi-thread",
@@ -39,11 +39,12 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 ena = "0.14.3"
 tracing-tree = "0.4.0"
-
+wasm-bindgen = { version = "0.2.100", optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower"]
+wasm = ["dep:wasm-bindgen"]
+cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio"]
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.

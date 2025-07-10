@@ -9,7 +9,24 @@ use crate::{
 };
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
-use super::server::TOKEN_TYPES;
+pub const TOKEN_TYPES: &[SemanticTokenType] = &[
+    SemanticTokenType::COMMENT,
+    SemanticTokenType::ENUM_MEMBER,
+    SemanticTokenType::ENUM,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::INTERFACE,
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::METHOD,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::OPERATOR,
+    SemanticTokenType::PARAMETER,
+    SemanticTokenType::PROPERTY,
+    SemanticTokenType::STRING,
+    SemanticTokenType::STRUCT,
+    SemanticTokenType::TYPE_PARAMETER,
+    SemanticTokenType::TYPE,
+    SemanticTokenType::VARIABLE,
+];
 
 struct SemanticTokenCollector<'a> {
     source_file: &'a SourceFile<Parsed>,
@@ -488,7 +505,7 @@ mod tests {
     use async_lsp::lsp_types::{SemanticToken, SemanticTokenType};
 
     use crate::{
-        lsp::{semantic_tokens::SemanticTokenCollector, server::TOKEN_TYPES},
+        lsp::semantic_tokens::{SemanticTokenCollector, TOKEN_TYPES},
         parser::parse,
     };
 

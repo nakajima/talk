@@ -16,7 +16,7 @@ pub mod helpers {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -33,7 +33,7 @@ pub mod helpers {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -71,7 +71,7 @@ pub mod lowering_tests {
         });
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
-        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-"));
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
         let module = lowered.module().clone();
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -1589,7 +1589,11 @@ pub mod lowering_tests {
                         Instr::Ret(IRType::Int, Some(Register(2).into())),
                     ],
                 }],
-                env_ty: Some(IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![])),
+                env_ty: Some(IRType::Struct(
+                    SymbolID::resolved(1),
+                    vec![IRType::Int],
+                    vec![]
+                )),
                 env_reg: Some(Register(0)),
                 size: 3,
             }

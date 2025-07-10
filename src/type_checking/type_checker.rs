@@ -10,7 +10,6 @@ use crate::{
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     expr::{Expr, IncompleteExpr, Pattern},
-    lsp::formatter::Formatter,
     name::Name,
     name_resolver::NameResolverError,
     parser::ExprID,
@@ -240,6 +239,8 @@ impl<'a> TypeChecker<'a> {
 
         #[cfg(debug_assertions)]
         {
+            use crate::formatter::Formatter;
+
             let _s = trace_span!(
                 "infer_node",
                 expr = Formatter::format_single_expr(&source_file.as_parsed(), id)

@@ -1,22 +1,23 @@
 use std::ops::ControlFlow;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use async_lsp::LanguageClient;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::lsp_types::{
-    CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind,
-    DiagnosticOptions, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidChangeWatchedFilesParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
-    DocumentDiagnosticReportResult, DocumentFormattingParams, FullDocumentDiagnosticReport,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, Location, OneOf, Position, Range,
-    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport,
-    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport, Url,
+    CompletionOptions, CompletionParams, CompletionResponse, CompletionTriggerKind, Diagnostic,
+    DiagnosticOptions, DiagnosticSeverity, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
+    FullDocumentDiagnosticReport, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, Location, OneOf, Position, Range,
+    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
+    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport,
+    Url,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -26,32 +27,13 @@ use async_lsp::{ClientSocket, LanguageServer, ResponseError};
 use futures::future::BoxFuture;
 use tower::ServiceBuilder;
 
+use crate::compiling::compilation_unit::{CompilationUnit, StageTrait};
 use crate::compiling::driver::{Driver, DriverConfig};
 use crate::environment::Environment;
 use crate::lexer::Lexer;
 use crate::lsp::completion::CompletionContext;
-use crate::lsp::formatter::format;
-use crate::lsp::semantic_tokens;
+use crate::lsp::semantic_tokens::{self, TOKEN_TYPES};
 use crate::parser::Parser;
-
-pub const TOKEN_TYPES: &[SemanticTokenType] = &[
-    SemanticTokenType::COMMENT,
-    SemanticTokenType::ENUM_MEMBER,
-    SemanticTokenType::ENUM,
-    SemanticTokenType::FUNCTION,
-    SemanticTokenType::INTERFACE,
-    SemanticTokenType::KEYWORD,
-    SemanticTokenType::METHOD,
-    SemanticTokenType::NUMBER,
-    SemanticTokenType::OPERATOR,
-    SemanticTokenType::PARAMETER,
-    SemanticTokenType::PROPERTY,
-    SemanticTokenType::STRING,
-    SemanticTokenType::STRUCT,
-    SemanticTokenType::TYPE_PARAMETER,
-    SemanticTokenType::TYPE,
-    SemanticTokenType::VARIABLE,
-];
 
 #[allow(dead_code)]
 struct ServerState {
@@ -233,7 +215,7 @@ impl LanguageServer for ServerState {
         };
 
         tracing::info!("Getting diagnostics for {path:?}");
-        let diagnostics = self.driver.refresh_diagnostics_for(&path);
+        let diagnostics = self.refresh_diagnostics_for(&path);
         tracing::info!(
             "Got {:#?} diagnostics",
             self.driver
@@ -320,7 +302,7 @@ impl LanguageServer for ServerState {
         let source_file = parser.parse_tree;
 
         Box::pin(async move {
-            let formatted = format(&source_file, 80);
+            let formatted = crate::parsing::formatter::format(&source_file, 80);
             let last_line = code.lines().count() as u32;
             let last_char = code.lines().last().map(|line| line.len().saturating_sub(1));
 
@@ -439,6 +421,83 @@ impl ServerState {
         tokio::spawn(async move {
             client.semantic_tokens_refresh(()).await.ok();
         });
+    }
+
+    pub fn refresh_diagnostics_for(&mut self, path: &PathBuf) -> Vec<Diagnostic> {
+        let mut result = vec![];
+        let mut round = 0;
+
+        if let Ok(session) = &mut self.driver.session.lock() {
+            session.clear_diagnostics()
+        } else {
+            tracing::error!("Unable to clear diagnostics")
+        }
+
+        while result.is_empty() && round < 3 {
+            let diagnostics = match round {
+                0 => {
+                    let parsed = self.driver.parse();
+                    round += 1;
+                    self.encode_diagnostics_from(path, parsed)
+                        .unwrap_or_default()
+                }
+                1 => {
+                    let checked = self.driver.check();
+                    round += 1;
+                    self.encode_diagnostics_from(path, checked)
+                        .unwrap_or_default()
+                }
+                _ => {
+                    let lowered = self.driver.lower();
+                    round += 1;
+                    self.encode_diagnostics_from(path, lowered)
+                        .unwrap_or_default()
+                }
+            };
+
+            result.extend(diagnostics);
+        }
+
+        result
+    }
+
+    fn encode_diagnostics_from<S: StageTrait>(
+        &self,
+        path: &PathBuf,
+        units: Vec<CompilationUnit<S>>,
+    ) -> Option<Vec<Diagnostic>> {
+        let mut result = vec![];
+        for unit in units {
+            tracing::info!("checking for diagnostics in {path:?}");
+            if unit.has_file(path)
+                && let Some(source_file) = unit.source_file(path)
+                && let Some(diagnostics) = self.driver.session.lock().ok()?.diagnostics_for(path)
+            {
+                for diag in diagnostics {
+                    if &diag.path != path {
+                        // This is definitely the wrong place to be doing this filtering...
+                        continue;
+                    }
+
+                    let diag_range = diag.range(source_file);
+                    let range = Range::new(
+                        Position::new(diag_range.0.line, diag_range.0.col),
+                        Position::new(diag_range.1.line, diag_range.1.col),
+                    );
+                    result.push(Diagnostic::new(
+                        range,
+                        Some(DiagnosticSeverity::ERROR),
+                        None,
+                        None,
+                        diag.message(),
+                        None,
+                        None,
+                    ));
+                }
+            }
+        }
+
+        Some(result)
     }
 }
 

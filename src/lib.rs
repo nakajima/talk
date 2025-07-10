@@ -10,6 +10,8 @@
 #![cfg_attr(not(test), warn(clippy::todo))]
 #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
+pub mod prelude;
+
 pub mod builtins;
 pub use builtins::*;
 pub mod source_file;
@@ -31,7 +33,6 @@ pub mod transforms;
 
 #[cfg(feature = "cli")]
 pub mod lsp;
-pub mod prelude;
 
 #[cfg(test)]
 pub mod test_utils;

@@ -1,13 +1,15 @@
-use std::path::{Path, PathBuf};
-
-use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     SourceFile, SymbolID, SymbolTable,
     compiling::{
         compilation_session::{CompilationSession, SharedCompilationSession},
-        compilation_unit::{CompilationUnit, Lowered, Parsed, StageTrait, Typed},
+        compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
     },
+    diagnostic::{Diagnostic, Position},
     environment::Environment,
     lowering::ir_module::IRModule,
     source_file,
@@ -151,9 +153,9 @@ impl Driver {
         let mut min = u32::MAX;
 
         for (span, sym) in &self.symbol_table.symbol_map {
-            if span.contains(&crate::diagnostic::Position {
+            if span.contains(&Position {
                 line: position.line,
-                col: position.character,
+                col: position.col,
             }) && span.path == *path
                 && span.length() < min
             {
@@ -165,81 +167,25 @@ impl Driver {
         result
     }
 
-    pub fn refresh_diagnostics_for(&mut self, path: &PathBuf) -> Vec<Diagnostic> {
-        let mut result = vec![];
-        let mut round = 0;
-
+    pub fn refresh_diagnostics_for(
+        &mut self,
+        path: &PathBuf,
+    ) -> Result<HashSet<Diagnostic>, CompilationError> {
         if let Ok(session) = &mut self.session.lock() {
             session.clear_diagnostics()
         } else {
             tracing::error!("Unable to clear diagnostics")
         }
 
-        while result.is_empty() && round < 3 {
-            let diagnostics = match round {
-                0 => {
-                    let parsed = self.parse();
-                    round += 1;
-                    self.encode_diagnostics_from(path, parsed)
-                        .unwrap_or_default()
-                }
-                1 => {
-                    let checked = self.check();
-                    round += 1;
-                    self.encode_diagnostics_from(path, checked)
-                        .unwrap_or_default()
-                }
-                _ => {
-                    let lowered = self.lower();
-                    round += 1;
-                    self.encode_diagnostics_from(path, lowered)
-                        .unwrap_or_default()
-                }
-            };
+        self.lower();
 
-            result.extend(diagnostics);
+        if let Ok(session) = self.session.lock()
+            && let Some(diagnostics) = session.diagnostics_for(path)
+        {
+            Ok(diagnostics.clone())
+        } else {
+            Err(CompilationError::UnknownError("Could not lock session"))
         }
-
-        result
-    }
-
-    fn encode_diagnostics_from<S: StageTrait>(
-        &self,
-        path: &PathBuf,
-        units: Vec<CompilationUnit<S>>,
-    ) -> Option<Vec<Diagnostic>> {
-        let mut result = vec![];
-        for unit in units {
-            tracing::info!("checking for diagnostics in {path:?}");
-            if unit.has_file(path)
-                && let Some(source_file) = unit.source_file(path)
-                && let Some(diagnostics) = self.session.lock().ok()?.diagnostics_for(path)
-            {
-                for diag in diagnostics {
-                    if &diag.path != path {
-                        // This is definitely the wrong place to be doing this filtering...
-                        continue;
-                    }
-
-                    let diag_range = diag.range(source_file);
-                    let range = Range::new(
-                        Position::new(diag_range.0.line, diag_range.0.col),
-                        Position::new(diag_range.1.line, diag_range.1.col),
-                    );
-                    result.push(Diagnostic::new(
-                        range,
-                        Some(DiagnosticSeverity::ERROR),
-                        None,
-                        None,
-                        diag.message(),
-                        None,
-                        None,
-                    ));
-                }
-            }
-        }
-
-        Some(result)
     }
 
     pub fn has_file(&self, path: &PathBuf) -> bool {
