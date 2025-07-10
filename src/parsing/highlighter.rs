@@ -7,7 +7,9 @@ use crate::{
     token_kind::TokenKind,
 };
 
+#[derive(Copy, Clone)]
 #[allow(non_camel_case_types)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum Kind {
     NAMESPACE,
     TYPE,
@@ -33,6 +35,8 @@ pub enum Kind {
     OPERATOR,
 }
 
+#[derive(Copy, Clone)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct HighlightToken {
     pub kind: Kind,
     pub start: u32,

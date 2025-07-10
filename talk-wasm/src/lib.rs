@@ -1,6 +1,5 @@
 use talk::{
-    compiling::driver::Driver, interpret::interpreter::IRInterpreter, lowering::ir_printer::print,
-    transforms::monomorphizer::Monomorphizer,
+    compiling::driver::Driver, highlighter::{HighlightToken, Higlighter}, interpret::interpreter::IRInterpreter, lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer
 };
 use wasm_bindgen::prelude::*;
 
@@ -33,4 +32,9 @@ pub fn run(code: String) {
     IRInterpreter::new(mono, &mut io, &driver.symbol_table)
         .run()
         .unwrap();
+}
+
+#[wasm_bindgen]
+pub fn higlight(code: String) -> Vec<HighlightToken> {
+    Higlighter::new(&code).highlight()
 }
