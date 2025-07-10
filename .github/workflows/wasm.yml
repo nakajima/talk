@@ -53,9 +53,9 @@ jobs:
       - name: Stamp build with short SHA
         run: |
           sha=$(git rev-parse --short HEAD)
-          mkdir -p site/$sha
-          cp dist/* site/$sha/
-          echo "latest build: $sha" > site/index.html       # optional landing page
+          mkdir -p dist/$sha
+          cp dist/* dist/$sha/
+          echo "latest build: $sha" > dist/index.html       # optional landing page
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
