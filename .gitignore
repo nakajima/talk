@@ -2,3 +2,4 @@
 editors/vscode/node_modules
 log.txt
 *.vsix
+talk-wasm/index.wit

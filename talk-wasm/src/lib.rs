@@ -1,6 +1,27 @@
 use talk::{
-    compiling::driver::Driver, highlighter::{HighlightToken, Higlighter}, interpret::interpreter::IRInterpreter, lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer
+    compiling::driver::Driver, highlighter::Higlighter, interpret::interpreter::IRInterpreter,
+    lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
 };
+use witgen::witgen;
+
+#[witgen]
+#[wasm_bindgen]
+#[derive(Copy, Clone)]
+pub struct HighlightToken {
+    pub kind: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+impl From<talk::highlighter::HighlightToken> for HighlightToken {
+    fn from(t: talk::highlighter::HighlightToken) -> Self {
+        Self {
+            kind: t.kind as u32,
+            start: t.start,
+            end: t.end,
+        }
+    }
+}
 use wasm_bindgen::prelude::*;
 
 use crate::io::WasmIO;
@@ -8,14 +29,17 @@ use crate::io::WasmIO;
 mod console;
 mod io;
 
+#[witgen]
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
 }
 
+#[witgen]
 #[wasm_bindgen]
 pub struct TalkTalk {}
 
+#[witgen]
 #[wasm_bindgen]
 pub fn ir(code: String) -> String {
     let mut driver = Driver::with_str(&code);
@@ -23,6 +47,7 @@ pub fn ir(code: String) -> String {
     print(&lowered.module())
 }
 
+#[witgen]
 #[wasm_bindgen]
 pub fn run(code: String) {
     let mut driver = Driver::with_str(&code);
@@ -34,7 +59,12 @@ pub fn run(code: String) {
         .unwrap();
 }
 
+#[witgen]
 #[wasm_bindgen]
 pub fn higlight(code: String) -> Vec<HighlightToken> {
-    Higlighter::new(&code).highlight()
+    Higlighter::new(&code)
+        .highlight()
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }

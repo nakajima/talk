@@ -11,3 +11,7 @@ wasm-bindgen = "0.2.100"
 talk = { path = "..", default-features = false, features = ["wasm"] }
 js-sys = "0.3.77"
 console_error_panic_hook = "0.1.7"
+witgen = "0.15.0"
+
+[build-dependencies]
+cargo-witgen = "0.15.0"
