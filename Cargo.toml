@@ -46,7 +46,9 @@ default = ["cli"]
 cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower"]
 
 [profile.release]
-debug = true
+strip = true  # Automatically strip symbols from the binary.
+debug = false 
+opt-level = "z"  # Optimize for size.
 
 [lints.clippy]
 approx_constant = "allow"
