@@ -980,4 +980,26 @@ mod tests {
             str::from_utf8(&io.stdout).unwrap()
         )
     }
+
+    #[test]
+    fn interprets_more_fib() {
+        interpret(
+            "
+        func fib(n) {
+            if n <= 1 { return n }
+
+            return fib(n - 2) + fib(n - 1)
+        }
+
+        let i = 0
+
+        // Calculate some numbers
+        loop i < 15 {
+            print(fib(i))
+            i = i + 1
+        }
+        ",
+        )
+        .unwrap();
+    }
 }

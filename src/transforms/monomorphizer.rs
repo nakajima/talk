@@ -97,6 +97,10 @@ impl<'a> Monomorphizer<'a> {
                         continue;
                     };
 
+                    if Some(&*callee) == self.currently_monomorphizing_stack.last() {
+                        continue;
+                    }
+
                     if callee_function.blocks.is_empty()
                         && let Some(first_arg) = &args.0.first()
                     {
@@ -757,6 +761,30 @@ mod tests {
                 debug_info: Default::default()
             }
         )
+    }
+
+    #[test]
+    fn handles_more_recursion() {
+        let mut driver = Driver::with_str(
+            "
+         func fib(n) {
+                if n <= 1 { return n }
+
+                return fib(n - 2) + fib(n - 1)
+            }
+
+            let i = 0
+
+            // Calculate some numbers
+            loop i < 15 {
+                print(fib(i))
+                i = i + 1
+            }
+      ",
+        );
+
+        let module = driver.lower().into_iter().next().unwrap().module();
+        Monomorphizer::new(&Environment::default()).run(module);
     }
 
     #[test]

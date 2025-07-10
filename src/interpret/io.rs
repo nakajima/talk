@@ -13,10 +13,12 @@ pub struct InterpreterStdIO {}
 impl InterpreterIO for InterpreterStdIO {
     fn write_all(&mut self, buf: &[u8]) {
         std::io::stdout().write_all(buf).unwrap();
+        std::io::stdout().flush().unwrap();
     }
 
     fn write_all_err(&mut self, buf: &[u8]) {
         std::io::stderr().write_all(buf).unwrap();
+        std::io::stderr().flush().unwrap();
     }
 
     fn read_exact(&mut self, buf: &mut [u8]) {
