@@ -20,7 +20,13 @@ concurrency:
 
 jobs:
   build:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./talk-wasm
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -30,10 +36,8 @@ jobs:
           override: true
 
       - run: cargo install wasm-pack --locked
-        working-directory: ./talk-wasm
       - run: wasm-pack build --target web --release \
               --out-dir dist --out-name talk
-        working-directory: ./talk-wasm
 
       - name: Stamp build with short SHA
         run: |
@@ -41,10 +45,9 @@ jobs:
           mkdir -p site/$sha
           cp dist/* site/$sha/
           echo "latest build: $sha" > site/index.html       # optional landing page
-        working-directory: ./talk-wasm
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "talk-wasm/dist"
+          path: ./talk-wasm/dist
       - uses: actions/deploy-pages@v4
