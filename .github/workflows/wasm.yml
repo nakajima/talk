@@ -29,15 +29,26 @@ jobs:
         working-directory: ./talk-wasm
     steps:
       - uses: actions/checkout@v4
+      - name: Cache cargo registry + binary installs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin      # <- holds the wasm-pack binary
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-wasm-pack-0.12.1
+          restore-keys: |
+            cargo-${{ runner.os }}-
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
           profile: minimal
           override: true
+      - run: pwd
+      - run: ls -lah
 
       - run: cargo install wasm-pack --locked
-      - run: wasm-pack build --target web --release \
-              --out-dir dist --out-name talk
+      - run: wasm-pack build --target web --release --out-dir dist --out-name talk
 
       - name: Stamp build with short SHA
         run: |
