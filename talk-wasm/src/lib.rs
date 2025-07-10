@@ -18,29 +18,19 @@ pub fn start() {
 pub struct TalkTalk {}
 
 #[wasm_bindgen]
-impl TalkTalk {
-    pub fn new() -> Self {
-        Self {}
-    }
+pub fn ir(code: String) -> String {
+    let mut driver = Driver::with_str(&code);
+    let lowered = driver.lower().into_iter().next().unwrap();
+    print(&lowered.module())
 }
 
 #[wasm_bindgen]
-impl TalkTalk {
-    #[wasm_bindgen]
-    pub fn ir(&self, code: String) -> String {
-        let mut driver = Driver::with_str(&code);
-        let lowered = driver.lower().into_iter().next().unwrap();
-        print(&lowered.module())
-    }
-
-    #[wasm_bindgen]
-    pub fn run(&self, code: String) {
-        let mut driver = Driver::with_str(&code);
-        let lowered = driver.lower().into_iter().next().unwrap();
-        let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
-        let mut io = WasmIO::default();
-        IRInterpreter::new(mono, &mut io, &driver.symbol_table)
-            .run()
-            .unwrap();
-    }
+pub fn run(code: String) {
+    let mut driver = Driver::with_str(&code);
+    let lowered = driver.lower().into_iter().next().unwrap();
+    let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
+    let mut io = WasmIO::default();
+    IRInterpreter::new(mono, &mut io, &driver.symbol_table)
+        .run()
+        .unwrap();
 }
