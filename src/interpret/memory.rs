@@ -19,11 +19,12 @@ pub struct Memory {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pointer {
     addr: usize,
+    ty: IRType,
 }
 
 impl Display for Pointer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "0x{}", self.addr)
+        write!(f, "{:#x}", self.addr)
     }
 }
 
@@ -33,13 +34,14 @@ impl Add<usize> for Pointer {
     fn add(self, rhs: usize) -> Self::Output {
         Pointer {
             addr: self.addr + rhs,
+            ty: self.ty,
         }
     }
 }
 
 impl Pointer {
-    pub fn new(addr: usize) -> Self {
-        Self { addr }
+    pub fn new(addr: usize, ty: IRType) -> Self {
+        Self { addr, ty }
     }
 }
 
@@ -80,6 +82,7 @@ impl Memory {
     pub fn stack_alloc(&mut self, ty: &IRType) -> Pointer {
         let ret = Pointer {
             addr: self.next_stack_addr,
+            ty: ty.clone(),
         };
         self.next_stack_addr += Self::mem_size(ty);
         ret
@@ -88,6 +91,7 @@ impl Memory {
     pub fn heap_alloc(&mut self, ty: &IRType, count: usize) -> Pointer {
         let ret = Pointer {
             addr: self.next_heap_addr,
+            ty: ty.clone(),
         };
         self.next_heap_addr += Self::mem_size(ty) * count;
         ret
@@ -109,6 +113,10 @@ impl Memory {
                 self.storage[pointer.addr] = Some(val);
             }
         };
+    }
+
+    pub fn load_with_ty(&self, pointer: &Pointer) -> Result<Value, InterpreterError> {
+        self.load(pointer, &pointer.ty)
     }
 
     #[allow(clippy::panic)]

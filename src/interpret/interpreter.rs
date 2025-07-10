@@ -1,4 +1,5 @@
 use crate::{
+    SymbolTable,
     interpret::{
         io::InterpreterIO,
         memory::{Memory, Pointer},
@@ -22,7 +23,7 @@ pub enum InterpreterError {
     NoMainFunc,
     CalleeNotFound(String),
     PredecessorNotFound,
-    TypeError(Value, Value),
+    TypeError(String, String),
     UnreachableReached,
     IRError(IRError),
     Unknown(String),
@@ -46,21 +47,23 @@ impl StackFrame {
 
 pub struct IRInterpreter<'a, IO: InterpreterIO> {
     pub(super) program: IRModule,
-    call_stack: Vec<StackFrame>,
     pub(super) memory: Memory,
+    pub symbols: &'a SymbolTable,
     io: &'a mut IO,
+    call_stack: Vec<StackFrame>,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
 impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
-    pub fn new(program: IRModule, io: &'a mut IO) -> Self {
+    pub fn new(program: IRModule, io: &'a mut IO, symbols: &'a SymbolTable) -> Self {
         let memory = Memory::new(&program.constants);
         Self {
             program,
             call_stack: vec![],
             memory,
             io,
+            symbols,
         }
     }
 
@@ -442,7 +445,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                     )));
                 }
             },
-            Instr::Const { dest, val, .. } => {
+            Instr::Const { dest, val, ty } => {
                 let Value::Int(int) = self.value(&val) else {
                     return Err(InterpreterError::Unknown(format!(
                         "no const found for {:?}",
@@ -450,7 +453,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                     )));
                 };
 
-                let const_ptr = Pointer::new(int as usize);
+                let const_ptr = Pointer::new(int as usize, ty);
                 self.set_register_value(&dest, Value::Pointer(const_ptr));
             }
             Instr::GetElementPointer {
@@ -462,7 +465,12 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                         let val = self.register_value(&reg);
                         match val {
                             Value::Int(int) => int,
-                            _ => return Err(InterpreterError::TypeError(val, Value::Int(123))),
+                            _ => {
+                                return Err(InterpreterError::TypeError(
+                                    val.to_string(self),
+                                    "??".to_string(),
+                                ));
+                            }
                         }
                     }
                 };
@@ -605,7 +613,7 @@ mod tests {
         let module = unit.module();
         let mono = Monomorphizer::new(&unit.env).run(module);
 
-        IRInterpreter::new(mono, io).run()
+        IRInterpreter::new(mono, io, &driver.symbol_table).run()
     }
 
     #[test]
@@ -949,5 +957,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!("hello world\n", str::from_utf8(&io.stdout).unwrap())
+    }
+
+    #[test]
+    fn interprets_print_struct() {
+        let mut io = TestIO::new();
+        interpret_io(
+            r#"
+            struct Person {
+                let name: String
+                let age: Int
+            }
+
+            let person = Person(name: "Pat", age: 123)
+            print(person)
+            "#,
+            &mut io,
+        )
+        .unwrap();
+        assert_eq!(
+            "Person(name: \"Pat\", age: 123)\n",
+            str::from_utf8(&io.stdout).unwrap()
+        )
     }
 }

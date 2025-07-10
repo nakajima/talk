@@ -67,7 +67,7 @@ async fn main() {
             let mut io = InterpreterStdIO::default();
             for lowered in lowered {
                 let monomorphized = Monomorphizer::new(&lowered.env).run(lowered.module());
-                let interpreter = IRInterpreter::new(monomorphized, &mut io);
+                let interpreter = IRInterpreter::new(monomorphized, &mut io, &driver.symbol_table);
                 interpreter.run().unwrap();
             }
         }

@@ -46,24 +46,37 @@ impl Value {
                         unreachable!()
                     };
 
-                    let loaded = interpreter.memory.load(ptr, &IRType::RawBuffer).unwrap();
+                    let loaded = interpreter.memory.load_with_ty(ptr).unwrap();
 
                     let Value::RawBuffer(bytes) = loaded else {
                         unreachable!("didn't get raw buffer: {loaded:?}");
                     };
                     String::from_utf8(bytes).unwrap()
                 } else {
+                    let info = interpreter.symbols.get(sym).unwrap();
+                    let ty = interpreter.symbols.types.get(sym).unwrap();
+
                     format!(
-                        "Struct({})",
-                        values
+                        "{}({})",
+                        info.name,
+                        ty.properties
                             .iter()
-                            .map(|v| v.to_string(interpreter))
+                            .zip(values.iter())
+                            .map(|(prop, value)| format!(
+                                "{}: {}",
+                                prop.name,
+                                value.to_escaped_string(interpreter)
+                            ))
                             .collect::<Vec<String>>()
                             .join(", ")
                     )
                 }
             }
-            Value::Pointer(pointer) => format!("{pointer}"),
+            Value::Pointer(pointer) => interpreter
+                .memory
+                .load_with_ty(pointer)
+                .unwrap()
+                .to_string(interpreter),
             Value::Func(func) => format!("@{func:?}()"),
             Value::RawBuffer(b) => format!("{b:?}"),
             Value::Array(values) => format!(
@@ -78,6 +91,35 @@ impl Value {
             Value::Buffer { .. } => "buf".to_string(),
         }
     }
+
+    #[allow(clippy::unwrap_used)]
+    pub fn to_escaped_string<IO: InterpreterIO>(&self, interpreter: &IRInterpreter<IO>) -> String {
+        match self {
+            Value::Pointer(pointer) => interpreter
+                .memory
+                .load_with_ty(pointer)
+                .unwrap()
+                .to_escaped_string(interpreter),
+            Value::Struct(sym, values) => {
+                if *sym == SymbolID::STRING {
+                    let Value::Pointer(ptr) = &values[2] else {
+                        unreachable!()
+                    };
+
+                    let loaded = interpreter.memory.load_with_ty(ptr).unwrap();
+
+                    let Value::RawBuffer(bytes) = loaded else {
+                        unreachable!("didn't get raw buffer: {loaded:?}");
+                    };
+
+                    format!("\"{}\"", String::from_utf8(bytes).unwrap())
+                } else {
+                    self.to_string(interpreter)
+                }
+            }
+            _ => self.to_string(interpreter),
+        }
+    }
 }
 
 impl Value {
@@ -85,7 +127,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -93,7 +138,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -101,7 +149,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -109,7 +160,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -117,7 +171,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -125,7 +182,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -133,7 +193,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -141,7 +204,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
