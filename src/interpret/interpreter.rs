@@ -1,5 +1,7 @@
 use crate::{
+    SymbolTable,
     interpret::{
+        io::InterpreterIO,
         memory::{Memory, Pointer},
         value::Value,
     },
@@ -9,6 +11,7 @@ use crate::{
         ir_function::IRFunction,
         ir_module::IRModule,
         ir_printer::{self},
+        ir_type::IRType,
         ir_value::IRValue,
         lowerer::{BasicBlock, BasicBlockID, RefKind, RegisterList},
         register::Register,
@@ -20,7 +23,7 @@ pub enum InterpreterError {
     NoMainFunc,
     CalleeNotFound(String),
     PredecessorNotFound,
-    TypeError(Value, Value),
+    TypeError(String, String),
     UnreachableReached,
     IRError(IRError),
     Unknown(String),
@@ -42,21 +45,25 @@ impl StackFrame {
     }
 }
 
-pub struct IRInterpreter {
-    program: IRModule,
+pub struct IRInterpreter<'a, IO: InterpreterIO> {
+    pub(super) program: IRModule,
+    pub(super) memory: Memory,
+    pub symbols: &'a SymbolTable,
+    io: &'a mut IO,
     call_stack: Vec<StackFrame>,
-    memory: Memory,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
-impl IRInterpreter {
-    pub fn new(program: IRModule) -> Self {
+impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
+    pub fn new(program: IRModule, io: &'a mut IO, symbols: &'a SymbolTable) -> Self {
         let memory = Memory::new(&program.constants);
         Self {
             program,
             call_stack: vec![],
             memory,
+            io,
+            symbols,
         }
     }
 
@@ -74,11 +81,33 @@ impl IRInterpreter {
             .iter()
             .find(|f| f.name == "@main")
             .cloned();
-        if let Some(main) = main {
-            self.execute_function(main, vec![])
+        let (ret_ty, result) = if let Some(main) = main {
+            let ret_ty = main
+                .blocks
+                .iter()
+                .rev()
+                .find_map(|b| {
+                    b.instructions.iter().rev().find_map(|i| match i {
+                        Instr::Ret(ty, _) => Some(ty.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or(IRType::Void);
+            (ret_ty, self.execute_function(main, vec![])?)
         } else {
-            Err(InterpreterError::NoMainFunc)
+            return Err(InterpreterError::NoMainFunc);
+        };
+
+        // If the program's entry point returns a struct but the interpreter
+        // represented it as a pointer, load the value from memory using the
+        // function's return type.
+        if let Value::Pointer(ptr) = &result
+            && ret_ty != IRType::POINTER
+        {
+            return self.memory.load(ptr, &ret_ty);
         }
+
+        Ok(result)
     }
 
     pub fn step(&mut self) -> Result<Option<Value>, InterpreterError> {
@@ -325,10 +354,14 @@ impl IRInterpreter {
                     Value::Bool(self.register_value(&op1) != self.register_value(&op2)),
                 );
             }
-            Instr::TagVariant(dest, _, tag, values) => {
+            Instr::TagVariant(dest, ty, tag, values) => {
+                let IRType::Enum(symbol_id, _) = ty else {
+                    unreachable!()
+                };
                 self.set_register_value(
                     &dest,
                     Value::Enum {
+                        symbol_id,
                         tag,
                         values: values
                             .0
@@ -412,7 +445,7 @@ impl IRInterpreter {
                     )));
                 }
             },
-            Instr::Const { dest, val, .. } => {
+            Instr::Const { dest, val, ty } => {
                 let Value::Int(int) = self.value(&val) else {
                     return Err(InterpreterError::Unknown(format!(
                         "no const found for {:?}",
@@ -420,7 +453,7 @@ impl IRInterpreter {
                     )));
                 };
 
-                let const_ptr = Pointer::new(int as usize);
+                let const_ptr = Pointer::new(int as usize, ty);
                 self.set_register_value(&dest, Value::Pointer(const_ptr));
             }
             Instr::GetElementPointer {
@@ -432,7 +465,12 @@ impl IRInterpreter {
                         let val = self.register_value(&reg);
                         match val {
                             Value::Int(int) => int,
-                            _ => return Err(InterpreterError::TypeError(val, Value::Int(123))),
+                            _ => {
+                                return Err(InterpreterError::TypeError(
+                                    val.to_string(self),
+                                    "??".to_string(),
+                                ));
+                            }
                         }
                     }
                 };
@@ -447,14 +485,25 @@ impl IRInterpreter {
                 let pointer = base + index as usize;
                 self.set_register_value(&dest, Value::Pointer(pointer));
             }
-            Instr::MakeStruct { dest, values, .. } => {
-                let structure = Value::Struct(self.register_values(&values));
+            Instr::MakeStruct { dest, values, ty } => {
+                let IRType::Struct(sym, _, _) = ty else {
+                    return Err(InterpreterError::Unknown("Didn't get struct".into()));
+                };
+                let structure = Value::Struct(sym, self.register_values(&values));
                 self.set_register_value(&dest, structure);
             }
             #[allow(clippy::print_with_newline)]
-            Instr::Print { val } => {
+            Instr::Print { ty, val } => {
                 let val = self.value(&val);
-                print!("{val}\n");
+
+                let val = if let Value::Pointer(ptr) = val {
+                    self.memory.load(&ptr, &ty)?
+                } else {
+                    val
+                };
+
+                self.io
+                    .write_all(format!("{}\n", val.to_string(self)).as_bytes());
             }
             Instr::GetValueOf { .. } => (),
         }
@@ -536,15 +585,22 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{
+        SymbolID,
         compiling::driver::Driver,
         interpret::{
             interpreter::{IRInterpreter, InterpreterError},
+            io::test_io::TestIO,
             value::Value,
         },
         transforms::monomorphizer::Monomorphizer,
     };
 
     fn interpret(code: &'static str) -> Result<Value, InterpreterError> {
+        let mut io = TestIO::new();
+        interpret_io(code, &mut io)
+    }
+
+    fn interpret_io(code: &'static str, io: &mut TestIO) -> Result<Value, InterpreterError> {
         let mut driver = Driver::with_str(code);
         let unit = driver.lower().into_iter().next().unwrap();
 
@@ -557,7 +613,7 @@ mod tests {
         let module = unit.module();
         let mono = Monomorphizer::new(&unit.env).run(module);
 
-        IRInterpreter::new(mono).run()
+        IRInterpreter::new(mono, io, &driver.symbol_table).run()
     }
 
     #[test]
@@ -789,7 +845,7 @@ mod tests {
         "
             )
             .unwrap(),
-            Value::Struct(vec![Value::Int(3), Value::Int(2)]),
+            Value::Struct(SymbolID::TUPLE, vec![Value::Int(3), Value::Int(2)]),
         )
     }
 
@@ -842,15 +898,12 @@ mod tests {
 
     #[test]
     fn interprets_string() {
-        assert_eq!(
-            interpret(
-                "
-                \"hello world\"
-                "
-            )
-            .unwrap(),
-            Value::String("hello world".to_string())
-        );
+        let Value::Struct(sym, fields) = interpret("\"hello world\"").unwrap() else {
+            panic!("did not get struct");
+        };
+        assert_eq!(sym, SymbolID::STRING);
+        assert_eq!(fields[0], Value::Int(11));
+        assert_eq!(fields[1], Value::Int(11));
     }
 
     #[test]
@@ -869,21 +922,84 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn interprets_string_append() {
-        assert_eq!(
-            interpret(
-                r#"
-                print("oh hi")
-                let a = ""
-                print("ok we have an empty string")
-                a.append("hello ")
-                a.append("world")
-                a
-            "#
-            )
-            .unwrap(),
-            Value::String("hello world".to_string())
+        let Value::Struct(sym, fields) = interpret(
+            r#"
+            let a = ""
+            a.append("hello ")
+            a.append("world")
+            a
+        "#,
         )
+        .unwrap() else {
+            panic!("did not get struct");
+        };
+        assert_eq!(sym, SymbolID::STRING);
+        assert_eq!(fields[0], Value::Int(11));
+        assert_eq!(fields[1], Value::Int(11));
+    }
+
+    #[test]
+    fn interprets_io() {
+        let mut io = TestIO::new();
+        interpret_io("print(123)", &mut io).unwrap();
+        assert_eq!("123\n".as_bytes(), io.stdout)
+    }
+
+    #[test]
+    fn interprets_string_special_case() {
+        let mut io = TestIO::new();
+        interpret_io(
+            r#"
+            print("hello world")
+            "#,
+            &mut io,
+        )
+        .unwrap();
+        assert_eq!("hello world\n", str::from_utf8(&io.stdout).unwrap())
+    }
+
+    #[test]
+    fn interprets_print_struct() {
+        let mut io = TestIO::new();
+        interpret_io(
+            r#"
+            struct Person {
+                let name: String
+                let age: Int
+            }
+
+            let person = Person(name: "Pat", age: 123)
+            print(person)
+            "#,
+            &mut io,
+        )
+        .unwrap();
+        assert_eq!(
+            "Person(name: \"Pat\", age: 123)\n",
+            str::from_utf8(&io.stdout).unwrap()
+        )
+    }
+
+    #[test]
+    fn interprets_more_fib() {
+        interpret(
+            "
+        func fib(n) {
+            if n <= 1 { return n }
+
+            return fib(n - 2) + fib(n - 1)
+        }
+
+        let i = 0
+
+        // Calculate some numbers
+        loop i < 15 {
+            print(fib(i))
+            i = i + 1
+        }
+        ",
+        )
+        .unwrap();
     }
 }

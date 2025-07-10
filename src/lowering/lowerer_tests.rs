@@ -1293,17 +1293,12 @@ pub mod lowering_tests {
                             val: Register(4).into(),
                             location: Register(3)
                         },
-                        Instr::Load {
-                            ty: IRType::string(),
-                            dest: Register(5),
-                            addr: Register(0),
-                        },
-                        Instr::Ret(IRType::string(), Some(Register(5).into())),
+                        Instr::Ret(IRType::string(), Some(Register(0).into())),
                     ],
                 }],
                 env_ty: None,
                 env_reg: None,
-                size: 6
+                size: 5
             }
         )
     }
@@ -1594,7 +1589,7 @@ pub mod lowering_tests {
                         Instr::Ret(IRType::Int, Some(Register(2).into())),
                     ],
                 }],
-                env_ty: Some(person_struct_ty.clone()),
+                env_ty: Some(IRType::Struct(SymbolID::resolved(1), vec![IRType::Int], vec![])),
                 env_reg: Some(Register(0)),
                 size: 3,
             }

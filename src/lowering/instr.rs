@@ -207,8 +207,8 @@ pub enum Instr {
         false_target: BasicBlockID,
     },
 
-    #[doc = "print $val;"]
-    Print { val: IRValue },
+    #[doc = "print $ty $val;"]
+    Print { ty: IRType, val: IRValue },
 
     #[doc = "unreachable;"]
     Unreachable,

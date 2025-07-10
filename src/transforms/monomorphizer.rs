@@ -56,12 +56,12 @@ impl<'a> Monomorphizer<'a> {
             let func = self.detect_monomorphizations_in(func, &module, &mut HashMap::default());
             final_functions.push(func);
         }
-
-        final_functions.extend(
-            self.generic_functions
-                .into_iter()
-                .filter_map(|f| if Self::is_generic(&f) { None } else { Some(f) }),
-        );
+        // Keep any specialized functions even if they still contain type
+        // variables. Recursively monomorphized functions may reference their own
+        // return type before constraints fully resolve, so filtering them out
+        // would drop required definitions.
+        // TODO: ideally we wouldn't need this.
+        final_functions.extend(self.generic_functions);
 
         module.functions = final_functions;
         module
@@ -96,6 +96,10 @@ impl<'a> Monomorphizer<'a> {
                     else {
                         continue;
                     };
+
+                    if Some(&*callee) == self.currently_monomorphizing_stack.last() {
+                        continue;
+                    }
 
                     if callee_function.blocks.is_empty()
                         && let Some(first_arg) = &args.0.first()
@@ -187,7 +191,7 @@ impl<'a> Monomorphizer<'a> {
         self.currently_monomorphizing_stack
             .push(function.name.clone());
 
-        tracing::info!("monomorphizing: {mangled_name} -> {expected_ret:?}");
+        tracing::info!("monomorphizing: {mangled_name} -> {expected_ret:?} {substitutions:?}");
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
@@ -216,7 +220,10 @@ impl<'a> Monomorphizer<'a> {
             substitutions
         );
 
-        self.cache.insert(mangled_name.clone());
+        let is_generic = Self::is_generic(&monomorphized_function);
+        if !is_generic {
+            self.cache.insert(mangled_name.clone());
+        }
 
         monomorphized_function =
             self.detect_monomorphizations_in(monomorphized_function.clone(), module, substitutions);
@@ -443,6 +450,7 @@ fn contains_type_var(ty: &IRType) -> bool {
         }
         IRType::Enum(_, params) => params.iter().any(contains_type_var),
         IRType::TypedBuffer { element } => contains_type_var(element),
+        IRType::Pointer { hint } => hint.is_some(),
         _ => false,
     }
 }
@@ -567,8 +575,8 @@ mod tests {
     fn monomorphs_array_get() {
         let mut driver = Driver::with_str(
             "
-      let a = [1,2,3]
-      a.get(0)
+        let a = [1,2,3]
+        a.get(0)
       ",
         );
 
@@ -612,11 +620,7 @@ mod tests {
                         Instr::Ret(IRType::Int, Some(Register(2).into()))
                     ]
                 }],
-                env_ty: Some(IRType::Struct(
-                    SymbolID::ARRAY,
-                    vec![IRType::Int, IRType::Int, IRType::POINTER],
-                    vec![IRType::Int]
-                )),
+                env_ty: Some(IRType::array(IRType::Int)),
                 env_reg: Some(Register(0)),
                 size: 6,
             }
@@ -757,6 +761,30 @@ mod tests {
                 debug_info: Default::default()
             }
         )
+    }
+
+    #[test]
+    fn handles_more_recursion() {
+        let mut driver = Driver::with_str(
+            "
+         func fib(n) {
+                if n <= 1 { return n }
+
+                return fib(n - 2) + fib(n - 1)
+            }
+
+            let i = 0
+
+            // Calculate some numbers
+            loop i < 15 {
+                print(fib(i))
+                i = i + 1
+            }
+      ",
+        );
+
+        let module = driver.lower().into_iter().next().unwrap().module();
+        Monomorphizer::new(&Environment::default()).run(module);
     }
 
     #[test]

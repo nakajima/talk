@@ -59,13 +59,15 @@ async fn main() {
             let lowered = driver.lower();
 
             use talk::interpret::interpreter::IRInterpreter;
+            use talk::interpret::io::InterpreterStdIO;
             use talk::transforms::monomorphizer::Monomorphizer;
 
             // let contents = std::fs::read_to_string(filename).expect("Could not read file");
             // let lowered = lower(&contents);
+            let mut io = InterpreterStdIO::default();
             for lowered in lowered {
                 let monomorphized = Monomorphizer::new(&lowered.env).run(lowered.module());
-                let interpreter = IRInterpreter::new(monomorphized);
+                let interpreter = IRInterpreter::new(monomorphized, &mut io, &driver.symbol_table);
                 interpreter.run().unwrap();
             }
         }

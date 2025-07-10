@@ -1,6 +1,12 @@
-use std::fmt::Display;
-
-use crate::interpret::{interpreter::InterpreterError, memory::Pointer};
+use crate::{
+    SymbolID,
+    interpret::{
+        interpreter::{IRInterpreter, InterpreterError},
+        io::InterpreterIO,
+        memory::Pointer,
+    },
+    lowering::{ir_module::IRModule, ir_type::IRType},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -8,15 +14,15 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Enum {
+        symbol_id: SymbolID,
         tag: u16,
         values: Vec<Value>,
     },
     Void,
-    Struct(Vec<Value>),
+    Struct(SymbolID, Vec<Value>),
     Pointer(Pointer),
     Func(usize),
     RawBuffer(Vec<u8>),
-    String(String),
     Array(Vec<Value>),
     Buffer {
         elements: Vec<Value>,
@@ -25,38 +31,93 @@ pub enum Value {
     },
 }
 
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Value {
+    #[allow(clippy::unwrap_used)]
+    pub fn to_string<IO: InterpreterIO>(&self, interpreter: &IRInterpreter<IO>) -> String {
         match self {
-            Value::Int(i) => write!(f, "{i}"),
-            Value::Float(i) => write!(f, "{i}"),
-            Value::Bool(i) => write!(f, "{i}"),
-            Value::Enum { tag, values } => write!(f, ".{tag}({values:?})"),
-            Value::Void => write!(f, "void"),
-            Value::Struct(values) => write!(
-                f,
-                "Struct({})",
-                values
-                    .iter()
-                    .map(|v| format!("{v}"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
-            Value::Pointer(pointer) => write!(f, "0x{pointer}"),
-            Value::Func(func) => write!(f, "@{func:?}()"),
-            Value::RawBuffer(b) => write!(f, "{b:?}"),
-            Value::String(string) => write!(f, "{string}"),
-            Value::Array(values) => write!(
-                f,
+            Value::Int(i) => format!("{i}"),
+            Value::Float(i) => format!("{i}"),
+            Value::Bool(i) => format!("{i}"),
+            Value::Enum { tag, values, .. } => format!(".{tag}({values:?})"),
+            Value::Void => "void".to_string(),
+            Value::Struct(sym, values) => {
+                if *sym == SymbolID::STRING {
+                    let Value::Pointer(ptr) = &values[2] else {
+                        unreachable!()
+                    };
+
+                    let loaded = interpreter.memory.load_with_ty(ptr).unwrap();
+
+                    let Value::RawBuffer(bytes) = loaded else {
+                        unreachable!("didn't get raw buffer: {loaded:?}");
+                    };
+                    String::from_utf8(bytes).unwrap()
+                } else {
+                    let info = interpreter.symbols.get(sym).unwrap();
+                    let ty = interpreter.symbols.types.get(sym).unwrap();
+
+                    format!(
+                        "{}({})",
+                        info.name,
+                        ty.properties
+                            .iter()
+                            .zip(values.iter())
+                            .map(|(prop, value)| format!(
+                                "{}: {}",
+                                prop.name,
+                                value.to_escaped_string(interpreter)
+                            ))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                }
+            }
+            Value::Pointer(pointer) => interpreter
+                .memory
+                .load_with_ty(pointer)
+                .unwrap()
+                .to_string(interpreter),
+            Value::Func(func) => format!("@{func:?}()"),
+            Value::RawBuffer(b) => format!("{b:?}"),
+            Value::Array(values) => format!(
                 "[{}]",
                 values
                     .iter()
-                    .map(|v| format!("{v}"))
+                    .map(|v| v.to_string(interpreter))
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
 
-            Value::Buffer { .. } => write!(f, "buf"),
+            Value::Buffer { .. } => "buf".to_string(),
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]
+    pub fn to_escaped_string<IO: InterpreterIO>(&self, interpreter: &IRInterpreter<IO>) -> String {
+        match self {
+            Value::Pointer(pointer) => interpreter
+                .memory
+                .load_with_ty(pointer)
+                .unwrap()
+                .to_escaped_string(interpreter),
+            Value::Struct(sym, values) => {
+                if *sym == SymbolID::STRING {
+                    let Value::Pointer(ptr) = &values[2] else {
+                        unreachable!()
+                    };
+
+                    let loaded = interpreter.memory.load_with_ty(ptr).unwrap();
+
+                    let Value::RawBuffer(bytes) = loaded else {
+                        unreachable!("didn't get raw buffer: {loaded:?}");
+                    };
+
+                    format!("\"{}\"", String::from_utf8(bytes).unwrap())
+                } else {
+                    self.to_string(interpreter)
+                }
+            }
+            _ => self.to_string(interpreter),
         }
     }
 }
@@ -66,7 +127,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -74,7 +138,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -82,7 +149,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -90,7 +160,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -98,7 +171,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a > b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -106,7 +182,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a >= b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -114,7 +193,10 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a < b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
         }
     }
 
@@ -122,7 +204,40 @@ impl Value {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(a <= b)),
-            _ => Err(InterpreterError::TypeError(self.clone(), other.clone())),
+            _ => Err(InterpreterError::TypeError(
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
+        }
+    }
+
+    pub fn ty(&self, module: &IRModule) -> IRType {
+        match self {
+            Value::Int(_) => IRType::Int,
+            Value::Float(_) => IRType::Float,
+            Value::Bool(_) => IRType::Bool,
+            Value::Enum {
+                symbol_id, values, ..
+            } => IRType::Enum(*symbol_id, values.iter().map(|v| v.ty(module)).collect()),
+            Value::Void => IRType::Void,
+            Value::Struct(symbol_id, values) => IRType::Struct(
+                *symbol_id,
+                values.iter().map(|v| v.ty(module)).collect(),
+                vec![],
+            ),
+            Value::Pointer(_) => IRType::POINTER,
+            Value::Func(idx) => module.functions[*idx].ty.clone(),
+            Value::RawBuffer(_) => IRType::RawBuffer,
+            Value::Array(v) => {
+                IRType::array(v.first().map(|v| v.ty(module)).unwrap_or(IRType::Void))
+            }
+            Value::Buffer { elements, .. } => IRType::TypedBuffer {
+                element: elements
+                    .first()
+                    .map(|v| v.ty(module))
+                    .unwrap_or(IRType::Void)
+                    .into(),
+            },
         }
     }
 }

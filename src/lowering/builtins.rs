@@ -142,7 +142,16 @@ fn lower_print(
         return Err(IRError::Unknown("Could not lower print arg".to_string()));
     };
 
-    lowerer.push_instr(Instr::Print { val: reg.into() });
+    let Some(typed_expr) = lowerer.env.typed_exprs.get(&args[0]) else {
+        return Err(IRError::Unknown(
+            "Could not figure out type of print arg".to_string(),
+        ));
+    };
+
+    lowerer.push_instr(Instr::Print {
+        ty: typed_expr.ty.to_ir(lowerer),
+        val: reg.into(),
+    });
 
     Ok(None)
 }

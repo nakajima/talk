@@ -765,14 +765,7 @@ impl<'a> Lowerer<'a> {
             location: storage_reg,
         });
 
-        let dest = self.allocate_register();
-        self.push_instr(Instr::Load {
-            dest,
-            ty: IRType::string(),
-            addr: string_struct_reg,
-        });
-
-        Some(dest)
+        Some(string_struct_reg)
     }
 
     fn lower_array(&mut self, expr_id: &ExprID, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
@@ -1084,16 +1077,7 @@ impl<'a> Lowerer<'a> {
         };
 
         // Override func type for init to always return the struct
-        let init_func_ty = Ty::Func(
-            params,
-            // Ty::Struct(
-            //     *symbol_id,
-            //     struct_def.properties.iter().map(|p| p.ty.clone()).collect(),
-            // )
-            // .into(),
-            Ty::Pointer.into(),
-            generics,
-        );
+        let init_func_ty = Ty::Func(params, Ty::Pointer.into(), generics);
 
         let name_str = type_def.name();
         let current_function = self.current_functions.pop()?;
@@ -1101,7 +1085,7 @@ impl<'a> Lowerer<'a> {
         let func = current_function.export(
             init_func_ty.to_ir(self),
             Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
-            Some(ty),
+            Some(type_def.ty().to_ir(self)),
             Some(env),
         );
 
@@ -1116,7 +1100,7 @@ impl<'a> Lowerer<'a> {
         func_id: &ExprID,
         name: &str,
     ) -> Option<Register> {
-        let (ty, type_def, typed_func, env, ret) = self.setup_self_context(symbol_id, func_id)?;
+        let (_ty, type_def, typed_func, env, ret) = self.setup_self_context(symbol_id, func_id)?;
 
         let (Ty::Func(_, ret_ty, _)
         | Ty::Closure {
@@ -1138,7 +1122,7 @@ impl<'a> Lowerer<'a> {
             typed_func.ty.to_ir(self),
             Name::Resolved(*symbol_id, format!("{}_{name}", type_def.name()))
                 .mangled(&typed_func.ty),
-            Some(ty),
+            Some(type_def.ty().to_ir(self)),
             Some(env),
         );
 

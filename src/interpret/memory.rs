@@ -1,7 +1,6 @@
 use std::{fmt::Display, ops::Add};
 
 use crate::{
-    SymbolID,
     interpret::{interpreter::InterpreterError, value::Value},
     lowering::{ir_module::IRConstantData, ir_type::IRType},
 };
@@ -20,11 +19,12 @@ pub struct Memory {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pointer {
     addr: usize,
+    ty: IRType,
 }
 
 impl Display for Pointer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "0x{}", self.addr)
+        write!(f, "{:#x}", self.addr)
     }
 }
 
@@ -34,13 +34,14 @@ impl Add<usize> for Pointer {
     fn add(self, rhs: usize) -> Self::Output {
         Pointer {
             addr: self.addr + rhs,
+            ty: self.ty,
         }
     }
 }
 
 impl Pointer {
-    pub fn new(addr: usize) -> Self {
-        Self { addr }
+    pub fn new(addr: usize, ty: IRType) -> Self {
+        Self { addr, ty }
     }
 }
 
@@ -81,6 +82,7 @@ impl Memory {
     pub fn stack_alloc(&mut self, ty: &IRType) -> Pointer {
         let ret = Pointer {
             addr: self.next_stack_addr,
+            ty: ty.clone(),
         };
         self.next_stack_addr += Self::mem_size(ty);
         ret
@@ -89,6 +91,7 @@ impl Memory {
     pub fn heap_alloc(&mut self, ty: &IRType, count: usize) -> Pointer {
         let ret = Pointer {
             addr: self.next_heap_addr,
+            ty: ty.clone(),
         };
         self.next_heap_addr += Self::mem_size(ty) * count;
         ret
@@ -97,16 +100,10 @@ impl Memory {
     pub fn store(&mut self, pointer: Pointer, val: Value, ty: &IRType) {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
         match val {
-            Value::Struct(vals) => {
+            Value::Struct(_, vals) => {
                 let vals: Vec<Option<Value>> = vals.iter().cloned().map(Option::Some).collect();
                 self.storage[range].clone_from_slice(&vals)
             }
-            // Value::Enum { tag, values } => {
-            //     let mut vals: Vec<Option<Value>> =
-            //         values.iter().cloned().map(Option::Some).collect();
-            //     vals.resize(range.into_iter().len() + 1, None);
-            //     self.storage[range].clone_from_slice(&vals)
-            // }
             Value::Buffer { elements, .. } => {
                 let elements: Vec<Option<Value>> =
                     elements.iter().cloned().map(Option::Some).collect();
@@ -118,56 +115,29 @@ impl Memory {
         };
     }
 
+    pub fn load_with_ty(&self, pointer: &Pointer) -> Result<Value, InterpreterError> {
+        self.load(pointer, &pointer.ty)
+    }
+
     #[allow(clippy::panic)]
     #[allow(clippy::unwrap_used)]
     pub fn load(&self, pointer: &Pointer, ty: &IRType) -> Result<Value, InterpreterError> {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
+
+        tracing::debug!(
+            "load range: {range:?}, {:?}",
+            self.storage[range.clone()].to_vec()
+        );
         #[allow(clippy::unwrap_used)]
         match ty {
             // Special case some stuff
-            IRType::Struct(struct_id, _, _) => match *struct_id {
-                SymbolID::STRING => {
-                    let string_struct_props: Vec<Value> = self.storage[range]
-                        .iter()
-                        .map(|c| c.clone().unwrap())
-                        .collect();
-
-                    let Value::Int(length) = string_struct_props[0] else {
-                        panic!("Didn't get length");
-                    };
-
-                    let Value::Pointer(Pointer { addr }) = string_struct_props[2] else {
-                        panic!("didn't get storage")
-                    };
-
-                    let Some(Value::RawBuffer(buf)) = self.storage[addr].clone() else {
-                        panic!(
-                            "didn't get string storage ({addr}): {:?}",
-                            self.storage[addr],
-                        );
-                    };
-
-                    if buf.len() != length as usize {
-                        return Err(InterpreterError::Unknown(format!(
-                            "string buffer/length mismatch: {buf:?}"
-                        )));
-                    }
-
-                    Ok(Value::String(String::from_utf8(buf).unwrap()))
-                }
-                _ => Ok(Value::Struct(
-                    self.storage[range]
-                        .iter()
-                        .map(|c| c.clone().unwrap())
-                        .collect(),
-                )),
-            },
-            // Value::Enum { tag, values } => {
-            //     let mut vals: Vec<Option<Value>> =
-            //         values.iter().cloned().map(Option::Some).collect();
-            //     vals.resize(range.into_iter().len() + 1, None);
-            //     self.storage[range].clone_from_slice(&vals)
-            // }
+            IRType::Struct(sym, _, _) => Ok(Value::Struct(
+                *sym,
+                self.storage[range]
+                    .iter()
+                    .map(|c| c.clone().unwrap())
+                    .collect(),
+            )),
             IRType::TypedBuffer { .. } => {
                 let elements: Vec<Value> = self.storage[range]
                     .iter()
