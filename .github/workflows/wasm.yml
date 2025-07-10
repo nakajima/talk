@@ -54,7 +54,7 @@ jobs:
         run: |
           sha=$(git rev-parse --short HEAD)
           mkdir -p dist/$sha
-          cp -r dist/* dist/$sha/
+          cp -r dist/*.js dist/*.wasm dist/*.json dist/*.ts dist/$sha/
           echo "latest build: $sha" > dist/index.html       # optional landing page
 
       - name: Upload artifact
