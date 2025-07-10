@@ -1,4 +1,5 @@
 use core::str::Chars;
+use std::ops::RangeInclusive;
 
 use itertools::{Itertools, MultiPeek};
 
@@ -7,15 +8,25 @@ use super::token_kind::TokenKind::{self, *};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LexerError {
+    ExpectedChar { expected: char, actual: char },
     UnexpectedInput(char),
+    InvalidEscape(char),
     UnexpectedEOF,
+    InvalidUnicodeEscape,
+    UnterminatedString,
 }
 
 impl LexerError {
     pub fn message(&self) -> String {
         match &self {
+            Self::ExpectedChar { expected, actual } => {
+                format!("Expected character: {expected:?}, got: {actual:?}")
+            }
             Self::UnexpectedInput(ch) => format!("Unexpected character: {ch:?}"),
             Self::UnexpectedEOF => "Unexpected end of file".to_string(),
+            Self::InvalidEscape(ch) => format!("Invalid escape: {ch:?}"),
+            Self::InvalidUnicodeEscape => "Invalid unicode escape".to_string(),
+            Self::UnterminatedString => "Unterminated string".to_string(),
         }
     }
 }
@@ -206,22 +217,53 @@ impl<'a> Lexer<'a> {
     }
 
     fn string(&mut self) -> Result<Token, LexerError> {
+        // opening quote was already eaten by `next()`
         self.started = self.current;
-        while let Some(ch) = self.peek() {
-            if ch == '"' {
-                let token = self.make(TokenKind::StringLiteral(
-                    self.string_from(self.started, self.current),
-                ));
+        let mut buf = String::new();
 
-                self.advance();
+        loop {
+            // pull the next physical character
+            let ch = self.advance().ok_or(LexerError::UnexpectedEOF)?;
 
-                return token;
+            match ch {
+                '"' => break,
+                '\\' => {
+                    // start of an escape
+                    let esc = self.advance().ok_or(LexerError::UnexpectedEOF)?;
+                    match esc {
+                        'n' => buf.push('\n'),
+                        't' => buf.push('\t'),
+                        'r' => buf.push('\r'),
+                        '"' => buf.push('"'),
+                        '\\' => buf.push('\\'),
+
+                        // Unicode escape: \u{1F600}
+                        'u' => {
+                            self.expect_char('{')?;
+                            let digits = self.take_hex_digits(1..=6)?;
+                            self.expect_char('}')?;
+
+                            let cp = u32::from_str_radix(&digits, 16)
+                                .map_err(|_| LexerError::InvalidUnicodeEscape)?;
+                            buf.push(char::from_u32(cp).ok_or(LexerError::InvalidUnicodeEscape)?);
+                        }
+
+                        '\n' => {
+                            self.line += 1;
+                            self.col = 0;
+                        }
+
+                        other => return Err(LexerError::InvalidEscape(other)),
+                    }
+                }
+                '\n' => buf.push('\n'),
+                _ => buf.push(ch),
             }
-
-            self.advance();
         }
 
-        Err(LexerError::UnexpectedEOF)
+        let mut tok = self.make(TokenKind::StringLiteral(buf))?;
+        tok.end -= 1; // move `end` back over the quote only
+        Ok(tok)
     }
 
     fn identifier(&mut self, starting_at: u32) -> TokenKind {
@@ -317,6 +359,39 @@ impl<'a> Lexer<'a> {
             Some(ch)
         } else {
             None
+        }
+    }
+
+    /// Consumes the next character and verifies it matches `expected`.
+    /// Errors if it doesn’t or if we hit EOF.
+    fn expect_char(&mut self, expected: char) -> Result<(), LexerError> {
+        match self.advance() {
+            Some(c) if c == expected => Ok(()),
+            Some(actual) => Err(LexerError::ExpectedChar { expected, actual }), // add this variant
+            None => Err(LexerError::UnexpectedEOF),
+        }
+    }
+
+    /// Collects 1–6 hex digits (or whatever `range` you pass) and returns them as a `String`.
+    /// Fails if the digit count is outside the range or a non-hex char is encountered first.
+    fn take_hex_digits(&mut self, range: RangeInclusive<usize>) -> Result<String, LexerError> {
+        let mut buf = String::new();
+
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_hexdigit()
+                && buf.len() < *range.end()
+                && let Some(next) = self.advance()
+            {
+                buf.push(next);
+            } else {
+                break;
+            }
+        }
+
+        if range.contains(&buf.len()) {
+            Ok(buf)
+        } else {
+            Err(LexerError::InvalidUnicodeEscape) // add this variant
         }
     }
 }
@@ -459,6 +534,28 @@ mod tests {
             StringLiteral("😎😎 hello 🗿".to_string())
         );
         assert_eq!(lexer.next().unwrap().kind, Plus);
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn strings_with_escapes() {
+        let mut lexer = Lexer::new(r#""\thello\nworld""#);
+        assert_eq!(
+            lexer.next().unwrap().kind,
+            StringLiteral("\thello\nworld".to_string())
+        );
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn strings_with_unicode_escape() {
+        // 😀 = U+1F600
+        let mut lexer = Lexer::new(r#""smile: \u{1F600}""#);
+
+        assert_eq!(
+            lexer.next().unwrap().kind,
+            StringLiteral("smile: 😀".to_string())
+        );
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 
