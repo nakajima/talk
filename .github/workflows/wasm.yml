@@ -50,7 +50,7 @@ jobs:
           curl -LsSf https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-$(uname -m)-unknown-linux-musl.tgz \
             | tar -xz -C ~/.cargo/bin
       - name: Install cargo-component
-        run: cargo binstall cargo-component@0.7.2 --no-confirm
+        run: cargo binstall cargo-component --no-confirm
       - uses: jetli/wasm-pack-action@v0.4.0
         with:
           # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')

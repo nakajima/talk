@@ -45,7 +45,8 @@ async fn main() {
         #[allow(clippy::print_with_newline)]
         Commands::IR { filename } => {
             use talk::{compiling::driver::Driver, lowering::ir_printer::print};
-            let mut driver = Driver::with_files(vec![filename.clone()]);
+            let cwd = std::env::current_dir().expect("couldn’t get CWD");
+            let mut driver = Driver::with_files(vec![cwd.join(filename).clone()]);
             let lowered = driver.lower();
 
             for unit in lowered {
