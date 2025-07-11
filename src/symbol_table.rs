@@ -156,7 +156,6 @@ impl SymbolTable {
         }
     }
 
-    #[track_caller]
     pub fn add(
         &mut self,
         name: &str,
@@ -164,18 +163,13 @@ impl SymbolTable {
         expr_id: ExprID,
         definition: Option<Definition>,
     ) -> SymbolID {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!(
-                "add symbol {:?} {:?} {:?} {:?} from {}:{}",
-                name,
-                kind,
-                expr_id,
-                definition,
-                loc.file(),
-                loc.line()
-            );
-        }
+        tracing::trace!(
+            "add symbol {:?} {:?} {:?} {:?}",
+            name,
+            kind,
+            expr_id,
+            definition,
+        );
 
         tracing::info!("add symbol: {name} next_id: {}", self.next_id);
 

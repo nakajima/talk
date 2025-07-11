@@ -75,7 +75,6 @@ impl Environment {
         self.context.next_id()
     }
 
-    #[track_caller]
     pub fn placeholder(
         &mut self,
         expr_id: &ExprID,
@@ -93,14 +92,7 @@ impl Environment {
             symbol_id: *symbol_id,
         });
 
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!(
-                "Placeholder {usage_placeholder:?} created for {name}: {}:{}",
-                loc.file(),
-                loc.line()
-            );
-        }
+        tracing::trace!("Placeholder {usage_placeholder:?} created for {name}",);
 
         usage_placeholder
     }
@@ -109,16 +101,12 @@ impl Environment {
         self.constraints.clone()
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn constrain(&mut self, constraint: Constraint) {
         if !constraint.needs_solving() {
             return;
         }
 
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::info!("⊢ {:#?} ({}:{})", constraint, loc.file(), loc.line(),);
-        }
+        tracing::info!("⊢ {:#?})", constraint);
 
         // #[allow(clippy::panic)]
         // if constraint.contains_canonical_type_parameter() {
@@ -181,14 +169,8 @@ impl Environment {
         self.constraints = new_constraints;
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn declare(&mut self, symbol_id: SymbolID, scheme: Scheme) -> Result<(), TypeError> {
-        let loc = std::panic::Location::caller();
-        tracing::debug!(
-            "λ Declare {symbol_id:?} -> {scheme:?} ({}:{})",
-            loc.file(),
-            loc.line()
-        );
+        tracing::debug!("λ Declare {symbol_id:?} -> {scheme:?}",);
 
         if let Some(scheme) = self
             .scopes
@@ -266,7 +248,6 @@ impl Environment {
         self.scopes.pop();
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn ty_for_symbol(
         &mut self,
         id: &ExprID,
@@ -284,48 +265,20 @@ impl Environment {
             self.placeholder(id, name.to_string(), symbol_id, constraints.to_vec())
         };
 
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!(
-                "T ty_for_symbol {} ({:?}) = {:?} from {}:{}",
-                name,
-                symbol_id,
-                ret,
-                loc.file(),
-                loc.line()
-            );
-        }
+        tracing::trace!("T ty_for_symbol {} ({:?}) = {:?}", name, symbol_id, ret,);
 
         ret
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
         let type_var_id = self.context.new_var(kind);
 
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!(
-                "+ {:?} from {}:{}",
-                Ty::TypeVar(type_var_id.clone()),
-                loc.file(),
-                loc.line()
-            );
-        }
+        tracing::trace!("+ {:?}", Ty::TypeVar(type_var_id.clone()),);
 
         type_var_id
     }
 
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
-        #[cfg(debug_assertions)]
-        if let Some(existing) = self.lookup_type(&def.symbol_id()) {
-            if existing != def {
-                tracing::info!("Updating {def:?}");
-            }
-        } else {
-            tracing::info!("Registering {def:?}");
-        }
-
         match def {
             TypeDef::Enum(def) => self.register_enum(def),
             TypeDef::Struct(def) => self.register_struct(def),
@@ -383,7 +336,6 @@ impl Environment {
         Ok(())
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn lookup_symbol(&self, symbol_id: &SymbolID) -> Result<&Scheme, TypeError> {
         if let Some(scheme) = self
             .scopes
@@ -393,14 +345,7 @@ impl Environment {
         {
             Ok(scheme)
         } else {
-            if cfg!(debug_assertions) {
-                let loc = std::panic::Location::caller();
-                tracing::warn!(
-                    "Did not find symbol {symbol_id:?}: {}:{}",
-                    loc.file(),
-                    loc.line()
-                );
-            }
+            tracing::warn!("Did not find symbol {symbol_id:?}",);
 
             Err(TypeError::Unresolved(format!(
                 "Did not find symbol {:?} in scope: {:?}",
@@ -409,7 +354,6 @@ impl Environment {
         }
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn lookup_symbol_mut(&mut self, symbol_id: &SymbolID) -> Result<&mut Scheme, TypeError> {
         let Some(scheme) = self
             .scopes
@@ -417,14 +361,7 @@ impl Environment {
             .rev()
             .find_map(|frame| frame.get_mut(symbol_id))
         else {
-            if cfg!(debug_assertions) {
-                let loc = std::panic::Location::caller();
-                tracing::warn!(
-                    "Did not find symbol {symbol_id:?}: {}:{}",
-                    loc.file(),
-                    loc.line()
-                );
-            }
+            tracing::warn!("Did not find symbol {symbol_id:?}",);
 
             return Err(TypeError::Unresolved(format!(
                 "Did not find symbol {symbol_id:?} in scope",

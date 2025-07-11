@@ -49,7 +49,10 @@ async fn main() {
             let lowered = driver.lower();
 
             for unit in lowered {
-                print!("{}\n", print(&unit.stage.module));
+                use talk::transforms::monomorphizer::Monomorphizer;
+
+                let monomorphized = Monomorphizer::new(&unit.env).run(unit.module());
+                print!("{}\n", print(&monomorphized));
             }
         }
 

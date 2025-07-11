@@ -218,7 +218,6 @@ impl<'a> TypeChecker<'a> {
         Ok(result)
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
     pub fn infer_node(
         &mut self,
         id: &ExprID,
@@ -237,16 +236,13 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unknown(format!("No expr found with id {id}")));
         };
 
-        #[cfg(debug_assertions)]
-        {
-            use crate::formatter::Formatter;
+        use crate::formatter::Formatter;
 
-            let _s = trace_span!(
-                "infer_node",
-                expr = Formatter::format_single_expr(&source_file.as_parsed(), id)
-            )
-            .entered();
-        }
+        let _s = trace_span!(
+            "infer_node",
+            expr = Formatter::format_single_expr(&source_file.as_parsed(), id)
+        )
+        .entered();
 
         let mut ty = match &expr {
             Expr::Incomplete(expr_id) => {

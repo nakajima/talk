@@ -289,12 +289,7 @@ struct CurrentFunction {
 }
 
 impl CurrentFunction {
-    #[track_caller]
     fn new(env_ty: Option<IRType>) -> Self {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!("new CurrentFunction from {}:{}", loc.file(), loc.line());
-        }
         Self {
             next_block_id: BasicBlockID(0),
             current_block_idx: 0,
@@ -331,18 +326,8 @@ impl CurrentFunction {
         Ok(())
     }
 
-    #[track_caller]
     fn register_symbol(&mut self, symbol_id: SymbolID, register: SymbolValue) {
-        if cfg!(debug_assertions) {
-            let loc = std::panic::Location::caller();
-            tracing::trace!(
-                "register symbol {:?}: {:?} from {}:{}",
-                symbol_id,
-                register,
-                loc.file(),
-                loc.line()
-            );
-        }
+        tracing::trace!("register symbol {:?}: {:?}", symbol_id, register,);
         self.symbol_registers.insert(symbol_id, register);
     }
 
