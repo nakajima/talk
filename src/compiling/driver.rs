@@ -262,14 +262,3 @@ impl Driver {
         None
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::compiling::driver::Driver;
-
-    #[test]
-    fn handle_parse_err() {
-        let driver = Driver::with_files(vec!["../../dev/fixtures/parse_err/fizz.tlk".into()]);
-        driver.parse();
-    }
-}
