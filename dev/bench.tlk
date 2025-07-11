@@ -1,7 +1,3 @@
-protocol Greetable {
-	let name: String
-}
-
 protocol Greeter {
 	func greet(name: String) -> String
 }
@@ -14,7 +10,7 @@ struct Person: Greeter {
 	}
 }
 
-struct Animal: Greetable {
+struct Animal {
 	let name: String
 }
 
@@ -28,7 +24,7 @@ loop j < count {
 	let i = 0
 	loop i < count {
 		i = i + 1
-		people.push(Person(name: "Person "))
+		people.push(Person(name: "Person"))
 		animals.push(Animal(name: "Animal"))
 	}
 

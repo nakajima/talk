@@ -27,14 +27,7 @@ async fn main() {
         stdio: bool,
     }
 
-    let file = File::create("log.txt").expect("can't create file");
-
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env()) // respects RUST_LOG
-        .without_time()
-        .with_target(false)
-        .with_writer(move || BufWriter::new(file.try_clone().expect("clone failed")))
-        .try_init();
+    init();
 
     let cli = Cli::parse();
 
@@ -84,4 +77,10 @@ fn main() {
     use core::panic;
 
     panic!("Compiled without 'cli' feature.")
+}
+
+pub fn init() {
+    use tracing_subscriber::{EnvFilter, prelude::*, registry};
+    let tree = tracing_tree::HierarchicalLayer::new(2).with_filter(EnvFilter::from_default_env()); // ordinary RUST_LOG filtering
+    registry().with(tree).init();
 }

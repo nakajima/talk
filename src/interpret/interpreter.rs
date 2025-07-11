@@ -173,7 +173,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
         tracing::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
         let frame = self.call_stack.last().unwrap();
         tracing::info!(
-            "\n{}:{}\n{:?}\n{}\n\t{:?}",
+            "\n{}:{}\n{:?}\n{}\n",
             frame.function.name,
             frame
                 .function
@@ -184,8 +184,20 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                 .unwrap_or("-".into()),
             instr,
             ir_printer::format_instruction(&instr),
-            self.memory.range(frame.sp, frame.function.size as usize)
         );
+
+        for (i, value) in self
+            .memory
+            .range(frame.sp, frame.function.size as usize)
+            .iter()
+            .enumerate()
+        {
+            if let Some(value) = value {
+                tracing::trace!("\t%{i} = {:?}", value)
+            } else {
+                tracing::trace!("\t%{i} = EMPTY")
+            }
+        }
 
         match instr {
             Instr::ConstantInt(register, val) => {
@@ -559,7 +571,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             let stack = self.memory.range(frame.sp, frame.function.size as usize);
             print!(
                 "{}:\n{}\n",
-                i,
+                frame.function.name,
                 stack
                     .iter()
                     .enumerate()
@@ -568,7 +580,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                             "\t{} = {}",
                             frame.sp + id,
                             match v {
-                                Some(v) => format!("{v:?}"),
+                                Some(v) => format!("{:?}", v.to_string(self)),
                                 None => "-".into(),
                             }
                         )

@@ -43,7 +43,7 @@ impl Value {
             Value::Struct(sym, values) => {
                 if *sym == SymbolID::STRING {
                     let Value::Pointer(ptr) = &values[2] else {
-                        unreachable!()
+                        unreachable!("didn't get string pointer, got: {:?}", &values[2]);
                     };
 
                     let loaded = interpreter.memory.load_with_ty(ptr).unwrap();

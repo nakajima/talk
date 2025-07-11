@@ -5,10 +5,9 @@ use crate::{
     lowering::{ir_module::IRConstantData, ir_type::IRType},
 };
 
-pub const MEM_SIZE: usize = 2048;
+pub const MEM_SIZE: usize = 4096;
 
 // Simulate memory, kinda. Compound types (like structs or buffers) are laid out inline.
-// The first 1024 slots are for stack, the second 1024 slots are for heap.
 #[derive(Debug)]
 pub struct Memory {
     storage: [Option<Value>; MEM_SIZE],
@@ -56,11 +55,11 @@ impl Memory {
         let mut memory = Self {
             storage: [const { None }; MEM_SIZE],
             next_stack_addr: 0,
-            next_heap_addr: 1024,
+            next_heap_addr: MEM_SIZE / 2,
         };
 
         memory.next_stack_addr = static_memory.len();
-        memory.next_heap_addr = static_memory.len() + 1024;
+        memory.next_heap_addr = static_memory.len() + MEM_SIZE / 2;
 
         for (i, val) in static_memory.iter().enumerate() {
             memory.storage[i] = match val {
@@ -125,7 +124,7 @@ impl Memory {
         let range = pointer.addr..(pointer.addr + Self::mem_size(ty));
 
         tracing::debug!(
-            "load range: {range:?}, {:?}",
+            "load range: {ty:?} {pointer:?} {range:?}, {:?}",
             self.storage[range.clone()].to_vec()
         );
         #[allow(clippy::unwrap_used)]

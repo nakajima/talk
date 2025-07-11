@@ -24,6 +24,7 @@ use crate::{
     },
     name::Name,
     parser::ExprID,
+    source_file,
     token::Token,
     token_kind::TokenKind,
     ty::Ty,
@@ -341,6 +342,7 @@ impl CurrentFunction {
         name: String,
         env_ty: Option<IRType>,
         env_reg: Option<Register>,
+        source_file: &SourceFile<source_file::Typed>,
     ) -> IRFunction {
         let mut blocks = vec![];
         let mut debug_info = DebugInfo::default();
@@ -350,7 +352,9 @@ impl CurrentFunction {
             let mut instructions = vec![];
             for (i, instruction) in block.instructions.into_iter().enumerate() {
                 instructions.push(instruction.instr);
-                instr_expr_ids.insert(i, instruction.expr_id);
+                if let Some(expr_id) = instruction.expr_id {
+                    instr_expr_ids.insert(i, source_file.meta.get(&expr_id).cloned());
+                }
             }
 
             debug_info.insert(block.id, instr_expr_ids);
@@ -375,7 +379,7 @@ impl CurrentFunction {
     }
 }
 
-pub type DebugInfo = HashMap<BasicBlockID, HashMap<usize, Option<ExprID>>>;
+pub type DebugInfo = HashMap<BasicBlockID, HashMap<usize, Option<ExprMeta>>>;
 
 #[derive(Debug, Clone, PartialEq)]
 struct RegisterAllocator {
@@ -1072,6 +1076,7 @@ impl<'a> Lowerer<'a> {
             Name::Resolved(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
             Some(type_def.ty().to_ir(self)),
             Some(env),
+            &self.source_file,
         );
 
         self.lowered_functions.push(func.clone());
@@ -1109,6 +1114,7 @@ impl<'a> Lowerer<'a> {
                 .mangled(&typed_func.ty),
             Some(type_def.ty().to_ir(self)),
             Some(env),
+            &self.source_file,
         );
 
         self.lowered_functions.push(func.clone());
@@ -1345,6 +1351,7 @@ impl<'a> Lowerer<'a> {
             name.mangled(&typed_expr.ty),
             env_ty,
             env_reg,
+            &self.source_file,
         );
 
         self.lowered_functions.push(func.clone());
