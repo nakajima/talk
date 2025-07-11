@@ -39,6 +39,7 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-wasm-pack-0.12.1
           restore-keys: |
             cargo-${{ runner.os }}-
+      - run: cargo install cargo-component
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
@@ -49,6 +50,7 @@ jobs:
           # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
           version: 'latest'
       - run: wasm-pack build --target web --release --out-dir dist --out-name talk
+      - run: cargo component build --release --artifact-dir dist/wit -Z unstable-options --verbose
 
       - name: Stamp build with short SHA
         run: |

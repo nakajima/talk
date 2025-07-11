@@ -1,0 +1,17 @@
+package talk-ex:host;
+
+interface host {
+  add: func(x: u32, y: u32) -> u32;
+}
+
+world talk-ex {
+  record highlight-token {
+    kind:  string,
+    start: u32,
+    end:   u32,
+  }
+
+  export highlight: func(code: string) -> list<highlight-token>;
+  export ir: func(code: string) -> string;
+  export run: func(code: string);
+}

@@ -7,10 +7,9 @@ use crate::{
     token_kind::TokenKind,
 };
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[allow(non_camel_case_types)]
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
-#[cfg_attr(feature = "wasm", witgen::witgen)]
 pub enum Kind {
     NAMESPACE,
     TYPE,
@@ -36,7 +35,13 @@ pub enum Kind {
     OPERATOR,
 }
 
-#[derive(Copy, Clone)]
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format!("{self:?}").to_lowercase())
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct HighlightToken {
     pub kind: Kind,
@@ -50,6 +55,7 @@ impl HighlightToken {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Higlighter<'a> {
     source: &'a str,
     source_file: SourceFile,

@@ -1498,7 +1498,6 @@ dependencies = [
  "tracing-tree",
  "typed-arena",
  "wasm-bindgen",
- "witgen",
 ]
 
 [[package]]
@@ -2003,29 +2002,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "witgen"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fca6ce1c345b4e7b7c6af847f758359c4fa5cbf021044b34b69dc09543435afb"
-dependencies = [
- "witgen_macro",
-]
-
-[[package]]
-name = "witgen_macro"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16b823beb9160767919b9046f49e5722d5ce4adb1f20a6626d460bb21573bd74"
-dependencies = [
- "anyhow",
- "once_cell",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
- "witgen_macro_helper",
-]
 
 [[package]]
 name = "witgen_macro_helper"

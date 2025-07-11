@@ -1,51 +1,61 @@
-use talk::{
-    compiling::driver::Driver, highlighter::Higlighter, interpret::interpreter::IRInterpreter,
-    lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
-};
-use wasm_bindgen::prelude::*;
-use witgen::witgen;
+// Use a procedural macro to generate bindings for the world we specified in
+// `host.wit`
+wit_bindgen::generate!({
+    // the name of the world in the `*.wit` input file
+    world: "talk-ex",
+});
 
-use crate::io::WasmIO;
-
+#[allow(warnings)]
+mod bindings;
 mod console;
 mod io;
 
-#[witgen]
-#[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
 }
 
-#[witgen]
-#[wasm_bindgen]
-pub struct TalkTalk {}
+mod talk_ex {
+    use crate::{bindings::HighlightToken, io::WasmIO};
 
-#[witgen]
-#[wasm_bindgen]
-pub fn ir(code: String) -> String {
-    let mut driver = Driver::with_str(&code);
-    let lowered = driver.lower().into_iter().next().unwrap();
-    print(&lowered.module())
+    use talk::{
+        compiling::driver::Driver, highlighter::Higlighter, interpret::interpreter::IRInterpreter,
+        lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
+    };
+
+    use crate::bindings::Guest;
+
+    pub struct TalkEx;
+
+    impl Guest for TalkEx {
+        fn ir(code: String) -> String {
+            let mut driver = Driver::with_str(&code);
+            let lowered = driver.lower().into_iter().next().unwrap();
+            print(&lowered.module())
+        }
+
+        fn run(code: String) {
+            let mut driver = Driver::with_str(&code);
+            let lowered = driver.lower().into_iter().next().unwrap();
+            let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
+            let mut io = WasmIO::default();
+            IRInterpreter::new(mono, &mut io, &driver.symbol_table)
+                .run()
+                .unwrap();
+        }
+
+        fn highlight(code: String) -> Vec<HighlightToken> {
+            Higlighter::new(&code)
+                .highlight()
+                .into_iter()
+                .map(|tok| HighlightToken {
+                    kind: tok.kind.to_string(),
+                    start: tok.start,
+                    end: tok.end,
+                })
+                .collect()
+        }
+    }
 }
 
-#[witgen]
-#[wasm_bindgen]
-pub fn run(code: String) {
-    let mut driver = Driver::with_str(&code);
-    let lowered = driver.lower().into_iter().next().unwrap();
-    let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
-    let mut io = WasmIO::default();
-    IRInterpreter::new(mono, &mut io, &driver.symbol_table)
-        .run()
-        .unwrap();
-}
-
-#[witgen]
-#[wasm_bindgen]
-pub fn higlight(code: String) -> Vec<HighlightToken> {
-    Higlighter::new(&code)
-        .highlight()
-        .into_iter()
-        .map(Into::into)
-        .collect()
-}
+use talk_ex::TalkEx;
+bindings::export!(TalkEx with_types_in bindings);
