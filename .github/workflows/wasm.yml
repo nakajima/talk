@@ -39,8 +39,6 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-wasm-pack-0.12.1
           restore-keys: |
             cargo-${{ runner.os }}-
-      - name: Install cargo-component
-        run: cargo binstall cargo-component@0.7.2 --no-confirm
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: nightly
@@ -51,6 +49,8 @@ jobs:
           mkdir -p ~/.cargo/bin
           curl -LsSf https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-$(uname -m)-unknown-linux-musl.tgz \
             | tar -xz -C ~/.cargo/bin
+      - name: Install cargo-component
+        run: cargo binstall cargo-component@0.7.2 --no-confirm
       - uses: jetli/wasm-pack-action@v0.4.0
         with:
           # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')

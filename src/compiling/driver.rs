@@ -82,9 +82,11 @@ impl Driver {
     pub fn with_files(files: Vec<PathBuf>) -> Self {
         let mut driver = Driver::default();
 
+        #[allow(clippy::expect_used)]
+        #[allow(clippy::expect_fun_call)]
         for file in files {
             let contents =
-                std::fs::read_to_string(&file).expect(format!("File not found: {file:?}"));
+                std::fs::read_to_string(&file).expect(format!("File not found: {file:?}").as_str());
             driver.update_file(&file, contents);
         }
 
