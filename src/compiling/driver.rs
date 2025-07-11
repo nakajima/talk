@@ -83,7 +83,8 @@ impl Driver {
         let mut driver = Driver::default();
 
         for file in files {
-            let contents = std::fs::read_to_string(&file).unwrap_or_default();
+            let contents =
+                std::fs::read_to_string(&file).expect(format!("File not found: {file:?}"));
             driver.update_file(&file, contents);
         }
 
