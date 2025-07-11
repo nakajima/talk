@@ -55,16 +55,19 @@ jobs:
         with:
           # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
           version: 'latest'
-      - run: wasm-pack build --target web --release --out-dir dist --out-name talk
+      - run: mkdir -p dist
       - run: cargo component build --release --artifact-dir dist/wit -Z unstable-options --verbose
+      - run: cargo binstall wasm-tools --no-confirm
+      - run: wasm-pack build --target web --release --out-dir dist --out-name talk
+      - run: wasm-tools component unbundle target/wasm32-wasip1/release/talk_ex.wasm --module-dir dist/unbundled -o dist/unbundled/talk_ex_core.wasm
 
       - name: Stamp build with short SHA
         run: |
           sha=$(git rev-parse --short HEAD)
           mkdir -p dist/$sha
           mkdir -p dist/latest
-          cp -r dist/*.js dist/*.wasm dist/*.json dist/*.ts dist/$sha/
-          cp -r dist/*.js dist/*.wasm dist/*.json dist/*.ts dist/latest/
+          cp -r dist/unbundled dist/*.wasm dist/*.json dist/*.ts dist/$sha/
+          cp -r dist/unbundled dist/*.js dist/*.wasm dist/*.json dist/*.ts dist/latest/
           echo "latest build: $sha" > dist/index.html       # optional landing page
 
       - name: Upload artifact
