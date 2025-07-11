@@ -1,5 +1,5 @@
 [package]
-name = "talk-wasm"
+name = "talk-ex"
 version = "0.1.0"
 edition = "2024"
 

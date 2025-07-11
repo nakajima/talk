@@ -44,10 +44,10 @@ jobs:
           toolchain: nightly
           profile: minimal
           override: true
-      - run: pwd
-      - run: ls -lah
-
-      - run: cargo install wasm-pack --locked
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
+          version: 'latest'
       - run: wasm-pack build --target web --release --out-dir dist --out-name talk
 
       - name: Stamp build with short SHA

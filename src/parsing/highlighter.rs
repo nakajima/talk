@@ -10,6 +10,7 @@ use crate::{
 #[derive(Copy, Clone)]
 #[allow(non_camel_case_types)]
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+#[cfg_attr(feature = "wasm", witgen::witgen)]
 pub enum Kind {
     NAMESPACE,
     TYPE,

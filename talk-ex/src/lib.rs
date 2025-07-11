@@ -2,27 +2,8 @@ use talk::{
     compiling::driver::Driver, highlighter::Higlighter, interpret::interpreter::IRInterpreter,
     lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
 };
-use witgen::witgen;
-
-#[witgen]
-#[wasm_bindgen]
-#[derive(Copy, Clone)]
-pub struct HighlightToken {
-    pub kind: u32,
-    pub start: u32,
-    pub end: u32,
-}
-
-impl From<talk::highlighter::HighlightToken> for HighlightToken {
-    fn from(t: talk::highlighter::HighlightToken) -> Self {
-        Self {
-            kind: t.kind as u32,
-            start: t.start,
-            end: t.end,
-        }
-    }
-}
 use wasm_bindgen::prelude::*;
+use witgen::witgen;
 
 use crate::io::WasmIO;
 
