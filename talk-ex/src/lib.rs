@@ -1,28 +1,25 @@
 // Use a procedural macro to generate bindings for the world we specified in
 // `host.wit`
 wit_bindgen::generate!({
-    // the name of the world in the `*.wit` input file
-    world: "talk-ex",
+    world: "host",
 });
 
 #[allow(warnings)]
 mod bindings;
-mod console;
-mod io;
 
 pub fn start() {
     console_error_panic_hook::set_once();
 }
 
 mod talk_ex {
-    use crate::{bindings::HighlightToken, io::WasmIO};
-
-    use talk::{
-        compiling::driver::Driver, highlighter::Higlighter, interpret::interpreter::IRInterpreter,
-        lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
+    use crate::{
+        bindings::{Guest, HighlightToken},
     };
 
-    use crate::bindings::Guest;
+    use talk::{
+        compiling::driver::Driver, highlighter::Higlighter, interpret::{interpreter::IRInterpreter, io::test_io::TestIO},
+        lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
+    };
 
     pub struct TalkEx;
 
@@ -37,7 +34,7 @@ mod talk_ex {
             let mut driver = Driver::with_str(&code);
             let lowered = driver.lower().into_iter().next().unwrap();
             let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
-            let mut io = WasmIO::default();
+            let mut io = TestIO::default();
             IRInterpreter::new(mono, &mut io, &driver.symbol_table)
                 .run()
                 .unwrap();

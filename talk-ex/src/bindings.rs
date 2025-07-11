@@ -119,7 +119,7 @@ pub trait Guest {
     fn run(code: _rt::String) -> ();
 }
 #[doc(hidden)]
-macro_rules! __export_world_talk_ex_cabi {
+macro_rules! __export_world_host_cabi {
     ($ty:ident with_types_in $($path_to_types:tt)*) => {
         const _ : () = { #[unsafe (export_name = "highlight")] unsafe extern "C" fn
         export_highlight(arg0 : * mut u8, arg1 : usize,) -> * mut u8 { unsafe {
@@ -137,7 +137,7 @@ macro_rules! __export_world_talk_ex_cabi {
     };
 }
 #[doc(hidden)]
-pub(crate) use __export_world_talk_ex_cabi;
+pub(crate) use __export_world_host_cabi;
 #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
 #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
 struct _RetArea([::core::mem::MaybeUninit<u8>; 2 * ::core::mem::size_of::<*const u8>()]);
@@ -247,30 +247,30 @@ mod _rt {
 /// ```
 #[allow(unused_macros)]
 #[doc(hidden)]
-macro_rules! __export_talk_ex_impl {
+macro_rules! __export_host_impl {
     ($ty:ident) => {
         self::export!($ty with_types_in self);
     };
     ($ty:ident with_types_in $($path_to_types_root:tt)*) => {
-        $($path_to_types_root)*:: __export_world_talk_ex_cabi!($ty with_types_in
+        $($path_to_types_root)*:: __export_world_host_cabi!($ty with_types_in
         $($path_to_types_root)*);
     };
 }
 #[doc(inline)]
-pub(crate) use __export_talk_ex_impl as export;
+pub(crate) use __export_host_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[unsafe(
-    link_section = "component-type:wit-bindgen:0.41.0:talk-ex:host:talk-ex:encoded world"
+    link_section = "component-type:wit-bindgen:0.41.0:talkex:host:host:encoded world"
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 264] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8a\x01\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 257] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x86\x01\x01A\x02\x01\
 A\x09\x01r\x03\x04kinds\x05starty\x03endy\x03\0\x0fhighlight-token\x03\0\0\x01p\x01\
 \x01@\x01\x04codes\0\x02\x04\0\x09highlight\x01\x03\x01@\x01\x04codes\0s\x04\0\x02\
-ir\x01\x04\x01@\x01\x04codes\x01\0\x04\0\x03run\x01\x05\x04\0\x14talk-ex:host/ta\
-lk-ex\x04\0\x0b\x0d\x01\0\x07talk-ex\x03\0\0\0G\x09producers\x01\x0cprocessed-by\
-\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+ir\x01\x04\x01@\x01\x04codes\x01\0\x04\0\x03run\x01\x05\x04\0\x10talkex:host/hos\
+t\x04\0\x0b\x0a\x01\0\x04host\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
+wit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

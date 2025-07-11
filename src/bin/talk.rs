@@ -1,7 +1,7 @@
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    use std::{fs::File, io::BufWriter, path::PathBuf};
+    use std::path::PathBuf;
 
     use clap::{Args, Parser, Subcommand};
 

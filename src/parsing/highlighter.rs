@@ -9,7 +9,6 @@ use crate::{
 
 #[derive(Debug, Copy, Clone)]
 #[allow(non_camel_case_types)]
-#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum Kind {
     NAMESPACE,
     TYPE,
@@ -42,7 +41,6 @@ impl std::fmt::Display for Kind {
 }
 
 #[derive(Debug, Copy, Clone)]
-#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct HighlightToken {
     pub kind: Kind,
     pub start: u32,

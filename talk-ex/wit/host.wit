@@ -1,11 +1,7 @@
-package talk-ex:host;
+package talkex:host;
 
-interface host {
-  add: func(x: u32, y: u32) -> u32;
-}
-
-world talk-ex {
-  record highlight-token {
+world host {
+   record highlight-token {
     kind:  string,
     start: u32,
     end:   u32,

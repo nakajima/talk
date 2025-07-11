@@ -40,12 +40,11 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 ena = "0.14.3"
 tracing-tree = "0.4.0"
-wasm-bindgen = { version = "0.2.100", optional = true }
 
 [features]
-default = ["cli", "wasm"]
-wasm = ["dep:wasm-bindgen"]
+default = ["cli"]
 cli = ["dep:clap", "dep:async-lsp", "dep:futures", "dep:tower", "dep:tokio"]
+wasm = []
 
 [profile.release]
 strip = true  # Automatically strip symbols from the binary.

@@ -917,7 +917,6 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "typed-arena",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -927,7 +926,6 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "talk",
- "wasm-bindgen",
  "wit-bindgen",
  "wit-bindgen-rt",
 ]

@@ -567,7 +567,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
     }
 
     fn dump(&self) {
-        for (i, frame) in self.call_stack.iter().rev().enumerate() {
+        for frame in self.call_stack.iter().rev() {
             let stack = self.memory.range(frame.sp, frame.function.size as usize);
             print!(
                 "{}:\n{}\n",

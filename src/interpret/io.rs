@@ -26,7 +26,6 @@ impl InterpreterIO for InterpreterStdIO {
     }
 }
 
-#[cfg(test)]
 pub mod test_io {
     use crate::interpret::io::InterpreterIO;
 
