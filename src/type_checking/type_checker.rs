@@ -16,6 +16,7 @@ use crate::{
     source_file::SourceFile,
     substitutions::Substitutions,
     synthesis::synthesize_inits,
+    token::Token,
     token_kind::TokenKind,
     ty::Ty,
     type_defs::{TypeDef, protocol_def::Conformance},
@@ -294,10 +295,11 @@ impl<'a> TypeChecker<'a> {
                 body,
                 ret,
                 captures,
-                ..
+                effects,
             } => self.infer_func(
                 env,
                 name,
+                effects,
                 generics,
                 params,
                 captures,
@@ -1003,6 +1005,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         env: &mut Environment,
         name: &Option<Name>,
+        effects: &Vec<Token>,
         generics: &[ExprID],
         params: &[ExprID],
         captures: &[SymbolID],
@@ -1064,6 +1067,10 @@ impl<'a> TypeChecker<'a> {
         }
 
         env.end_scope();
+
+        if effects.iter().any(|e| e.kind == TokenKind::Async) {
+            ret_ty = Ty::Struct(SymbolID::FUTURE, vec![ret_ty]);
+        }
 
         let func_ty = Ty::Func(param_vars.clone(), Box::new(ret_ty), inferred_generics);
         let inferred_ty = if captures.is_empty() {

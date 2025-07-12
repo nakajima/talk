@@ -108,6 +108,8 @@ pub enum Expr {
         default_value: Option<ExprID>,
     },
 
+    Await(ExprID),
+
     // A type annotation
     TypeRepr {
         name: Name,
@@ -140,6 +142,7 @@ pub enum Expr {
         body: ExprID,        /* body */
         ret: Option<ExprID>, /* return type */
         captures: Vec<SymbolID>,
+        effects: Vec<Token>,
     },
 
     Parameter(Name /* name */, Option<ExprID> /* TypeRepr */),

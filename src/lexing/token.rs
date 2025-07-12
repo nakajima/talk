@@ -26,6 +26,14 @@ impl Token {
         col: 0,
     };
 
+    pub const GENERATED_ASYNC: Token = Token {
+        kind: TokenKind::Async,
+        start: 0,
+        end: 0,
+        line: 0,
+        col: 0,
+    };
+
     pub fn as_str(&self) -> String {
         self.kind.as_str()
     }

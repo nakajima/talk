@@ -1,0 +1,7 @@
+struct Future<T> {
+	let result: Optional<T>
+
+	init() {
+		self.result = Optional.none
+	}
+}

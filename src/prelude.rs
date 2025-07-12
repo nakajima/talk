@@ -27,12 +27,16 @@ pub fn compile_prelude() -> &'static Prelude {
 fn load_files(driver: &mut Driver) {
     for (path, contents) in [
         (
-            "./core/Operators.tlk",
-            include_str!("../core/Operators.tlk"),
+            "./core/1_Operators.tlk",
+            include_str!("../core/1_Operators.tlk"),
         ),
-        ("./core/Optional.tlk", include_str!("../core/Optional.tlk")),
-        ("./core/Array.tlk", include_str!("../core/Array.tlk")),
-        ("./core/String.tlk", include_str!("../core/String.tlk")),
+        (
+            "./core/2_Optional.tlk",
+            include_str!("../core/2_Optional.tlk"),
+        ),
+        ("./core/3_Array.tlk", include_str!("../core/3_Array.tlk")),
+        ("./core/4_String.tlk", include_str!("../core/4_String.tlk")),
+        ("./core/5_Future.tlk", include_str!("../core/5_Future.tlk")),
     ] {
         driver.update_file(&PathBuf::from(path), contents.to_string());
     }
@@ -41,10 +45,11 @@ fn load_files(driver: &mut Driver) {
 #[cfg(not(feature = "wasm"))]
 fn load_files(driver: &mut Driver) {
     for file in [
-        PathBuf::from("./core/Operators.tlk"),
-        PathBuf::from("./core/Optional.tlk"),
-        PathBuf::from("./core/Array.tlk"),
-        PathBuf::from("./core/String.tlk"),
+        PathBuf::from("./core/1_Operators.tlk"),
+        PathBuf::from("./core/2_Optional.tlk"),
+        PathBuf::from("./core/3_Array.tlk"),
+        PathBuf::from("./core/4_String.tlk"),
+        PathBuf::from("./core/5_Future.tlk"),
     ] {
         #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
@@ -100,6 +105,10 @@ pub fn _compile_prelude() -> Prelude {
         println!(
             "pub const STRING: SymbolID = SymbolID({});",
             symbols.lookup("String").unwrap().0
+        );
+        println!(
+            "pub const FUTURE: SymbolID = SymbolID({});",
+            symbols.lookup("Future").unwrap().0
         );
         println!(
             "pub const ADD: SymbolID = SymbolID({});",

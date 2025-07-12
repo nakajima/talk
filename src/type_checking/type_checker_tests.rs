@@ -1540,6 +1540,27 @@ mod tests {
         // Make sure extensions don't blow away what was there before
         assert!(person_struct.member_ty("sup").is_some())
     }
+
+    #[test]
+    fn checks_async() {
+        let checked = check(
+            "
+            async func foo() {
+                123
+            }
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.first().unwrap(),
+            Ty::Func(
+                vec![],
+                Ty::Struct(SymbolID::FUTURE, vec![Ty::Int]).into(),
+                vec![]
+            )
+        );
+    }
 }
 
 #[cfg(test)]

@@ -501,6 +501,7 @@ impl<'a> Parser<'a> {
                             body,
                             ret: Some(*ret),
                             captures: vec![],
+                            effects: vec![],
                         };
 
                         members.push(self.add_expr(func, tok)?);
@@ -521,7 +522,7 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn init(&mut self) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
-        let func_id = self.func()?;
+        let func_id = self.func(vec![])?;
         self.add_expr(Expr::Init(None, func_id), tok)
     }
 
@@ -865,7 +866,7 @@ impl<'a> Parser<'a> {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::StringLiteral(val) => self.add_expr(LiteralString(val.to_string()), tok),
-            TokenKind::Func => self.func(),
+            TokenKind::Func => self.func(vec![]),
             _ => return Err(ParserError::UnknownError("did not get literal".into())),
         }?;
 
@@ -911,7 +912,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
+    pub(crate) fn func(&mut self, effects: Vec<Token>) -> Result<ExprID, ParserError> {
         let tok = self.push_source_location();
 
         let current = self.current.clone();
@@ -1005,6 +1006,7 @@ impl<'a> Parser<'a> {
                 body,
                 ret,
                 captures: vec![],
+                effects,
             },
             tok,
         )?;
@@ -1258,6 +1260,19 @@ impl<'a> Parser<'a> {
         let rhs = self.parse_with_precedence(current_precedence + 1)?;
 
         self.add_expr(Unary(op.kind, rhs), tok)
+    }
+
+    pub(crate) fn async_func(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let await_token = self.consume(TokenKind::Async)?;
+        self.consume(TokenKind::Func)?;
+        self.func(vec![await_token])
+    }
+
+    pub(crate) fn await_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Await)?;
+        let rhs = self.parse_with_precedence(Precedence::Assignment)?;
+        self.add_expr(Expr::Await(rhs), tok)
     }
 
     pub(crate) fn binary(&mut self, _can_assign: bool, lhs: ExprID) -> Result<ExprID, ParserError> {

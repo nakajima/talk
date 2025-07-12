@@ -86,6 +86,8 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::Async => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Await => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
                 TokenKind::Extend => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::If => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -186,6 +188,7 @@ impl<'a> Higlighter<'a> {
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
                 result.push(HighlightToken::new(Kind::NUMBER, start, end));
             }
+            Expr::Await(rhs) => result.extend(self.tokens_from_expr(rhs)),
             Expr::LiteralTrue | Expr::LiteralFalse => {
                 result.push(HighlightToken::new(Kind::KEYWORD, start, end))
             }
@@ -238,6 +241,13 @@ impl<'a> Higlighter<'a> {
                 body,
                 ..
             } => {
+                if let Some(meta) = self.source_file.meta.get(expr_id) {
+                    result.extend(
+                        meta.identifiers
+                            .iter()
+                            .map(|i| HighlightToken::new(Kind::TYPE, i.start, i.end)),
+                    )
+                }
                 result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_exprs(conformances));
                 result.extend(self.tokens_from_expr(body));
@@ -334,6 +344,13 @@ impl<'a> Higlighter<'a> {
             Expr::EnumDecl { generics, body, .. } => {
                 result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_expr(body));
+                if let Some(meta) = self.source_file.meta.get(expr_id) {
+                    result.extend(
+                        meta.identifiers
+                            .iter()
+                            .map(|i| HighlightToken::new(Kind::ENUM, i.start, i.end)),
+                    )
+                }
             }
             Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Match(_, items) => result.extend(self.tokens_from_exprs(items)),

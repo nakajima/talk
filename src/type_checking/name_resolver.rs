@@ -318,6 +318,9 @@ impl NameResolver {
                 Unary(_, expr_id) => {
                     self.resolve_nodes(&[expr_id], source_file, symbol_table);
                 }
+                Await(rhs) => {
+                    self.resolve_nodes(&[rhs], source_file, symbol_table);
+                }
                 Binary(lhs, _, rhs) => {
                     self.resolve_nodes(&[lhs, rhs], source_file, symbol_table);
                 }
@@ -693,6 +696,7 @@ impl NameResolver {
                 body,
                 ret,
                 captures,
+                effects,
             }) = source_file.get(id).cloned()
             {
                 let symbol_id = self.declare(
@@ -712,6 +716,7 @@ impl NameResolver {
                         body,
                         ret,
                         captures,
+                        effects,
                     },
                 );
             }

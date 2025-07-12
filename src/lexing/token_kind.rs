@@ -10,6 +10,9 @@ pub enum TokenKind {
     Loop,
     Return,
 
+    Async,
+    Await,
+
     True,
     False,
 
@@ -145,6 +148,8 @@ impl TokenKind {
             TokenKind::Semicolon => ";",
             TokenKind::StringLiteral(string) => &format!("\"{string}\""),
             TokenKind::Extend => "extend",
+            TokenKind::Await => "await",
+            TokenKind::Async => "async",
         };
 
         text.to_string()

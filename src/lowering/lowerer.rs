@@ -1684,11 +1684,11 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Register> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
-        if let Ty::Enum(sym, _generics) = &typed_expr.ty {
+        if !is_lvalue && let Ty::Enum(sym, _generics) = &typed_expr.ty {
             return self.lower_enum_construction(*expr_id, *sym, name, &typed_expr.ty, &[]);
         }
 
-        if let Ty::EnumVariant(sym, _generics) = &typed_expr.ty {
+        if !is_lvalue && let Ty::EnumVariant(sym, _generics) = &typed_expr.ty {
             return self.lower_enum_construction(*expr_id, *sym, name, &typed_expr.ty, &[]);
         }
 
@@ -1790,7 +1790,10 @@ impl<'a> Lowerer<'a> {
         }
 
         let Some(tag) = tag else {
-            self.push_err("did not find variant for tag", expr_id);
+            self.push_err(
+                format!("did not find variant for tag: {variant_name}").as_str(),
+                expr_id,
+            );
             return None;
         };
 
@@ -2731,6 +2734,7 @@ fn find_or_create_main(
         body: body_id,
         ret: None,
         captures: vec![],
+        effects: vec![Token::GENERATED_ASYNC],
     };
 
     source_file.set_typed_expr(

@@ -205,6 +205,23 @@ pub mod lowering_tests {
     }
 
     #[test]
+    fn lowers_optional_property() {
+        lower(
+            "
+            struct Wrapper<T> {
+                let result: Optional<T>
+
+                init() {
+                    self.result = Optional.none
+                }
+            }
+
+            ",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn lowers_return() {
         let lowered = lower(
             "

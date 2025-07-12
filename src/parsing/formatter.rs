@@ -150,6 +150,7 @@ impl<'a> Formatter<'a> {
             Expr::Tuple(items) => self.format_tuple(items),
             Expr::Block(stmts) => self.format_block(stmts),
             Expr::Break => text("break"),
+            Expr::Await(id) => join(vec![text("await"), self.format_expr(*id)], text(" ")),
             Expr::Call {
                 callee,
                 type_args,

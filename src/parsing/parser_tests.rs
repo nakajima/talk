@@ -7,6 +7,7 @@ mod tests {
         name::Name,
         parser::parse_with_comments,
         parsing::expr::Expr::{self, *},
+        token::Token,
         token_kind::TokenKind,
     };
 
@@ -64,7 +65,8 @@ mod tests {
                 params: vec![],
                 body: 0,
                 ret: None,
-                captures: vec![]
+                captures: vec![],
+                effects: vec![],
             }
         );
         assert_eq!(*parsed.roots()[1].unwrap(), Tuple(vec![]));
@@ -323,6 +325,7 @@ mod tests {
                 body: 0,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
         assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
@@ -347,6 +350,7 @@ mod tests {
                 body: 2,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
     }
@@ -365,6 +369,7 @@ mod tests {
                 body: 0,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
         assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
@@ -388,6 +393,7 @@ mod tests {
                 body: 4,
                 ret: Some(2),
                 captures: vec![],
+                effects: vec![],
             }
         );
 
@@ -439,6 +445,7 @@ mod tests {
                 body: 0,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
 
@@ -452,6 +459,7 @@ mod tests {
                 body: 2,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
         assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![]));
@@ -471,6 +479,7 @@ mod tests {
                 body: 2,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
     }
@@ -488,6 +497,7 @@ mod tests {
                 body: 2,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
 
@@ -622,6 +632,7 @@ mod tests {
                 body: 2,
                 ret: Some(0),
                 captures: vec![],
+                effects: vec![],
             }
         );
     }
@@ -962,6 +973,7 @@ mod tests {
                 body: 4,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
 
@@ -1009,6 +1021,7 @@ mod tests {
                 body: 3,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         );
 
@@ -1074,6 +1087,7 @@ mod tests {
                 body: 4,
                 ret: None,
                 captures: vec![],
+                effects: vec![],
             }
         )
     }
@@ -1087,6 +1101,39 @@ mod tests {
         );
 
         assert_eq!(*parsed.roots()[0].unwrap(), Expr::Assignment(0, 1));
+    }
+
+    #[test]
+    fn parses_await() {
+        let parsed = parse(
+            "
+            await fizz()
+            ",
+        );
+        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Await(1));
+    }
+
+    #[test]
+    fn parses_async() {
+        let parsed = parse("async func foo() {}");
+        assert_eq!(
+            *parsed.roots()[0].unwrap(),
+            Expr::Func {
+                name: Some("foo".into()),
+                generics: vec![],
+                params: vec![],
+                body: 0,
+                ret: None,
+                captures: vec![],
+                effects: vec![Token {
+                    kind: TokenKind::Async,
+                    start: 0,
+                    end: 5,
+                    line: 0,
+                    col: 5,
+                }]
+            }
+        );
     }
 }
 
@@ -1224,7 +1271,8 @@ mod arrays {
                     params: vec![],
                     body: Block(vec![]).into(),
                     ret: None.into(),
-                    captures: vec![]
+                    captures: vec![],
+                    effects: vec![],
                 }])
                 .into()
             }
@@ -1376,6 +1424,7 @@ mod structs {
             body,
             ret,
             captures,
+            effects,
         }) = parsed.get(func_id)
         else {
             unreachable!()
@@ -1386,6 +1435,7 @@ mod structs {
         assert_eq!(&vec![3], params);
         assert_eq!(&None, ret);
         assert_eq!(&8, body);
+        assert!(effects.is_empty());
         assert!(captures.is_empty());
     }
 
@@ -1457,7 +1507,8 @@ mod structs {
                 ret: None,
                 params: vec![],
                 generics: vec![],
-                captures: vec![]
+                captures: vec![],
+                effects: vec![],
             }
         )
     }
@@ -1602,7 +1653,8 @@ mod structs {
                     introduces_type: false
                 })
                 .into(),
-                captures: vec![]
+                captures: vec![],
+                effects: vec![],
             }
         );
     }

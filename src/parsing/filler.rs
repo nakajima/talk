@@ -3,6 +3,7 @@ use crate::{
     expr::{Expr, IncompleteExpr, Pattern},
     name::Name,
     parser::ExprID,
+    token::Token,
     token_kind::TokenKind,
 };
 
@@ -90,6 +91,7 @@ pub enum FullExpr {
         body: Box<FullExpr>,        /* body */
         ret: Box<Option<FullExpr>>, /* return type */
         captures: Vec<SymbolID>,
+        effects: Vec<Token>,
     },
 
     Parameter(
@@ -138,6 +140,8 @@ pub enum FullExpr {
         Name,          // name: "some"
         Vec<FullExpr>, // associated types: [TypeRepr("T")]
     ),
+
+    Await(Box<FullExpr>),
 
     // Match expression
     Match(
@@ -221,7 +225,7 @@ impl<P: Phase> Filler<P> {
                     body: body.map(|b| self.fill(b).into()),
                 }),
             },
-
+            Expr::Await(id) => FullExpr::Await(self.fill(id).into()),
             Expr::LiteralInt(s) => FullExpr::LiteralInt(s),
             Expr::LiteralString(s) => FullExpr::LiteralString(s),
             Expr::Unary(op, rhs_id) => {
@@ -330,6 +334,7 @@ impl<P: Phase> Filler<P> {
                 body,
                 ret,
                 captures,
+                effects,
             } => FullExpr::Func {
                 name,
                 generics: self.fill_mult(&generics),
@@ -337,6 +342,7 @@ impl<P: Phase> Filler<P> {
                 body: self.fill(body).into(),
                 ret: ret.map(|ret| self.fill(ret)).into(),
                 captures,
+                effects,
             },
             Expr::Parameter(name, type_repr) => {
                 FullExpr::Parameter(name, type_repr.map(|type_repr| self.fill(type_repr)).into())

@@ -294,6 +294,8 @@ impl<'a> Lexer<'a> {
             "break" => Break,
             "init" => Init,
             "protocol" => Protocol,
+            "await" => Await,
+            "async" => Async,
             _ => Identifier(string),
         }
     }

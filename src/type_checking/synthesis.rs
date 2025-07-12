@@ -82,6 +82,7 @@ pub fn synthesize_inits(
                     body,
                     ret: None,
                     captures: vec![],
+                    effects: vec![],
                 },
                 ExprMeta::generated(),
             );
@@ -115,6 +116,7 @@ pub fn synthesize_inits(
                     body,
                     ret: None,
                     captures: vec![],
+                    effects: vec![],
                 },
             );
 
@@ -194,6 +196,7 @@ mod tests {
             body,
             ret,
             captures,
+            effects,
         }) = resolved.get(func_id)
         else {
             panic!("didn't get init func")
@@ -207,6 +210,7 @@ mod tests {
         assert_eq!(params.len(), 1);
         assert_eq!(ret, &None);
         assert!(captures.is_empty());
+        assert!(effects.is_empty());
 
         let Some(Expr::Block(body_ids)) = resolved.get(body) else {
             panic!("didn't get body")

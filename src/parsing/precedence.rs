@@ -229,6 +229,18 @@ impl Precedence {
                 precedence: Precedence::Factor,
             },
 
+            TokenKind::Async => ParseHandler {
+                prefix: Some(Parser::async_func),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
+            TokenKind::Await => ParseHandler {
+                prefix: Some(Parser::await_expr),
+                infix: None,
+                precedence: Precedence::None,
+            },
+
             TokenKind::Identifier(_) => ParseHandler {
                 prefix: Some(Parser::variable),
                 infix: None,
