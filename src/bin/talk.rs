@@ -61,10 +61,10 @@ async fn main() {
 
             // let contents = std::fs::read_to_string(filename).expect("Could not read file");
             // let lowered = lower(&contents);
-            let mut io = InterpreterStdIO::default();
+            let io = InterpreterStdIO::default();
             for lowered in lowered {
                 let monomorphized = Monomorphizer::new(&lowered.env).run(lowered.module());
-                let interpreter = IRInterpreter::new(monomorphized, &mut io, &driver.symbol_table);
+                let interpreter = IRInterpreter::new(monomorphized, &io, &driver.symbol_table);
                 interpreter.run().unwrap();
             }
         }
