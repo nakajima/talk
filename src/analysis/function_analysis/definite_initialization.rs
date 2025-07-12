@@ -69,8 +69,14 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
             }
         }
 
-        let all_properties: HashSet<Property> =
-            HashSet::from_iter(self.struct_def.properties.clone());
+        let all_properties: HashSet<Property> = HashSet::from_iter(
+            self
+                .struct_def
+                .properties
+                .iter()
+                .filter(|p| p.default_value.is_none())
+                .cloned(),
+        );
         let mut props_initialized_on_all_paths: Option<HashSet<Property>> = None;
 
         for block in &func.blocks {
@@ -296,6 +302,37 @@ mod tests {
               self.age = 123
             }
           }
+        }
+      ",
+        );
+
+        let person_id = SymbolID::resolved(1);
+        let function = module
+            .functions
+            .iter()
+            .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
+            .unwrap();
+
+        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
+            panic!("didn't get struct def");
+        };
+
+        let cfg = ControlFlowGraph::new(function);
+
+        assert_eq!(
+            Ok(()),
+            DefiniteInitizationPass::new(struct_def.clone()).run(function, &cfg)
+        );
+    }
+
+    #[test]
+    fn ignores_properties_with_default_values() {
+        let (module, _file, env) = lower(
+            "
+        struct Person {
+          let age: Int = 1
+
+          init() {}
         }
       ",
         );

@@ -11,11 +11,17 @@ pub struct Property {
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
+    pub default_value: Option<ExprID>,
 }
 
 impl Property {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
-        Self { name, expr_id, ty }
+    pub fn new(name: String, expr_id: ExprID, ty: Ty, default_value: Option<ExprID>) -> Self {
+        Self {
+            name,
+            expr_id,
+            ty,
+            default_value,
+        }
     }
 }
 
@@ -24,6 +30,7 @@ pub struct RawProperty {
     pub name: String,
     pub expr_id: ExprID,
     pub placeholder: TypeVarID,
+    pub default_value: Option<ExprID>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

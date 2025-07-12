@@ -200,6 +200,7 @@ impl<'a> TypeChecker<'a> {
                 match &expr {
                     Expr::Property {
                         name: Name::Resolved(prop_id, name_str),
+                        default_value,
                         ..
                     } if expr_ids.kind != PredeclarationKind::Enum => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
@@ -217,6 +218,7 @@ impl<'a> TypeChecker<'a> {
                             name: name_str.clone(),
                             expr_id: body_id,
                             placeholder: type_var.clone(),
+                            default_value: *default_value,
                         });
                     }
                     Expr::Init(_, func_id) if expr_ids.kind != PredeclarationKind::Enum => {
@@ -393,6 +395,7 @@ impl<'a> TypeChecker<'a> {
                         name: property.name.clone(),
                         expr_id: property.expr_id,
                         ty: ty.clone(),
+                        default_value: property.default_value,
                     });
 
                     substitutions.insert(property.placeholder.clone(), ty.clone());
