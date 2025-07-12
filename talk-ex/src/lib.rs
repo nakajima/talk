@@ -12,13 +12,16 @@ pub fn start() {
 }
 
 mod talk_ex {
-    use crate::{
-        bindings::{Guest, HighlightToken},
-    };
+    use std::io::Write;
+
+    use crate::bindings::{Guest, HighlightToken};
 
     use talk::{
-        compiling::driver::Driver, highlighter::Higlighter, interpret::{interpreter::IRInterpreter, io::test_io::TestIO},
-        lowering::ir_printer::print, transforms::monomorphizer::Monomorphizer,
+        compiling::driver::Driver,
+        highlighter::Higlighter,
+        interpret::{interpreter::IRInterpreter, io::InterpreterStdIO},
+        lowering::ir_printer::print,
+        transforms::monomorphizer::Monomorphizer,
     };
 
     pub struct TalkEx;
@@ -34,10 +37,11 @@ mod talk_ex {
             let mut driver = Driver::with_str(&code);
             let lowered = driver.lower().into_iter().next().unwrap();
             let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
-            let mut io = TestIO::default();
+            // let mut io = TestIO::default();
+            let mut io = InterpreterStdIO::default();
             IRInterpreter::new(mono, &mut io, &driver.symbol_table)
                 .run()
-                .unwrap();
+                .expect("Did not run.");
         }
 
         fn highlight(code: String) -> Vec<HighlightToken> {
@@ -50,6 +54,10 @@ mod talk_ex {
                     end: tok.end,
                 })
                 .collect()
+        }
+
+        fn ping() -> () {
+            println!("PONG")
         }
     }
 }

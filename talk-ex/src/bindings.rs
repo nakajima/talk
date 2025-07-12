@@ -113,10 +113,17 @@ pub unsafe fn _export_run_cabi<T: Guest>(arg0: *mut u8, arg1: usize) {
     let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
     T::run(_rt::string_lift(bytes0));
 }
+#[doc(hidden)]
+#[allow(non_snake_case)]
+pub unsafe fn _export_ping_cabi<T: Guest>() {
+    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+    T::ping();
+}
 pub trait Guest {
     fn highlight(code: _rt::String) -> _rt::Vec<HighlightToken>;
     fn ir(code: _rt::String) -> _rt::String;
     fn run(code: _rt::String) -> ();
+    fn ping() -> ();
 }
 #[doc(hidden)]
 macro_rules! __export_world_host_cabi {
@@ -133,7 +140,8 @@ macro_rules! __export_world_host_cabi {
         u8,) { unsafe { $($path_to_types)*:: __post_return_ir::<$ty > (arg0) } } #[unsafe
         (export_name = "run")] unsafe extern "C" fn export_run(arg0 : * mut u8, arg1 :
         usize,) { unsafe { $($path_to_types)*:: _export_run_cabi::<$ty > (arg0, arg1) } }
-        };
+        #[unsafe (export_name = "ping")] unsafe extern "C" fn export_ping() { unsafe {
+        $($path_to_types)*:: _export_ping_cabi::<$ty > () } } };
     };
 }
 #[doc(hidden)]
@@ -264,13 +272,14 @@ pub(crate) use __export_host_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 257] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x86\x01\x01A\x02\x01\
-A\x09\x01r\x03\x04kinds\x05starty\x03endy\x03\0\x0fhighlight-token\x03\0\0\x01p\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 271] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x94\x01\x01A\x02\x01\
+A\x0b\x01r\x03\x04kinds\x05starty\x03endy\x03\0\x0fhighlight-token\x03\0\0\x01p\x01\
 \x01@\x01\x04codes\0\x02\x04\0\x09highlight\x01\x03\x01@\x01\x04codes\0s\x04\0\x02\
-ir\x01\x04\x01@\x01\x04codes\x01\0\x04\0\x03run\x01\x05\x04\0\x10talkex:host/hos\
-t\x04\0\x0b\x0a\x01\0\x04host\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
-wit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+ir\x01\x04\x01@\x01\x04codes\x01\0\x04\0\x03run\x01\x05\x01@\0\x01\0\x04\0\x04pi\
+ng\x01\x06\x04\0\x10talkex:host/host\x04\0\x0b\x0a\x01\0\x04host\x03\0\0\0G\x09p\
+roducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\
+\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

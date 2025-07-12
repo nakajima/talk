@@ -10,4 +10,5 @@ world host {
   export highlight: func(code: string) -> list<highlight-token>;
   export ir: func(code: string) -> string;
   export run: func(code: string);
+  export ping: func();
 }
