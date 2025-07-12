@@ -698,7 +698,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        return Err(ParserError::UnknownError("did not get match".into()));
+        Err(ParserError::UnknownError("did not get match".into()))
     }
 
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
