@@ -1,14 +1,21 @@
 package talkex:host;
 
-world host {
-   record highlight-token {
+interface types {
+  record highlight-token {
     kind:  string,
     start: u32,
     end:   u32,
   }
 
-  export highlight: func(code: string) -> list<highlight-token>;
-  export ir: func(code: string) -> string;
-  export run: func(code: string);
-  export ping: func();
+  resource runner {
+    constructor();
+    highlight: func(code: string) -> list<highlight-token>;
+    ir: func(code: string) -> string;
+    run: func(code: string);
+    ping: func();
+  }
+}
+
+world host {
+  export types;
 }

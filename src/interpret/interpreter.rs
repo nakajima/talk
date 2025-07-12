@@ -49,14 +49,14 @@ pub struct IRInterpreter<'a, IO: InterpreterIO> {
     pub(super) program: IRModule,
     pub(super) memory: Memory,
     pub symbols: &'a SymbolTable,
-    io: &'a mut IO,
+    io: &'a IO,
     call_stack: Vec<StackFrame>,
 }
 
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
 impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
-    pub fn new(program: IRModule, io: &'a mut IO, symbols: &'a SymbolTable) -> Self {
+    pub fn new(program: IRModule, io: &'a IO, symbols: &'a SymbolTable) -> Self {
         let memory = Memory::new(&program.constants);
         Self {
             program,
@@ -955,7 +955,7 @@ mod tests {
     fn interprets_io() {
         let mut io = TestIO::new();
         interpret_io("print(123)", &mut io).unwrap();
-        assert_eq!("123\n".as_bytes(), io.stdout)
+        assert_eq!("123\n".as_bytes(), io.stdout())
     }
 
     #[test]
@@ -968,7 +968,7 @@ mod tests {
             &mut io,
         )
         .unwrap();
-        assert_eq!("hello world\n", str::from_utf8(&io.stdout).unwrap())
+        assert_eq!("hello world\n", str::from_utf8(&io.stdout()).unwrap())
     }
 
     #[test]
@@ -989,7 +989,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             "Person(name: \"Pat\", age: 123)\n",
-            str::from_utf8(&io.stdout).unwrap()
+            str::from_utf8(&io.stdout()).unwrap()
         )
     }
 

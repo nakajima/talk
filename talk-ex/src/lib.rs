@@ -1,3 +1,5 @@
+use crate::talk_ex::Runtime;
+
 // Use a procedural macro to generate bindings for the world we specified in
 // `host.wit`
 wit_bindgen::generate!({
@@ -12,40 +14,32 @@ pub fn start() {
 }
 
 mod talk_ex {
-    use crate::bindings::{Guest, HighlightToken};
+    use std::{cell::RefCell, path::PathBuf};
 
+    use talk::interpret::io::InterpreterIO;
     use talk::{
-        compiling::driver::Driver,
+        compiling::driver::{Driver, DriverConfig},
         highlighter::Higlighter,
-        interpret::{
-            interpreter::IRInterpreter,
-            io::{InterpreterIO, InterpreterStdIO},
-        },
-        lowering::ir_printer::print,
+        interpret::{interpreter::IRInterpreter, io::test_io::TestIO},
         transforms::monomorphizer::Monomorphizer,
     };
 
-    pub struct TalkEx;
+    use crate::bindings::exports::talkex::host::types::{Guest, GuestRunner, HighlightToken};
 
-    impl Guest for TalkEx {
-        fn ir(code: String) -> String {
-            let mut driver = Driver::with_str(&code);
-            let lowered = driver.lower().into_iter().next().unwrap();
-            print(&lowered.module())
+    pub struct Runtime {
+        pub io: TestIO,
+        driver: RefCell<Driver>,
+    }
+
+    impl GuestRunner for Runtime {
+        fn new() -> Self {
+            Self {
+                io: TestIO::default(),
+                driver: RefCell::new(Driver::new(DriverConfig::default())),
+            }
         }
 
-        fn run(code: String) {
-            let mut driver = Driver::with_str(&code);
-            let lowered = driver.lower().into_iter().next().unwrap();
-            let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
-            // let mut io = TestIO::default();
-            let mut io = InterpreterStdIO::default();
-            IRInterpreter::new(mono, &mut io, &driver.symbol_table)
-                .run()
-                .expect("Did not run.");
-        }
-
-        fn highlight(code: String) -> Vec<HighlightToken> {
+        fn highlight(&self, code: String) -> Vec<HighlightToken> {
             Higlighter::new(&code)
                 .highlight()
                 .into_iter()
@@ -57,12 +51,31 @@ mod talk_ex {
                 .collect()
         }
 
-        fn ping() -> () {
-            let mut io = InterpreterStdIO::default();
-            io.write_all("PONG".as_bytes());
+        fn ir(&self, code: String) -> String {
+            let mut driver = self.driver.borrow_mut();
+            driver.update_file(&PathBuf::from("-"), code);
+            let lowered = driver.lower().into_iter().next().unwrap();
+            talk::lowering::ir_printer::print(&lowered.module())
         }
+
+        fn run(&self, code: String) -> () {
+            let mut driver = self.driver.borrow_mut();
+            driver.update_file(&PathBuf::from("-"), code);
+            let lowered = driver.lower().into_iter().next().unwrap();
+            let mono = Monomorphizer::new(&lowered.env).run(lowered.module());
+            IRInterpreter::new(mono, &self.io, &driver.symbol_table)
+                .run()
+                .expect("Did not run.");
+        }
+
+        fn ping(&self) -> () {
+            self.io.write_all("PONG".as_bytes());
+        }
+    }
+
+    impl Guest for Runtime {
+        type Runner = Runtime;
     }
 }
 
-use talk_ex::TalkEx;
-bindings::export!(TalkEx with_types_in bindings);
+bindings::export!(Runtime with_types_in bindings);
