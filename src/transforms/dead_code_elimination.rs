@@ -13,11 +13,12 @@ use crate::lowering::{
 /// All functions reachable from `@main` (through direct calls or function
 /// references) are retained. Unreachable functions are removed. Each remaining
 /// function has unreachable basic blocks pruned.
+#[derive(Default)]
 pub struct DeadCodeEliminator;
 
 impl DeadCodeEliminator {
     pub fn new() -> Self {
-        Self
+        Default::default()
     }
 
     pub fn run(self, mut module: IRModule) -> IRModule {
@@ -42,7 +43,10 @@ impl DeadCodeEliminator {
                 for block in &func.blocks {
                     for instr in &block.instructions {
                         match instr {
-                            Instr::Call { callee: Callee::Name(n), .. } => {
+                            Instr::Call {
+                                callee: Callee::Name(n),
+                                ..
+                            } => {
                                 if functions.contains_key(n) {
                                     worklist.push_back(n.clone());
                                 }
@@ -83,8 +87,9 @@ impl DeadCodeEliminator {
             if !reachable.insert(id) {
                 continue;
             }
-            let block = func.blocks.iter().find(|b| b.id == id).unwrap();
-            if let Some(term) = block.instructions.last() {
+            if let Some(block) = func.blocks.iter().find(|b| b.id == id)
+                && let Some(term) = block.instructions.last()
+            {
                 for succ in term.successors() {
                     worklist.push_back(succ);
                 }
@@ -106,7 +111,11 @@ impl DeadCodeEliminator {
                     Instr::Jump(target) => {
                         *target = map[target];
                     }
-                    Instr::Branch { true_target, false_target, .. } => {
+                    Instr::Branch {
+                        true_target,
+                        false_target,
+                        ..
+                    } => {
                         *true_target = map[true_target];
                         *false_target = map[false_target];
                     }
@@ -210,9 +219,16 @@ mod tests {
             size: 1,
         };
 
-        let module = IRModule { functions: vec![func.clone()], constants: vec![] };
+        let module = IRModule {
+            functions: vec![func.clone()],
+            constants: vec![],
+        };
         let optimized = DeadCodeEliminator::new().run(module);
-        let optimized_func = optimized.functions.iter().find(|f| f.name == "@main").unwrap();
+        let optimized_func = optimized
+            .functions
+            .iter()
+            .find(|f| f.name == "@main")
+            .unwrap();
 
         assert_eq!(optimized_func.blocks.len(), 2);
         assert!(optimized_func.blocks.iter().all(|b| b.id.0 < 2));
