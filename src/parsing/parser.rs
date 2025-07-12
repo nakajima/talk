@@ -698,7 +698,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        unreachable!("{:?}", self.current)
+        return Err(ParserError::UnknownError("did not get match".into()));
     }
 
     pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
@@ -764,7 +764,7 @@ impl<'a> Parser<'a> {
             return self.add_expr(Expr::LiteralFalse, tok);
         }
 
-        unreachable!()
+        Err(ParserError::UnknownError("did not get bool".into()))
     }
 
     pub(crate) fn if_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
@@ -866,7 +866,7 @@ impl<'a> Parser<'a> {
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::StringLiteral(val) => self.add_expr(LiteralString(val.to_string()), tok),
             TokenKind::Func => self.func(),
-            _ => unreachable!("didn't get a literal"),
+            _ => return Err(ParserError::UnknownError("did not get literal".into())),
         }?;
 
         if let Some(call_id) = self.check_call(expr, can_assign)? {
