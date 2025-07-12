@@ -819,6 +819,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f154ce46856750ed433c8649605bf7ed2de3bc35fd9d2a9f30cddd873c80cb08"
 
 [[package]]
+name = "iai"
+version = "0.1.1"
+source = "git+https://github.com/sigaloid/iai?rev=6c83e942#6c83e9429b86290f88d6ff30ca6c0d6014b5a5f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1681,6 +1689,7 @@ dependencies = [
  "ena",
  "env_logger",
  "futures",
+ "iai",
  "indoc",
  "itertools 0.14.0",
  "lazy_static",

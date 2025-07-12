@@ -1,5 +1,4 @@
-use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
+use iai::{black_box, main};
 use talk::{
     analysis::module_pass_manager::ModulePassManager,
     compiling::driver::Driver,
@@ -17,7 +16,7 @@ fn run(code: &str) {
     }
 }
 
-fn bench_fib(c: &mut Criterion) {
+fn bench_fib() {
     const CODE: &str = r#"
 func fib(n) {
     if n <= 1 { return n }
@@ -33,10 +32,10 @@ loop i < 20 {
 
 n
 "#;
-    c.bench_function("fib_20", |b| b.iter(|| run(CODE)));
+    run(CODE);
 }
 
-fn bench_loop_sum(c: &mut Criterion) {
+fn bench_loop_sum() {
     const CODE: &str = r#"
 let i = 0
 let sum = 0
@@ -47,8 +46,7 @@ loop i < 1000 {
 
 sum
 "#;
-    c.bench_function("loop_sum_1000", |b| b.iter(|| run(CODE)));
+    run(CODE);
 }
 
-criterion_group!(benches, bench_fib, bench_loop_sum);
-criterion_main!(benches);
+iai::main!(bench_fib, bench_loop_sum);
