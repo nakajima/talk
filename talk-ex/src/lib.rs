@@ -12,14 +12,15 @@ pub fn start() {
 }
 
 mod talk_ex {
-    use std::io::Write;
-
     use crate::bindings::{Guest, HighlightToken};
 
     use talk::{
         compiling::driver::Driver,
         highlighter::Higlighter,
-        interpret::{interpreter::IRInterpreter, io::InterpreterStdIO},
+        interpret::{
+            interpreter::IRInterpreter,
+            io::{InterpreterIO, InterpreterStdIO},
+        },
         lowering::ir_printer::print,
         transforms::monomorphizer::Monomorphizer,
     };
@@ -57,7 +58,8 @@ mod talk_ex {
         }
 
         fn ping() -> () {
-            println!("PONG")
+            let mut io = InterpreterStdIO::default();
+            io.write_all("PONG".as_bytes());
         }
     }
 }

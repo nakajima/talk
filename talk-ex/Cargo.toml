@@ -15,3 +15,6 @@ wit-bindgen = "0.43.0"
 
 [package.metadata.component]
 package = "talkex:host"
+
+[profile.release]
+panic = "abort"
