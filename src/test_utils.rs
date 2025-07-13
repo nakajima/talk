@@ -1,4 +1,14 @@
 #[macro_export]
+macro_rules! any_expr {
+    ($expr:expr) => {
+        ParsedExpr {
+            id: ExprID::ANY,
+            expr: $expr,
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! assert_match_capture {
     ($expr:expr, $pattern:pat, $capture_block:block) => {{
         let value = $expr;

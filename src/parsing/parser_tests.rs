@@ -2,13 +2,14 @@
 mod tests {
     use std::path::PathBuf;
 
+    use crate::any_expr;
+    use crate::parsed_expr::ParsedExpr;
+    use crate::parser::ExprID;
     use crate::{
-        Parsed, SourceFile,
-        name::Name,
-        parser::parse_with_comments,
-        parsing::expr::Expr::{self, *},
-        token_kind::TokenKind,
+        Parsed, SourceFile, name::Name, parser::parse_with_comments, token_kind::TokenKind,
     };
+
+    use crate::parsed_expr::Expr::{self, *};
 
     fn parse(input: &str) -> SourceFile<Parsed> {
         crate::parser::parse(input, PathBuf::from("-"))
@@ -17,24 +18,21 @@ mod tests {
     #[test]
     fn parses_literal_expr() {
         let parsed = parse("123");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, LiteralInt("123".into()));
+        assert_eq!(parsed.roots()[0].expr, LiteralInt("123".into()));
     }
 
     #[test]
     fn parses_string_literal() {
         let parsed = parse("\"hello world\"");
-        let expr = parsed.roots()[0].unwrap();
-        assert_eq!(*expr, LiteralString("hello world".into()));
+        assert_eq!(parsed.roots()[0].expr, LiteralString("hello world".into()));
     }
 
     #[test]
     fn handles_semicolons() {
         let parsed = parse("123 ; 456");
 
-        assert_eq!(*parsed.roots()[0].unwrap(), LiteralInt("123".into()));
-        assert_eq!(*parsed.roots()[1].unwrap(), LiteralInt("456".into()));
+        assert_eq!(parsed.roots()[0].expr, LiteralInt("123".into()));
+        assert_eq!(parsed.roots()[1].expr, LiteralInt("456".into()));
     }
 
     #[test]
@@ -42,13 +40,13 @@ mod tests {
         let parsed = parse("struct Person { ; }");
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
-            Struct {
+            parsed.roots()[0],
+            any_expr!(Struct {
                 name: "Person".into(),
                 generics: vec![],
                 conformances: vec![],
-                body: 0
-            }
+                body: Box::new(any_expr!(Block(vec![]))),
+            })
         );
     }
 
@@ -57,39 +55,46 @@ mod tests {
         let parsed = parse("func() { };()");
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
-            Func {
+            parsed.roots()[0],
+            any_expr!(Func {
                 name: None,
                 generics: vec![],
                 params: vec![],
-                body: 0,
+                body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![]
-            }
+            })
         );
-        assert_eq!(*parsed.roots()[1].unwrap(), Tuple(vec![]));
+        assert_eq!(parsed.roots()[1].expr, Tuple(vec![]));
     }
 
     #[test]
     fn ignores_comments() {
         let parsed = parse_with_comments("// what's up\n123");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
-        assert_eq!(*expr, LiteralInt("123".into()));
+        assert_eq!(expr, LiteralInt("123".into()));
     }
 
     #[test]
     fn parses_eq() {
         let parsed = parse("1 == 2");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0];
 
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::EqualsEquals, 1,));
+        assert_eq!(
+            expr,
+            any_expr!(Expr::Binary(
+                any_expr!(Expr::LiteralInt("1".into())).into(),
+                TokenKind::EqualsEquals,
+                any_expr!(Expr::LiteralInt("2".into())).into()
+            ))
+        );
     }
 
     #[test]
     fn stores_expr_meta() {
         let parsed = parse("1 + 2");
-        let meta = &parsed.meta.get(&parsed.root_ids()[0]).unwrap();
+        let meta = &parsed.meta.get(&parsed.roots()[0].id).unwrap();
 
         assert_eq!(meta.start.start, 0);
         assert_eq!(meta.start.end, 1);
@@ -101,174 +106,229 @@ mod tests {
     #[test]
     fn parses_not_eq() {
         let parsed = parse("1 != 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::BangEquals, 1,));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::BangEquals,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_greater() {
         let parsed = parse("1 > 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Greater, 1,));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Greater,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_greater_eq() {
         let parsed = parse("1 >= 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::GreaterEquals, 1,));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::GreaterEquals,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_less() {
         let parsed = parse("1 < 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Less, 1,));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Less,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_less_eq() {
         let parsed = parse("1 <= 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::LessEquals, 1,));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::LessEquals,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_plus_expr() {
         let parsed = parse("1 + 2");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Plus, 1,));
+        assert_eq!(expr, Expr::Binary(0, TokenKind::Plus, 1,));
     }
 
     #[test]
     fn parses_minus_expr() {
         let parsed = parse("1 - 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Minus, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Minus,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_div_expr() {
         let parsed = parse("1 / 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Slash, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Slash,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_mult_expr() {
         let parsed = parse("1 * 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Star, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Star,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_less_expr() {
         let parsed = parse("1 < 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Less, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Less,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_less_equals_expr() {
         let parsed = parse("1 <= 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::LessEquals, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::LessEquals,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_greater_expr() {
         let parsed = parse("1 > 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Greater, 1));
-    }
-
-    #[test]
-    fn parses_greater_equals_expr() {
-        let parsed = parse("1 >= 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::GreaterEquals, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Greater,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_caret_expr() {
         let parsed = parse("1 ^ 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Caret, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Caret,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_pipe_expr() {
         let parsed = parse("1 | 2");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Pipe, 1));
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Pipe,
+                any_expr!(LiteralInt("2".into())).into(),
+            ))
+        );
     }
 
     #[test]
     fn parses_correct_precedence() {
         let parsed = parse("1 + 2 * 2");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
-        if let Expr::Binary(left, TokenKind::Plus, right) = expr {
-            assert_eq!(*parsed.get(left).unwrap(), Expr::LiteralInt("1".into()));
-            let rhs = parsed.get(right).unwrap();
-            match rhs {
-                Expr::Binary(_, TokenKind::Star, _) => {}
-                _ => panic!("expected multiplication on RHS, got {rhs:?}"),
-            }
-        } else {
-            panic!("expected binary plus expression, got {expr:?}");
-        }
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Binary(
+                any_expr!(LiteralInt("1".into())).into(),
+                TokenKind::Plus,
+                any_expr!(Binary(
+                    any_expr!(LiteralInt("2".into())).into(),
+                    TokenKind::Star,
+                    any_expr!(LiteralInt("2".into())).into()
+                ))
+                .into()
+            ))
+        );
     }
 
     #[test]
     fn parses_group() {
         let parsed = parse("(1 + 2)");
-        let expr = parsed.roots()[0].unwrap();
-        let Expr::Tuple(tup) = &expr else {
-            panic!("expected a Tuple, got {expr:?}");
-        };
-
-        assert_eq!(1, tup.len());
-        let expr = parsed.get(&tup[0]).unwrap();
-
-        assert_eq!(*expr, Expr::Binary(0, TokenKind::Plus, 1));
         assert_eq!(
-            *parsed.get(&2).unwrap(),
-            Expr::Binary(0, TokenKind::Plus, 1)
+            parsed.roots()[0],
+            any_expr!(Tuple(vec![any_expr!(Expr::Binary(
+                any_expr!(Expr::LiteralInt("1".into())).into(),
+                TokenKind::EqualsEquals,
+                any_expr!(Expr::LiteralInt("2".into())).into()
+            ))]))
         );
     }
 
     #[test]
     fn parses_var() {
         let parsed = parse("hello\nworld");
-        let hello = parsed.roots()[0].unwrap();
-        let world = parsed.roots()[1].unwrap();
+        let hello = parsed.roots()[0].expr;
+        let world = parsed.roots()[1].expr;
 
-        assert_eq!(*hello, Expr::Variable(Name::Raw("hello".to_string()), None));
-        assert_eq!(*world, Expr::Variable(Name::Raw("world".to_string()), None));
+        assert_eq!(hello, Expr::Variable(Name::Raw("hello".to_string())));
+        assert_eq!(world, Expr::Variable(Name::Raw("world".to_string())));
     }
 
     #[test]
     fn parses_unary_bang() {
         let parsed = parse("!hello");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
-        assert_eq!(*expr, Expr::Unary(TokenKind::Bang, 0));
+        assert_eq!(expr, Expr::Unary(TokenKind::Bang, 0));
         assert_eq!(
             *parsed.get(&0).unwrap(),
             Expr::Variable(Name::Raw("hello".to_string()), None)
@@ -278,10 +338,8 @@ mod tests {
     #[test]
     fn parses_unary_minus() {
         let parsed = parse("-1");
-        let expr = parsed.roots()[0].unwrap();
-
-        assert_eq!(*expr, Expr::Unary(TokenKind::Minus, 0));
-        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
+        let expr = parsed.roots()[0].expr;
+        assert_eq(expr, Unary(TokenKind::Minus, LiteralInt("1".into()).into()));
     }
 
     #[test]
@@ -290,9 +348,9 @@ mod tests {
             "
         (1, 2, fizz)",
         );
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
-        assert_eq!(*expr, Expr::Tuple(vec![0, 1, 2]));
+        assert_eq!(expr, Expr::Tuple(vec![0, 1, 2]));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("2".into()));
         assert_eq!(
@@ -304,9 +362,9 @@ mod tests {
     #[test]
     fn parses_empty_tuple() {
         let parsed = parse("( )");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
-        assert_eq!(*expr, Expr::Tuple(vec![]));
+        assert_eq!(expr, Expr::Tuple(vec![]));
     }
 
     #[test]
@@ -317,7 +375,7 @@ mod tests {
     #[test]
     fn parses_func_literal_no_name_no_args() {
         let parsed = parse("func() { }");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -341,7 +399,7 @@ mod tests {
             }",
         );
 
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -359,7 +417,7 @@ mod tests {
     #[test]
     fn parses_func_literal_name_no_args() {
         let parsed = parse("func greet() { }");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -382,7 +440,7 @@ mod tests {
         func greet<T>(t) -> T { t }
         ",
         );
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -413,7 +471,7 @@ mod tests {
     fn parses_func_call_with_generics() {
         let parsed = parse("foo<T>()");
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::Call {
                 callee: 0,
                 type_args: vec![1],
@@ -436,7 +494,7 @@ mod tests {
         let parsed = parse("func hello() {}\nfunc world() {}");
         assert_eq!(2, parsed.roots().len());
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::Func {
                 name: Some(Name::Raw("hello".to_string())),
                 generics: vec![],
@@ -449,7 +507,7 @@ mod tests {
 
         assert_eq!(*parsed.get(&0).unwrap(), Expr::Block(vec![]));
         assert_eq!(
-            *parsed.roots()[1].unwrap(),
+            parsed.roots()[1].expr,
             Expr::Func {
                 name: Some(Name::Raw("world".to_string())),
                 generics: vec![],
@@ -465,7 +523,7 @@ mod tests {
     #[test]
     fn parses_func_literal_name_with_args() {
         let parsed = parse("func greet(one, two) { }");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -483,7 +541,7 @@ mod tests {
     #[test]
     fn parses_param_type() {
         let parsed = parse("func greet(name: Int) {}");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
         assert_eq!(
             *expr,
             Expr::Func {
@@ -514,7 +572,7 @@ mod tests {
     #[test]
     fn parses_call_no_args() {
         let parsed = parse("fizz()");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         let Expr::Call {
             callee: callee_id,
@@ -535,7 +593,7 @@ mod tests {
     fn parses_call_with_args() {
         let parsed = parse("fizz(foo: 123)");
 
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         let Expr::Call {
             callee: callee_id,
@@ -564,15 +622,15 @@ mod tests {
     #[test]
     fn parses_let() {
         let parsed = parse("let fizz");
-        let expr = parsed.roots()[0].unwrap();
-        assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), None));
+        let expr = parsed.roots()[0].expr;
+        assert_eq!(expr, Expr::Let(Name::Raw("fizz".to_string()), None));
     }
 
     #[test]
     fn parses_let_with_type() {
         let parsed = parse("let fizz: Int");
-        let expr = parsed.roots()[0].unwrap();
-        assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(0)));
+        let expr = parsed.roots()[0].expr;
+        assert_eq!(expr, Expr::Let(Name::Raw("fizz".to_string()), Some(0)));
         assert_eq!(
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
@@ -587,8 +645,8 @@ mod tests {
     #[test]
     fn parses_let_with_tuple_type() {
         let parsed = parse("let fizz: (Int, Bool)");
-        let expr = parsed.roots()[0].unwrap();
-        assert_eq!(*expr, Expr::Let(Name::Raw("fizz".to_string()), Some(2)));
+        let expr = parsed.roots()[0].expr;
+        assert_eq!(expr, Expr::Let(Name::Raw("fizz".to_string()), Some(2)));
         assert_eq!(
             *parsed.get(&2).unwrap(),
             Expr::TupleTypeRepr(vec![0, 1], false)
@@ -616,7 +674,7 @@ mod tests {
     #[test]
     fn parses_return_type_annotation() {
         let parsed = parse("func fizz() -> Int { 123 }");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -634,14 +692,14 @@ mod tests {
     #[test]
     fn parses_bools() {
         let parsed = parse("true\nfalse");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::LiteralTrue);
-        assert_eq!(*parsed.roots()[1].unwrap(), Expr::LiteralFalse);
+        assert_eq!(parsed.roots()[0].expr, Expr::LiteralTrue);
+        assert_eq!(parsed.roots()[1].expr, Expr::LiteralFalse);
     }
 
     #[test]
     fn parses_if() {
         let parsed = parse("if true { 123 }");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, None));
+        assert_eq!(parsed.roots()[0].expr, Expr::If(0, 2, None));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
@@ -650,7 +708,7 @@ mod tests {
     #[test]
     fn parses_if_else() {
         let parsed = parse("if true { 123 } else { 456 }");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::If(0, 2, Some(4)));
+        assert_eq!(parsed.roots()[0].expr, Expr::If(0, 2, Some(4)));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
@@ -661,7 +719,7 @@ mod tests {
     #[test]
     fn parses_loop() {
         let parsed = parse("loop { 123 }");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(None, 1));
+        assert_eq!(parsed.roots()[0].expr, Expr::Loop(None, 1));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::Block(vec![0]));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("123".into()));
     }
@@ -669,7 +727,7 @@ mod tests {
     #[test]
     fn parses_break() {
         let parsed = parse("loop { break }");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(None, 1));
+        assert_eq!(parsed.roots()[0].expr, Expr::Loop(None, 1));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::Block(vec![0]));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::Break);
     }
@@ -677,7 +735,7 @@ mod tests {
     #[test]
     fn parses_loop_with_condition() {
         let parsed = parse("loop true { 123 }");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(0), 2));
+        assert_eq!(parsed.roots()[0].expr, Expr::Loop(Some(0), 2));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralTrue);
         assert_eq!(*parsed.get(&2).unwrap(), Expr::Block(vec![1]));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("123".into()));
@@ -686,7 +744,7 @@ mod tests {
     #[test]
     fn parses_loop_with_binary_condition() {
         let parsed = parse("loop i < self.count { 123 }");
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Loop(Some(3), 5));
+        assert_eq!(parsed.roots()[0].expr, Expr::Loop(Some(3), 5));
         assert_eq!(
             *parsed.get(&3).unwrap(),
             Expr::Binary(0, TokenKind::Less, 2)
@@ -703,7 +761,7 @@ mod tests {
         let parsed = parse("enum Fizz {}");
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::EnumDecl {
                 name: "Fizz".into(),
                 generics: vec![],
@@ -717,7 +775,7 @@ mod tests {
     fn parses_empty_enum_instantiation() {
         let parsed = parse("enum Fizz { case foo }\nFizz.foo");
 
-        assert_eq!(*parsed.roots()[1].unwrap(), Member(Some(3), "foo".into()));
+        assert_eq!(parsed.roots()[1].expr, Member(Some(3), "foo".into()));
     }
 
     #[test]
@@ -725,7 +783,7 @@ mod tests {
         let parsed = parse("enum Fizz { case foo(Int) }\nFizz.foo(123)");
 
         assert_eq!(
-            *parsed.roots()[1].unwrap(),
+            parsed.roots()[1].expr,
             Call {
                 callee: 5,
                 type_args: vec![],
@@ -747,7 +805,7 @@ mod tests {
                 case foo(T, Y), bar
             }",
         );
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             *expr,
@@ -814,7 +872,7 @@ mod tests {
             }",
         );
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::EnumDecl {
                 name: "Fizz".into(),
                 generics: vec![],
@@ -850,7 +908,7 @@ mod tests {
             }",
         );
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::EnumDecl {
                 name: "Fizz".into(),
                 generics: vec![],
@@ -920,7 +978,7 @@ mod tests {
             }",
         );
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Match(0, vec![4, 7]));
+        assert_eq!(parsed.roots()[0].expr, Expr::Match(0, vec![4, 7]));
         assert_eq!(
             *parsed.get(&0).unwrap(),
             Variable(Name::Raw("fizz".to_string()), None)
@@ -957,7 +1015,7 @@ mod tests {
         func greet(using: (T) -> Y) {}
         ",
         );
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
         assert_eq!(
             *expr,
             Expr::Func {
@@ -1004,7 +1062,7 @@ mod tests {
     #[test]
     fn converts_question_to_optional_for_type_repr() {
         let parsed = parse("func greet(name: Int?) {}");
-        let expr = parsed.roots()[0].unwrap();
+        let expr = parsed.roots()[0].expr;
         assert_eq!(
             *expr,
             Expr::Func {
@@ -1056,7 +1114,7 @@ mod tests {
         );
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::EnumDecl {
                 name: "MyEnum".into(),
                 generics: vec![],
@@ -1091,7 +1149,7 @@ mod tests {
             ",
         );
 
-        assert_eq!(*parsed.roots()[0].unwrap(), Expr::Assignment(0, 1));
+        assert_eq!(parsed.roots()[0].expr, Expr::Assignment(0, 1));
     }
 }
 
@@ -1170,10 +1228,7 @@ mod arrays {
     #[test]
     fn parses_array_literal() {
         let parsed = parse("[1, 2, 3]", "-".into());
-        assert_eq!(
-            *parsed.roots()[0].unwrap(),
-            Expr::LiteralArray(vec!(0, 1, 2))
-        );
+        assert_eq!(parsed.roots()[0].expr, Expr::LiteralArray(vec!(0, 1, 2)));
 
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
         assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("2".into()));
@@ -1190,10 +1245,7 @@ mod arrays {
         ]",
             "-".into(),
         );
-        assert_eq!(
-            *parsed.roots()[0].unwrap(),
-            Expr::LiteralArray(vec!(0, 1, 2))
-        );
+        assert_eq!(parsed.roots()[0].expr, Expr::LiteralArray(vec!(0, 1, 2)));
     }
 
     #[test]
@@ -1260,7 +1312,7 @@ mod structs {
         );
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::Struct {
                 name: "Person".into(),
                 generics: vec![],
@@ -1284,7 +1336,7 @@ mod structs {
         );
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::Struct {
                 name: "Person".into(),
                 generics: vec![],
@@ -1357,7 +1409,7 @@ mod structs {
         );
 
         assert_eq!(
-            *parsed.roots()[0].unwrap(),
+            parsed.roots()[0].expr,
             Expr::Struct {
                 name: "Person".into(),
                 generics: vec![],

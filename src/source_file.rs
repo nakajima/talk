@@ -1,7 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    environment::Environment, scope_tree::ScopeTree, span::Span, ty::Ty, typed_expr::TypedExpr,
+    environment::Environment, expr::SharedExpr, parsed_expr::ParsedExpr, scope_tree::ScopeTree,
+    span::Span, ty::Ty, typed_expr::TypedExpr,
 };
 
 use super::{
@@ -30,7 +31,7 @@ impl Phase for Lowered {}
 #[derive(Default, Debug, PartialEq, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
     pub path: PathBuf,
-    roots: Vec<ExprID>,
+    roots: Vec<ParsedExpr>,
     pub(crate) nodes: HashMap<ExprID, Expr>,
     pub(crate) meta: HashMap<ExprID, ExprMeta>,
     phase_data: P,
@@ -92,12 +93,12 @@ impl SourceFile<Typed> {
         env.typed_exprs.insert(id, typed_expr);
     }
 
-    pub fn typed_roots(&self, env: &Environment) -> Vec<TypedExpr> {
-        self.root_ids()
-            .iter()
-            .filter_map(|root| env.typed_exprs.get(root).cloned())
-            .collect::<Vec<TypedExpr>>()
-    }
+    // pub fn typed_roots(&self, env: &Environment) -> Vec<TypedExpr> {
+    //     self.root_ids()
+    //         .iter()
+    //         .filter_map(|root| env.typed_exprs.get(root).cloned())
+    //         .collect::<Vec<TypedExpr>>()
+    // }
 
     // pub fn types_mut(&mut self) -> &mut HashMap<(PathBuf, ExprID), TypedExpr> {
     //     &mut self.phase_data.env.typed_exprs
@@ -170,24 +171,17 @@ impl SourceFile<Lowered> {}
 
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID
-    pub fn add(&mut self, id: ExprID, expr: Expr, meta: ExprMeta) -> ExprID {
-        self.nodes.insert(id, expr);
+    pub fn add(&mut self, id: ExprID, meta: ExprMeta) {
         self.meta.insert(id, meta);
-        id
     }
 
-    pub fn push_root(&mut self, root: ExprID) {
+    pub fn push_root(&mut self, root: ParsedExpr) {
         self.roots.push(root);
     }
 
     // Gets the root expr of the tree
-    pub fn roots(&self) -> Vec<Option<&Expr>> {
-        self.roots.iter().map(|r| self.get(r)).collect()
-    }
-
-    // Gets the root expr of the tree
-    pub fn root_ids(&self) -> Vec<ExprID> {
-        self.roots.clone()
+    pub fn roots(&self) -> &[ParsedExpr] {
+        self.roots.as_ref()
     }
 
     pub fn find_expr_id(&self, expr: fn(expr: &Expr) -> bool) -> Option<ExprID> {

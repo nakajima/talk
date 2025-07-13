@@ -1,6 +1,6 @@
-use std::ops::Range;
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
-use crate::{SymbolID, token::Token, token_kind::TokenKind};
+use crate::{SymbolID, parsed_expr::ParsedExpr, token::Token, token_kind::TokenKind};
 
 use super::{name::Name, parser::ExprID};
 
@@ -27,193 +27,160 @@ impl ExprMeta {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Pattern {
-    // Literals that must match exactly
-    LiteralInt(String),
-    LiteralFloat(String),
-    LiteralTrue,
-    LiteralFalse,
+pub type SharedExpr = Rc<RefCell<Expr>>;
 
-    // Variable binding (always succeeds, binds value)
-    Bind(Name),
-
-    // Wildcard (always succeeds, ignores value)
-    Wildcard,
-
-    // Enum variant destructuring
-    Variant {
-        enum_name: Option<Name>, // None for .some, Some for Option.some
-        variant_name: String,
-        fields: Vec<ExprID>, // Recursive patterns for fields
-    },
-    // // Tuple destructuring
-    // PatternTuple(Vec<Pattern>),
-
-    // // Reference patterns (for Rust-style matching)
-    // PatternRef(Box<Pattern>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum IncompleteExpr {
-    Member(Option<ExprID>), // Receiver
-    Func {
-        name: Option<Name>,
-        params: Option<Vec<ExprID>>,
-        generics: Option<Vec<ExprID>>,
-        ret: Option<ExprID>,
-        body: Option<ExprID>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
 
     // Start of the real expressions
-    LiteralArray(Vec<ExprID>),
+    LiteralArray(Vec<SharedExpr>),
     LiteralInt(String),
     LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
     LiteralString(String),
-    Unary(TokenKind, ExprID),
-    Binary(ExprID, TokenKind, ExprID),
-    Tuple(Vec<ExprID>),
-    Block(Vec<ExprID>),
+    Unary(TokenKind, SharedExpr),
+    Binary(SharedExpr, TokenKind, SharedExpr),
+    Tuple(Vec<SharedExpr>),
+    Block(Vec<SharedExpr>),
     Call {
-        callee: ExprID,
-        type_args: Vec<ExprID>,
-        args: Vec<ExprID>,
+        callee: SharedExpr,
+        type_args: Vec<SharedExpr>,
+        args: Vec<SharedExpr>,
     },
     Pattern(Pattern),
-    Return(Option<ExprID>),
+    Return(Option<SharedExpr>),
     Break,
     Extend {
-        name: Name,            /* name */
-        generics: Vec<ExprID>, /* generics */
-        conformances: Vec<ExprID>,
-        body: ExprID, /* body */
+        name: Name,                /* name */
+        generics: Vec<SharedExpr>, /* generics */
+        conformances: Vec<SharedExpr>,
+        body: SharedExpr, /* body */
     },
     Struct {
-        name: Name,            /* name */
-        generics: Vec<ExprID>, /* generics */
-        conformances: Vec<ExprID>,
-        body: ExprID, /* body */
+        name: Name,                /* name */
+        generics: Vec<SharedExpr>, /* generics */
+        conformances: Vec<SharedExpr>,
+        body: SharedExpr, /* body */
     },
+
     Property {
         name: Name,
-        type_repr: Option<ExprID>,
-        default_value: Option<ExprID>,
+        type_repr: Option<SharedExpr>,
+        default_value: Option<SharedExpr>,
     },
 
     // A type annotation
     TypeRepr {
         name: Name,
-        generics: Vec<ExprID>, /* generics */
-        conformances: Vec<ExprID>,
+        generics: Vec<SharedExpr>, /* generics */
+        conformances: Vec<SharedExpr>,
         introduces_type: bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     },
 
     FuncTypeRepr(
-        Vec<ExprID>, /* [TypeRepr] args */
-        ExprID,      /* return TypeRepr */
-        bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
+        Vec<SharedExpr>, /* [TypeRepr] args */
+        SharedExpr,      /* return TypeRepr */
+        bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
     TupleTypeRepr(
-        Vec<ExprID>, /* (T1, T2) */
-        bool,        /* is this a generic type parameter (if so we need to declare it in a scope) */
+        Vec<SharedExpr>, /* (T1, T2) */
+        bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
     // A dot thing
-    Member(Option<ExprID> /* receiver */, String),
+    Member(Option<SharedExpr> /* receiver */, String),
 
-    Init(Option<SymbolID>, ExprID /* func */),
+    Init(Option<SymbolID>, SharedExpr /* func */),
 
     // Function stuff
     Func {
         name: Option<Name>,
-        generics: Vec<ExprID>,
-        params: Vec<ExprID>, /* params tuple */
-        body: ExprID,        /* body */
-        ret: Option<ExprID>, /* return type */
+        generics: Vec<SharedExpr>,
+        params: Vec<SharedExpr>, /* params tuple */
+        body: SharedExpr,        /* body */
+        ret: Option<SharedExpr>, /* return type */
         captures: Vec<SymbolID>,
     },
 
-    Parameter(Name /* name */, Option<ExprID> /* TypeRepr */),
+    Parameter(Name /* name */, Option<SharedExpr> /* TypeRepr */),
     CallArg {
         label: Option<Name>,
-        value: ExprID,
+        value: SharedExpr,
     },
 
     // Variables
     Let(
-        Name,           /* name */
-        Option<ExprID>, /* type annotation */
+        Name,               /* name */
+        Option<SharedExpr>, /* type annotation */
     ),
-    Assignment(ExprID /* LHS */, ExprID /* RHS */),
-    Variable(Name, Option<ExprID>),
+    Assignment(SharedExpr /* LHS */, SharedExpr /* RHS */),
+    Variable(Name, Option<SharedExpr>),
 
     // For name resolution
-    // ResolvedVariable(SymbolID, Option<ExprID>),
-    // ResolvedLet(SymbolID, Option<ExprID> /* RHS */),
+    // ResolvedVariable(SymbolID, Option<SharedExpr>),
+    // ResolvedLet(SymbolID, Option<SharedExpr> /* RHS */),
 
     // Control flow
     If(
-        ExprID,         /* condition */
-        ExprID,         /* condition block */
-        Option<ExprID>, /* else block */
+        SharedExpr,         /* condition */
+        SharedExpr,         /* condition block */
+        Option<SharedExpr>, /* else block */
     ),
 
-    Loop(Option<ExprID> /* condition */, ExprID /* body */),
+    Loop(
+        Option<SharedExpr>, /* condition */
+        SharedExpr,         /* body */
+    ),
 
     // Enum declaration
     EnumDecl {
         name: Name, // TypeRepr name: Option
-        conformances: Vec<ExprID>,
-        generics: Vec<ExprID>, // Generics TypeParams <T>
-        body: ExprID,          // Body
+        conformances: Vec<SharedExpr>,
+        generics: Vec<SharedExpr>, // Generics TypeParams <T>
+        body: SharedExpr,          // Body
     },
 
     // Individual enum variant in declaration
     EnumVariant(
-        Name,        // name: "some"
-        Vec<ExprID>, // associated types: [TypeRepr("T")]
+        Name,            // name: "some"
+        Vec<SharedExpr>, // associated types: [TypeRepr("T")]
     ),
 
     // Match expression
     Match(
-        ExprID,      // scrutinee: the value being matched
-        Vec<ExprID>, // arms: [MatchArm(pattern, body)]
+        SharedExpr,      // scrutinee: the value being matched
+        Vec<SharedExpr>, // arms: [MatchArm(pattern, body)]
     ),
 
     // Individual match arm
     MatchArm(
-        ExprID, // pattern
-        ExprID, // body (after ->)
+        SharedExpr, // pattern
+        SharedExpr, // body (after ->)
     ),
 
     // Patterns (for match arms)
     PatternVariant(
-        Option<Name>, // enum name (None for unqualified .some)
-        Name,         // variant name: "some"
-        Vec<ExprID>,  // bindings: ["wrapped"]
+        Option<Name>,    // enum name (None for unqualified .some)
+        Name,            // variant name: "some"
+        Vec<SharedExpr>, // bindings: ["wrapped"]
     ),
 
     ProtocolDecl {
         name: Name,
-        associated_types: Vec<ExprID>, // Associated types
-        body: ExprID,                  // Body ID
-        conformances: Vec<ExprID>,
+        associated_types: Vec<SharedExpr>, // Associated types
+        body: SharedExpr,                  // Body ID
+        conformances: Vec<SharedExpr>,
     },
 
     FuncSignature {
         name: Name,
-        params: Vec<ExprID>,
-        generics: Vec<ExprID>,
-        ret: ExprID,
+        params: Vec<SharedExpr>,
+        generics: Vec<SharedExpr>,
+        ret: SharedExpr,
     },
 }
 

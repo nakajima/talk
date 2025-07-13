@@ -1,27 +1,48 @@
+use parsed_expr::Expr::*;
 use std::path::PathBuf;
-
 use tracing::info_span;
 
 #[cfg(test)]
 use crate::filler::FullExpr;
 use crate::{
-    SourceFile, compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
-    environment::Environment, expr::IncompleteExpr, lexer::Lexer, token::Token,
+    SourceFile,
+    compiling::compilation_session::SharedCompilationSession,
+    diagnostic::Diagnostic,
+    environment::Environment,
+    lexer::Lexer,
+    parsed_expr::{self, IncompleteExpr, ParsedExpr, Pattern},
+    token::Token,
     token_kind::TokenKind,
 };
 
-use super::{
-    expr::{
-        self,
-        Expr::{self, *},
-        ExprMeta,
-    },
-    name::Name,
-    precedence::Precedence,
-};
+use super::{expr::ExprMeta, name::Name, precedence::Precedence};
 
-pub type ExprID = i32;
+#[derive(Debug, Clone, Copy, Hash, Eq)]
+pub struct ExprID(pub i32);
+impl ExprID {
+    #[cfg(test)]
+    pub const ANY: ExprID = ExprID(i32::MIN);
+}
+
 pub type VariableID = u32;
+
+#[cfg(not(test))]
+impl PartialEq for ExprID {
+    fn eq(&self, other: &Self) -> bool {
+        other.0 == self.0
+    }
+}
+
+#[cfg(test)]
+impl PartialEq for ExprID {
+    fn eq(&self, other: &Self) -> bool {
+        if other.0 == Self::ANY.0 {
+            true
+        } else {
+            other.0 == self.0
+        }
+    }
+}
 
 // for tracking begin/end tokens
 pub struct SourceLocationStart {
@@ -265,7 +286,7 @@ impl<'a> Parser<'a> {
         self.previous.clone()
     }
 
-    pub(super) fn add_expr(&mut self, expr: Expr, _loc: LocToken) -> Result<ExprID, ParserError> {
+    pub(super) fn save_meta(&mut self, _loc: LocToken) -> Result<ExprID, ParserError> {
         let token = self
             .previous_before_newline
             .clone()
@@ -288,9 +309,9 @@ impl<'a> Parser<'a> {
 
         let next_id = self.env.next_expr_id();
 
-        tracing::trace!("Add [{next_id}] {expr:?}");
+        self.parse_tree.add(next_id, expr_meta);
 
-        Ok(self.parse_tree.add(next_id, expr, expr_meta))
+        Ok(next_id)
     }
 
     fn push_identifier(&mut self, identifier: Token) {
@@ -325,26 +346,27 @@ impl<'a> Parser<'a> {
 
     // MARK: Expr parsers
 
-    pub(crate) fn protocol_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn protocol_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Protocol)?;
         let name = Name::Raw(self.identifier()?);
         let associated_types = self.type_reprs()?;
         let conformances = self.conformances()?;
         let body = self.protocol_body()?;
+        let id = self.save_meta(tok)?;
 
-        self.add_expr(
-            Expr::ProtocolDecl {
+        Ok(ParsedExpr {
+            id,
+            expr: parsed_expr::Expr::ProtocolDecl {
                 name,
                 associated_types,
                 conformances,
-                body,
+                body: Box::new(body),
             },
-            tok,
-        )
+        })
     }
 
-    fn conformances(&mut self) -> Result<Vec<ExprID>, ParserError> {
+    fn conformances(&mut self) -> Result<Vec<ParsedExpr>, ParserError> {
         let mut conformances = vec![];
 
         if !self.did_match(TokenKind::Colon)? {
@@ -362,7 +384,7 @@ impl<'a> Parser<'a> {
         Ok(conformances)
     }
 
-    pub(crate) fn struct_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn struct_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Struct)?;
 
@@ -372,19 +394,21 @@ impl<'a> Parser<'a> {
 
         let generics = self.type_reprs()?;
         let conformances = self.conformances()?;
-        let body = self.struct_body()?;
-        self.add_expr(
-            Struct {
+        let body = Box::new(self.struct_body()?);
+        let id = self.save_meta(tok)?;
+
+        Ok(ParsedExpr {
+            id,
+            expr: Struct {
                 name: Name::Raw(name_str),
                 generics,
                 conformances,
                 body,
             },
-            tok,
-        )
+        })
     }
 
-    pub(crate) fn extend_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn extend_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Extend)?;
 
@@ -394,26 +418,28 @@ impl<'a> Parser<'a> {
 
         let generics = self.type_reprs()?;
         let conformances = self.conformances()?;
-        let body = self.extend_body()?;
-        self.add_expr(
-            Extend {
+        let body = Box::new(self.extend_body()?);
+        let id = self.save_meta(tok)?;
+
+        Ok(ParsedExpr {
+            id,
+            expr: Extend {
                 name: Name::Raw(name_str),
                 generics,
                 conformances,
                 body,
             },
-            tok,
-        )
+        })
     }
 
-    fn struct_body(&mut self) -> Result<ExprID, ParserError> {
+    fn struct_body(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
         tracing::info!("in struct body: {:?}", self.current);
         self.consume(TokenKind::LeftBrace)?;
         self.skip_semicolons_and_newlines();
 
-        let mut members: Vec<ExprID> = vec![];
+        let mut members: Vec<ParsedExpr> = vec![];
 
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_newlines();
@@ -429,16 +455,21 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.add_expr(Expr::Block(members), tok)
+        let id = self.save_meta(tok)?;
+
+        Ok(ParsedExpr {
+            id,
+            expr: Block(members),
+        })
     }
 
-    fn extend_body(&mut self) -> Result<ExprID, ParserError> {
+    fn extend_body(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace)?;
         self.skip_semicolons_and_newlines();
 
-        let mut members: Vec<ExprID> = vec![];
+        let mut members: Vec<ParsedExpr> = vec![];
 
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_newlines();
@@ -456,15 +487,15 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.add_expr(Expr::Block(members), tok)
+        self.add_expr(Block(members), tok)
     }
 
-    fn protocol_body(&mut self) -> Result<ExprID, ParserError> {
+    fn protocol_body(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
-        let mut members: Vec<ExprID> = vec![];
+        let mut members: Vec<ParsedExpr> = vec![];
 
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_semicolons_and_newlines();
@@ -477,12 +508,12 @@ impl<'a> Parser<'a> {
                 some_kind!(Func) => {
                     let tok = self.push_source_location();
                     let func_requirement = self.func_requirement()?;
-                    let Expr::FuncSignature {
+                    let FuncSignature {
                         name,
                         params,
                         generics,
                         ret,
-                    } = &func_requirement
+                    } = &func_requirement.expr
                     else {
                         return Err(ParserError::UnknownError(format!(
                             "Did not get protocol func requirement: {:?}",
@@ -492,20 +523,20 @@ impl<'a> Parser<'a> {
 
                     // See if we have a default implementation
                     if self.peek_is(TokenKind::LeftBrace) {
-                        let body = self.block(false)?;
+                        let body = Box::new(self.block(false)?);
 
-                        let func = Expr::Func {
+                        let func = Func {
                             name: Some(name.clone()),
                             generics: generics.clone(),
                             params: params.clone(),
                             body,
-                            ret: Some(*ret),
+                            ret: Some(ret.clone()),
                             captures: vec![],
                         };
 
                         members.push(self.add_expr(func, tok)?);
                     } else {
-                        members.push(self.add_expr(func_requirement.clone(), tok)?)
+                        members.push(self.add_expr(func_requirement.expr.clone(), tok)?)
                     }
                 }
                 _ => {
@@ -516,32 +547,34 @@ impl<'a> Parser<'a> {
             self.skip_semicolons_and_newlines();
         }
 
-        self.add_expr(Expr::Block(members), tok)
+        self.add_expr(Block(members), tok)
     }
 
-    pub(crate) fn init(&mut self) -> Result<ExprID, ParserError> {
+    pub(crate) fn init(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
-        let func_id = self.func()?;
-        self.add_expr(Expr::Init(None, func_id), tok)
+        let func_id = Box::new(self.func()?);
+        self.add_expr(Init(None, func_id), tok)
     }
 
-    pub(crate) fn property(&mut self) -> Result<ExprID, ParserError> {
+    pub(crate) fn property(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
         let name = self.identifier()?;
         let type_repr = if self.did_match(TokenKind::Colon)? {
-            Some(self.type_repr(false)?)
+            Some(Box::new(self.type_repr(false)?))
         } else {
             None
         };
         let default_value = if self.did_match(TokenKind::Equals)? {
-            Some(self.parse_with_precedence(Precedence::Assignment)?)
+            Some(Box::new(
+                self.parse_with_precedence(Precedence::Assignment)?,
+            ))
         } else {
             None
         };
 
         self.add_expr(
-            Expr::Property {
+            Property {
                 name: Name::Raw(name),
                 type_repr,
                 default_value,
@@ -550,7 +583,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(crate) fn enum_decl(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn enum_decl(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Enum)?;
         self.skip_semicolons_and_newlines();
@@ -560,7 +593,7 @@ impl<'a> Parser<'a> {
         let conformances = self.conformances()?;
 
         // Consume the block
-        let body = self.enum_body()?;
+        let body = Box::new(self.enum_body()?);
 
         self.add_expr(
             EnumDecl {
@@ -573,13 +606,13 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(crate) fn break_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn break_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Break)?;
-        self.add_expr(Expr::Break, tok)
+        self.add_expr(Break, tok)
     }
 
-    pub(crate) fn return_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn return_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Return)?;
 
@@ -587,32 +620,32 @@ impl<'a> Parser<'a> {
             return self.add_expr(Return(None), tok);
         }
 
-        let rhs = self.parse_with_precedence(Precedence::None)?;
+        let rhs = Box::new(self.parse_with_precedence(Precedence::None)?);
         self.add_expr(Return(Some(rhs)), tok)
     }
 
-    pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Match)?;
 
-        let target = self.parse_with_precedence(Precedence::Assignment)?;
+        let target = Box::new(self.parse_with_precedence(Precedence::Assignment)?);
         let body = self.match_block()?;
 
         self.add_expr(Match(target, body), tok)
     }
 
-    fn match_block(&mut self) -> Result<Vec<ExprID>, ParserError> {
+    fn match_block(&mut self) -> Result<Vec<ParsedExpr>, ParserError> {
         self.skip_semicolons_and_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
-        let mut items: Vec<ExprID> = vec![];
+        let mut items: Vec<ParsedExpr> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             let tok = self.push_source_location();
             let pattern = self.parse_match_pattern()?;
-            let pattern_id = self.add_expr(Pattern(pattern), tok)?;
+            let pattern_id = Box::new(self.add_expr(ParsedPattern(pattern), tok)?);
             self.consume(TokenKind::Arrow)?;
             let tok = self.push_source_location();
-            let body = self.parse_with_precedence(Precedence::Primary)?;
+            let body = Box::new(self.parse_with_precedence(Precedence::Primary)?);
             items.push(self.add_expr(MatchArm(pattern_id, body), tok)?);
             self.consume(TokenKind::Comma).ok();
         }
@@ -620,30 +653,30 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
-    pub(super) fn parse_match_pattern(&mut self) -> Result<expr::Pattern, ParserError> {
+    pub(super) fn parse_match_pattern(&mut self) -> Result<Pattern, ParserError> {
         self.skip_semicolons_and_newlines();
 
         if self.did_match(TokenKind::Underscore)? {
-            return Ok(expr::Pattern::Wildcard);
+            return Ok(Pattern::Wildcard);
         }
 
         if let Some(Token { kind, .. }) = self.current.clone() {
             match kind {
                 TokenKind::Int(value) => {
                     self.advance();
-                    return Ok(expr::Pattern::LiteralInt(value));
+                    return Ok(Pattern::LiteralInt(value));
                 }
                 TokenKind::Float(value) => {
                     self.advance();
-                    return Ok(expr::Pattern::LiteralFloat(value));
+                    return Ok(Pattern::LiteralFloat(value));
                 }
                 TokenKind::True => {
                     self.advance();
-                    return Ok(expr::Pattern::LiteralTrue);
+                    return Ok(Pattern::LiteralTrue);
                 }
                 TokenKind::False => {
                     self.advance();
-                    return Ok(expr::Pattern::LiteralFalse);
+                    return Ok(Pattern::LiteralFalse);
                 }
 
                 _ => (),
@@ -653,20 +686,20 @@ impl<'a> Parser<'a> {
         if let Ok(name) = self.identifier() {
             // It's not an enum variant so it's a bind
             if !self.did_match(TokenKind::Dot)? {
-                return Ok(expr::Pattern::Bind(Name::Raw(name)));
+                return Ok(Pattern::Bind(Name::Raw(name)));
             }
 
             let variant_name = self.identifier()?;
-            let mut fields: Vec<ExprID> = vec![];
+            let mut fields: Vec<ParsedExpr> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
                     let tok = self.push_source_location();
                     let pattern = self.parse_match_pattern()?;
-                    fields.push(self.add_expr(Expr::Pattern(pattern), tok)?);
+                    fields.push(self.add_expr(ParsedPattern(pattern), tok)?);
                 }
             }
 
-            return Ok(expr::Pattern::Variant {
+            return Ok(Pattern::Variant {
                 enum_name: Some(Name::Raw(name)),
                 variant_name,
                 fields,
@@ -681,17 +714,17 @@ impl<'a> Parser<'a> {
 
             tracing::debug!("unqualified variant");
 
-            let mut fields: Vec<ExprID> = vec![];
+            let mut fields: Vec<ParsedExpr> = vec![];
             if self.did_match(TokenKind::LeftParen)? {
                 while !self.did_match(TokenKind::RightParen)? {
                     tracing::trace!("adding arg: {:?}", self.current);
                     let tok = self.push_source_location();
                     let pattern = self.parse_match_pattern()?;
-                    fields.push(self.add_expr(Expr::Pattern(pattern), tok)?);
+                    fields.push(self.add_expr(ParsedPattern(pattern), tok)?);
                 }
             }
 
-            return Ok(expr::Pattern::Variant {
+            return Ok(Pattern::Variant {
                 enum_name: None,
                 variant_name,
                 fields,
@@ -701,13 +734,13 @@ impl<'a> Parser<'a> {
         Err(ParserError::UnknownError("did not get match".into()))
     }
 
-    pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Dot)?;
         let name = self.identifier()?;
 
         let member = self.add_expr(Member(None, name), tok)?;
-        if let Some(call_id) = self.check_call(member, can_assign)? {
+        if let Some(call_id) = self.check_call(&member, can_assign)? {
             Ok(call_id)
         } else {
             Ok(member)
@@ -717,25 +750,25 @@ impl<'a> Parser<'a> {
     pub(crate) fn member_infix(
         &mut self,
         can_assign: bool,
-        lhs: ExprID,
-    ) -> Result<ExprID, ParserError> {
-        let tok = self.push_lhs_location(lhs);
+        lhs: ParsedExpr,
+    ) -> Result<ParsedExpr, ParserError> {
+        let tok = self.push_lhs_location(lhs.id);
         self.consume(TokenKind::Dot)?;
 
         let name = match self.identifier() {
             Ok(name) => name,
             Err(_) => {
-                let incomplete_member = Expr::Incomplete(IncompleteExpr::Member(Some(lhs)));
+                let incomplete_member = Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
                 return self.add_expr(incomplete_member, tok);
             }
         };
 
-        let member = self.add_expr(Member(Some(lhs), name), tok)?;
+        let member = self.add_expr(Member(Some(Box::new(lhs)), name), tok)?;
 
         self.skip_semicolons_and_newlines();
 
-        let expr_id = if let Some(call_id) = self.check_call(member, can_assign)? {
-            call_id
+        let expr = if let Some(call_expr) = self.check_call(&member, can_assign)? {
+            call_expr
         } else {
             member
         };
@@ -744,61 +777,61 @@ impl<'a> Parser<'a> {
             if can_assign {
                 let loc = self.push_source_location();
                 let rhs = self.parse_with_precedence(Precedence::Assignment)?;
-                return self.add_expr(Expr::Assignment(expr_id, rhs), loc);
+                return self.add_expr(Assignment(Box::new(expr), Box::new(rhs)), loc);
             } else {
                 return Err(ParserError::CannotAssign);
             }
         }
 
-        Ok(expr_id)
+        Ok(expr)
     }
 
-    pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn boolean(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         if self.did_match(TokenKind::True)? {
-            return self.add_expr(Expr::LiteralTrue, tok);
+            return self.add_expr(LiteralTrue, tok);
         }
 
         if self.did_match(TokenKind::False)? {
-            return self.add_expr(Expr::LiteralFalse, tok);
+            return self.add_expr(LiteralFalse, tok);
         }
 
         Err(ParserError::UnknownError("did not get bool".into()))
     }
 
-    pub(crate) fn if_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn if_expr(&mut self, can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         self.consume(TokenKind::If)?;
 
-        let condition = self.parse_with_precedence(Precedence::Assignment)?;
-        let body = self.block(can_assign)?;
+        let condition = Box::new(self.parse_with_precedence(Precedence::Assignment)?);
+        let body = Box::new(self.block(can_assign)?);
 
         if self.did_match(TokenKind::Else)? {
-            let else_body = self.block(can_assign)?;
+            let else_body = Box::new(self.block(can_assign)?);
             self.add_expr(If(condition, body, Some(else_body)), tok)
         } else {
             self.add_expr(If(condition, body, None), tok)
         }
     }
 
-    pub(crate) fn loop_expr(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn loop_expr(&mut self, can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         self.consume(TokenKind::Loop)?;
 
         let mut condition = None;
         if !self.peek_is(TokenKind::LeftBrace) {
-            condition = Some(self.parse_with_precedence(Precedence::None)?)
+            condition = Some(Box::new(self.parse_with_precedence(Precedence::None)?))
         }
 
-        let body = self.block(can_assign)?;
+        let body = Box::new(self.block(can_assign)?);
 
         self.add_expr(Loop(condition, body), tok)
     }
 
-    pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn tuple(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         self.consume(TokenKind::LeftParen)?;
@@ -826,7 +859,7 @@ impl<'a> Parser<'a> {
         self.add_expr(Tuple(items), tok)
     }
 
-    pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         // Consume the `let` keyword
@@ -834,23 +867,23 @@ impl<'a> Parser<'a> {
         let name = self.identifier()?;
 
         let type_repr = if self.did_match(TokenKind::Colon)? {
-            Some(self.type_repr(false)?)
+            Some(Box::new(self.type_repr(false)?))
         } else {
             None
         };
 
-        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr), tok);
+        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr), tok)?;
 
         if self.did_match(TokenKind::Equals)? {
             let tok = self.push_source_location();
-            let rhs = self.parse_with_precedence(Precedence::Assignment)?;
-            self.add_expr(Expr::Assignment(let_expr?, rhs), tok)
+            let rhs = Box::new(self.parse_with_precedence(Precedence::Assignment)?);
+            self.add_expr(Assignment(Box::new(let_expr), rhs), tok)
         } else {
-            let_expr
+            Ok(let_expr)
         }
     }
 
-    pub(crate) fn literal(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn literal(&mut self, can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         self.advance();
@@ -869,14 +902,15 @@ impl<'a> Parser<'a> {
             _ => return Err(ParserError::UnknownError("did not get literal".into())),
         }?;
 
-        if let Some(call_id) = self.check_call(expr, can_assign)? {
+        if let Some(call_id) = self.check_call(&expr, can_assign)? {
             Ok(call_id)
         } else {
             Ok(expr)
         }
     }
 
-    pub(crate) fn func_requirement(&mut self) -> Result<Expr, ParserError> {
+    pub(crate) fn func_requirement(&mut self) -> Result<ParsedExpr, ParserError> {
+        let tok = self.push_source_location();
         self.consume(TokenKind::Func)?;
 
         let name_str = match self.current.clone() {
@@ -901,17 +935,20 @@ impl<'a> Parser<'a> {
         // We always want a return type for a func requirement
         self.consume(TokenKind::Arrow)?;
 
-        let ret = self.type_repr(false)?;
+        let ret = Box::new(self.type_repr(false)?);
 
-        Ok(Expr::FuncSignature {
-            name,
-            params,
-            generics,
-            ret,
-        })
+        self.add_expr(
+            FuncSignature {
+                name,
+                params,
+                generics,
+                ret,
+            },
+            tok,
+        )
     }
 
-    pub(crate) fn func(&mut self) -> Result<ExprID, ParserError> {
+    pub(crate) fn func(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         let current = self.current.clone();
@@ -945,7 +982,7 @@ impl<'a> Parser<'a> {
                     body: None,
                 };
 
-                return self.add_expr(Expr::Incomplete(incomplete_func), tok);
+                return self.add_expr(Incomplete(incomplete_func), tok);
             }
         }
 
@@ -967,18 +1004,18 @@ impl<'a> Parser<'a> {
                     body: None,
                 };
 
-                return self.add_expr(Expr::Incomplete(incomplete_func), tok);
+                return self.add_expr(Incomplete(incomplete_func), tok);
             }
         }
 
         let ret = if self.did_match(TokenKind::Arrow)? {
-            Some(self.type_repr(false)?)
+            Some(Box::new(self.type_repr(false)?))
         } else {
             None
         };
 
         let body = match self.block(false) {
-            Ok(body) => body,
+            Ok(body) => Box::new(body),
             Err(e) => {
                 self.add_diagnostic(Diagnostic::parser(
                     self.parse_tree.path.clone(),
@@ -993,12 +1030,12 @@ impl<'a> Parser<'a> {
                     body: None,
                 };
 
-                return self.add_expr(Expr::Incomplete(incomplete_func), tok);
+                return self.add_expr(Incomplete(incomplete_func), tok);
             }
         };
 
         let func_id = self.add_expr(
-            Expr::Func {
+            Func {
                 name: name.map(|s| s.to_string()).map(Name::Raw),
                 generics,
                 params,
@@ -1009,15 +1046,15 @@ impl<'a> Parser<'a> {
             tok,
         )?;
 
-        if let Some(call_id) = self.check_call(func_id, false)? {
+        if let Some(call_id) = self.check_call(&func_id, false)? {
             Ok(call_id)
         } else {
             Ok(func_id)
         }
     }
 
-    fn parameter_list(&mut self) -> Result<Vec<ExprID>, ParserError> {
-        let mut params: Vec<ExprID> = vec![];
+    fn parameter_list(&mut self) -> Result<Vec<ParsedExpr>, ParserError> {
+        let mut params: Vec<ParsedExpr> = vec![];
         while let Some((
             _,
             Token {
@@ -1028,7 +1065,7 @@ impl<'a> Parser<'a> {
         {
             let tok = self.push_source_location();
             let ty_repr = if self.did_match(TokenKind::Colon)? {
-                Some(self.type_repr(false)?)
+                Some(Box::new(self.type_repr(false)?))
             } else {
                 None
             };
@@ -1045,7 +1082,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn type_repr(&mut self, is_type_parameter: bool) -> Result<ExprID, ParserError> {
+    fn type_repr(&mut self, is_type_parameter: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         if self.did_match(TokenKind::LeftParen)? {
@@ -1057,7 +1094,10 @@ impl<'a> Parser<'a> {
             }
             if self.did_match(TokenKind::Arrow)? {
                 let ret = self.type_repr(is_type_parameter)?;
-                return self.add_expr(FuncTypeRepr(sig_args, ret, is_type_parameter), tok);
+                return self.add_expr(
+                    FuncTypeRepr(sig_args, Box::new(ret), is_type_parameter),
+                    tok,
+                );
             } else {
                 return self.add_expr(TupleTypeRepr(sig_args, is_type_parameter), tok);
             }
@@ -1099,12 +1139,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn enum_body(&mut self) -> Result<ExprID, ParserError> {
+    fn enum_body(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
         self.consume(TokenKind::LeftBrace)?;
 
-        let mut items: Vec<ExprID> = vec![];
+        let mut items: Vec<ParsedExpr> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             if self.did_match(TokenKind::Case)? {
                 while {
@@ -1119,7 +1159,7 @@ impl<'a> Parser<'a> {
                         }
                     }
 
-                    let item = self.add_expr(Expr::EnumVariant(Name::Raw(name), types), tok)?;
+                    let item = self.add_expr(EnumVariant(Name::Raw(name), types), tok)?;
                     items.push(item);
                     self.did_match(TokenKind::Comma)?
                 } {}
@@ -1129,24 +1169,24 @@ impl<'a> Parser<'a> {
             };
         }
 
-        self.add_expr(Expr::Block(items), tok)
+        self.add_expr(Block(items), tok)
     }
 
-    pub(crate) fn block(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn block(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
 
         self.consume(TokenKind::LeftBrace)?;
 
-        let mut items: Vec<ExprID> = vec![];
+        let mut items: Vec<ParsedExpr> = vec![];
         while !self.did_match(TokenKind::RightBrace)? {
             items.push(self.parse_with_precedence(Precedence::Assignment)?)
         }
 
-        self.add_expr(Expr::Block(items), tok)
+        self.add_expr(Block(items), tok)
     }
 
-    pub(crate) fn array_literal(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn array_literal(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::LeftBracket)?;
         self.skip_newlines();
@@ -1157,26 +1197,26 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Comma).ok();
         }
 
-        self.add_expr(Expr::LiteralArray(items), tok)
+        self.add_expr(LiteralArray(items), tok)
     }
 
-    pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn variable(&mut self, can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         let name = self.identifier()?;
-        let variable = self.add_expr(Variable(Name::Raw(name.to_string()), None), tok)?;
+        let variable = self.add_expr(Variable(Name::Raw(name.to_string())), tok)?;
 
         self.skip_newlines();
 
-        let var = if let Some(call_id) = self.check_call(variable, can_assign)? {
-            call_id
+        let var = if let Some(call_expr) = self.check_call(&variable, can_assign)? {
+            call_expr
         } else {
             variable
         };
 
         if can_assign && self.did_match(TokenKind::Equals)? {
             let tok = self.push_source_location();
-            let rhs = self.parse_with_precedence(Precedence::Assignment)?;
-            self.add_expr(Expr::Assignment(var, rhs), tok)
+            let rhs = Box::new(self.parse_with_precedence(Precedence::Assignment)?);
+            self.add_expr(Assignment(Box::new(var), rhs), tok)
         } else {
             Ok(var)
         }
@@ -1185,20 +1225,20 @@ impl<'a> Parser<'a> {
     pub(crate) fn call_infix(
         &mut self,
         can_assign: bool,
-        callee: ExprID,
-    ) -> Result<ExprID, ParserError> {
+        callee: ParsedExpr,
+    ) -> Result<ParsedExpr, ParserError> {
         self.call(can_assign, vec![], callee)
     }
 
     pub(crate) fn call(
         &mut self,
         _can_assign: bool,
-        type_args: Vec<ExprID>,
-        callee: ExprID,
-    ) -> Result<ExprID, ParserError> {
-        let tok = self.push_lhs_location(callee);
+        type_args: Vec<ParsedExpr>,
+        callee: ParsedExpr,
+    ) -> Result<ParsedExpr, ParserError> {
+        let tok = self.push_lhs_location(callee.id);
         self.skip_newlines();
-        let mut args: Vec<ExprID> = vec![];
+        let mut args: Vec<ParsedExpr> = vec![];
 
         if !self.did_match(TokenKind::RightParen)? {
             while {
@@ -1222,17 +1262,17 @@ impl<'a> Parser<'a> {
                         return Err(ParserError::ExpectedIdentifier(self.current.clone()));
                     };
                     self.consume(TokenKind::Colon)?;
-                    let value = self.parse_with_precedence(Precedence::Assignment)?;
+                    let value = Box::new(self.parse_with_precedence(Precedence::Assignment)?);
                     args.push(self.add_expr(
-                        Expr::CallArg {
+                        CallArg {
                             label: Some(Name::Raw(label)),
                             value,
                         },
                         tok,
                     )?)
                 } else {
-                    let value = self.parse_with_precedence(Precedence::Assignment)?;
-                    args.push(self.add_expr(Expr::CallArg { label: None, value }, tok)?);
+                    let value = Box::new(self.parse_with_precedence(Precedence::Assignment)?);
+                    args.push(self.add_expr(CallArg { label: None, value }, tok)?);
                 }
 
                 self.did_match(TokenKind::Comma)?
@@ -1242,8 +1282,8 @@ impl<'a> Parser<'a> {
         }
 
         self.add_expr(
-            Expr::Call {
-                callee,
+            Call {
+                callee: Box::new(callee),
                 type_args,
                 args,
             },
@@ -1251,17 +1291,21 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ExprID, ParserError> {
+    pub(crate) fn unary(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         let op = self.consume_any(vec![TokenKind::Minus, TokenKind::Bang])?;
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
-        let rhs = self.parse_with_precedence(current_precedence)?;
+        let rhs = Box::new(self.parse_with_precedence(current_precedence)?);
 
         self.add_expr(Unary(op.kind, rhs), tok)
     }
 
-    pub(crate) fn binary(&mut self, _can_assign: bool, lhs: ExprID) -> Result<ExprID, ParserError> {
-        let tok = self.push_lhs_location(lhs);
+    pub(crate) fn binary(
+        &mut self,
+        _can_assign: bool,
+        lhs: ParsedExpr,
+    ) -> Result<ParsedExpr, ParserError> {
+        let tok = self.push_lhs_location(lhs.id);
 
         let op = self.consume_any(vec![
             TokenKind::Plus,
@@ -1279,12 +1323,15 @@ impl<'a> Parser<'a> {
         ])?;
 
         let current_precedence = Precedence::handler(&Some(op.clone()))?.precedence;
-        let rhs = self.parse_with_precedence(current_precedence)?;
+        let rhs = Box::new(self.parse_with_precedence(current_precedence)?);
 
-        self.add_expr(Binary(lhs, op.kind, rhs), tok)
+        self.add_expr(Binary(Box::new(lhs), op.kind, rhs), tok)
     }
 
-    pub fn parse_with_precedence(&mut self, precedence: Precedence) -> Result<ExprID, ParserError> {
+    pub fn parse_with_precedence(
+        &mut self,
+        precedence: Precedence,
+    ) -> Result<ParsedExpr, ParserError> {
         tracing::trace!(
             "Parsing {:?} with precedence: {:?}",
             self.current,
@@ -1293,7 +1340,7 @@ impl<'a> Parser<'a> {
 
         self.skip_newlines();
 
-        let mut lhs: Option<ExprID> = None;
+        let mut lhs: Option<ParsedExpr> = None;
         let mut handler = Precedence::handler(&self.current)?;
 
         if let Some(prefix) = handler.prefix {
@@ -1341,7 +1388,7 @@ impl<'a> Parser<'a> {
 
     // MARK: Helpers
 
-    pub(super) fn type_reprs(&mut self) -> Result<Vec<ExprID>, ParserError> {
+    pub(super) fn type_reprs(&mut self) -> Result<Vec<ParsedExpr>, ParserError> {
         let mut generics = vec![];
         if self.did_match(TokenKind::Less)? {
             while !self.did_match(TokenKind::Greater)? {
@@ -1390,9 +1437,9 @@ impl<'a> Parser<'a> {
 
     pub(super) fn check_call(
         &mut self,
-        callee: ExprID,
+        callee: &ParsedExpr,
         can_assign: bool,
-    ) -> Result<Option<ExprID>, ParserError> {
+    ) -> Result<Option<ParsedExpr>, ParserError> {
         let prev = self
             .previous
             .as_ref()
@@ -1414,12 +1461,12 @@ impl<'a> Parser<'a> {
 
             self.consume(TokenKind::LeftParen)?;
 
-            return Ok(Some(self.call(can_assign, generics, callee)?));
+            return Ok(Some(self.call(can_assign, generics, callee.clone())?));
         }
 
         if self.did_match(TokenKind::LeftParen)? {
             self.skip_newlines();
-            return Ok(Some(self.call(can_assign, vec![], callee)?));
+            return Ok(Some(self.call(can_assign, vec![], callee.clone())?));
         }
 
         Ok(None)
@@ -1437,6 +1484,15 @@ impl<'a> Parser<'a> {
         };
 
         Ok(false)
+    }
+
+    fn add_expr(
+        &mut self,
+        expr: parsed_expr::Expr,
+        tok: LocToken,
+    ) -> Result<ParsedExpr, ParserError> {
+        let id = self.save_meta(tok)?;
+        Ok(ParsedExpr { id, expr })
     }
 
     // Try to get a specific token. If it's not a match, return an error.

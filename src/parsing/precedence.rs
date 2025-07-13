@@ -1,6 +1,6 @@
 use std::{mem::transmute, ops::Add};
 
-use crate::{token::Token, token_kind::TokenKind};
+use crate::{parsed_expr::ParsedExpr, token::Token, token_kind::TokenKind};
 
 use super::parser::{ExprID, Parser, ParserError};
 
@@ -30,8 +30,9 @@ impl Precedence {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct ParseHandler<'a> {
-    pub(crate) prefix: Option<fn(&mut Parser<'a>, bool) -> Result<ExprID, ParserError>>,
-    pub(crate) infix: Option<fn(&mut Parser<'a>, bool, ExprID) -> Result<ExprID, ParserError>>,
+    pub(crate) prefix: Option<fn(&mut Parser<'a>, bool) -> Result<ParsedExpr, ParserError>>,
+    pub(crate) infix:
+        Option<fn(&mut Parser<'a>, bool, ParsedExpr) -> Result<ParsedExpr, ParserError>>,
     pub(crate) precedence: Precedence,
 }
 
