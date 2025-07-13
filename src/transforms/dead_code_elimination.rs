@@ -233,4 +233,46 @@ mod tests {
         assert_eq!(optimized_func.blocks.len(), 2);
         assert!(optimized_func.blocks.iter().all(|b| b.id.0 < 2));
     }
+
+    #[test]
+    fn removes_unread_registers() {
+        let func = IRFunction {
+            debug_info: Default::default(),
+            name: "@main".into(),
+            ty: IRType::Func(vec![], IRType::Void.into()),
+            blocks: vec![BasicBlock {
+                id: BasicBlockID(0),
+                instructions: vec![
+                    Instr::ConstantInt(Register(1), 1),
+                    Instr::ConstantInt(Register(2), 2),
+                    Instr::ConstantInt(Register(3), 3),
+                    Instr::ConstantInt(Register(4), 4),
+                    Instr::Ret(IRType::Int, Some(Register(4).into())),
+                ],
+            }],
+            env_ty: None,
+            env_reg: None,
+            size: 1,
+        };
+
+        let module = IRModule {
+            functions: vec![func.clone()],
+            constants: vec![],
+        };
+        let optimized = DeadCodeEliminator::new().run(module);
+        let optimized_func = optimized
+            .functions
+            .iter()
+            .find(|f| f.name == "@main")
+            .unwrap();
+
+        let block = &optimized_func.blocks[0];
+        assert_eq!(
+            block.instructions,
+            &[
+                Instr::ConstantInt(Register(4), 4),
+                Instr::Ret(IRType::Int, Some(Register(4).into())),
+            ]
+        );
+    }
 }
