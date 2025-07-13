@@ -4,7 +4,9 @@ use crate::lowering::{
     instr::{Callee, Instr},
     ir_function::IRFunction,
     ir_module::IRModule,
+    ir_value::IRValue,
     lowerer::BasicBlockID,
+    register::Register,
 };
 
 /// Eliminates unreachable functions and basic blocks from an [`IRModule`].
@@ -67,6 +69,7 @@ impl DeadCodeEliminator {
         for (name, mut func) in functions.into_iter() {
             if reachable.contains(&name) {
                 Self::prune_blocks(&mut func);
+                Self::remove_unused_registers(&mut func);
                 new_functions.push(func);
             }
         }
@@ -123,6 +126,149 @@ impl DeadCodeEliminator {
                 }
             }
         }
+    }
+
+    fn remove_unused_registers(func: &mut IRFunction) {
+        let mut used: HashSet<Register> = HashSet::new();
+
+        for block in func.blocks.iter().rev() {
+            for instr in block.instructions.iter().rev() {
+                let dest = Self::dest_register(instr);
+                let side = Self::has_side_effect(instr);
+                if side || dest.map_or(false, |d| used.contains(&d)) {
+                    for r in Self::used_registers(instr) {
+                        used.insert(r);
+                    }
+                    if let Some(d) = dest {
+                        used.insert(d);
+                    }
+                }
+            }
+        }
+
+        for block in &mut func.blocks {
+            let mut new_instrs = Vec::new();
+            for instr in std::mem::take(&mut block.instructions) {
+                let dest = Self::dest_register(&instr);
+                let side = Self::has_side_effect(&instr);
+                if side || dest.map_or(false, |d| used.contains(&d)) {
+                    new_instrs.push(instr);
+                }
+            }
+            block.instructions = new_instrs;
+        }
+    }
+
+    fn dest_register(instr: &Instr) -> Option<Register> {
+        use Instr::*;
+        match instr {
+            ConstantInt(d, _)
+            | ConstantFloat(d, _)
+            | ConstantBool(d, _)
+            | Add(d, _, _, _)
+            | Sub(d, _, _, _)
+            | Mul(d, _, _, _)
+            | Div(d, _, _, _)
+            | LoadLocal(d, _, _)
+            | Phi(d, _, _)
+            | Ref(d, _, _)
+            | Eq(d, _, _, _)
+            | Ne(d, _, _, _)
+            | LessThan(d, _, _, _)
+            | LessThanEq(d, _, _, _)
+            | GreaterThan(d, _, _, _)
+            | GreaterThanEq(d, _, _, _)
+            | Alloc { dest: d, .. }
+            | Const { dest: d, .. }
+            | Load { dest: d, .. }
+            | GetElementPointer { dest: d, .. }
+            | MakeStruct { dest: d, .. }
+            | GetValueOf { dest: d, .. }
+            | Call { dest_reg: d, .. }
+            | GetEnumTag(d, _)
+            | GetEnumValue(d, _, _, _, _)
+            | TagVariant(d, _, _, _) => Some(*d),
+            _ => None,
+        }
+    }
+
+    fn used_registers(instr: &Instr) -> Vec<Register> {
+        use Instr::*;
+        let mut regs = Vec::new();
+        match instr {
+            Add(_, _, a, b)
+            | Sub(_, _, a, b)
+            | Mul(_, _, a, b)
+            | Div(_, _, a, b)
+            | Eq(_, _, a, b)
+            | Ne(_, _, a, b)
+            | LessThan(_, _, a, b)
+            | LessThanEq(_, _, a, b)
+            | GreaterThan(_, _, a, b)
+            | GreaterThanEq(_, _, a, b) => {
+                regs.push(*a);
+                regs.push(*b);
+            }
+            StoreLocal(ptr, _, val) => {
+                regs.push(*ptr);
+                regs.push(*val);
+            }
+            LoadLocal(_, _, ptr) => regs.push(*ptr),
+            Phi(_, _, preds) => regs.extend(preds.0.iter().map(|(r, _)| *r)),
+            Branch { cond, .. } => regs.push(*cond),
+            Ret(_, Some(v)) => {
+                if let IRValue::Register(r) = v {
+                    regs.push(*r);
+                }
+            }
+            Print { val, .. } => {
+                if let IRValue::Register(r) = val {
+                    regs.push(*r);
+                }
+            }
+            Store { val, location, .. } => {
+                if let IRValue::Register(r) = val {
+                    regs.push(*r);
+                }
+                regs.push(*location);
+            }
+            Load { addr, .. } => regs.push(*addr),
+            GetElementPointer { base, index, .. } => {
+                regs.push(*base);
+                if let IRValue::Register(r) = index {
+                    regs.push(*r);
+                }
+            }
+            MakeStruct { values, .. } | TagVariant(_, _, _, values) => {
+                regs.extend(values.0.iter().map(|tr| tr.register));
+            }
+            GetValueOf { structure, .. } => regs.push(*structure),
+            Call { callee, args, .. } => {
+                if let Callee::Register(r) = callee {
+                    regs.push(*r);
+                }
+                regs.extend(args.0.iter().map(|tr| tr.register));
+            }
+            GetEnumTag(_, r) => regs.push(*r),
+            GetEnumValue(_, _, scrutinee, _, _) => regs.push(*scrutinee),
+            _ => {}
+        }
+        regs
+    }
+
+    fn has_side_effect(instr: &Instr) -> bool {
+        use Instr::*;
+        matches!(
+            instr,
+            Ret(..)
+                | Jump(..)
+                | Branch { .. }
+                | Print { .. }
+                | Store { .. }
+                | StoreLocal(..)
+                | Call { .. }
+                | Unreachable
+        )
     }
 }
 
