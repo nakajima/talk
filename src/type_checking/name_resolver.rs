@@ -442,6 +442,7 @@ impl NameResolver {
                 },
                 TypeRepr {
                     name,
+                    suffixes,
                     generics,
                     conformances,
                     introduces_type,
@@ -492,6 +493,7 @@ impl NameResolver {
                         *node_id,
                         TypeRepr {
                             name: resolved_name_for_node,
+                            suffixes,
                             generics: generics.clone(), // Keep original generics ExprIDs
                             conformances: conformances.clone(),
                             introduces_type,
@@ -1134,13 +1136,18 @@ impl NameResolver {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::{compiling::driver::Driver, diagnostic::DiagnosticKind, expr::Expr};
+    use crate::{
+        compiling::driver::Driver,
+        diagnostic::DiagnosticKind,
+        expr::Expr,
+        filler::{Filler, FullExpr},
+    };
 
-    fn resolve(code: &'static str) -> SourceFile<NameResolved> {
+    pub fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
         driver.resolved_source_file(&PathBuf::from("-")).unwrap()
     }
@@ -1165,6 +1172,28 @@ mod tests {
             .unwrap()
             .clone();
         (file, driver.symbol_table)
+    }
+
+    #[test]
+    fn resolve_optional_desugared() {
+        let tree = resolve("func foo() -> Int? {}");
+        let filler = Filler::new(tree);
+        let filled = filler.fill_root();
+        let FullExpr::Func {
+            ret: box Some(FullExpr::TypeRepr { name, generics, .. }),
+            ..
+        } = &filled[0]
+        else {
+            panic!("nope");
+        };
+
+        assert_eq!(*name, Name::Resolved(SymbolID::OPTIONAL, "Optional".into()));
+
+        let FullExpr::TypeRepr { name, .. } = &generics[0] else {
+            panic!("nope")
+        };
+
+        assert_eq!(*name, Name::Resolved(SymbolID::INT, "Int".into()));
     }
 
     #[test]
@@ -1467,6 +1496,7 @@ mod tests {
         assert_eq!(
             resolved.get(&foo_args[0]).unwrap(),
             &Expr::TypeRepr {
+                suffixes: vec![],
                 name: Name::Resolved(SymbolID::INT, "Int".into()),
                 generics: vec![],
                 conformances: vec![],
@@ -1628,6 +1658,7 @@ mod tests {
             *resolved.get(&generics[0]).unwrap(),
             TypeRepr {
                 name: Name::Resolved(SymbolID(-1), "Int".into()),
+                suffixes: vec![],
                 conformances: vec![],
                 generics: vec![],
                 introduces_type: false
@@ -1700,6 +1731,7 @@ mod tests {
             *resolved.get(&type_repr.unwrap()).unwrap(),
             Expr::TypeRepr {
                 name: Name::Resolved(SymbolID(-1), "Int".into()),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -1753,6 +1785,7 @@ mod tests {
             *resolved.get(&type_repr.unwrap()).unwrap(),
             Expr::TypeRepr {
                 name: Name::Resolved(SymbolID(-1), "Int".into()),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false

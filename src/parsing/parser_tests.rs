@@ -403,6 +403,7 @@ mod tests {
             *parsed.get(&2).unwrap(),
             Expr::TypeRepr {
                 name: "T".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -425,6 +426,7 @@ mod tests {
             *parsed.get(&1).unwrap(),
             Expr::TypeRepr {
                 name: "T".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -509,6 +511,7 @@ mod tests {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -582,6 +585,7 @@ mod tests {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -602,6 +606,7 @@ mod tests {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -611,6 +616,7 @@ mod tests {
             *parsed.get(&1).unwrap(),
             Expr::TypeRepr {
                 name: "Bool".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -770,6 +776,7 @@ mod tests {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "T".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: true
@@ -779,6 +786,7 @@ mod tests {
             *parsed.get(&1).unwrap(),
             Expr::TypeRepr {
                 name: "Y".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: true
@@ -795,6 +803,7 @@ mod tests {
             *parsed.get(&2).unwrap(),
             Expr::TypeRepr {
                 name: "T".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -804,6 +813,7 @@ mod tests {
             *parsed.get(&3).unwrap(),
             Expr::TypeRepr {
                 name: "Y".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -878,6 +888,7 @@ mod tests {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -887,6 +898,7 @@ mod tests {
             *parsed.get(&1).unwrap(),
             Expr::TypeRepr {
                 name: "Float".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -901,6 +913,7 @@ mod tests {
             *parsed.get(&3).unwrap(),
             Expr::TypeRepr {
                 name: "Float".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -910,6 +923,7 @@ mod tests {
             *parsed.get(&4).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -991,6 +1005,7 @@ mod tests {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "T".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -1001,47 +1016,7 @@ mod tests {
             *parsed.get(&1).unwrap(),
             Expr::TypeRepr {
                 name: "Y".into(),
-                generics: vec![],
-                conformances: vec![],
-                introduces_type: false
-            }
-        );
-    }
-
-    #[test]
-    fn converts_question_to_optional_for_type_repr() {
-        let parsed = parse("func greet(name: Int?) {}");
-        let expr = parsed.roots()[0].unwrap();
-        assert_eq!(
-            *expr,
-            Expr::Func {
-                name: Some(Name::Raw("greet".to_string())),
-                generics: vec![],
-                params: vec![2],
-                body: 3,
-                ret: None,
-                captures: vec![],
-                effects: vec![],
-            }
-        );
-
-        assert_eq!(
-            *parsed.get(&2).unwrap(),
-            Parameter(Name::Raw("name".to_string()), Some(1))
-        );
-        assert_eq!(
-            *parsed.get(&1).unwrap(),
-            Expr::TypeRepr {
-                name: "Optional".into(),
-                generics: vec![0],
-                conformances: vec![],
-                introduces_type: false
-            }
-        );
-        assert_eq!(
-            *parsed.get(&0).unwrap(),
-            Expr::TypeRepr {
-                name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -1256,8 +1231,10 @@ mod arrays {
                 generics: vec![],
                 conformances: vec![TypeRepr {
                     name: Name::Raw("Something".into()),
+                    suffixes: vec![],
                     generics: vec![TypeRepr {
                         name: Name::Raw("String".into()),
+                        suffixes: vec![],
                         generics: vec![],
                         conformances: vec![],
                         introduces_type: false
@@ -1348,6 +1325,7 @@ mod structs {
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -1366,6 +1344,7 @@ mod structs {
             *parsed.get(&2).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -1589,6 +1568,7 @@ mod structs {
             *parsed.get(ret).unwrap(),
             Expr::TypeRepr {
                 name: Name::Raw("Int".into()),
+                suffixes: vec![],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false
@@ -1635,8 +1615,10 @@ mod structs {
                 name: Some(Name::Raw("foo".into())),
                 generics: vec![TypeRepr {
                     name: Name::Raw("T".into()),
+                    suffixes: vec![],
                     conformances: vec![TypeRepr {
                         name: Name::Raw("Fizz".into()),
+                        suffixes: vec![],
                         generics: vec![],
                         conformances: vec![],
                         introduces_type: false
@@ -1648,6 +1630,7 @@ mod structs {
                 body: Block(vec![Variable(Name::Raw("x".into()), None.into())]).into(),
                 ret: Some(TypeRepr {
                     name: Name::Raw("T".into()),
+                    suffixes: vec![],
                     conformances: vec![],
                     generics: vec![],
                     introduces_type: false

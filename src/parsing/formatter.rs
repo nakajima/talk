@@ -3,6 +3,7 @@ use crate::{
     name::Name,
     parser::ExprID,
     source_file::SourceFile,
+    token::Token,
     token_kind::TokenKind,
 };
 use std::collections::HashMap;
@@ -177,10 +178,11 @@ impl<'a> Formatter<'a> {
             } => self.format_property(name, type_repr.as_ref(), default_value.as_ref()),
             Expr::TypeRepr {
                 name,
+                suffixes,
                 generics,
                 conformances,
                 ..
-            } => self.format_type_repr(name, generics, conformances),
+            } => self.format_type_repr(name, generics, &suffixes, conformances),
             Expr::FuncTypeRepr(args, ret, _) => self.format_func_type_repr(args, *ret),
             Expr::TupleTypeRepr(types, _) => self.format_tuple_type_repr(types),
             Expr::Member(receiver, property) => self.format_member(receiver.as_ref(), property),
@@ -591,7 +593,13 @@ impl<'a> Formatter<'a> {
         result
     }
 
-    fn format_type_repr(&self, name: &Name, generics: &[ExprID], conformances: &[ExprID]) -> Doc {
+    fn format_type_repr(
+        &self,
+        name: &Name,
+        generics: &[ExprID],
+        suffixes: &[Token],
+        conformances: &[ExprID],
+    ) -> Doc {
         let mut result = self.format_name(name);
 
         if !generics.is_empty() {
@@ -604,6 +612,10 @@ impl<'a> Formatter<'a> {
                     concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
                 ),
             );
+        }
+
+        for token in suffixes {
+            result = concat(result, text(token.kind.as_str()))
         }
 
         if !conformances.is_empty() {
@@ -1283,7 +1295,7 @@ mod formatter_tests {
 
     #[test]
     fn test_type_annotations() {
-        assert_eq!(format_code("let x: Int?", 80), "let x: Optional<Int>");
+        assert_eq!(format_code("let x: Int?", 80), "let x: Int?");
         assert_eq!(format_code("let x: (Int, Bool)", 80), "let x: (Int, Bool)");
         assert_eq!(
             format_code("let f: (Int) -> Bool", 80),

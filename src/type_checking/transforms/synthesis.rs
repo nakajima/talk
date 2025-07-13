@@ -147,7 +147,8 @@ mod tests {
 
     use crate::{
         NameResolved, SourceFile, SymbolID, SymbolTable, compiling::driver::Driver,
-        environment::Environment, expr::Expr, name::Name, synthesis::synthesize_inits,
+        environment::Environment, expr::Expr, name::Name,
+        type_checking::transforms::synthesis::synthesize_inits,
     };
 
     pub fn resolve_with_symbols(

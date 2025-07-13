@@ -116,6 +116,7 @@ pub enum Expr {
         generics: Vec<ExprID>, /* generics */
         conformances: Vec<ExprID>,
         introduces_type: bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
+        suffixes: Vec<Token>,
     },
 
     FuncTypeRepr(

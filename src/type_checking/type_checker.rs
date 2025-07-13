@@ -15,10 +15,10 @@ use crate::{
     parser::ExprID,
     source_file::SourceFile,
     substitutions::Substitutions,
-    synthesis::synthesize_inits,
     token::Token,
     token_kind::TokenKind,
     ty::Ty,
+    type_checking::transforms::synthesis::synthesize_inits,
     type_defs::{TypeDef, protocol_def::Conformance},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -273,6 +273,7 @@ impl<'a> TypeChecker<'a> {
                 generics,
                 conformances,
                 introduces_type,
+                ..
             } => self.infer_type_repr(
                 id,
                 env,

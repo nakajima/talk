@@ -7,6 +7,7 @@ use crate::{
     NameResolved, SourceFile, SymbolID, SymbolTable,
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     constraint_solver::ConstraintSolver,
+    desugar::desugar_source_file,
     diagnostic::Diagnostic,
     environment::Environment,
     lexer::{Lexer, LexerError},
@@ -111,8 +112,25 @@ impl CompilationUnit<Raw> {
             } else {
                 Lexer::new(&source)
             };
-            let mut parser = Parser::new(self.session.clone(), lexer, path, &mut self.env);
+            let mut parser = Parser::new(self.session.clone(), lexer, path.clone(), &mut self.env);
             parser.parse();
+
+            match desugar_source_file(&mut parser) {
+                Err(e) => {
+                    tracing::error!("read error: {e:?}");
+                    if let Ok(mut session) = self.session.lock() {
+                        session.add_diagnostic(Diagnostic::resolve(
+                            path.clone(),
+                            parser.parse_tree.root_ids().first().cloned().unwrap_or(0),
+                            crate::name_resolver::NameResolverError::Unknown(
+                                "Could not desugar".into(),
+                            ),
+                        ));
+                    }
+                }
+                _ => (),
+            };
+
             files.push(parser.parse_tree);
         }
 

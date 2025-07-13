@@ -440,29 +440,26 @@ mod tests {
 
 #[cfg(test)]
 mod optional_tests {
-    use crate::{expr::Expr, parser::parse};
+    use crate::{expr::Expr, parser::parse, token::Token, token_kind::TokenKind};
 
     #[test]
     fn gets_parsed() {
         let parsed = parse("let a: Int?", "-".into());
-        let Expr::Let(_, Some(ty)) = parsed.roots()[0].unwrap() else {
+        let Expr::Let(_, Some(_)) = parsed.roots()[0].unwrap() else {
             panic!("didn't get let expr");
         };
-
-        assert_eq!(
-            *parsed.get(ty).unwrap(),
-            Expr::TypeRepr {
-                name: "Optional".into(),
-                generics: vec![0],
-                conformances: vec![],
-                introduces_type: false
-            }
-        );
 
         assert_eq!(
             *parsed.get(&0).unwrap(),
             Expr::TypeRepr {
                 name: "Int".into(),
+                suffixes: vec![Token {
+                    kind: TokenKind::QuestionMark,
+                    start: 10,
+                    end: 11,
+                    line: 0,
+                    col: 11
+                }],
                 generics: vec![],
                 conformances: vec![],
                 introduces_type: false

@@ -62,6 +62,7 @@ pub enum FullExpr {
     // A type annotation
     TypeRepr {
         name: Name,
+        suffixes: Vec<Token>,
         generics: Vec<FullExpr>, /* generics */
         conformances: Vec<FullExpr>,
         introduces_type: bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
@@ -309,11 +310,13 @@ impl<P: Phase> Filler<P> {
                 generics,
                 conformances,
                 introduces_type,
+                suffixes,
             } => FullExpr::TypeRepr {
                 name,
                 generics: self.fill_mult(&generics),
                 conformances: self.fill_mult(&conformances),
                 introduces_type,
+                suffixes,
             },
             Expr::FuncTypeRepr(items, ret, introduces_vars) => FullExpr::FuncTypeRepr(
                 self.fill_mult(&items),

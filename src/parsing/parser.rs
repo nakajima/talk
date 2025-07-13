@@ -312,7 +312,7 @@ impl<'a> Parser<'a> {
     }
 
     #[must_use]
-    fn push_source_location(&mut self) -> LocToken {
+    pub(super) fn push_source_location(&mut self) -> LocToken {
         tracing::trace!("push_source_location: {:?}", self.current);
         #[allow(clippy::unwrap_used)]
         let start = SourceLocationStart {
@@ -1075,30 +1075,25 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let conformances = self.conformances()?;
+        let mut suffixes = vec![];
+        let mut conformances = vec![];
+        if is_type_parameter {
+            conformances = self.conformances()?;
+        } else {
+            while self.peek_is(TokenKind::QuestionMark) {
+                suffixes.push(self.advance().unwrap())
+            }
+        }
 
         let type_repr = TypeRepr {
             name: name.into(),
+            suffixes,
             generics,
             conformances,
             introduces_type: is_type_parameter,
         };
-        let type_repr_id = self.add_expr(type_repr, tok)?;
 
-        if self.did_match(TokenKind::QuestionMark)? {
-            let tok = self.push_source_location();
-            self.add_expr(
-                TypeRepr {
-                    name: Name::Raw("Optional".to_string()),
-                    generics: vec![type_repr_id],
-                    conformances: vec![],
-                    introduces_type: is_type_parameter,
-                },
-                tok,
-            )
-        } else {
-            Ok(type_repr_id)
-        }
+        self.add_expr(type_repr, tok)
     }
 
     fn enum_body(&mut self) -> Result<ExprID, ParserError> {

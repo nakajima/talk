@@ -12,7 +12,7 @@ pub mod environment;
 pub mod name_resolver;
 pub mod scope_tree;
 pub mod substitutions;
-pub mod synthesis;
+pub mod transforms;
 pub mod ty;
 pub mod type_checker;
 pub mod type_checker_hoisting;
