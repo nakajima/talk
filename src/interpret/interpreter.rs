@@ -8,7 +8,6 @@ use crate::{
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
-        ir_function::IRFunction,
         ir_module::IRModule,
         ir_printer::{self},
         ir_type::IRType,
@@ -301,7 +300,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                         *self
                             .function_map
                             .get(&name)
-                            .ok_or_else(|| InterpreterError::CalleeNotFound(name))?
+                            .ok_or(InterpreterError::CalleeNotFound(name))?
                     }
                 };
 
@@ -556,10 +555,6 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
         stack[register.0 as usize]
             .clone()
             .expect("null pointer lol")
-    }
-
-    fn load_function(&self, idx: usize) -> Option<&IRFunction> {
-        self.program.functions.get(idx)
     }
 
     fn dump(&self) {

@@ -312,11 +312,15 @@ impl Instr {
                 regs
             }
 
-            Alloc { count, .. } => match count {
-                Some(IRValue::Register(r)) => vec![*r],
-                _ => Vec::new(),
-            },
+            Alloc {
+                count: Some(IRValue::Register(r)),
+                ..
+            } => vec![*r],
 
+            //                match count {
+            //               Some(IRValue::Register(r)) => vec![*r],
+            //              _ => Vec::new(),
+            //         },
             GetElementPointer { base, index, .. } => {
                 let mut regs = vec![*base];
                 if let IRValue::Register(r) = index {
@@ -331,15 +335,15 @@ impl Instr {
 
             TagVariant(_, _, _, values) => values.0.iter().map(|v| v.register).collect(),
 
-            Print { val, .. } => match val {
-                IRValue::Register(r) => vec![*r],
-                _ => Vec::new(),
-            },
+            Print {
+                val: IRValue::Register(r),
+                ..
+            } => vec![*r],
 
-            Const { val, .. } => match val {
-                IRValue::Register(r) => vec![*r],
-                _ => Vec::new(),
-            },
+            Const {
+                val: IRValue::Register(r),
+                ..
+            } => vec![*r],
 
             _ => Vec::new(),
         }

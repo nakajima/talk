@@ -127,8 +127,6 @@ impl DeadCodeEliminator {
     }
 
     fn prune_unread_registers(func: &mut IRFunction) {
-        use Instr::*;
-
         let mut used = HashSet::new();
 
         // Gather initial set of used registers
