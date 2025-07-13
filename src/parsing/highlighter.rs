@@ -1,7 +1,7 @@
 use crate::{
     SourceFile,
     lexer::Lexer,
-    parsed_expr::{Expr, IncompleteExpr, ParsedExpr},
+    parsed_expr::{Expr, IncompleteExpr, ParsedExpr, Pattern},
     parser::parse,
     token::Token,
     token_kind::TokenKind,
@@ -169,7 +169,7 @@ impl<'a> Higlighter<'a> {
         let start = meta.start.start;
         let end = meta.end.end;
 
-        match expr.expr {
+        match &expr.expr {
             Expr::Incomplete(e) => match e {
                 IncompleteExpr::Member(rec) => {
                     if let Some(receiver) = rec {
@@ -187,8 +187,8 @@ impl<'a> Higlighter<'a> {
                 result.push(HighlightToken::new(Kind::KEYWORD, start, end))
             }
             Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(&rhs)),
-            Expr::Binary(lhs, _token_kind, rhs) => {
-                result.extend(self.tokens_from_exprs(&[*lhs, *rhs]))
+            Expr::Binary(box lhs, _token_kind, box rhs) => {
+                result.extend(self.tokens_from_expr_refs(&[lhs, rhs]))
             }
             Expr::Tuple(items) => {
                 result.push(HighlightToken::new(Kind::KEYWORD, start, end));
@@ -206,23 +206,19 @@ impl<'a> Higlighter<'a> {
                 result.extend(self.tokens_from_exprs(&args));
             }
             Expr::ParsedPattern(pattern) => match pattern {
-                crate::expr::Pattern::LiteralInt(_) => {
+                Pattern::LiteralInt(_) => {
                     result.push(HighlightToken::new(Kind::NUMBER, start, end))
                 }
-                crate::expr::Pattern::LiteralFloat(_) => {
+                Pattern::LiteralFloat(_) => {
                     result.push(HighlightToken::new(Kind::NUMBER, start, end))
                 }
-                crate::expr::Pattern::LiteralTrue => {
+                Pattern::LiteralTrue => result.push(HighlightToken::new(Kind::KEYWORD, start, end)),
+                Pattern::LiteralFalse => {
                     result.push(HighlightToken::new(Kind::KEYWORD, start, end))
                 }
-                crate::expr::Pattern::LiteralFalse => {
-                    result.push(HighlightToken::new(Kind::KEYWORD, start, end))
-                }
-                crate::expr::Pattern::Bind(_name) => {}
-                crate::expr::Pattern::Wildcard => {}
-                crate::expr::Pattern::Variant { fields, .. } => {
-                    result.extend(self.tokens_from_exprs(fields))
-                }
+                Pattern::Bind(_name) => {}
+                Pattern::Wildcard => {}
+                Pattern::Variant { fields, .. } => result.extend(self.tokens_from_exprs(&fields)),
             },
             Expr::Return(rhs) => {
                 if let Some(rhs) = rhs {
@@ -266,7 +262,7 @@ impl<'a> Higlighter<'a> {
                 conformances,
                 ..
             } => {
-                if let Some(meta) = self.source_file.meta.get(expr_id) {
+                if let Some(meta) = self.source_file.meta.get(&expr.id) {
                     result.extend(
                         meta.identifiers
                             .iter()
@@ -313,7 +309,9 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(&rhs));
                 }
             }
-            Expr::Assignment(lhs, rhs) => result.extend(self.tokens_from_exprs(&[*lhs, *rhs])),
+            Expr::Assignment(box lhs, box rhs) => {
+                result.extend(self.tokens_from_expr_refs(&[lhs, rhs]))
+            }
             Expr::Variable(_name) => {}
             Expr::If(cond, then, alt) => {
                 result.extend(self.tokens_from_expr(&cond));
@@ -329,19 +327,19 @@ impl<'a> Higlighter<'a> {
                 result.extend(self.tokens_from_expr(&body));
             }
             Expr::EnumDecl { generics, body, .. } => {
-                result.extend(self.tokens_from_exprs(&generics));
+                result.extend(self.tokens_from_exprs(generics));
                 result.extend(self.tokens_from_expr(&body));
             }
             Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(&items)),
             Expr::Match(_, items) => result.extend(self.tokens_from_exprs(&items)),
-            Expr::MatchArm(pattern, body) => {
-                result.extend(self.tokens_from_exprs(&[*pattern, *body]))
+            Expr::MatchArm(box pattern, box body) => {
+                result.extend(self.tokens_from_expr_refs(&[pattern, body]))
             }
             Expr::PatternVariant(_name, _name1, items) => {
                 result.extend(self.tokens_from_exprs(&items))
             }
             Expr::CallArg { value, .. } => {
-                if let Some(meta) = self.source_file.meta.get(expr_id) {
+                if let Some(meta) = self.source_file.meta.get(&expr.id) {
                     result.extend(
                         meta.identifiers
                             .iter()
@@ -374,6 +372,13 @@ impl<'a> Higlighter<'a> {
         };
 
         result
+    }
+
+    fn tokens_from_expr_refs(&self, exprs: &[&ParsedExpr]) -> Vec<HighlightToken> {
+        exprs
+            .iter()
+            .flat_map(|e| self.tokens_from_expr(e))
+            .collect()
     }
 
     fn tokens_from_exprs(&self, exprs: &[ParsedExpr]) -> Vec<HighlightToken> {

@@ -1,7 +1,8 @@
 use crate::{
     expr::ExprMeta,
     name::Name,
-    parsed_expr::{Expr, ParsedExpr},
+    parsed_expr::{Expr, ParsedExpr, Pattern},
+    parser::ExprID,
     source_file::SourceFile,
     token_kind::TokenKind,
 };
@@ -111,7 +112,7 @@ impl<'a> Formatter<'a> {
         let mut output = String::new();
         let mut last_meta: Option<&ExprMeta> = None;
 
-        for (i, &root_id) in self.source_file.roots().iter().enumerate() {
+        for (i, root) in self.source_file.roots().iter().enumerate() {
             if i > 0 {
                 output.push('\n');
 
@@ -123,7 +124,7 @@ impl<'a> Formatter<'a> {
                 }
             }
 
-            let doc = self.format_expr(root);
+            let doc = self.format_expr(&root);
             output.push_str(&Self::render_doc(doc, width));
 
             last_meta = self.meta_cache.get(&root.id).map(|v| &**v);
@@ -133,11 +134,7 @@ impl<'a> Formatter<'a> {
     }
 
     pub(crate) fn format_expr(&self, expr: &ParsedExpr) -> Doc {
-        let Some(expr) = self.source_file.get(&expr_id) else {
-            return Doc::Empty;
-        };
-
-        match expr {
+        match &expr.expr {
             Expr::Incomplete(_) => Doc::Empty,
             Expr::LiteralArray(items) => self.format_array_literal(items),
             Expr::LiteralString(string) => self.format_string_literal(string),
@@ -190,7 +187,7 @@ impl<'a> Formatter<'a> {
                 body,
                 ret,
                 ..
-            } => self.format_func(name, generics, params, &Some(body), ret, false),
+            } => self.format_func(name, generics, params, &Some(body), &ret.as_ref(), false),
             Expr::Parameter(name, type_repr) => self.format_parameter(name, type_repr),
             Expr::Let(name, type_repr) => self.format_let(name, type_repr),
             Expr::Assignment(lhs, rhs) => self.format_assignment(lhs, rhs),
@@ -222,12 +219,12 @@ impl<'a> Formatter<'a> {
                             ..
                         },
                     ..
-                } = func_id
+                } = &func_id
                 else {
                     return Doc::Empty;
                 };
 
-                self.format_func(name, generics, params, &Some(body), ret, true)
+                self.format_func(name, generics, params, &Some(body), &ret.as_ref(), true)
             }
             Expr::ProtocolDecl {
                 name,
@@ -245,7 +242,7 @@ impl<'a> Formatter<'a> {
                 generics,
                 params,
                 &None,
-                &Some(*ret),
+                &Some(ret),
                 false,
             ),
         }
@@ -349,12 +346,11 @@ impl<'a> Formatter<'a> {
             ));
         }
 
-        // --- Corrected Logic ---
         let mut final_doc = empty();
         let mut last_meta: Option<&ExprMeta> = None;
 
-        for (i, &stmt_id) in stmts.iter().enumerate() {
-            let meta = self.meta_cache.get(&stmt_id);
+        for (i, stmt) in stmts.iter().enumerate() {
+            let meta = self.meta_cache.get(&stmt.id);
 
             // Add separators *before* each statement, except the first one.
             if i > 0 {
@@ -370,7 +366,7 @@ impl<'a> Formatter<'a> {
             }
 
             // Add the formatted statement itself.
-            final_doc = concat(final_doc, self.format_expr(&stmt_id));
+            final_doc = concat(final_doc, self.format_expr(&stmt));
             last_meta = meta.map(|v| &**v);
         }
 
@@ -655,7 +651,7 @@ impl<'a> Formatter<'a> {
         generics: &[ParsedExpr],
         params: &[ParsedExpr],
         body: &Option<&Box<ParsedExpr>>,
-        ret: &Option<Box<ParsedExpr>>,
+        ret: &Option<&Box<ParsedExpr>>,
         is_init: bool,
     ) -> Doc {
         let mut result;
@@ -808,12 +804,16 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_enum_body(&self, body_id: &ParsedExpr) -> Doc {
+        let Expr::Block(items) = &body_id.expr else {
+            return Doc::Empty;
+        };
+
         if items.is_empty() {
             return concat(text("{"), text("}"));
         }
 
         let mut docs = Vec::new();
-        for &item_id in items {
+        for item_id in items {
             docs.push(self.format_expr(&item_id));
         }
 
@@ -907,8 +907,8 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn contains_control_flow(&self, expr_id: &ParsedExpr) -> bool {
-        match expr {
+    fn contains_control_flow(&self, expr: &ParsedExpr) -> bool {
+        match &expr.expr {
             Expr::Func { .. } | Expr::If(..) | Expr::Loop(..) | Expr::Match(..) => true,
             Expr::Block(stmts) => stmts.iter().any(|id| self.contains_control_flow(id)),
             _ => false,

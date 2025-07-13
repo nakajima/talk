@@ -8,11 +8,10 @@ use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
 use crate::diagnostic::Diagnostic;
-use crate::expr::Expr;
-use crate::expr::Expr::*;
-use crate::expr::IncompleteExpr;
-use crate::expr::Pattern;
 use crate::name::Name;
+use crate::parsed_expr::Expr;
+use crate::parsed_expr::IncompleteExpr;
+use crate::parsed_expr::ParsedExpr;
 use crate::parser::ExprID;
 use crate::scope_tree::ScopeId;
 use crate::source_file::SourceFile;
@@ -80,8 +79,10 @@ impl NameResolver {
         if !source_file.roots().is_empty()
             && let Some(first_root) = &source_file
                 .meta
-                .get(source_file.root_ids().first().unwrap())
-            && let Some(last_root) = &source_file.meta.get(source_file.root_ids().last().unwrap())
+                .get(&source_file.roots().first().unwrap().id)
+            && let Some(last_root) = &source_file
+                .meta
+                .get(&source_file.roots().last().unwrap().id)
         {
             let root_scope_id = source_file.scope_tree.new_scope(
                 None,
@@ -97,39 +98,33 @@ impl NameResolver {
             );
             self.scope_tree_ids.push(root_scope_id);
         }
-        self.resolve_nodes(&source_file.root_ids(), &mut source_file, symbol_table);
+        self.resolve_nodes(source_file.roots_mut(), symbol_table);
         source_file.to_resolved()
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
-    fn resolve_nodes(
-        &mut self,
-        node_ids: &[ExprID],
-        source_file: &mut SourceFile,
-        symbol_table: &mut SymbolTable,
-    ) {
-        self.hoist_protocols(node_ids, source_file, symbol_table);
-        self.hoist_enums(node_ids, source_file, symbol_table);
-        self.hoist_funcs(node_ids, source_file, symbol_table);
-        self.hoise_structs(node_ids, source_file, symbol_table);
+    #[tracing::instrument(skip(self, symbol_table))]
+    fn resolve_nodes(&mut self, exprs: Vec<&mut ParsedExpr>, symbol_table: &mut SymbolTable) {
+        self.hoist_protocols(exprs, symbol_table);
+        self.hoist_enums(exprs, symbol_table);
+        self.hoist_funcs(exprs, symbol_table);
+        self.hoise_structs(exprs, symbol_table);
 
-        for node_id in node_ids {
-            let Some(expr) = &mut source_file.get_mut(node_id) else {
-                continue;
-            };
+        use Expr::*;
+
+        for expr in exprs {
             tracing::trace!("Resolving: {expr:?}");
-            match expr.clone() {
+            match &expr.expr {
                 LiteralInt(_) => continue,
                 LiteralFloat(_) => continue,
                 LiteralString(_) => continue,
                 LiteralArray(items) => {
-                    self.resolve_nodes(&items, source_file, symbol_table);
+                    self.resolve_nodes(items.iter_mut().collect(), symbol_table);
                 }
                 LiteralTrue | LiteralFalse => continue,
                 Incomplete(incomplete) => match incomplete {
                     IncompleteExpr::Member(receiver) => {
-                        if let Some(receiver) = receiver {
-                            self.resolve_nodes(&[receiver], source_file, symbol_table);
+                        if let Some(box mut receiver) = receiver {
+                            self.resolve_nodes(vec![&mut receiver], symbol_table);
                         }
                     }
                     IncompleteExpr::Func {
@@ -141,13 +136,12 @@ impl NameResolver {
                     } => {
                         self.resolve_func(
                             &name,
-                            node_id,
+                            expr,
                             &params.unwrap_or(vec![]),
                             &generics.unwrap_or(vec![]),
                             body.as_ref(),
                             &ret,
                             symbol_table,
-                            source_file,
                         );
                     }
                 },
@@ -182,8 +176,8 @@ impl NameResolver {
                             if let Ok(mut session) = self.session.lock() {
                                 session.add_diagnostic(Diagnostic::resolve(
                                     source_file.path.clone(),
-                                    *node_id,
-                                    NameResolverError::UnresolvedName(name_str),
+                                    expr.id,
+                                    NameResolverError::UnresolvedName(name_str.to_string()),
                                 ))
                             }
                             return;
@@ -194,7 +188,7 @@ impl NameResolver {
                         let symbol_id = symbol_id.0;
                         self.type_symbol_stack.push(symbol_id);
                         source_file.nodes.insert(
-                            *node_id,
+                            *expr,
                             Extend {
                                 name: Name::Resolved(symbol_id, name_str),
                                 generics: generics.clone(),
@@ -217,11 +211,11 @@ impl NameResolver {
                         return;
                     };
 
-                    symbol_table.add_initializer(symbol_id, *node_id);
+                    symbol_table.add_initializer(symbol_id, *expr);
                     self.resolve_nodes(&[func_id], source_file, symbol_table);
                     source_file
                         .nodes
-                        .insert(*node_id, Expr::Init(Some(symbol_id), func_id));
+                        .insert(*expr, Expr::Init(Some(symbol_id), func_id));
                 }
                 Property {
                     type_repr,
@@ -241,13 +235,13 @@ impl NameResolver {
                         let symbol_id = self.declare(
                             name_str.clone(),
                             SymbolKind::Property,
-                            node_id,
+                            expr,
                             source_file,
                             symbol_table,
                         );
 
                         source_file.nodes.insert(
-                            *node_id,
+                            *expr,
                             Expr::Property {
                                 name: Name::Resolved(symbol_id, name_str),
                                 type_repr,
@@ -286,7 +280,7 @@ impl NameResolver {
                             let symbol_id = self.declare(
                                 name_str.clone(),
                                 SymbolKind::Local,
-                                node_id,
+                                expr,
                                 source_file,
                                 symbol_table,
                             );
@@ -299,7 +293,7 @@ impl NameResolver {
                         self.resolve_nodes(&[rhs], source_file, symbol_table);
                     }
 
-                    source_file.nodes.insert(*node_id, Let(name, rhs));
+                    source_file.nodes.insert(*expr, Let(name, rhs));
                 }
                 Call {
                     callee,
@@ -325,7 +319,7 @@ impl NameResolver {
                     self.resolve_nodes(&items, source_file, symbol_table);
                 }
                 Block(items) => {
-                    let tok = self.start_scope(source_file, source_file.span(node_id));
+                    let tok = self.start_scope(source_file, source_file.span(expr));
                     self.hoist_funcs(&items, source_file, symbol_table);
                     self.resolve_nodes(&items, source_file, symbol_table);
                     self.end_scope(tok);
@@ -340,7 +334,7 @@ impl NameResolver {
                 } => {
                     self.resolve_func(
                         &name,
-                        node_id,
+                        expr,
                         &params,
                         &generics,
                         Some(&body),
@@ -357,13 +351,13 @@ impl NameResolver {
                         let symbol_id = self.declare(
                             name.clone(),
                             SymbolKind::Param,
-                            node_id,
+                            expr,
                             source_file,
                             symbol_table,
                         );
 
                         source_file.nodes.insert(
-                            *node_id,
+                            *expr,
                             Parameter(Name::Resolved(symbol_id, name.clone()), ty_repr),
                         );
                     }
@@ -377,13 +371,13 @@ impl NameResolver {
                         let name = if name_str == "self" {
                             if let Some(last_symbol) = self.type_symbol_stack.last() {
                                 let name = Name::_Self(*last_symbol);
-                                symbol_table.add_map(source_file, node_id, last_symbol);
+                                symbol_table.add_map(source_file, expr, last_symbol);
                                 name
                             } else {
                                 if let Ok(mut lock) = self.session.lock() {
                                     lock.add_diagnostic(Diagnostic::resolve(
                                         source_file.path.clone(),
-                                        *node_id,
+                                        *expr,
                                         NameResolverError::InvalidSelf,
                                     ));
                                 }
@@ -394,7 +388,7 @@ impl NameResolver {
                                 if let Ok(mut session) = self.session.lock() {
                                     session.add_diagnostic(Diagnostic::resolve(
                                         source_file.path.clone(),
-                                        *node_id,
+                                        *expr,
                                         NameResolverError::UnresolvedName(name_str),
                                     ))
                                 }
@@ -403,7 +397,7 @@ impl NameResolver {
                             };
                             tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
 
-                            symbol_table.add_map(source_file, node_id, &symbol_id);
+                            symbol_table.add_map(source_file, expr, &symbol_id);
 
                             // Check to see if this is a capture
                             if let Some((func_id, func_depth)) = self.func_stack.last()
@@ -433,7 +427,7 @@ impl NameResolver {
                             Name::Resolved(symbol_id, name_str)
                         };
 
-                        source_file.nodes.insert(*node_id, Variable(name, None));
+                        source_file.nodes.insert(*expr, Variable(name, None));
                     }
                     Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
                 },
@@ -451,7 +445,7 @@ impl NameResolver {
                                 let symbol_id = self.declare(
                                     raw_name_str.clone(),
                                     SymbolKind::TypeParameter,
-                                    node_id,
+                                    expr,
                                     source_file,
                                     symbol_table,
                                 );
@@ -463,7 +457,7 @@ impl NameResolver {
                                     && let Some(last_symbol) = self.type_symbol_stack.last()
                                 {
                                     let name = Name::SelfType;
-                                    symbol_table.add_map(source_file, node_id, last_symbol);
+                                    symbol_table.add_map(source_file, expr, last_symbol);
                                     name
                                 } else if let Some((symbol_id, _)) = self.lookup(&raw_name_str) {
                                     Name::Resolved(symbol_id, raw_name_str)
@@ -471,7 +465,7 @@ impl NameResolver {
                                     if let Ok(mut session) = self.session.lock() {
                                         session.add_diagnostic(Diagnostic::resolve(
                                             source_file.path.clone(),
-                                            *node_id,
+                                            *expr,
                                             NameResolverError::UnresolvedName(raw_name_str),
                                         ))
                                     }
@@ -486,7 +480,7 @@ impl NameResolver {
                     // Update the existing TypeRepr node with the resolved name.
                     // The node type remains TypeRepr.
                     source_file.nodes.insert(
-                        *node_id,
+                        *expr,
                         TypeRepr {
                             name: resolved_name_for_node,
                             generics: generics.clone(), // Keep original generics ExprIDs
@@ -517,7 +511,7 @@ impl NameResolver {
                             let symbol_id = self.declare(
                                 name_str.clone(),
                                 SymbolKind::Enum,
-                                node_id,
+                                expr,
                                 source_file,
                                 symbol_table,
                             );
@@ -526,7 +520,7 @@ impl NameResolver {
                             self.resolve_nodes(&conformances, source_file, symbol_table);
                             self.resolve_nodes(&[body], source_file, symbol_table);
                             source_file.nodes.insert(
-                                *node_id,
+                                *expr,
                                 EnumDecl {
                                     name: Name::Resolved(symbol_id, name_str),
                                     generics: generics.clone(),
@@ -551,14 +545,14 @@ impl NameResolver {
                         let sym = self.declare(
                             name_str.clone(),
                             SymbolKind::EnumVariant(SymbolID(type_sym.0)),
-                            node_id,
+                            expr,
                             source_file,
                             symbol_table,
                         );
 
                         source_file
                             .nodes
-                            .insert(*node_id, EnumVariant(Name::Resolved(sym, name_str), values));
+                            .insert(*expr, EnumVariant(Name::Resolved(sym, name_str), values));
                     }
                 }
                 Match(scrutinee, arms) => {
@@ -570,15 +564,14 @@ impl NameResolver {
                     self.resolve_nodes(&arms, source_file, symbol_table);
                 }
                 MatchArm(pattern, body) => {
-                    let tok = self.start_scope(source_file, source_file.span(node_id));
+                    let tok = self.start_scope(source_file, source_file.span(expr));
                     self.resolve_nodes(&[pattern], source_file, symbol_table);
                     self.resolve_nodes(&[body], source_file, symbol_table);
                     self.end_scope(tok);
                 }
                 Pattern(pattern) => {
-                    let pattern =
-                        self.resolve_pattern(&pattern, source_file, symbol_table, node_id);
-                    source_file.nodes.insert(*node_id, Pattern(pattern));
+                    let pattern = self.resolve_pattern(&pattern, source_file, symbol_table, expr);
+                    source_file.nodes.insert(*expr, Pattern(pattern));
                 }
                 PatternVariant(_, _, _items) => (),
                 FuncSignature {
@@ -588,7 +581,7 @@ impl NameResolver {
                     ret,
                 } => self.resolve_func(
                     &Some(name),
-                    node_id,
+                    expr,
                     &params,
                     &generics,
                     None,
@@ -606,13 +599,13 @@ impl NameResolver {
                         let symbol_id = self.declare(
                             name_str.clone(),
                             SymbolKind::Protocol,
-                            node_id,
+                            expr,
                             source_file,
                             symbol_table,
                         );
                         self.type_symbol_stack.push(symbol_id);
                         source_file.nodes.insert(
-                            *node_id,
+                            *expr,
                             ProtocolDecl {
                                 name: Name::Resolved(symbol_id, name_str),
                                 associated_types: associated_types.clone(),
@@ -638,12 +631,11 @@ impl NameResolver {
         &mut self,
         name: &Option<Name>,
         node_id: &ExprID,
-        params: &[ExprID],
-        generics: &[ExprID],
+        params: &[ParsedExpr],
+        generics: &[ParsedExpr],
         body: Option<&ExprID>,
         ret: &Option<ExprID>,
         symbol_table: &mut SymbolTable,
-        source_file: &mut SourceFile,
     ) {
         if !self.type_symbol_stack.is_empty() && name.is_none() {
             if let Ok(mut lock) = self.session.lock() {
@@ -681,7 +673,7 @@ impl NameResolver {
     #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_funcs(
         &mut self,
-        node_ids: &[ExprID],
+        node_ids: &[ParsedExpr],
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {
@@ -760,7 +752,7 @@ impl NameResolver {
     #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoise_structs(
         &mut self,
-        node_ids: &[ExprID],
+        node_ids: &[ParsedExpr],
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {
@@ -867,7 +859,7 @@ impl NameResolver {
     #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_enums(
         &mut self,
-        node_ids: &[ExprID],
+        node_ids: &[ParsedExpr],
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {
@@ -966,7 +958,7 @@ impl NameResolver {
     #[tracing::instrument(skip(self, source_file, symbol_table))]
     fn hoist_protocols(
         &mut self,
-        items: &[ExprID],
+        items: &[ParsedExpr],
         source_file: &mut SourceFile,
         symbol_table: &mut SymbolTable,
     ) {

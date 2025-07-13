@@ -70,7 +70,7 @@ mod tests {
                 captures: vec![]
             })
         );
-        assert_eq!(parsed.roots()[1].expr, any_expr!(Expr::Tuple(vec![])));
+        assert_eq!(parsed.roots()[1], any_expr!(Expr::Tuple(vec![])));
     }
 
     #[test]

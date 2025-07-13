@@ -184,6 +184,11 @@ impl<P: Phase> SourceFile<P> {
         self.roots.as_ref()
     }
 
+    // Gets the root expr of the tree
+    pub fn roots_mut(&mut self) -> &mut [ParsedExpr] {
+        self.roots.as_mut_slice()
+    }
+
     pub fn find_expr_id(&self, expr: fn(expr: &Expr) -> bool) -> Option<ExprID> {
         for (id, node) in self.nodes.iter() {
             if expr(node) {
