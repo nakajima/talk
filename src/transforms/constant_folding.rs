@@ -150,6 +150,14 @@ impl ConstantFolder {
                             instr = Instr::Phi(dest, ty.clone(), preds);
                         }
                     }
+                    Instr::StoreLocal(dest, ref ty, src) => {
+                        if let Some(val) = consts.get(&src).cloned() {
+                            consts.insert(dest, val.clone());
+                            instr = Self::make_const(dest, ty.clone(), val);
+                        } else {
+                            consts.remove(&dest);
+                        }
+                    }
                     _ => {}
                 }
                 new_instructions.push(instr);
@@ -282,6 +290,34 @@ mod tests {
         assert_eq!(func.blocks[0].instructions[1], Instr::Jump(BasicBlockID(2)));
         if let Instr::ConstantInt(_, 7) = func.blocks[3].instructions[0] { } else { panic!("phi not folded"); }
         if let Instr::ConstantInt(_, 11) = func.blocks[3].instructions[4] { } else { panic!("mul/add not folded"); }
+    }
+
+    #[test]
+    fn store_local_clears_constants() {
+        let module = IRModule {
+            functions: vec![IRFunction {
+                debug_info: Default::default(),
+                name: "@main".into(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID::ENTRY,
+                    instructions: vec![
+                        Instr::ConstantInt(Register(0), 0),
+                        Instr::StoreLocal(Register(0), IRType::Int, Register(1)),
+                        Instr::LessThan(Register(2), IRType::Int, Register(0), Register(1)),
+                    ],
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 1,
+            }],
+            constants: vec![],
+        };
+
+        let optimized = ConstantFolder::new().run(module);
+        let func = optimized.functions.iter().find(|f| f.name == "@main").unwrap();
+        // LessThan should remain since register 0 was overwritten with a non-constant
+        assert!(matches!(func.blocks[0].instructions[2], Instr::LessThan(..)));
     }
 
 }
