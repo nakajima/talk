@@ -2,7 +2,7 @@ use std::{mem::transmute, ops::Add};
 
 use crate::{parsed_expr::ParsedExpr, token::Token, token_kind::TokenKind};
 
-use super::parser::{ExprID, Parser, ParserError};
+use super::parser::{Parser, ParserError};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]

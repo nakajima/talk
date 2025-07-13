@@ -1,16 +1,13 @@
-use parsed_expr::Expr::*;
 use std::path::PathBuf;
 use tracing::info_span;
 
-#[cfg(test)]
-use crate::filler::FullExpr;
 use crate::{
     SourceFile,
     compiling::compilation_session::SharedCompilationSession,
     diagnostic::Diagnostic,
     environment::Environment,
     lexer::Lexer,
-    parsed_expr::{self, IncompleteExpr, ParsedExpr, Pattern},
+    parsed_expr::{self, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
     token::Token,
     token_kind::TokenKind,
 };
@@ -134,22 +131,6 @@ pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
 
     parser.parse();
     parser.parse_tree
-}
-
-#[cfg(test)]
-pub fn parse_fill(code: &str) -> Vec<FullExpr> {
-    let lexer = Lexer::new(code);
-    let mut env = Environment::default();
-    let session = SharedCompilationSession::default();
-    let mut parser = Parser::new(session.clone(), lexer, PathBuf::from("-"), &mut env);
-
-    parser.parse();
-
-    use crate::filler::Filler;
-
-    let filler = Filler::new(parser.parse_tree);
-
-    filler.fill_root()
 }
 
 #[cfg(test)]
