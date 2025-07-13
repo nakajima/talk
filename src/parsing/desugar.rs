@@ -168,6 +168,7 @@ mod tests {
         environment::Environment,
         filler::{Filler, FullExpr},
         lexer::Lexer,
+        parser::parse_fill,
         token::Token,
         token_kind::TokenKind,
     };
@@ -245,6 +246,33 @@ mod tests {
                 .into(),
                 captures: vec![],
                 effects: vec![]
+            }
+        )
+    }
+
+    #[test]
+    fn desugars_basic_await() {
+        let desugared = desugar(
+            "
+        func foo() {
+            await bar();
+        }",
+        );
+
+        let full = Filler::new(desugared).fill_root();
+        assert_eq!(
+            full[0],
+            FullExpr::Func {
+                name: Some("foo".into()),
+                generics: vec![],
+                params: vec![],
+                body: FullExpr::Block(vec![
+                    // ??
+                ])
+                .into(),
+                ret: None.into(),
+                captures: vec![],
+                effects: vec![],
             }
         )
     }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tracing::info_span;
 
 #[cfg(test)]
-use crate::filler::FullExpr;
+use crate::{Phase, filler::FullExpr};
 use crate::{
     SourceFile, compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
     environment::Environment, expr::IncompleteExpr, lexer::Lexer, token::Token,
