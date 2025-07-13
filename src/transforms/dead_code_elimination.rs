@@ -144,11 +144,12 @@ impl DeadCodeEliminator {
             for block in &mut func.blocks {
                 let mut new_instrs = Vec::new();
                 for instr in std::mem::take(&mut block.instructions) {
-                    if let Some(dest) = instr.dest() {
-                        if !used.contains(&dest) && instr.is_pure() {
-                            changed = true;
-                            continue;
-                        }
+                    if let Some(dest) = instr.dest()
+                        && !used.contains(&dest)
+                        && instr.is_pure()
+                    {
+                        changed = true;
+                        continue;
                     }
                     new_instrs.push(instr);
                 }

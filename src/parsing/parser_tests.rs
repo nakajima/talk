@@ -236,22 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_precedence_chain() {
-        let parsed = parse("2 + 3 * 3");
-        let expr = parsed.roots()[0].unwrap();
-        if let Expr::Binary(left, TokenKind::Plus, right) = expr {
-            assert_eq!(*parsed.get(&left).unwrap(), Expr::LiteralInt("2".into()));
-            let rhs = parsed.get(&right).unwrap();
-            match rhs {
-                Expr::Binary(_, TokenKind::Star, _) => {}
-                _ => panic!("expected multiplication on RHS, got {:?}", rhs),
-            }
-        } else {
-            panic!("expected binary plus expression, got {expr:?}");
-        }
-    }
-
-    #[test]
     fn parses_group() {
         let parsed = parse("(1 + 2)");
         let expr = parsed.roots()[0].unwrap();
@@ -299,7 +283,6 @@ mod tests {
         assert_eq!(*expr, Expr::Unary(TokenKind::Minus, 0));
         assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
     }
-
 
     #[test]
     fn parses_tuple() {

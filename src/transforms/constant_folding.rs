@@ -17,7 +17,7 @@ enum ConstValue {
 
 impl ConstantFolder {
     pub fn new() -> Self {
-        Self::default()
+        Self {}
     }
 
     pub fn run(self, mut module: IRModule) -> IRModule {
