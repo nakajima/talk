@@ -1,12 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::lowering::{
-    instr::Instr,
-    ir_function::IRFunction,
-    ir_module::IRModule,
-    ir_type::IRType,
-    register::Register,
-    phi_predecessors::PhiPredecessors,
+    instr::Instr, ir_function::IRFunction, ir_module::IRModule, ir_type::IRType,
+    phi_predecessors::PhiPredecessors, register::Register,
 };
 
 #[derive(Default)]
@@ -33,6 +29,7 @@ impl ConstantFolder {
 
     fn fold_function(func: &mut IRFunction) {
         let mut consts: HashMap<Register, ConstValue> = HashMap::new();
+        let mut defs: HashMap<Register, ConstValue> = HashMap::new();
         let mut removed_blocks = HashSet::new();
 
         for block in &mut func.blocks {
@@ -45,65 +42,53 @@ impl ConstantFolder {
                 match instr {
                     Instr::ConstantInt(dest, val) => {
                         consts.insert(dest, ConstValue::Int(val));
+                        defs.insert(dest, ConstValue::Int(val));
                     }
                     Instr::ConstantFloat(dest, val) => {
                         consts.insert(dest, ConstValue::Float(val));
+                        defs.insert(dest, ConstValue::Float(val));
                     }
                     Instr::ConstantBool(dest, val) => {
                         consts.insert(dest, ConstValue::Bool(val));
+                        defs.insert(dest, ConstValue::Bool(val));
                     }
                     Instr::StoreLocal(dest, _, reg) => {
                         if let Some(val) = consts.get(&reg).cloned() {
-                            consts.insert(dest, val);
+                            consts.insert(dest, val.clone());
+                            defs.insert(dest, val);
                         } else {
                             consts.remove(&dest);
                         }
                     }
                     Instr::Add(dest, ref ty, r1, r2) => {
-                        if let Some(val) = Self::fold_int_binop(
-                            r1,
-                            r2,
-                            &consts,
-                            |a, b| a + b,
-                        ) {
+                        if let Some(val) = Self::fold_int_binop(r1, r2, &consts, |a, b| a + b) {
                             let new = Self::make_const(dest, ty.clone(), val.clone());
-                            consts.insert(dest, val);
+                            consts.insert(dest, val.clone());
+                            defs.insert(dest, val);
                             instr = new;
                         }
                     }
                     Instr::Sub(dest, ref ty, r1, r2) => {
-                        if let Some(val) = Self::fold_int_binop(
-                            r1,
-                            r2,
-                            &consts,
-                            |a, b| a - b,
-                        ) {
+                        if let Some(val) = Self::fold_int_binop(r1, r2, &consts, |a, b| a - b) {
                             let new = Self::make_const(dest, ty.clone(), val.clone());
-                            consts.insert(dest, val);
+                            consts.insert(dest, val.clone());
+                            defs.insert(dest, val);
                             instr = new;
                         }
                     }
                     Instr::Mul(dest, ref ty, r1, r2) => {
-                        if let Some(val) = Self::fold_int_binop(
-                            r1,
-                            r2,
-                            &consts,
-                            |a, b| a * b,
-                        ) {
+                        if let Some(val) = Self::fold_int_binop(r1, r2, &consts, |a, b| a * b) {
                             let new = Self::make_const(dest, ty.clone(), val.clone());
-                            consts.insert(dest, val);
+                            consts.insert(dest, val.clone());
+                            defs.insert(dest, val);
                             instr = new;
                         }
                     }
                     Instr::Div(dest, ref ty, r1, r2) => {
-                        if let Some(val) = Self::fold_int_binop(
-                            r1,
-                            r2,
-                            &consts,
-                            |a, b| a / b,
-                        ) {
+                        if let Some(val) = Self::fold_int_binop(r1, r2, &consts, |a, b| a / b) {
                             let new = Self::make_const(dest, ty.clone(), val.clone());
-                            consts.insert(dest, val);
+                            consts.insert(dest, val.clone());
+                            defs.insert(dest, val);
                             instr = new;
                         }
                     }
@@ -143,7 +128,11 @@ impl ConstantFolder {
                             consts.insert(dest, ConstValue::Bool(val));
                         }
                     }
-                    Instr::Branch { cond, true_target, false_target } => {
+                    Instr::Branch {
+                        cond,
+                        true_target,
+                        false_target,
+                    } => {
                         if let Some(ConstValue::Bool(b)) = consts.get(&cond) {
                             let taken = if *b { true_target } else { false_target };
                             let removed = if *b { false_target } else { true_target };
@@ -153,9 +142,10 @@ impl ConstantFolder {
                     }
                     Instr::Phi(dest, ref ty, mut preds) => {
                         preds.0.retain(|(_, bb)| !removed_blocks.contains(bb));
-                        if let Some(val) = Self::fold_phi(&preds, &consts) {
+                        if let Some(val) = Self::fold_phi(&preds, &defs) {
                             instr = Self::make_const(dest, ty.clone(), val.clone());
-                            consts.insert(dest, val);
+                            consts.insert(dest, val.clone());
+                            defs.insert(dest, val);
                         } else {
                             instr = Instr::Phi(dest, ty.clone(), preds);
                         }
@@ -177,11 +167,14 @@ impl ConstantFolder {
         }
     }
 
-    fn fold_phi(preds: &PhiPredecessors, consts: &HashMap<Register, ConstValue>) -> Option<ConstValue> {
+    fn fold_phi(
+        preds: &PhiPredecessors,
+        defs: &HashMap<Register, ConstValue>,
+    ) -> Option<ConstValue> {
         if preds.0.is_empty() {
             return None;
         }
-        let mut iter = preds.0.iter().filter_map(|(reg, _)| consts.get(reg));
+        let mut iter = preds.0.iter().filter_map(|(reg, _)| defs.get(reg));
         let first = iter.next()?.clone();
         if iter.all(|c| *c == first) {
             Some(first)
@@ -190,17 +183,29 @@ impl ConstantFolder {
         }
     }
 
-    fn fold_int_binop<F>(r1: Register, r2: Register, consts: &HashMap<Register, ConstValue>, op: F) -> Option<ConstValue>
+    fn fold_int_binop<F>(
+        r1: Register,
+        r2: Register,
+        consts: &HashMap<Register, ConstValue>,
+        op: F,
+    ) -> Option<ConstValue>
     where
         F: FnOnce(i64, i64) -> i64,
     {
         match (consts.get(&r1), consts.get(&r2)) {
-            (Some(ConstValue::Int(a)), Some(ConstValue::Int(b))) => Some(ConstValue::Int(op(*a, *b))),
+            (Some(ConstValue::Int(a)), Some(ConstValue::Int(b))) => {
+                Some(ConstValue::Int(op(*a, *b)))
+            }
             _ => None,
         }
     }
 
-    fn fold_cmp_binop<F>(r1: Register, r2: Register, consts: &HashMap<Register, ConstValue>, op: F) -> Option<bool>
+    fn fold_cmp_binop<F>(
+        r1: Register,
+        r2: Register,
+        consts: &HashMap<Register, ConstValue>,
+        op: F,
+    ) -> Option<bool>
     where
         F: FnOnce(i64, i64) -> bool,
     {
@@ -226,7 +231,7 @@ impl ConstantFolder {
 mod tests {
     use super::ConstantFolder;
     use crate::lowering::{
-        instr::{Instr},
+        instr::Instr,
         ir_function::IRFunction,
         ir_module::IRModule,
         ir_type::IRType,
@@ -247,7 +252,11 @@ mod tests {
                         id: BasicBlockID::ENTRY,
                         instructions: vec![
                             Instr::ConstantBool(Register(0), false),
-                            Instr::Branch { cond: Register(0), true_target: BasicBlockID(1), false_target: BasicBlockID(2) },
+                            Instr::Branch {
+                                cond: Register(0),
+                                true_target: BasicBlockID(1),
+                                false_target: BasicBlockID(2),
+                            },
                         ],
                     },
                     BasicBlock {
@@ -271,7 +280,14 @@ mod tests {
                     BasicBlock {
                         id: BasicBlockID(3),
                         instructions: vec![
-                            Instr::Phi(Register(7), IRType::Int, PhiPredecessors(vec![(Register(3), BasicBlockID(1)), (Register(6), BasicBlockID(2))])),
+                            Instr::Phi(
+                                Register(7),
+                                IRType::Int,
+                                PhiPredecessors(vec![
+                                    (Register(3), BasicBlockID(1)),
+                                    (Register(6), BasicBlockID(2)),
+                                ]),
+                            ),
                             Instr::ConstantInt(Register(8), 2),
                             Instr::ConstantInt(Register(9), 3),
                             Instr::Mul(Register(10), IRType::Int, Register(9), Register(9)),
@@ -288,10 +304,19 @@ mod tests {
         };
 
         let optimized = ConstantFolder::new().run(module);
-        let func = optimized.functions.iter().find(|f| f.name == "@main").unwrap();
+        let func = optimized
+            .functions
+            .iter()
+            .find(|f| f.name == "@main")
+            .unwrap();
         assert_eq!(func.blocks[0].instructions[1], Instr::Jump(BasicBlockID(2)));
-        if let Instr::ConstantInt(_, 7) = func.blocks[3].instructions[0] { } else { panic!("phi not folded"); }
-        if let Instr::ConstantInt(_, 11) = func.blocks[3].instructions[4] { } else { panic!("mul/add not folded"); }
+        if let Instr::ConstantInt(_, 7) = func.blocks[3].instructions[0] {
+        } else {
+            panic!("phi not folded");
+        }
+        if let Instr::ConstantInt(_, 11) = func.blocks[3].instructions[4] {
+        } else {
+            panic!("mul/add not folded");
+        }
     }
-
 }

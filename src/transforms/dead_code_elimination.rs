@@ -67,6 +67,7 @@ impl DeadCodeEliminator {
         for (name, mut func) in functions.into_iter() {
             if reachable.contains(&name) {
                 Self::prune_blocks(&mut func);
+                Self::prune_unread_registers(&mut func);
                 new_functions.push(func);
             }
         }
@@ -120,6 +121,50 @@ impl DeadCodeEliminator {
                         *false_target = map[false_target];
                     }
                     _ => {}
+                }
+            }
+        }
+    }
+
+    fn prune_unread_registers(func: &mut IRFunction) {
+        use Instr::*;
+
+        let mut used = HashSet::new();
+
+        // Gather initial set of used registers
+        for block in &func.blocks {
+            for instr in &block.instructions {
+                for reg in instr.read_regs() {
+                    used.insert(reg);
+                }
+            }
+        }
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in &mut func.blocks {
+                let mut new_instrs = Vec::new();
+                for instr in std::mem::take(&mut block.instructions) {
+                    if let Some(dest) = instr.dest() {
+                        if !used.contains(&dest) && instr.is_pure() {
+                            changed = true;
+                            continue;
+                        }
+                    }
+                    new_instrs.push(instr);
+                }
+                block.instructions = new_instrs;
+            }
+
+            if changed {
+                used.clear();
+                for block in &func.blocks {
+                    for instr in &block.instructions {
+                        for reg in instr.read_regs() {
+                            used.insert(reg);
+                        }
+                    }
                 }
             }
         }

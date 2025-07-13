@@ -233,4 +233,130 @@ impl Instr {
             _ => vec![],
         }
     }
+
+    /// Returns the register defined by this instruction, if any.
+    pub fn dest(&self) -> Option<Register> {
+        use Instr::*;
+        match self {
+            ConstantInt(r, _)
+            | ConstantFloat(r, _)
+            | ConstantBool(r, _)
+            | Add(r, ..)
+            | Sub(r, ..)
+            | Mul(r, ..)
+            | Div(r, ..)
+            | StoreLocal(r, ..)
+            | LoadLocal(r, ..)
+            | Phi(r, ..)
+            | Ref(r, ..)
+            | Eq(r, ..)
+            | Ne(r, ..)
+            | LessThan(r, ..)
+            | LessThanEq(r, ..)
+            | GreaterThan(r, ..)
+            | GreaterThanEq(r, ..)
+            | Alloc { dest: r, .. }
+            | Const { dest: r, .. }
+            | Load { dest: r, .. }
+            | GetElementPointer { dest: r, .. }
+            | MakeStruct { dest: r, .. }
+            | GetValueOf { dest: r, .. }
+            | Call { dest_reg: r, .. }
+            | GetEnumTag(r, _)
+            | GetEnumValue(r, ..)
+            | TagVariant(r, ..) => Some(*r),
+            _ => None,
+        }
+    }
+
+    /// Returns registers read by this instruction.
+    pub fn read_regs(&self) -> Vec<Register> {
+        use Instr::*;
+        match self {
+            Add(_, _, r1, r2)
+            | Sub(_, _, r1, r2)
+            | Mul(_, _, r1, r2)
+            | Div(_, _, r1, r2)
+            | Eq(_, _, r1, r2)
+            | Ne(_, _, r1, r2)
+            | LessThan(_, _, r1, r2)
+            | LessThanEq(_, _, r1, r2)
+            | GreaterThan(_, _, r1, r2)
+            | GreaterThanEq(_, _, r1, r2) => vec![*r1, *r2],
+
+            StoreLocal(_, _, r) | LoadLocal(_, _, r) | GetEnumTag(_, r) => vec![*r],
+
+            Phi(_, _, preds) => preds.0.iter().map(|(r, _)| *r).collect(),
+
+            Branch { cond, .. } => vec![*cond],
+
+            Ret(_, Some(IRValue::Register(r))) => vec![*r],
+
+            Call { callee, args, .. } => {
+                let mut regs = Vec::new();
+                if let Callee::Register(r) = callee {
+                    regs.push(*r);
+                }
+                regs.extend(args.0.iter().map(|t| t.register));
+                regs
+            }
+
+            Load { addr, .. } => vec![*addr],
+
+            Store { val, location, .. } => {
+                let mut regs = Vec::new();
+                if let IRValue::Register(r) = val {
+                    regs.push(*r);
+                }
+                regs.push(*location);
+                regs
+            }
+
+            Alloc { count, .. } => match count {
+                Some(IRValue::Register(r)) => vec![*r],
+                _ => Vec::new(),
+            },
+
+            GetElementPointer { base, index, .. } => {
+                let mut regs = vec![*base];
+                if let IRValue::Register(r) = index {
+                    regs.push(*r);
+                }
+                regs
+            }
+
+            MakeStruct { values, .. } => values.0.iter().map(|v| v.register).collect(),
+
+            GetValueOf { structure, .. } => vec![*structure],
+
+            TagVariant(_, _, _, values) => values.0.iter().map(|v| v.register).collect(),
+
+            Print { val, .. } => match val {
+                IRValue::Register(r) => vec![*r],
+                _ => Vec::new(),
+            },
+
+            Const { val, .. } => match val {
+                IRValue::Register(r) => vec![*r],
+                _ => Vec::new(),
+            },
+
+            _ => Vec::new(),
+        }
+    }
+
+    /// Returns true if this instruction has no side effects.
+    pub fn is_pure(&self) -> bool {
+        use Instr::*;
+        match self {
+            Call { .. }
+            | Store { .. }
+            | Print { .. }
+            | Ret(..)
+            | Jump(..)
+            | Branch { .. }
+            | Unreachable => false,
+            _ => true,
+        }
+    }
 }
