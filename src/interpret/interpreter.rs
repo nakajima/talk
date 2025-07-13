@@ -18,6 +18,8 @@ use crate::{
     },
 };
 
+use std::collections::HashMap;
+
 #[derive(Debug)]
 pub enum InterpreterError {
     NoMainFunc,
@@ -33,7 +35,7 @@ pub enum InterpreterError {
 #[derive(Debug)]
 struct StackFrame {
     pred: Option<BasicBlockID>,
-    function: IRFunction,
+    function: usize,
     block_idx: usize,
     pc: usize,
     sp: usize,
@@ -50,6 +52,7 @@ pub struct IRInterpreter<'a, IO: InterpreterIO> {
     pub(super) memory: Memory,
     pub symbols: &'a SymbolTable,
     io: &'a IO,
+    function_map: HashMap<String, usize>,
     call_stack: Vec<StackFrame>,
 }
 
@@ -58,12 +61,19 @@ pub struct IRInterpreter<'a, IO: InterpreterIO> {
 impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
     pub fn new(program: IRModule, io: &'a IO, symbols: &'a SymbolTable) -> Self {
         let memory = Memory::new(&program.constants);
+        let function_map = program
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.name.clone(), i))
+            .collect();
         Self {
             program,
             call_stack: vec![],
             memory,
             io,
             symbols,
+            function_map,
         }
     }
 
@@ -75,28 +85,22 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             print!("{}\n", crate::lowering::ir_printer::print(&self.program));
         }
 
-        let main = self
-            .program
-            .functions
-            .iter()
-            .find(|f| f.name == "@main")
-            .cloned();
-        let (ret_ty, result) = if let Some(main) = main {
-            let ret_ty = main
-                .blocks
-                .iter()
-                .rev()
-                .find_map(|b| {
-                    b.instructions.iter().rev().find_map(|i| match i {
-                        Instr::Ret(ty, _) => Some(ty.clone()),
-                        _ => None,
-                    })
-                })
-                .unwrap_or(IRType::Void);
-            (ret_ty, self.execute_function(main, vec![])?)
-        } else {
+        let Some(&main_idx) = self.function_map.get("@main") else {
             return Err(InterpreterError::NoMainFunc);
         };
+        let main = &self.program.functions[main_idx];
+        let ret_ty = main
+            .blocks
+            .iter()
+            .rev()
+            .find_map(|b| {
+                b.instructions.iter().rev().find_map(|i| match i {
+                    Instr::Ret(ty, _) => Some(ty.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or(IRType::Void);
+        let result = self.execute_function(main_idx, vec![])?;
 
         // If the program's entry point returns a struct but the interpreter
         // represented it as a pointer, load the value from memory using the
@@ -113,7 +117,8 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
     pub fn step(&mut self) -> Result<Option<Value>, InterpreterError> {
         let instr = {
             let frame = &mut self.call_stack.last().expect("Stack underflow");
-            let block = &frame.function.blocks[frame.block_idx];
+            let func = &self.program.functions[frame.function];
+            let block = &func.blocks[frame.block_idx];
             block.instructions[frame.pc].clone()
         };
 
@@ -135,14 +140,14 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
     fn execute_function(
         &mut self,
-        function: IRFunction,
+        function_idx: usize,
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
-        // let blocks = function.blocks.clone();
+        let _function = &self.program.functions[function_idx];
         let sp = self
             .call_stack
             .last()
-            .map(|frame| frame.sp + frame.function.size as usize)
+            .map(|frame| frame.sp + self.program.functions[frame.function].size as usize)
             .unwrap_or(self.memory.next_stack_addr);
 
         self.call_stack.push(StackFrame {
@@ -150,7 +155,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             block_idx: 0,
             pc: 0,
             sp,
-            function: function.clone(),
+            function: function_idx,
         });
 
         for (i, arg) in args.iter().enumerate() {
@@ -172,11 +177,11 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
     fn execute_instr(&mut self, instr: Instr) -> Result<Option<Value>, InterpreterError> {
         tracing::trace!("PC: {:?}", self.call_stack.last().unwrap().pc);
         let frame = self.call_stack.last().unwrap();
+        let func = &self.program.functions[frame.function];
         tracing::info!(
             "\n{}:{}\n{:?}\n{}\n",
-            frame.function.name,
-            frame
-                .function
+            func.name,
+            func
                 .debug_info
                 .get(&BasicBlockID(frame.block_idx as u32))
                 .map(|i| i.get(&frame.pc))
@@ -188,7 +193,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
         for (i, value) in self
             .memory
-            .range(frame.sp, frame.function.size as usize)
+            .range(frame.sp, func.size as usize)
             .iter()
             .enumerate()
         {
@@ -280,37 +285,28 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                 args,
                 ..
             } => {
-                let callee = match callee {
+                let callee_idx = match callee {
                     Callee::Register(reg) => {
                         let callee_value = self.register_value(&reg);
-                        let callee_id = match callee_value {
+                        match callee_value {
                             Value::Func(id) => id,
                             _ => {
                                 return Err(InterpreterError::Unknown(format!(
                                     "Interpreter error: Expected a function in the callee register, but got {callee_value:?}."
                                 )));
                             }
-                        };
-
-                        let Some(function_to_call) = self.load_function(callee_id) else {
-                            return Err(InterpreterError::CalleeNotFound(format!("[{callee_id}]")));
-                        };
-
-                        function_to_call
+                        }
                     }
                     Callee::Name(name) => {
-                        let Some(function_to_call) =
-                            self.program.functions.iter().find(|f| f.name == name)
-                        else {
-                            return Err(InterpreterError::CalleeNotFound(name));
-                        };
-
-                        function_to_call.clone()
+                        *self
+                            .function_map
+                            .get(&name)
+                            .ok_or_else(|| InterpreterError::CalleeNotFound(name))?
                     }
                 };
 
                 let arg_values = self.register_values(&args);
-                let result = self.execute_function(callee, arg_values)?;
+                let result = self.execute_function(callee_idx, arg_values)?;
                 self.set_register_value(&dest_reg, result);
             }
             Instr::Branch {
@@ -534,7 +530,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
     fn current_basic_block(&self) -> &BasicBlock {
         let frame = self.call_stack.last().unwrap();
-        &frame.function.blocks[frame.block_idx]
+        &self.program.functions[frame.function].blocks[frame.block_idx]
     }
 
     fn set_register_value(&mut self, register: &Register, value: Value) {
@@ -542,7 +538,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
         let frame = self.call_stack.last_mut().expect("Stack underflow");
         let stack = self
             .memory
-            .range_mut(frame.sp, frame.function.size as usize);
+            .range_mut(frame.sp, self.program.functions[frame.function].size as usize);
         stack[register.0 as usize] = Some(value);
     }
 
@@ -556,22 +552,23 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
     fn register_value(&self, register: &Register) -> Value {
         let frame = self.call_stack.last().expect("Stack underflow");
-        let stack = self.memory.range(frame.sp, frame.function.size as usize);
+        let stack = self.memory.range(frame.sp, self.program.functions[frame.function].size as usize);
         stack[register.0 as usize]
             .clone()
             .expect("null pointer lol")
     }
 
-    fn load_function(&self, idx: usize) -> Option<IRFunction> {
-        self.program.functions.get(idx).cloned()
+    fn load_function(&self, idx: usize) -> Option<&IRFunction> {
+        self.program.functions.get(idx)
     }
 
     fn dump(&self) {
         for frame in self.call_stack.iter().rev() {
-            let stack = self.memory.range(frame.sp, frame.function.size as usize);
+            let func = &self.program.functions[frame.function];
+            let stack = self.memory.range(frame.sp, func.size as usize);
             print!(
                 "{}:\n{}\n",
-                frame.function.name,
+                func.name,
                 stack
                     .iter()
                     .enumerate()
