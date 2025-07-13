@@ -1,0 +1,26 @@
+protocol Iterator<Element> {
+	func next()	-> Element?
+}
+
+protocol Iterable<Element> {
+	func iter() -> Iterator<Element>
+}
+
+struct ArrayIterator<Element>: Iterator<Element> {
+	let array: Array
+	let cur: Int
+
+	func next() -> Element? {
+		if self.cur < self.array.count {
+			Optional.some(self.array.get(self.cur))
+		} else {
+			Optional.none
+		}
+	}
+}
+
+extend Array<Element>: Iterable<Element> {
+	func iter() -> ArrayIterator {
+		ArrayIterator(array: self, cur: 0)
+	}
+}
