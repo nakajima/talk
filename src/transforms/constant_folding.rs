@@ -36,6 +36,9 @@ impl ConstantFolder {
         let mut removed_blocks = HashSet::new();
 
         for block in &mut func.blocks {
+            // Only propagate constants within each block. This avoids
+            // incorrectly folding across control-flow edges such as loops.
+            consts.clear();
             let mut new_instructions = Vec::new();
             for instr in std::mem::take(&mut block.instructions) {
                 let mut instr = instr;
@@ -48,6 +51,13 @@ impl ConstantFolder {
                     }
                     Instr::ConstantBool(dest, val) => {
                         consts.insert(dest, ConstValue::Bool(val));
+                    }
+                    Instr::StoreLocal(dest, _, reg) => {
+                        if let Some(val) = consts.get(&reg).cloned() {
+                            consts.insert(dest, val);
+                        } else {
+                            consts.remove(&dest);
+                        }
                     }
                     Instr::Add(dest, ref ty, r1, r2) => {
                         if let Some(val) = Self::fold_int_binop(
