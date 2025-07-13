@@ -6,48 +6,55 @@ use talk::{
     interpret::{interpreter::IRInterpreter, io::test_io::TestIO},
 };
 
-fn run(code: &str) {
-    let mut driver = Driver::with_str(code);
-    let lowered = driver.lower();
-    let io = TestIO::new();
-    for unit in lowered {
-        let module = ModulePassManager::run(&unit.env, unit.module());
-        let interpreter = IRInterpreter::new(module, &io, &driver.symbol_table);
-        black_box(interpreter.run().unwrap());
-    }
-}
-
 fn bench_fib(c: &mut Criterion) {
-    const CODE: &str = r#"
-func fib(n) {
-    if n <= 1 { return n }
-    fib(n - 2) + fib(n - 1)
-}
+    let mut driver = Driver::with_str(
+        r#"
+        func fib(n) {
+            if n <= 1 { return n }
+            fib(n - 2) + fib(n - 1)
+        }
 
-let i = 0
-let n = 0
-loop i < 20 {
-    n = fib(i)
-    i = i + 1
-}
+        let i = 0
+        let n = 0
+        loop i < 20 {
+            n = fib(i)
+            i = i + 1
+        }
 
-n
-"#;
-    c.bench_function("fib_20", |b| b.iter(|| run(CODE)));
+        n
+        "#,
+    );
+
+    let unit = driver.lower().into_iter().next().unwrap();
+    let module = ModulePassManager::run(&unit.env, unit.module());
+    let io = TestIO::new();
+
+    c.bench_function("fib_20", |b| {
+        b.iter(|| black_box(IRInterpreter::new(module.clone(), &io, &driver.symbol_table).run()))
+    });
 }
 
 fn bench_loop_sum(c: &mut Criterion) {
-    const CODE: &str = r#"
-let i = 0
-let sum = 0
-loop i < 1000 {
-    sum = sum + i
-    i = i + 1
-}
+    let mut driver = Driver::with_str(
+        r#"
+        let i = 0
+        let sum = 0
+        loop i < 1000 {
+            sum = sum + i
+            i = i + 1
+        }
 
-sum
-"#;
-    c.bench_function("loop_sum_1000", |b| b.iter(|| run(CODE)));
+        sum
+        "#,
+    );
+
+    let unit = driver.lower().into_iter().next().unwrap();
+    let module = ModulePassManager::run(&unit.env, unit.module());
+    let io = TestIO::new();
+
+    c.bench_function("loop_sum_1000", |b| {
+        b.iter(|| black_box(IRInterpreter::new(module.clone(), &io, &driver.symbol_table).run()))
+    });
 }
 
 criterion_group!(benches, bench_fib, bench_loop_sum);
