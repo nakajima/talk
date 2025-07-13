@@ -352,15 +352,15 @@ impl Instr {
     /// Returns true if this instruction has no side effects.
     pub fn is_pure(&self) -> bool {
         use Instr::*;
-        match self {
+        !matches!(
+            self,
             Call { .. }
-            | Store { .. }
-            | Print { .. }
-            | Ret(..)
-            | Jump(..)
-            | Branch { .. }
-            | Unreachable => false,
-            _ => true,
-        }
+                | Store { .. }
+                | Print { .. }
+                | Ret(..)
+                | Jump(..)
+                | Branch { .. }
+                | Unreachable
+        )
     }
 }

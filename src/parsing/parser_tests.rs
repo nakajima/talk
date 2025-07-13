@@ -224,11 +224,11 @@ mod tests {
         let expr = parsed.roots()[0].unwrap();
 
         if let Expr::Binary(left, TokenKind::Plus, right) = expr {
-            assert_eq!(*parsed.get(&left).unwrap(), Expr::LiteralInt("1".into()));
-            let rhs = parsed.get(&right).unwrap();
+            assert_eq!(*parsed.get(left).unwrap(), Expr::LiteralInt("1".into()));
+            let rhs = parsed.get(right).unwrap();
             match rhs {
                 Expr::Binary(_, TokenKind::Star, _) => {}
-                _ => panic!("expected multiplication on RHS, got {:?}", rhs),
+                _ => panic!("expected multiplication on RHS, got {rhs:?}"),
             }
         } else {
             panic!("expected binary plus expression, got {expr:?}");
