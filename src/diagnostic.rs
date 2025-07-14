@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{hash::Hash, path::PathBuf};
 
 use crate::{
     SourceFile,
@@ -16,7 +16,7 @@ pub struct Position {
     pub col: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticKind {
     Lexer(Position, LexerError),
     Parse(Token, ParserError),
@@ -25,10 +25,16 @@ pub enum DiagnosticKind {
     Lowering(ExprID, IRError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
     pub path: PathBuf,
+}
+
+impl Hash for Diagnostic {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        format!("{self:?}").hash(state)
+    }
 }
 
 impl Diagnostic {
@@ -103,7 +109,8 @@ impl Diagnostic {
                 },
             ),
             DiagnosticKind::Resolve(expr_id, _name_resolver_error) => {
-                let Some(expr) = source_file.meta.get(expr_id) else {
+                let meta = source_file.meta.borrow();
+                let Some(expr) = meta.get(expr_id) else {
                     return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
                 };
 
@@ -119,7 +126,8 @@ impl Diagnostic {
                 )
             }
             DiagnosticKind::Typing(expr_id, _type_error) => {
-                let Some(expr) = source_file.meta.get(expr_id) else {
+                let meta = source_file.meta.borrow();
+                let Some(expr) = meta.get(expr_id) else {
                     return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
                 };
 
@@ -135,7 +143,8 @@ impl Diagnostic {
                 )
             }
             DiagnosticKind::Lowering(expr_id, _type_error) => {
-                let Some(expr) = source_file.meta.get(expr_id) else {
+                let meta = source_file.meta.borrow();
+                let Some(expr) = meta.get(expr_id) else {
                     return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
                 };
 

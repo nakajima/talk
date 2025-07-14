@@ -10,7 +10,7 @@ use crate::{
     constraint::Constraint,
     diagnostic::Diagnostic,
     environment::Environment,
-    expr::{Expr, ExprMeta, Pattern},
+    expr::ExprMeta,
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,

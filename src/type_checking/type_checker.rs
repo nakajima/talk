@@ -193,7 +193,11 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        source_file.to_typed(typed_roots, self.type_map.clone())
+        source_file.to_typed(
+            typed_roots,
+            self.type_map.clone(),
+            source_file.phase_data.scope_tree.clone(),
+        )
     }
 
     pub fn infer_nodes(

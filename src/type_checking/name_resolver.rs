@@ -114,7 +114,7 @@ impl NameResolver {
 
         let meta = source_file.meta.clone();
         self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table);
-        source_file.to_resolved()
+        source_file.to_resolved(self.scope_tree.clone())
     }
 
     #[tracing::instrument(skip(self, symbol_table))]

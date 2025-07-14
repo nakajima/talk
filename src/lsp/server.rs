@@ -295,9 +295,9 @@ impl LanguageServer for ServerState {
         let mut parser = Parser::new(self.driver.session.clone(), lexer, path, &mut env);
         parser.parse();
         let source_file = parser.parse_tree;
+        let formatted = crate::parsing::formatter::format(&source_file, 80);
 
         Box::pin(async move {
-            let formatted = crate::parsing::formatter::format(&source_file, 80);
             let last_line = code.lines().count() as u32;
             let last_char = code.lines().last().map(|line| line.len().saturating_sub(1));
 

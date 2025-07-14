@@ -1,7 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    name::Name, parser::ExprID, ty::Ty, type_checker::Scheme, type_defs::{builtin_def::BuiltinDef, TypeDef}, type_var_id::{TypeVarID, TypeVarKind}, SymbolID, SymbolInfo, SymbolKind, SymbolTable
+    SymbolID, SymbolInfo, SymbolKind, SymbolTable,
+    name::Name,
+    parser::ExprID,
+    ty::Ty,
+    type_checker::Scheme,
+    type_defs::{TypeDef, builtin_def::BuiltinDef},
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 pub struct Builtin {
@@ -378,7 +384,7 @@ mod tests {
 
         assert!(checked.diagnostics().is_empty());
         assert_eq!(
-            checked.type_for(&checked.root_ids()[0]).unwrap(),
+            checked.type_for(checked.root_ids()[0]).unwrap(),
             Ty::Pointer
         );
     }
@@ -395,7 +401,7 @@ mod tests {
 
         assert!(checked.diagnostics().is_empty());
         assert_eq!(
-            checked.type_for(&checked.root_ids()[1]).unwrap(),
+            checked.type_for(checked.root_ids()[1]).unwrap(),
             Ty::Pointer
         );
     }
@@ -415,7 +421,7 @@ mod tests {
             "{:#?}",
             checked.diagnostics()
         );
-        assert_eq!(checked.type_for(&checked.root_ids()[1]).unwrap(), Ty::Void);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Void);
     }
 
     #[test]
@@ -429,7 +435,7 @@ mod tests {
         .unwrap();
 
         assert!(checked.diagnostics().is_empty());
-        assert_eq!(checked.type_for(&checked.root_ids()[1]), Some(Ty::Int));
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Int));
     }
 }
 
@@ -447,9 +453,9 @@ mod optional_tests {
 
         assert_eq!(
             parsed.roots()[0],
-            any_expr!(parsed_expr::parsed_expr::Expr::TypeRepr {
+            any_expr!(parsed_expr::Expr::TypeRepr {
                 name: "Optional".into(),
-                generics: vec![any_expr!(parsed_expr::parsed_expr::Expr::TypeRepr {
+                generics: vec![any_expr!(parsed_expr::Expr::TypeRepr {
                     name: "Int".into(),
                     generics: vec![],
                     conformances: vec![],
@@ -483,7 +489,7 @@ mod array_tests {
     fn gets_typed() {
         let checked = crate::type_checking::check("[1,2,3]").unwrap();
         assert_eq!(
-            checked.type_for(&checked.root_ids()[0]).unwrap(),
+            checked.type_for(checked.root_ids()[0]).unwrap(),
             Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
         );
     }
@@ -491,13 +497,13 @@ mod array_tests {
     #[test]
     fn gets_typed_get() {
         let checked = crate::type_checking::check("[1,2,3].get(0)").unwrap();
-        assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[0]).unwrap(), Ty::Int);
     }
 
     #[test]
     fn gets_count() {
         let checked = crate::type_checking::check("[1,2,3].count").unwrap();
-        assert_eq!(checked.type_for(&checked.root_ids()[0]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[0]).unwrap(), Ty::Int);
     }
 
     #[test]

@@ -173,10 +173,10 @@ mod tests {
     #[test]
     fn parses_plus_expr() {
         let parsed = parse("1 + 2");
-        let expr = parsed.roots()[0].expr;
+        let expr = &parsed.roots()[0];
 
         assert_eq!(
-            expr,
+            *expr,
             any_expr!(Expr::Binary(
                 any_expr!(LiteralInt("1".into())).into(),
                 TokenKind::Plus,
@@ -419,12 +419,10 @@ mod tests {
                 name: Some(Name::Raw("greet".to_string())),
                 generics: vec![],
                 params: vec![any_expr!(Parameter("a".into(), None)).into()],
-                body: any_expr!(
-                    Block(vec![any_expr!(Return(Some(
-                        any_expr!(Variable("a".into())).into()
-                    )))])
-                    .into()
-                ),
+                body: any_expr!(Block(vec![any_expr!(Return(Some(
+                    any_expr!(Variable("a".into())).into()
+                )))]))
+                .into(),
                 ret: None,
                 captures: vec![],
             })
@@ -455,7 +453,6 @@ mod tests {
         func greet<T>(t) -> T { t }
         ",
         );
-        let expr = parsed.roots()[0].expr;
 
         assert_eq!(
             parsed.roots()[0],
@@ -468,12 +465,10 @@ mod tests {
                     introduces_type: false
                 })],
                 params: vec![any_expr!(Parameter("t".into(), None))],
-                body: any_expr!(
-                    Block(vec![any_expr!(Return(Some(
-                        any_expr!(Variable("t".into())).into()
-                    )))])
-                    .into()
-                ),
+                body: any_expr!(Block(vec![any_expr!(Return(Some(
+                    any_expr!(Variable("t".into())).into()
+                )))]))
+                .into(),
                 ret: Some(
                     any_expr!(TypeRepr {
                         name: "T".into(),
@@ -683,12 +678,10 @@ mod tests {
                 name: Some(Name::Raw("fizz".to_string())),
                 generics: vec![],
                 params: vec![],
-                body: any_expr!(
-                    Block(vec![any_expr!(Return(Some(
-                        any_expr!(LiteralInt("123".into())).into()
-                    )))])
-                    .into()
-                ),
+                body: any_expr!(Block(vec![any_expr!(Return(Some(
+                    any_expr!(LiteralInt("123".into())).into()
+                )))]))
+                .into(),
                 ret: Some(
                     any_expr!(TypeRepr {
                         name: "Int".into(),
@@ -1056,7 +1049,7 @@ mod tests {
         );
 
         assert_eq!(
-            parsed.roots()[0].expr,
+            parsed.roots()[0],
             any_expr!(Expr::Func {
                 name: Some(Name::Raw("greet".into())),
                 generics: vec![],
@@ -1485,36 +1478,34 @@ mod tests {
             any_expr!(Expr::ProtocolDecl {
                 name: "Aged".into(),
                 associated_types: vec![],
-                body: any_expr!(
-                    Block(vec![
-                        any_expr!(Property {
-                            name: Name::Raw("age".into()),
-                            type_repr: Some(
-                                any_expr!(TypeRepr {
-                                    name: Name::Raw("Int".into()),
-                                    generics: vec![],
-                                    conformances: vec![],
-                                    introduces_type: false
-                                })
-                                .into()
-                            ),
-                            default_value: None
-                        }),
-                        any_expr!(FuncSignature {
-                            name: Name::Raw("getAge".into()),
-                            params: vec![],
-                            generics: vec![],
-                            ret: any_expr!(TypeRepr {
+                body: any_expr!(Block(vec![
+                    any_expr!(Property {
+                        name: Name::Raw("age".into()),
+                        type_repr: Some(
+                            any_expr!(TypeRepr {
                                 name: Name::Raw("Int".into()),
                                 generics: vec![],
                                 conformances: vec![],
                                 introduces_type: false
                             })
                             .into()
+                        ),
+                        default_value: None
+                    }),
+                    any_expr!(FuncSignature {
+                        name: Name::Raw("getAge".into()),
+                        params: vec![],
+                        generics: vec![],
+                        ret: any_expr!(TypeRepr {
+                            name: Name::Raw("Int".into()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
                         })
-                    ])
-                    .into()
-                ),
+                        .into()
+                    })
+                ]))
+                .into(),
                 conformances: vec![],
             })
         );

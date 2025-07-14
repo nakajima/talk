@@ -1,6 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use crate::{parsed_expr::ParsedExpr, span::Span, ty::Ty, typed_expr::TypedExpr};
+use crate::{
+    parsed_expr::ParsedExpr, scope_tree::ScopeTree, span::Span, ty::Ty, typed_expr::TypedExpr,
+};
 
 use super::{expr::ExprMeta, parser::ExprID};
 
@@ -11,13 +13,16 @@ pub struct Parsed;
 impl Phase for Parsed {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NameResolved;
+pub struct NameResolved {
+    pub scope_tree: ScopeTree,
+}
 impl Phase for NameResolved {}
 
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Typed {
     pub(super) type_map: HashMap<ExprID, TypedExpr>,
     pub roots: Vec<TypedExpr>,
+    pub scope_tree: ScopeTree,
 }
 impl Phase for Typed {}
 
@@ -94,12 +99,12 @@ impl SourceFile {
 }
 
 impl SourceFile<Parsed> {
-    pub fn to_resolved(self) -> SourceFile<NameResolved> {
+    pub fn to_resolved(self, scope_tree: ScopeTree) -> SourceFile<NameResolved> {
         SourceFile {
             path: self.path,
             roots: self.roots,
             meta: self.meta,
-            phase_data: NameResolved,
+            phase_data: NameResolved { scope_tree },
         }
     }
 }
@@ -109,12 +114,17 @@ impl SourceFile<NameResolved> {
         &self,
         roots: Vec<TypedExpr>,
         type_map: HashMap<ExprID, TypedExpr>,
+        scope_tree: ScopeTree,
     ) -> SourceFile<Typed> {
         SourceFile {
             path: self.path.clone(),
             roots: self.roots.clone(),
             meta: self.meta.clone(),
-            phase_data: Typed { roots, type_map },
+            phase_data: Typed {
+                roots,
+                type_map,
+                scope_tree,
+            },
         }
     }
 

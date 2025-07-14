@@ -133,10 +133,16 @@ impl<'a> CompletionContext<'a> {
 
         if let Some(scope) = self
             .source_file
+            .phase_data
             .scope_tree
             .find_scope_at(self.position.into())
         {
-            for symbol_id in self.source_file.scope_tree.get_symbols_in_scope(scope) {
+            for symbol_id in self
+                .source_file
+                .phase_data
+                .scope_tree
+                .get_symbols_in_scope(scope)
+            {
                 if let Some(symbol_info) = self.driver.symbol_table.get(&symbol_id) {
                     let kind = match symbol_info.kind {
                         SymbolKind::FuncDef => CompletionItemKind::FUNCTION,
