@@ -11,7 +11,7 @@ use crate::{
     diagnostic::Diagnostic,
     name::{Name, ResolvedName},
     name_resolver::NameResolverError,
-    parsed_expr::{IncompleteExpr, ParsedExpr},
+    parsed_expr::{self, IncompleteExpr, ParsedExpr},
     parser::ExprID,
     source_file::SourceFile,
     substitutions::Substitutions,
@@ -760,8 +760,8 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id: *id,
+            ty: ret.as_ref().map(|r| r.ty.clone()).unwrap_or(Ty::Void),
             expr: typed_expr::Expr::Return(ret),
-            ty: ret.map(|r| r.ty.clone()).unwrap_or(Ty::Void),
         })
     }
 
@@ -824,18 +824,17 @@ impl<'a> TypeChecker<'a> {
         })
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected,))]
     #[allow(clippy::too_many_arguments)]
     fn infer_call(
         &mut self,
         id: &ExprID,
         env: &mut Environment,
-        callee: &ExprID,
-        type_args: &[ExprID],
-        args: &[ExprID],
+        callee: &ParsedExpr,
+        type_args: &[ParsedExpr],
+        args: &[ParsedExpr],
         expected: &Option<Ty>,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Ty, TypeError> {
+    ) -> Result<TypedExpr, TypeError> {
         let mut ret_var = if let Some(expected) = expected {
             expected.clone()
         } else {
@@ -846,19 +845,20 @@ impl<'a> TypeChecker<'a> {
 
         let mut inferred_type_args = vec![];
         for type_arg in type_args {
-            inferred_type_args.push(self.infer_node(type_arg, env, expected, source_file)?);
+            inferred_type_args.push(self.infer_node(type_arg, env, &None)?);
         }
 
-        let mut arg_tys: Vec<Ty> = vec![];
+        let mut arg_tys = vec![];
         for arg in args {
-            let ty = self.infer_node(arg, env, &None, source_file)?;
+            let ty = self.infer_node(arg, env, &None)?;
             arg_tys.push(ty);
         }
 
-        let callee_expr = source_file.get(callee);
-        match &callee_expr {
+        let callee = self.infer_node(callee, env, expected)?;
+
+        match &callee.expr {
             // Handle struct initialization
-            Some(Expr::Variable(Name::Resolved(symbol_id, _), _))
+            typed_expr::Expr::Variable(ResolvedName(symbol_id, name_str))
                 if env.is_struct_symbol(symbol_id) =>
             {
                 let Some(struct_def) = env.lookup_struct(symbol_id).cloned() else {
@@ -867,19 +867,11 @@ impl<'a> TypeChecker<'a> {
                     )));
                 };
 
-                let placeholder =
-                    env.placeholder(callee, format!("init({symbol_id:?})"), symbol_id, vec![]);
-
-                env.typed_exprs.insert(
-                    *callee,
-                    TypedExpr {
-                        id: *callee,
-                        #[allow(clippy::expect_used)]
-                        expr: callee_expr
-                            .expect("we're already in the Some() arm")
-                            .clone(),
-                        ty: placeholder.clone(),
-                    },
+                let placeholder = env.placeholder(
+                    &callee.id,
+                    format!("init({symbol_id:?})"),
+                    symbol_id,
+                    vec![],
                 );
 
                 // If there aren't explicit type params specified, create some placeholders. I guess for now
@@ -889,7 +881,7 @@ impl<'a> TypeChecker<'a> {
                 if !struct_def.type_parameters.is_empty() {
                     for (i, type_arg) in struct_def.type_parameters.iter().enumerate() {
                         type_args.push(if i < inferred_type_args.len() {
-                            inferred_type_args[i].clone()
+                            inferred_type_args[i].ty.clone()
                         } else {
                             env.placeholder(
                                 id,
@@ -914,15 +906,18 @@ impl<'a> TypeChecker<'a> {
                     .collect::<Vec<Constraint>>();
 
                 ret_var = env.instantiate(&Scheme::new(
-                    Ty::Struct(*symbol_id, type_args.clone()),
+                    Ty::Struct(
+                        ResolvedName(*symbol_id, name_str.to_string()),
+                        type_args.clone(),
+                    ),
                     struct_def.canonical_type_vars(),
                     constraints,
                 ));
 
                 env.constrain(Constraint::InitializerCall {
-                    expr_id: *callee,
+                    expr_id: callee.id,
                     initializes_id: *symbol_id,
-                    args: arg_tys.clone(),
+                    args: arg_tys.iter().map(|a| a.ty.clone()).collect(),
                     type_args,
                     func_ty: placeholder.clone(),
                     result_ty: ret_var.clone(),
@@ -930,36 +925,54 @@ impl<'a> TypeChecker<'a> {
             }
             _ => {
                 let _s = tracing::trace_span!("non-struct call").entered();
-                let callee_ty = self.infer_node(callee, env, &None, source_file)?;
-                let expected_callee_ty =
-                    Ty::Func(arg_tys, Box::new(ret_var.clone()), inferred_type_args);
+                let expected_callee_ty = Ty::Func(
+                    arg_tys.iter().map(|a| a.ty.clone()).collect(),
+                    Box::new(ret_var.clone()),
+                    inferred_type_args.iter().map(|a| a.ty.clone()).collect(),
+                );
                 env.constrain(Constraint::Equality(
-                    *callee,
-                    callee_ty.clone(),
+                    callee.id,
+                    callee.ty.clone(),
                     expected_callee_ty,
                 ));
             }
         };
 
-        Ok(ret_var)
+        Ok(TypedExpr {
+            id: *id,
+            expr: typed_expr::Expr::Call {
+                callee: Box::new(callee),
+                type_args: inferred_type_args,
+                args: arg_tys,
+            },
+            ty: ret_var,
+        })
     }
 
     #[tracing::instrument(level = "DEBUG", skip(self, env))]
     fn infer_assignment(
         &mut self,
+        id: &ExprID,
+        lhs: &ParsedExpr,
+        rhs: &ParsedExpr,
         env: &mut Environment,
-        lhs: &ExprID,
-        rhs: &ExprID,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Ty, TypeError> {
-        let rhs_ty = self.infer_node(rhs, env, &None, source_file)?;
+    ) -> Result<TypedExpr, TypeError> {
+        let rhs_ty = self.infer_node(rhs, env, &None)?;
 
         // Expect lhs to be the same as rhs
-        let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.clone()), source_file)?;
+        let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.ty.clone()))?;
 
-        env.constrain(Constraint::Equality(*rhs, rhs_ty.clone(), lhs_ty));
+        env.constrain(Constraint::Equality(
+            rhs.id,
+            rhs_ty.ty.clone(),
+            lhs_ty.ty.clone(),
+        ));
 
-        Ok(rhs_ty)
+        Ok(TypedExpr {
+            id: *id,
+            ty: rhs_ty.ty.clone(),
+            expr: typed_expr::Expr::Assignment(Box::new(lhs_ty), Box::new(rhs_ty)),
+        })
     }
 
     #[tracing::instrument(level = "DEBUG", skip(self, env))]
@@ -967,36 +980,39 @@ impl<'a> TypeChecker<'a> {
     fn infer_type_repr(
         &mut self,
         id: &ExprID,
-        env: &mut Environment,
         name: &Name,
-        generics: &[ExprID],
-        conformances: &[ExprID],
+        generics: &[ParsedExpr],
+        conformances: &[ParsedExpr],
         is_type_parameter: &bool,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Ty, TypeError> {
-        let symbol_id = match name {
+        env: &mut Environment,
+    ) -> Result<TypedExpr, TypeError> {
+        let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
-                Some(
-                    Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _),
-                ) => *symbol_id,
+                Some(Ty::Struct(name, _) | Ty::Enum(name, _) | Ty::Protocol(name, _)) => {
+                    (name.0, name.1)
+                }
                 _ => {
                     return Err(TypeError::Unresolved(format!(
-                        "Unable to get Self for {:?}",
-                        source_file.get(id)
+                        "Unable to get Self for {name:?}",
                     )));
                 }
             },
-            _ => name.symbol_id()?,
+            _ => (name.symbol_id()?, name.name_str()),
         };
 
+        // If it's a type parameter, it's defining a generic type
         if *is_type_parameter {
             let mut unbound_vars = vec![];
             let mut conformance_data = vec![];
+            let mut typed_conformances = vec![];
 
-            for id in conformances {
-                let ty = self.infer_node(id, env, &None, source_file)?;
-                let Ty::Protocol(protocol_id, associated_types) = ty.clone() else {
-                    return Err(TypeError::Unknown(format!("{ty:?} is not a protocol",)));
+            for conformance in conformances {
+                let typed_conformance = self.infer_node(conformance, env, &None)?;
+                let Ty::Protocol(protocol_id, associated_types) = &typed_conformance.ty else {
+                    return Err(TypeError::Unknown(format!(
+                        "{typed_conformance:?} is not a protocol",
+                    )));
                 };
 
                 unbound_vars.extend(associated_types.iter().filter_map(|t| {
@@ -1007,7 +1023,8 @@ impl<'a> TypeChecker<'a> {
                     }
                 }));
 
-                conformance_data.push((id, protocol_id, associated_types));
+                typed_conformances.push(typed_conformance);
+                conformance_data.push((conformance.id, protocol_id, associated_types));
             }
 
             let ref ty @ Ty::TypeVar(ref type_var_id) =
@@ -1020,9 +1037,9 @@ impl<'a> TypeChecker<'a> {
 
             for (id, protocol_id, associated_types) in conformance_data {
                 let constraint = Constraint::ConformsTo {
-                    expr_id: *id,
+                    protocol_ty: *protocol_id,
                     ty: ty.clone(),
-                    conformance: Conformance::new(protocol_id, associated_types),
+                    conformance: Conformance::new(protocol_id.clone(), associated_types.to_vec()),
                 };
 
                 tracing::info!("Constraining type repr {constraint:?}");
@@ -1036,9 +1053,19 @@ impl<'a> TypeChecker<'a> {
 
             env.declare(symbol_id, scheme.clone())?;
 
-            return Ok(scheme.ty);
+            return Ok(TypedExpr {
+                id: *id,
+                expr: typed_expr::Expr::TypeRepr {
+                    name: ResolvedName(symbol_id, name_str.to_string()),
+                    generics: self.infer_nodes(generics, env)?,
+                    conformances: typed_conformances,
+                    introduces_type: true,
+                },
+                ty: scheme.ty.clone(),
+            });
         }
 
+        // It's not type params, it's type args that already exist
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
@@ -1047,55 +1074,96 @@ impl<'a> TypeChecker<'a> {
                 env.ty_for_symbol(id, name.name_str(), &symbol_id, &[])
             };
 
-            return Ok(ty);
+            return Ok(TypedExpr {
+                id: *id,
+                expr: typed_expr::Expr::TypeRepr {
+                    name: ResolvedName(symbol_id, name_str.to_string()),
+                    generics: vec![],
+                    conformances: vec![],
+                    introduces_type: false,
+                },
+                ty,
+            });
         }
 
         let ty_scheme = env.lookup_symbol(&symbol_id)?.clone();
         let mut substitutions = Substitutions::default();
 
-        for (var, generic_id) in ty_scheme.unbound_vars.iter().zip(generics) {
+        let mut typed_generics = vec![];
+        for (var, generic) in ty_scheme.unbound_vars.iter().zip(generics) {
             // Recursively get arg_ty
-            let arg_ty = self.infer_node(generic_id, env, &None, source_file)?;
-            substitutions.insert(var.clone(), arg_ty);
+            let typed_generic = self.infer_node(generic, env, &None)?;
+            substitutions.insert(var.clone(), typed_generic.ty.clone());
+            typed_generics.push(typed_generic);
         }
 
         let instantiated = env.instantiate_with_args(&ty_scheme, substitutions.clone());
 
-        Ok(instantiated)
+        Ok(TypedExpr {
+            id: *id,
+            expr: typed_expr::Expr::TypeRepr {
+                name: ResolvedName(symbol_id, name_str.to_string()),
+                generics: typed_generics,
+                conformances: vec![],
+                introduces_type: false,
+            },
+            ty: instantiated,
+        })
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected,))]
     fn infer_func_type_repr(
         &mut self,
+        id: &ExprID,
         env: &mut Environment,
-        args: &[ExprID],
-        ret: &ExprID,
+        args: &[ParsedExpr],
+        ret: &ParsedExpr,
         expected: &Option<Ty>,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Ty, TypeError> {
+        introduces_type: bool,
+    ) -> Result<TypedExpr, TypeError> {
         let mut inferred_args = vec![];
+        let mut inferred_arg_tys = vec![];
         for arg in args {
-            inferred_args.push(self.infer_node(arg, env, expected, source_file)?);
+            let inferred = self.infer_node(arg, env, expected)?;
+            inferred_arg_tys.push(inferred.ty.clone());
+            inferred_args.push(inferred);
         }
 
-        let inferred_ret = self.infer_node(ret, env, expected, source_file)?;
-        let ty = Ty::Func(inferred_args, Box::new(inferred_ret), vec![]);
-        Ok(ty)
+        let inferred_ret = self.infer_node(ret, env, expected)?;
+        let ty = Ty::Func(inferred_arg_tys, Box::new(inferred_ret.ty.clone()), vec![]);
+        Ok(TypedExpr {
+            id: *id,
+            expr: typed_expr::Expr::FuncTypeRepr(
+                inferred_args,
+                Box::new(inferred_ret),
+                introduces_type,
+            ),
+            ty,
+        })
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env, expected, source_file))]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, expected))]
     fn infer_tuple_type_repr(
         &mut self,
-        env: &mut Environment,
-        types: &Vec<ExprID>,
+        id: &ExprID,
+        types: &Vec<ParsedExpr>,
+        introduces_type: bool,
         expected: &Option<Ty>,
-        source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Ty, TypeError> {
-        let mut inferred_types: Vec<Ty> = vec![];
+        env: &mut Environment,
+    ) -> Result<TypedExpr, TypeError> {
+        let mut typed_exprs = vec![];
+        let mut tys = vec![];
         for t in types {
-            inferred_types.push(self.infer_node(t, env, expected, source_file)?);
+            let typed = self.infer_node(t, env, &None)?;
+            tys.push(typed.ty.clone());
+            typed_exprs.push(typed);
         }
-        Ok(Ty::Tuple(inferred_types))
+
+        Ok(TypedExpr {
+            id: *id,
+            expr: typed_expr::Expr::TupleTypeRepr(typed_exprs, introduces_type),
+            ty: Ty::Tuple(tys),
+        })
     }
 
     #[tracing::instrument(level = "DEBUG", skip(self, env))]
