@@ -4,7 +4,7 @@ use crate::{
     NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
-    name::Name,
+    name::{Name, ResolvedName},
     parsed_expr::ParsedExpr,
     parser::ExprID,
     substitutions::Substitutions,
@@ -55,26 +55,22 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         items: &'a [ParsedExpr],
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
-        let _s = info_span!("hoisting", path = source_file.path.to_str()).entered();
+        let _s = info_span!("hoisting", path = self.path.to_str()).entered();
         let mut to_generalize = vec![];
 
         // The first pass goes through and finds all the named things that need to be predeclared and just defines
         // them with placeholder type variables.
-        let type_defs_with_placeholders =
-            Self::predeclare_types(items, env, source_file).map_err(|e| e.1)?;
-        let lets_results = self
-            .predeclare_lets(items, env, source_file)
-            .map_err(|e| e.1)?;
-        let func_results = self.predeclare_functions(items, env, source_file)?;
+        let type_defs_with_placeholders = Self::predeclare_types(items, env).map_err(|e| e.1)?;
+        let lets_results = self.predeclare_lets(items, env).map_err(|e| e.1)?;
+        let func_results = self.predeclare_functions(items, env)?;
 
         // Then go through and actually infer stuff
-        self.infer_types(type_defs_with_placeholders, env, source_file)
+        self.infer_types(type_defs_with_placeholders, env)
             .map_err(|e| e.1)?;
 
-        to_generalize.extend(self.infer_lets(&lets_results, env, source_file)?);
-        to_generalize.extend(self.infer_funcs(&func_results, env, source_file)?);
+        to_generalize.extend(self.infer_lets(&lets_results, env)?);
+        to_generalize.extend(self.infer_funcs(&func_results, env)?);
 
         // Solve what we can
         let mut substitutions = env.flush_constraints(self.symbol_table)?;
@@ -99,7 +95,6 @@ impl<'a> TypeChecker<'a> {
     pub(super) fn predeclare_types(
         roots: &'a [ParsedExpr],
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, TypePlaceholders<'a>)>, (ExprID, TypeError)> {
         let mut placeholders = vec![];
 
@@ -161,9 +156,18 @@ impl<'a> TypeChecker<'a> {
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::Struct(*symbol_id, canonical_types.clone()),
-                PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
-                PredeclarationKind::Protocol => Ty::Protocol(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Struct => Ty::Struct(
+                    ResolvedName(*symbol_id, name_str.to_string()),
+                    canonical_types.clone(),
+                ),
+                PredeclarationKind::Enum => Ty::Enum(
+                    ResolvedName(*symbol_id, name_str.to_string()),
+                    canonical_types.clone(),
+                ),
+                PredeclarationKind::Protocol => Ty::Protocol(
+                    ResolvedName(*symbol_id, name_str.to_string()),
+                    canonical_types.clone(),
+                ),
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
                     #[allow(clippy::expect_used)]
@@ -359,7 +363,6 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         placeholders: Vec<(SymbolID, TypePlaceholders)>,
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), (ExprID, TypeError)> {
         let mut substitutions: Substitutions = Default::default();
 
@@ -386,7 +389,7 @@ impl<'a> TypeChecker<'a> {
                 let mut properties = vec![];
                 for property in placeholders.properties.iter() {
                     let typed_expr = self
-                        .infer_node(&property.expr, env, &None, source_file)
+                        .infer_node(&property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
                     properties.push(Property {
                         name: property.name.clone(),
@@ -405,7 +408,7 @@ impl<'a> TypeChecker<'a> {
             let mut methods = vec![];
             for method in &placeholders.methods {
                 let typed_expr = self
-                    .infer_node(&method.expr, env, &None, source_file)
+                    .infer_node(&method.expr, env, &None)
                     .map_err(|e| (method.expr.id, e))?;
                 methods.push(Method {
                     name: method.name.clone(),
@@ -422,7 +425,7 @@ impl<'a> TypeChecker<'a> {
                 let mut method_requirements = vec![];
                 for method in placeholders.method_requirements.iter() {
                     let typed_expr = self
-                        .infer_node(&method.expr, env, &None, source_file)
+                        .infer_node(&method.expr, env, &None)
                         .map_err(|e| (method.expr.id, e))?;
                     method_requirements.push(Method {
                         name: method.name.clone(),
@@ -449,7 +452,7 @@ impl<'a> TypeChecker<'a> {
 
                 for initializer in placeholders.initializers.iter() {
                     let typed_expr = self
-                        .infer_node(&initializer.expr, env, &None, source_file)
+                        .infer_node(&initializer.expr, env, &None)
                         .map_err(|e| (initializer.expr.id, e))?;
 
                     substitutions.insert(initializer.placeholder.clone(), typed_expr.ty.clone());
@@ -477,8 +480,10 @@ impl<'a> TypeChecker<'a> {
                         .infer_node(
                             &variant.expr,
                             env,
-                            &Some(Ty::Enum(def.symbol_id(), vec![])),
-                            source_file,
+                            &Some(Ty::Enum(
+                                ResolvedName(def.symbol_id(), def.name().to_string()),
+                                vec![],
+                            )),
                         )
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
@@ -495,15 +500,15 @@ impl<'a> TypeChecker<'a> {
             let mut conformances = vec![];
             for conformance_expr in placeholders.conformances.iter() {
                 let typed_expr = self
-                    .infer_node(conformance_expr, env, &None, source_file)
+                    .infer_node(conformance_expr, env, &None)
                     .map_err(|e| (conformance_expr.id, e))?;
 
-                let Ty::Protocol(symbol_id, associated_types) = &typed_expr.ty else {
+                let Ty::Protocol(name, associated_types) = &typed_expr.ty else {
                     tracing::error!("Didn't get protocol for expr: {typed_expr:?}",);
                     continue;
                 };
 
-                let conformance = Conformance::new(*symbol_id, associated_types.to_vec());
+                let conformance = Conformance::new(name.0, associated_types.to_vec());
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
                     protocol_ty: typed_expr.ty.clone(),
@@ -532,7 +537,6 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         roots: &'a [ParsedExpr],
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(&'a ParsedExpr, &'a SymbolID, TypeVarID)>, TypeError> {
         tracing::trace!("Predeclaring funcs");
 
@@ -570,18 +574,13 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         func_ids: &[(&'a ParsedExpr, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
         let mut placeholder_substitutions = Substitutions::new();
         let mut results = vec![];
 
         for (func_expr, symbol_id, placeholder) in func_ids {
-            let typed_expr = self.infer_node(
-                func_expr,
-                env,
-                &Some(Ty::TypeVar(placeholder.clone())),
-                source_file,
-            )?;
+            let typed_expr =
+                self.infer_node(func_expr, env, &Some(Ty::TypeVar(placeholder.clone())))?;
             env.declare(
                 **symbol_id,
                 Scheme::new(typed_expr.ty.clone(), vec![], vec![]),
@@ -602,7 +601,6 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         items: &'a [ParsedExpr],
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(&'a Box<ParsedExpr>, &'a SymbolID, TypeVarID)>, (ExprID, TypeError)> {
         tracing::trace!("Predeclaring lets");
         let mut result = vec![];
@@ -635,7 +633,6 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         let_ids: &[(&'a Box<ParsedExpr>, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
-        source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
         tracing::trace!("infer lets");
 
@@ -643,7 +640,7 @@ impl<'a> TypeChecker<'a> {
         let mut results = vec![];
 
         for (id, symbol, type_var) in let_ids {
-            let typed_expr = self.infer_node(id, env, &None, source_file)?;
+            let typed_expr = self.infer_node(id, env, &None)?;
             placeholder_substitutions.insert(type_var.clone(), typed_expr.ty.clone());
             results.push((**symbol, typed_expr.ty.clone()));
             env.declare(**symbol, Scheme::new(typed_expr.ty.clone(), vec![], vec![]))?;

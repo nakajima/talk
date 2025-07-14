@@ -1,5 +1,6 @@
 use crate::{
     SymbolID,
+    name::ResolvedName,
     ty::Ty,
     type_defs::{
         TypeParams,
@@ -91,7 +92,7 @@ impl ProtocolDef {
 
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
         Ty::Struct(
-            self.symbol_id,
+            ResolvedName(self.symbol_id, self.name_str.clone()),
             type_parameters
                 .iter()
                 .map(|t| Ty::TypeVar(t.type_var.clone()))

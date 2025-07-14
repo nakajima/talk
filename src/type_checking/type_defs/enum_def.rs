@@ -7,14 +7,14 @@ use crate::{
     type_var_id::TypeVarID,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawEnumVariant<'a> {
     pub name: String,
     pub expr: &'a ParsedExpr,
     pub values: &'a [ParsedExpr],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumVariant {
     pub name: String,
     pub ty: Ty,

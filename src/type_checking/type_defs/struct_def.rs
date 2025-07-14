@@ -1,5 +1,6 @@
 use crate::{
     SymbolID,
+    name::ResolvedName,
     parsed_expr::ParsedExpr,
     parser::ExprID,
     ty::Ty,
@@ -136,7 +137,7 @@ impl StructDef {
 
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
         Ty::Struct(
-            self.symbol_id,
+            ResolvedName(self.symbol_id, self.name_str.clone()),
             type_parameters
                 .iter()
                 .map(|t| Ty::TypeVar(t.type_var.clone()))

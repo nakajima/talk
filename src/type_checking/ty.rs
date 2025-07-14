@@ -3,6 +3,7 @@ use std::fmt::Display;
 use crate::{
     SymbolID,
     environment::Environment,
+    name::ResolvedName,
     type_checker::{FuncParams, FuncReturning},
     type_defs::TypeDef,
     type_var_id::TypeVarID,
@@ -22,15 +23,15 @@ pub enum Ty {
     ),
     Closure {
         func: Box<Ty>, // the func
-        captures: Vec<SymbolID>,
+        captures: Vec<ResolvedName>,
     },
     TypeVar(TypeVarID),
-    Enum(SymbolID, Vec<Ty>), // enum name + type arguments
-    EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
+    Enum(ResolvedName, Vec<Ty>), // enum name + type arguments
+    EnumVariant(ResolvedName /* Enum */, Vec<Ty> /* Values */),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
-    Struct(SymbolID, Vec<Ty> /* generics */),
-    Protocol(SymbolID, Vec<Ty> /* generics */),
+    Struct(ResolvedName, Vec<Ty> /* generics */),
+    Protocol(ResolvedName, Vec<Ty> /* generics */),
     Byte,
     Pointer,
     SelfType,
