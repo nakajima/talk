@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
 use tracing::trace_span;
 
@@ -215,9 +215,7 @@ impl<'a> TypeChecker<'a> {
         let _s = trace_span!("infer_node", expr = format!("{parsed_expr:?}")).entered();
 
         let mut ty = match &parsed_expr.expr {
-            crate::parsed_expr::Expr::Incomplete(expr_id) => {
-                self.handle_incomplete(expr_id, expected, env)
-            }
+            crate::parsed_expr::Expr::Incomplete(expr_id) => self.handle_incomplete(expr_id),
             crate::parsed_expr::Expr::LiteralTrue => {
                 checked_expected(expected, Ty::Bool);
                 Ok(TypedExpr {
@@ -483,13 +481,8 @@ impl<'a> TypeChecker<'a> {
         ty
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env, expected,))]
-    fn handle_incomplete(
-        &mut self,
-        expr: &IncompleteExpr,
-        expected: &Option<Ty>,
-        env: &mut Environment,
-    ) -> Result<TypedExpr, TypeError> {
+    #[tracing::instrument(level = "DEBUG", skip(self,))]
+    fn handle_incomplete(&mut self, expr: &IncompleteExpr) -> Result<TypedExpr, TypeError> {
         Err(TypeError::OccursConflict)
     }
 
@@ -521,7 +514,7 @@ impl<'a> TypeChecker<'a> {
                 conformances: self.infer_nodes(conformances, env)?,
             },
             ty: Ty::Protocol(
-                ResolvedName(*symbol_id, name_str.to_string()),
+                *symbol_id,
                 inferred_associated_types
                     .iter()
                     .map(|t| t.ty.clone())
@@ -618,7 +611,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            expr: typed_expr::Expr::EnumVariant(ResolvedName(enum_id.0, name.name_str()), values),
+            expr: typed_expr::Expr::EnumVariant(ResolvedName(*enum_id, name.name_str()), values),
             ty,
         })
     }
@@ -713,7 +706,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         let ty = Ty::Struct(
-            ResolvedName(*symbol_id, name_str.to_string()),
+            *symbol_id,
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
 
@@ -751,7 +744,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         let ty = Ty::Struct(
-            ResolvedName(*symbol_id, name_str.to_string()),
+            *symbol_id,
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
 
@@ -789,7 +782,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: Ty::Struct(ResolvedName(SymbolID::ARRAY, "Array".to_string()), vec![ty]),
+            ty: Ty::Struct(SymbolID::ARRAY, vec![ty]),
             expr: typed_expr::Expr::LiteralArray(typed_items),
         })
     }
@@ -954,10 +947,7 @@ impl<'a> TypeChecker<'a> {
                     .collect::<Vec<Constraint>>();
 
                 ret_var = env.instantiate(&Scheme::new(
-                    Ty::Struct(
-                        ResolvedName(*symbol_id, name_str.to_string()),
-                        type_args.clone(),
-                    ),
+                    Ty::Struct(*symbol_id, type_args.clone()),
                     struct_def.canonical_type_vars(),
                     constraints,
                 ));
@@ -1036,9 +1026,9 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
-                Some(Ty::Struct(name, _) | Ty::Enum(name, _) | Ty::Protocol(name, _)) => {
-                    (name.0, name.1.to_string())
-                }
+                Some(
+                    Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _),
+                ) => (*symbol_id, "Self".to_string()),
                 _ => {
                     return Err(TypeError::Unresolved(format!(
                         "Unable to get Self for {name:?}",
@@ -1085,6 +1075,7 @@ impl<'a> TypeChecker<'a> {
 
             for (id, protocol_id, associated_types) in conformance_data {
                 let constraint = Constraint::ConformsTo {
+                    expr_id: id,
                     ty: ty.clone(),
                     conformance: Conformance::new(protocol_id.clone(), associated_types.to_vec()),
                 };
@@ -1360,7 +1351,7 @@ impl<'a> TypeChecker<'a> {
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     if let Ty::Protocol(symbol_id, _) = self_ {
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id.0)))
+                        Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id)))
                     } else {
                         self_.clone()
                     }
@@ -1473,9 +1464,10 @@ impl<'a> TypeChecker<'a> {
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone())))
                 });
                 env.constrain(Constraint::ConformsTo {
+                    expr_id: id,
                     ty: lhs.ty.clone(),
                     conformance: Conformance {
-                        protocol_id: ResolvedName(SymbolID::ADD, "Add".to_string()),
+                        protocol_id: SymbolID::ADD,
                         associated_types: vec![rhs.ty.clone(), ret_ty.clone()],
                     },
                 });
@@ -1763,7 +1755,7 @@ impl<'a> TypeChecker<'a> {
                 // The expected type should be an Enum type
                 match expected {
                     Ty::Enum(enum_id, type_args) => {
-                        let Some(enum_def) = env.lookup_enum(&enum_id.0).cloned() else {
+                        let Some(enum_def) = env.lookup_enum(&enum_id).cloned() else {
                             return Err(TypeError::Unknown(format!(
                                 "Could not resolve enum with symbol: {enum_id:?}"
                             )));

@@ -26,12 +26,12 @@ pub enum Ty {
         captures: Vec<SymbolID>,
     },
     TypeVar(TypeVarID),
-    Enum(ResolvedName, Vec<Ty>), // enum name + type arguments
-    EnumVariant(ResolvedName /* Enum */, Vec<Ty> /* Values */),
+    Enum(SymbolID, Vec<Ty>), // enum name + type arguments
+    EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
-    Struct(ResolvedName, Vec<Ty> /* generics */),
-    Protocol(ResolvedName, Vec<Ty> /* generics */),
+    Struct(SymbolID, Vec<Ty> /* generics */),
+    Protocol(SymbolID, Vec<Ty> /* generics */),
     Byte,
     Pointer,
     SelfType,
@@ -112,15 +112,15 @@ impl Ty {
 
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
         let sym = match self {
-            Ty::Struct(sym, _) | Ty::Enum(sym, _) | Ty::Protocol(sym, _) => sym,
-            Ty::Int => &SymbolID::INT,
-            Ty::Float => &SymbolID::FLOAT,
-            Ty::Bool => &SymbolID::BOOL,
-            Ty::Pointer => &SymbolID::POINTER,
+            Ty::Struct(sym, _) | Ty::Enum(sym, _) | Ty::Protocol(sym, _) => *sym,
+            Ty::Int => SymbolID::INT,
+            Ty::Float => SymbolID::FLOAT,
+            Ty::Bool => SymbolID::BOOL,
+            Ty::Pointer => SymbolID::POINTER,
             _ => return None,
         };
 
-        env.lookup_type(sym)
+        env.lookup_type(&sym)
     }
 
     pub fn replace<F: Fn(&Ty) -> bool>(&self, replacement: Ty, f: &F) -> Ty {
@@ -177,7 +177,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Enum(
-                        *symbol_id,
+                        symbol_id.clone(),
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -190,7 +190,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::EnumVariant(
-                        *symbol_id,
+                        symbol_id.clone(),
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -222,7 +222,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Struct(
-                        *symbol_id,
+                        symbol_id.clone(),
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -235,7 +235,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Protocol(
-                        *symbol_id,
+                        symbol_id.clone(),
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))

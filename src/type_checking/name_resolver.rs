@@ -1563,7 +1563,8 @@ mod tests {
                     callee: any_expr!(Expr::Variable(Name::Resolved(
                         SymbolID::resolved(-5),
                         "__alloc".into()
-                    ))),
+                    )))
+                    .into(),
                     args: vec![any_expr!(Expr::LiteralInt("123".into())).into()],
                     type_args: vec![],
                 })]))

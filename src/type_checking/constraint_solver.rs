@@ -3,14 +3,14 @@ use crate::{
     conformance_checker::{ConformanceChecker, ConformanceError},
     constraint::Constraint,
     environment::{Environment, TypeParameter},
-    expr::Expr,
-    name::Name,
+    name::{Name, ResolvedName},
     parser::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
     type_defs::TypeDef,
     type_var_id::TypeVarKind,
+    typed_expr,
 };
 
 pub struct ConstraintSolverSolution {
@@ -115,13 +115,11 @@ impl<'a> ConstraintSolver<'a> {
 
             // Try to fill in the symbol ID of types of variables
             let this_symbol = match typed_expr.expr {
-                Expr::Variable(Name::Resolved(symbol_id, _) | Name::_Self(symbol_id), _) => {
-                    symbol_id
-                }
+                typed_expr::Expr::Variable(ResolvedName(symbol_id, _)) => symbol_id,
                 _ => continue,
             };
 
-            let def_symbol = match typed_expr.ty {
+            let def_symbol = match &typed_expr.ty {
                 Ty::Struct(struct_id, _) => struct_id,
                 Ty::Enum(enum_id, _) => enum_id,
                 _ => continue,
@@ -132,7 +130,7 @@ impl<'a> ConstraintSolver<'a> {
             };
 
             if let Some(definition) = symbol_info.definition.as_mut() {
-                definition.sym = Some(def_symbol);
+                definition.sym = Some(*def_symbol);
             }
         }
 

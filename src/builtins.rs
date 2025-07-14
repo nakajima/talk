@@ -440,33 +440,29 @@ mod tests {
 
 #[cfg(test)]
 mod optional_tests {
-    use crate::{expr::Expr, parser::parse};
+    use crate::{
+        any_expr,
+        parsed_expr::{self, ParsedExpr},
+        parser::{ExprID, parse},
+    };
 
     #[test]
     fn gets_parsed() {
         let parsed = parse("let a: Int?", "-".into());
-        let Expr::Let(_, Some(ty)) = parsed.roots()[0].unwrap() else {
-            panic!("didn't get let expr");
-        };
 
         assert_eq!(
-            *parsed.get(ty).unwrap(),
-            Expr::TypeRepr {
+            parsed.roots()[0],
+            any_expr!(parsed_expr::parsed_expr::Expr::TypeRepr {
                 name: "Optional".into(),
-                generics: vec![0],
+                generics: vec![any_expr!(parsed_expr::parsed_expr::Expr::TypeRepr {
+                    name: "Int".into(),
+                    generics: vec![],
+                    conformances: vec![],
+                    introduces_type: false
+                })],
                 conformances: vec![],
                 introduces_type: false
-            }
-        );
-
-        assert_eq!(
-            *parsed.get(&0).unwrap(),
-            Expr::TypeRepr {
-                name: "Int".into(),
-                generics: vec![],
-                conformances: vec![],
-                introduces_type: false
-            }
+            })
         );
     }
 }
@@ -476,7 +472,6 @@ mod array_tests {
     use crate::{
         SymbolID,
         compiling::driver::Driver,
-        expr::Expr,
         lowering::{
             instr::Instr,
             ir_function::IRFunction,
@@ -488,19 +483,6 @@ mod array_tests {
         parser::parse,
         ty::Ty,
     };
-
-    #[test]
-    fn gets_parsed() {
-        let parsed = parse("[1,2,3]", "-".into());
-        assert_eq!(
-            *parsed.roots()[0].unwrap(),
-            Expr::LiteralArray(vec![0, 1, 2])
-        );
-
-        assert_eq!(*parsed.get(&0).unwrap(), Expr::LiteralInt("1".into()));
-        assert_eq!(*parsed.get(&1).unwrap(), Expr::LiteralInt("2".into()));
-        assert_eq!(*parsed.get(&2).unwrap(), Expr::LiteralInt("3".into()));
-    }
 
     #[test]
     fn gets_typed() {

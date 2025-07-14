@@ -137,7 +137,7 @@ impl StructDef {
 
     pub fn type_repr(&self, type_parameters: &TypeParams) -> Ty {
         Ty::Struct(
-            ResolvedName(self.symbol_id, self.name_str.clone()),
+            self.symbol_id,
             type_parameters
                 .iter()
                 .map(|t| Ty::TypeVar(t.type_var.clone()))

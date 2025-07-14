@@ -156,18 +156,9 @@ impl<'a> TypeChecker<'a> {
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::Struct(
-                    ResolvedName(*symbol_id, name_str.to_string()),
-                    canonical_types.clone(),
-                ),
-                PredeclarationKind::Enum => Ty::Enum(
-                    ResolvedName(*symbol_id, name_str.to_string()),
-                    canonical_types.clone(),
-                ),
-                PredeclarationKind::Protocol => Ty::Protocol(
-                    ResolvedName(*symbol_id, name_str.to_string()),
-                    canonical_types.clone(),
-                ),
+                PredeclarationKind::Struct => Ty::Struct(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Protocol => Ty::Protocol(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
                     #[allow(clippy::expect_used)]
@@ -477,14 +468,7 @@ impl<'a> TypeChecker<'a> {
                 let mut variants = vec![];
                 for variant in placeholders.variants.iter() {
                     let typed_expr = self
-                        .infer_node(
-                            &variant.expr,
-                            env,
-                            &Some(Ty::Enum(
-                                ResolvedName(def.symbol_id(), def.name().to_string()),
-                                vec![],
-                            )),
-                        )
+                        .infer_node(&variant.expr, env, &Some(Ty::Enum(def.symbol_id(), vec![])))
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
                         name: variant.name.clone(),
@@ -511,6 +495,7 @@ impl<'a> TypeChecker<'a> {
                 let conformance = Conformance::new(name.clone(), associated_types.to_vec());
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
+                    expr_id: conformance_expr.id,
                     ty: def.ty(),
                     conformance,
                 });

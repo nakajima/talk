@@ -32,16 +32,14 @@ pub enum TypeDef {
 impl TypeDef {
     pub fn ty(&self) -> Ty {
         match self {
-            TypeDef::Enum(enum_def) => Ty::Enum(
-                ResolvedName(enum_def.symbol_id, enum_def.name_str.clone()),
-                enum_def.canonical_type_parameters(),
-            ),
-            TypeDef::Struct(struct_def) => Ty::Struct(
-                ResolvedName(struct_def.symbol_id, struct_def.name_str.clone()),
-                struct_def.canonical_type_parameters(),
-            ),
+            TypeDef::Enum(enum_def) => {
+                Ty::Enum(enum_def.symbol_id, enum_def.canonical_type_parameters())
+            }
+            TypeDef::Struct(struct_def) => {
+                Ty::Struct(struct_def.symbol_id, struct_def.canonical_type_parameters())
+            }
             TypeDef::Protocol(protocol_def) => Ty::Protocol(
-                ResolvedName(protocol_def.symbol_id, protocol_def.name_str.clone()),
+                protocol_def.symbol_id,
                 protocol_def.canonical_associated_types(),
             ),
             TypeDef::Builtin(builtin_def) => builtin_def.ty.clone(),

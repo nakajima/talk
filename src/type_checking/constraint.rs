@@ -37,6 +37,7 @@ pub enum Constraint {
         symbol_id: SymbolID,
     },
     ConformsTo {
+        expr_id: ExprID,
         ty: Ty,
         conformance: Conformance,
     },

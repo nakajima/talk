@@ -3,7 +3,6 @@ mod tests {
     use crate::{
         SymbolID, check,
         diagnostic::{Diagnostic, DiagnosticKind},
-        expr::Expr,
         ty::Ty,
         type_checker::TypeError,
         type_defs::TypeDef,
