@@ -1,14 +1,8 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use crate::{
-    environment::Environment, expr::SharedExpr, parsed_expr::ParsedExpr, scope_tree::ScopeTree,
-    span::Span, ty::Ty, typed_expr::TypedExpr,
-};
+use crate::{parsed_expr::ParsedExpr, span::Span};
 
-use super::{
-    expr::{Expr, ExprMeta},
-    parser::ExprID,
-};
+use super::{expr::ExprMeta, parser::ExprID};
 
 pub trait Phase: Eq {}
 
@@ -29,13 +23,56 @@ pub struct Lowered {}
 impl Phase for Lowered {}
 
 #[derive(Default, Debug, PartialEq, Clone)]
+pub struct ExprMetaStorage {
+    pub path: PathBuf,
+    storage: HashMap<ExprID, ExprMeta>,
+}
+
+impl ExprMetaStorage {
+    pub fn get(&self, id: &ExprID) -> Option<&ExprMeta> {
+        self.storage.get(id)
+    }
+
+    pub fn insert(&mut self, id: ExprID, meta: ExprMeta) {
+        self.storage.insert(id, meta);
+    }
+
+    pub fn span(&self, id: &ExprID) -> Span {
+        let meta = self.storage.get(id)?;
+        // handle single token expressions
+        if meta.start == meta.end {
+            Span {
+                path: self.path.clone(),
+                start: meta.start.start,
+                end: meta.end.end,
+                start_line: meta.start.line,
+                start_col: meta
+                    .start
+                    .col
+                    .saturating_sub(meta.start.end - meta.start.start),
+                end_line: meta.end.line,
+                end_col: meta.end.col,
+            }
+        } else {
+            Span {
+                path: self.path.clone(),
+                start: meta.start.start,
+                end: meta.end.end,
+                start_line: meta.start.line,
+                start_col: meta.start.col,
+                end_line: meta.end.line,
+                end_col: meta.end.col,
+            }
+        }
+    }
+}
+
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct SourceFile<P: Phase = Parsed> {
     pub path: PathBuf,
     roots: Vec<ParsedExpr>,
-    pub(crate) nodes: HashMap<ExprID, Expr>,
-    pub(crate) meta: HashMap<ExprID, ExprMeta>,
+    pub(crate) meta: Rc<RefCell<ExprMetaStorage>>,
     phase_data: P,
-    pub scope_tree: ScopeTree,
 }
 
 impl SourceFile {
@@ -43,10 +80,8 @@ impl SourceFile {
         Self {
             path,
             roots: vec![],
-            nodes: Default::default(),
             meta: Default::default(),
             phase_data: Parsed,
-            scope_tree: Default::default(),
         }
     }
 }
@@ -56,10 +91,8 @@ impl SourceFile<Parsed> {
         SourceFile {
             path: self.path,
             roots: self.roots,
-            nodes: self.nodes,
             meta: self.meta,
             phase_data: NameResolved,
-            scope_tree: self.scope_tree,
         }
     }
 }
@@ -69,10 +102,8 @@ impl SourceFile<NameResolved> {
         SourceFile {
             path: self.path,
             roots: self.roots,
-            nodes: self.nodes,
             meta: self.meta,
             phase_data: Typed {},
-            scope_tree: self.scope_tree,
         }
     }
 
@@ -80,19 +111,13 @@ impl SourceFile<NameResolved> {
         SourceFile {
             path: self.path.clone(),
             roots: self.roots.clone(),
-            nodes: self.nodes.clone(),
             meta: self.meta.clone(),
             phase_data: Parsed,
-            scope_tree: self.scope_tree.clone(),
         }
     }
 }
 
 impl SourceFile<Typed> {
-    pub fn set_typed_expr(&mut self, id: ExprID, typed_expr: TypedExpr, env: &mut Environment) {
-        env.typed_exprs.insert(id, typed_expr);
-    }
-
     // pub fn typed_roots(&self, env: &Environment) -> Vec<TypedExpr> {
     //     self.root_ids()
     //         .iter()
@@ -108,10 +133,6 @@ impl SourceFile<Typed> {
     //     &self.phase_data.env.typed_exprs
     // }
 
-    pub fn typed_expr(&self, expr_id: &ExprID, env: &Environment) -> Option<TypedExpr> {
-        env.typed_exprs.get(expr_id).cloned()
-    }
-
     // pub fn type_defs(&self) -> TypeDefs {
     //     self.phase_data.env.types.clone()
     // }
@@ -119,12 +140,6 @@ impl SourceFile<Typed> {
     // pub fn type_def(&self, id: &SymbolID) -> Option<&TypeDef> {
     //     self.phase_data.env.types.get(id)
     // }
-
-    pub fn define(&mut self, id: ExprID, ty: Ty, env: &mut Environment) {
-        if let Some(typed_expr) = env.typed_exprs.get_mut(&id) {
-            typed_expr.ty = ty;
-        }
-    }
 
     // pub fn type_from_symbol(
     //     &self,
@@ -134,12 +149,6 @@ impl SourceFile<Typed> {
     // ) -> Option<Ty> {
     // }
 
-    pub fn type_for(&self, id: ExprID, env: &Environment) -> Option<Ty> {
-        env.typed_exprs
-            .get(&id)
-            .map(|typed_expr| typed_expr.ty.clone())
-    }
-
     // pub fn constraints(&self) -> Vec<Constraint> {
     //     self.phase_data.env.constraints()
     // }
@@ -148,10 +157,8 @@ impl SourceFile<Typed> {
         SourceFile {
             path: self.path.clone(),
             roots: self.roots.clone(),
-            nodes: self.nodes.clone(),
             meta: self.meta.clone(),
             phase_data: Parsed,
-            scope_tree: self.scope_tree.clone(),
         }
     }
 
@@ -159,10 +166,8 @@ impl SourceFile<Typed> {
         SourceFile {
             path: self.path,
             roots: self.roots,
-            nodes: self.nodes,
             meta: self.meta,
             phase_data: Lowered {},
-            scope_tree: self.scope_tree,
         }
     }
 }
@@ -172,7 +177,7 @@ impl SourceFile<Lowered> {}
 impl<P: Phase> SourceFile<P> {
     // Adds the expr to the parse tree and sets its ID
     pub fn add(&mut self, id: ExprID, meta: ExprMeta) {
-        self.meta.insert(id, meta);
+        self.meta.borrow_mut().insert(id, meta);
     }
 
     pub fn push_root(&mut self, root: ParsedExpr) {
@@ -189,28 +194,9 @@ impl<P: Phase> SourceFile<P> {
         self.roots.as_mut_slice()
     }
 
-    pub fn find_expr_id(&self, expr: fn(expr: &Expr) -> bool) -> Option<ExprID> {
-        for (id, node) in self.nodes.iter() {
-            if expr(node) {
-                return Some(*id);
-            }
-        }
-
-        None
-    }
-
-    // Gets the expr at a given index
-    pub fn get(&self, index: &ExprID) -> Option<&Expr> {
-        self.nodes.get(index)
-    }
-
-    // Gets the expr at a given index
-    pub fn get_mut(&mut self, index: &ExprID) -> Option<&mut Expr> {
-        self.nodes.get_mut(index)
-    }
-
     pub fn span(&self, expr_id: &ExprID) -> Span {
-        let Some(meta) = self.meta.get(expr_id) else {
+        let meta = self.meta.borrow();
+        let Some(meta) = meta.get(expr_id) else {
             return Span::default();
         };
 

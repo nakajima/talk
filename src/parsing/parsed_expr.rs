@@ -187,8 +187,8 @@ pub enum Expr {
 
     ProtocolDecl {
         name: Name,
-        associated_types: Vec<ParsedExpr>, // Associated types
-        body: Box<ParsedExpr>,             // Body ID
+        associated_types: Vec<ParsedExpr>,
+        body: Box<ParsedExpr>,
         conformances: Vec<ParsedExpr>,
     },
 

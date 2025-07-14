@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use crate::Definition;
+use crate::ExprMetaStorage;
 use crate::NameResolved;
 use crate::SymbolID;
 use crate::SymbolInfo;
@@ -12,8 +14,10 @@ use crate::name::Name;
 use crate::parsed_expr::Expr;
 use crate::parsed_expr::IncompleteExpr;
 use crate::parsed_expr::ParsedExpr;
+use crate::parsed_expr::Pattern;
 use crate::parser::ExprID;
 use crate::scope_tree::ScopeId;
+use crate::scope_tree::ScopeTree;
 use crate::source_file::SourceFile;
 use crate::span::Span;
 
@@ -48,24 +52,29 @@ pub struct NameResolver {
     type_symbol_stack: Vec<SymbolID>,
 
     // For resolving captures
-    func_stack: Vec<(ExprID /* func expr id */, usize /* scope depth */)>,
+    func_stack: Vec<(String /* func expr id */, usize /* scope depth */)>,
 
     scope_tree_ids: Vec<ScopeId>,
+    scope_tree: ScopeTree,
 
     session: SharedCompilationSession,
+    path: PathBuf,
 }
 
 impl NameResolver {
     pub fn new(
         initial_scope: BTreeMap<String, SymbolID>,
         session: SharedCompilationSession,
+        path: PathBuf,
     ) -> Self {
         NameResolver {
             scopes: vec![initial_scope],
             type_symbol_stack: vec![],
             func_stack: vec![],
             scope_tree_ids: vec![],
+            scope_tree: Default::default(),
             session,
+            path,
         }
     }
 
@@ -79,12 +88,14 @@ impl NameResolver {
         if !source_file.roots().is_empty()
             && let Some(first_root) = &source_file
                 .meta
+                .borrow()
                 .get(&source_file.roots().first().unwrap().id)
             && let Some(last_root) = &source_file
                 .meta
+                .borrow()
                 .get(&source_file.roots().last().unwrap().id)
         {
-            let root_scope_id = source_file.scope_tree.new_scope(
+            let root_scope_id = self.scope_tree.new_scope(
                 None,
                 Span {
                     path: source_file.path.clone(),
@@ -98,828 +109,695 @@ impl NameResolver {
             );
             self.scope_tree_ids.push(root_scope_id);
         }
-        self.resolve_nodes(source_file.roots_mut(), symbol_table);
+
+        let meta = source_file.meta.clone();
+        self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table);
         source_file.to_resolved()
     }
 
     #[tracing::instrument(skip(self, symbol_table))]
-    fn resolve_nodes(&mut self, exprs: Vec<&mut ParsedExpr>, symbol_table: &mut SymbolTable) {
-        self.hoist_protocols(exprs, symbol_table);
-        self.hoist_enums(exprs, symbol_table);
-        self.hoist_funcs(exprs, symbol_table);
-        self.hoise_structs(exprs, symbol_table);
+    fn resolve_nodes(
+        &mut self,
+        exprs: &mut [ParsedExpr],
+        meta: &ExprMetaStorage,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<Vec<ParsedExpr>, NameResolverError> {
+        self.hoist_protocols(exprs, meta, symbol_table);
+        self.hoist_enums(exprs, meta, symbol_table);
+        self.hoist_funcs(exprs, meta, symbol_table);
+        self.hoise_structs(exprs, meta, symbol_table);
 
-        use Expr::*;
+        let mut result = vec![];
 
         for expr in exprs {
             tracing::trace!("Resolving: {expr:?}");
-            match &expr.expr {
-                LiteralInt(_) => continue,
-                LiteralFloat(_) => continue,
-                LiteralString(_) => continue,
-                LiteralArray(items) => {
-                    self.resolve_nodes(items.iter_mut().collect(), symbol_table);
-                }
-                LiteralTrue | LiteralFalse => continue,
-                Incomplete(incomplete) => match incomplete {
-                    IncompleteExpr::Member(receiver) => {
-                        if let Some(box mut receiver) = receiver {
-                            self.resolve_nodes(vec![&mut receiver], symbol_table);
-                        }
-                    }
-                    IncompleteExpr::Func {
-                        name,
-                        params,
-                        generics,
-                        ret,
-                        body,
-                    } => {
-                        self.resolve_func(
-                            &name,
-                            expr,
-                            &params.unwrap_or(vec![]),
-                            &generics.unwrap_or(vec![]),
-                            body.as_ref(),
-                            &ret,
-                            symbol_table,
-                        );
-                    }
-                },
-                Struct { .. } => {
-                    // Handled by hoisting
-                    //    match name {
-                    //        Name::Resolved(symbol_id, _) => {
-                    //            self.type_symbol_stack.push(symbol_id);
-                    //        }
-                    //        _ => {
-                    //            tracing::error!("trying to resolve un-hoisted struct");
-                    //            continue;
-                    //        }
-                    //    }
+            result.push(self.resolve_node(expr, meta, symbol_table)?);
+        }
 
-                    //    let tok = self.start_scope(source_file, source_file.span(node_id));
-                    //    self.resolve_nodes(&generics, source_file, symbol_table);
-                    //    self.resolve_nodes(&conformances, source_file, symbol_table);
-                    //    self.resolve_nodes(&[body], source_file, symbol_table);
-                    //    self.type_symbol_stack.pop();
-                    //    self.end_scope(tok);
+        Ok(result)
+    }
+
+    fn resolve_node(
+        &mut self,
+        parsed_expr: &mut ParsedExpr,
+        meta: &ExprMetaStorage,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<ParsedExpr, NameResolverError> {
+        let expr = &mut parsed_expr.expr;
+
+        match expr {
+            Expr::LiteralArray(items) => {
+                *items = self.resolve_nodes(items, meta, symbol_table)?;
+            }
+            Expr::Incomplete(incomplete) => match &mut *incomplete {
+                IncompleteExpr::Member(receiver) => {
+                    if let Some(box receiver_brw) = receiver {
+                        *receiver_brw = self.resolve_node(receiver_brw, meta, symbol_table)?;
+                    }
                 }
-                Extend {
+                IncompleteExpr::Func {
                     name,
-                    generics,
-                    body,
-                    conformances,
-                } => match name {
-                    Name::Raw(name_str) => {
-                        let Some(symbol_id) = self.lookup(&name_str) else {
-                            tracing::error!("Did not find symbol for {name_str}");
-                            if let Ok(mut session) = self.session.lock() {
-                                session.add_diagnostic(Diagnostic::resolve(
-                                    source_file.path.clone(),
-                                    expr.id,
-                                    NameResolverError::UnresolvedName(name_str.to_string()),
-                                ))
-                            }
-                            return;
-                        };
-
-                        tracing::trace!("Resolving extension {name_str} {symbol_id:?}");
-
-                        let symbol_id = symbol_id.0;
-                        self.type_symbol_stack.push(symbol_id);
-                        source_file.nodes.insert(
-                            *expr,
-                            Extend {
-                                name: Name::Resolved(symbol_id, name_str),
-                                generics: generics.clone(),
-                                conformances: conformances.clone(),
-                                body,
-                            },
-                        );
-
-                        self.resolve_nodes(&generics, source_file, symbol_table);
-                        self.resolve_nodes(&conformances, source_file, symbol_table);
-                        self.resolve_nodes(&[body], source_file, symbol_table);
-                        self.type_symbol_stack.pop();
-                    }
-                    _ => continue,
-                },
-                Break => (),
-                Init(_, func_id) => {
-                    let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
-                        tracing::error!("no type found for initializer");
-                        return;
-                    };
-
-                    symbol_table.add_initializer(symbol_id, *expr);
-                    self.resolve_nodes(&[func_id], source_file, symbol_table);
-                    source_file
-                        .nodes
-                        .insert(*expr, Expr::Init(Some(symbol_id), func_id));
-                }
-                Property {
-                    type_repr,
-                    default_value,
-                    name,
-                } => {
-                    let mut to_resolve = vec![];
-                    if let Some(type_repr) = type_repr {
-                        to_resolve.push(type_repr)
-                    }
-                    if let Some(default_value) = default_value {
-                        to_resolve.push(default_value)
-                    }
-                    self.resolve_nodes(&to_resolve, source_file, symbol_table);
-
-                    if let Name::Raw(name_str) = name {
-                        let symbol_id = self.declare(
-                            name_str.clone(),
-                            SymbolKind::Property,
-                            expr,
-                            source_file,
-                            symbol_table,
-                        );
-
-                        source_file.nodes.insert(
-                            *expr,
-                            Expr::Property {
-                                name: Name::Resolved(symbol_id, name_str),
-                                type_repr,
-                                default_value,
-                            },
-                        );
-                    }
-                }
-                Return(rhs) => {
-                    if let Some(rhs) = rhs {
-                        self.resolve_nodes(&[rhs], source_file, symbol_table);
-                    }
-                }
-                If(condi, conseq, alt) => {
-                    if let Some(alt) = alt {
-                        self.resolve_nodes(&[condi, conseq, alt], source_file, symbol_table);
-                    } else {
-                        self.resolve_nodes(&[condi, conseq], source_file, symbol_table);
-                    }
-                }
-                Loop(cond, body) => {
-                    if let Some(cond) = cond {
-                        self.resolve_nodes(&[cond, body], source_file, symbol_table);
-                    } else {
-                        self.resolve_nodes(&[body], source_file, symbol_table);
-                    }
-                }
-                Member(receiver, _member) => {
-                    if let Some(receiver) = receiver {
-                        self.resolve_nodes(&[receiver], source_file, symbol_table);
-                    }
-                }
-                Let(name, rhs) => {
-                    let name = match name {
-                        Name::Raw(name_str) => {
-                            let symbol_id = self.declare(
-                                name_str.clone(),
-                                SymbolKind::Local,
-                                expr,
-                                source_file,
-                                symbol_table,
-                            );
-                            Name::Resolved(symbol_id, name_str)
-                        }
-                        Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name,
-                    };
-
-                    if let Some(rhs) = rhs {
-                        self.resolve_nodes(&[rhs], source_file, symbol_table);
-                    }
-
-                    source_file.nodes.insert(*expr, Let(name, rhs));
-                }
-                Call {
-                    callee,
-                    type_args,
-                    args,
-                } => {
-                    let mut to_resolve = args.clone();
-                    to_resolve.extend(type_args);
-                    to_resolve.push(callee);
-
-                    self.resolve_nodes(&to_resolve, source_file, symbol_table);
-                }
-                Assignment(lhs, rhs) => {
-                    self.resolve_nodes(&[lhs, rhs], source_file, symbol_table);
-                }
-                Unary(_, expr_id) => {
-                    self.resolve_nodes(&[expr_id], source_file, symbol_table);
-                }
-                Binary(lhs, _, rhs) => {
-                    self.resolve_nodes(&[lhs, rhs], source_file, symbol_table);
-                }
-                Tuple(items) => {
-                    self.resolve_nodes(&items, source_file, symbol_table);
-                }
-                Block(items) => {
-                    let tok = self.start_scope(source_file, source_file.span(expr));
-                    self.hoist_funcs(&items, source_file, symbol_table);
-                    self.resolve_nodes(&items, source_file, symbol_table);
-                    self.end_scope(tok);
-                }
-                Func {
-                    generics,
                     params,
-                    body,
-                    ret,
-                    name,
-                    ..
-                } => {
-                    self.resolve_func(
-                        &name,
-                        expr,
-                        &params,
-                        &generics,
-                        Some(&body),
-                        &ret,
-                        symbol_table,
-                        source_file,
-                    );
-                }
-                CallArg { value, .. } => {
-                    self.resolve_nodes(&[value], source_file, symbol_table);
-                }
-                Parameter(name, ty_repr) => {
-                    if let Name::Raw(name) = &name {
-                        let symbol_id = self.declare(
-                            name.clone(),
-                            SymbolKind::Param,
-                            expr,
-                            source_file,
-                            symbol_table,
-                        );
-
-                        source_file.nodes.insert(
-                            *expr,
-                            Parameter(Name::Resolved(symbol_id, name.clone()), ty_repr),
-                        );
-                    }
-
-                    if let Some(ty_repr) = ty_repr {
-                        self.resolve_nodes(&[ty_repr], source_file, symbol_table);
-                    }
-                }
-                Variable(name, _) => match name {
-                    Name::Raw(name_str) => {
-                        let name = if name_str == "self" {
-                            if let Some(last_symbol) = self.type_symbol_stack.last() {
-                                let name = Name::_Self(*last_symbol);
-                                symbol_table.add_map(source_file, expr, last_symbol);
-                                name
-                            } else {
-                                if let Ok(mut lock) = self.session.lock() {
-                                    lock.add_diagnostic(Diagnostic::resolve(
-                                        source_file.path.clone(),
-                                        *expr,
-                                        NameResolverError::InvalidSelf,
-                                    ));
-                                }
-                                continue;
-                            }
-                        } else {
-                            let Some((symbol_id, depth)) = self.lookup(&name_str) else {
-                                if let Ok(mut session) = self.session.lock() {
-                                    session.add_diagnostic(Diagnostic::resolve(
-                                        source_file.path.clone(),
-                                        *expr,
-                                        NameResolverError::UnresolvedName(name_str),
-                                    ))
-                                }
-
-                                return;
-                            };
-                            tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
-
-                            symbol_table.add_map(source_file, expr, &symbol_id);
-
-                            // Check to see if this is a capture
-                            if let Some((func_id, func_depth)) = self.func_stack.last()
-                                && &depth < func_depth
-                                && symbol_id.0 > 0
-                            {
-                                #[allow(clippy::unwrap_used)]
-                                let Func { name, captures, .. } =
-                                    source_file.get_mut(func_id).unwrap()
-                                else {
-                                    unreachable!()
-                                };
-
-                                if let Some(Name::Resolved(_, func_name)) = name
-                                    && func_name == &name_str
-                                {
-                                    tracing::trace!("the same: {func_name:?} <> {name_str:?}");
-                                } else {
-                                    if !captures.contains(&symbol_id) {
-                                        (*captures).push(symbol_id);
-                                    }
-
-                                    symbol_table.mark_as_captured(&symbol_id);
-                                }
-                            }
-
-                            Name::Resolved(symbol_id, name_str)
-                        };
-
-                        source_file.nodes.insert(*expr, Variable(name, None));
-                    }
-                    Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
-                },
-                TypeRepr {
-                    name,
                     generics,
-                    conformances,
-                    introduces_type,
+                    ret,
+                    body,
                 } => {
-                    let resolved_name_for_node = match name.clone() {
-                        Name::Raw(raw_name_str) => {
-                            if introduces_type {
-                                // Declaration site of a type parameter (e.g., T in `enum Option<T>`)
-                                // Ensure it's declared in the current scope.
-                                let symbol_id = self.declare(
-                                    raw_name_str.clone(),
-                                    SymbolKind::TypeParameter,
-                                    expr,
-                                    source_file,
-                                    symbol_table,
-                                );
-                                Name::Resolved(symbol_id, raw_name_str)
-                            } else {
-                                // Usage site of a type name (e.g., T in `case some(T)`, or `Int`)
-                                // Look up an existing symbol.
-                                if raw_name_str == "Self"
-                                    && let Some(last_symbol) = self.type_symbol_stack.last()
-                                {
-                                    let name = Name::SelfType;
-                                    symbol_table.add_map(source_file, expr, last_symbol);
-                                    name
-                                } else if let Some((symbol_id, _)) = self.lookup(&raw_name_str) {
-                                    Name::Resolved(symbol_id, raw_name_str)
-                                } else {
-                                    if let Ok(mut session) = self.session.lock() {
-                                        session.add_diagnostic(Diagnostic::resolve(
-                                            source_file.path.clone(),
-                                            *expr,
-                                            NameResolverError::UnresolvedName(raw_name_str),
-                                        ))
-                                    }
-
-                                    return;
-                                }
-                            }
+                    // self.resolve_func(&name, expr, symbol_table);
+                }
+            },
+            Expr::Struct { .. } => {
+                // Handled by hoisting
+            }
+            Expr::Extend {
+                name,
+                generics,
+                body,
+                conformances,
+            } => match name {
+                Name::Raw(name_str) => {
+                    let Some(symbol_id) = self.lookup(&name_str) else {
+                        tracing::error!("Did not find symbol for {name_str}");
+                        if let Ok(mut session) = self.session.lock() {
+                            session.add_diagnostic(Diagnostic::resolve(
+                                self.path.clone(),
+                                parsed_expr.id,
+                                NameResolverError::UnresolvedName(name_str.to_string()),
+                            ))
                         }
-                        Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name, // Already resolved, no change needed to the name itself.
+
+                        return Ok(parsed_expr.clone());
                     };
 
-                    // Update the existing TypeRepr node with the resolved name.
-                    // The node type remains TypeRepr.
-                    source_file.nodes.insert(
-                        *expr,
-                        TypeRepr {
-                            name: resolved_name_for_node,
-                            generics: generics.clone(), // Keep original generics ExprIDs
-                            conformances: conformances.clone(),
-                            introduces_type,
-                        },
-                    );
+                    tracing::trace!("Resolving extension {name_str} {symbol_id:?}");
 
-                    // Recursively resolve any type arguments within this TypeRepr.
-                    self.resolve_nodes(&generics, source_file, symbol_table);
-                    self.resolve_nodes(&conformances, source_file, symbol_table);
-                }
-                FuncTypeRepr(args, ret, _) => {
-                    self.resolve_nodes(&args, source_file, symbol_table);
-                    self.resolve_nodes(&[ret], source_file, symbol_table);
-                }
-                TupleTypeRepr(types, _) => {
-                    self.resolve_nodes(&types, source_file, symbol_table);
-                }
-                EnumDecl {
-                    name,
-                    generics,
-                    conformances,
-                    body,
-                } => {
-                    match name {
-                        Name::Raw(name_str) => {
-                            let symbol_id = self.declare(
-                                name_str.clone(),
-                                SymbolKind::Enum,
-                                expr,
-                                source_file,
-                                symbol_table,
-                            );
-                            self.type_symbol_stack.push(symbol_id);
-                            self.resolve_nodes(&generics, source_file, symbol_table);
-                            self.resolve_nodes(&conformances, source_file, symbol_table);
-                            self.resolve_nodes(&[body], source_file, symbol_table);
-                            source_file.nodes.insert(
-                                *expr,
-                                EnumDecl {
-                                    name: Name::Resolved(symbol_id, name_str),
-                                    generics: generics.clone(),
-                                    conformances: conformances.clone(),
-                                    body,
-                                },
-                            );
-                        }
-                        _ => continue,
-                    }
+                    let symbol_id = symbol_id.0;
+                    self.type_symbol_stack.push(symbol_id);
 
-                    self.resolve_nodes(&generics, source_file, symbol_table);
-                    self.resolve_nodes(&[body], source_file, symbol_table);
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
+                    *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                    *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                    *body = self.resolve_node(body, meta, symbol_table)?.into();
+
                     self.type_symbol_stack.pop();
                 }
-                EnumVariant(name, values) => {
-                    if let Name::Raw(name_str) = name {
-                        self.resolve_nodes(&values, source_file, symbol_table);
-                        let Some(type_sym) = self.type_symbol_stack.last() else {
-                            continue;
-                        };
-                        let sym = self.declare(
-                            name_str.clone(),
-                            SymbolKind::EnumVariant(SymbolID(type_sym.0)),
-                            expr,
-                            source_file,
-                            symbol_table,
-                        );
+                _ => return Ok(parsed_expr.clone()),
+            },
+            Expr::Break => (),
+            Expr::Init(_, func_id) => {
+                let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
+                    tracing::error!("no type found for initializer");
+                    return Err(NameResolverError::InvalidSelf);
+                };
 
-                        source_file
-                            .nodes
-                            .insert(*expr, EnumVariant(Name::Resolved(sym, name_str), values));
-                    }
-                }
-                Match(scrutinee, arms) => {
-                    // Resolve the scrutinee expression
-                    self.resolve_nodes(&[scrutinee], source_file, symbol_table);
-                    // Each arm will manage its own scope for pattern bindings.
-                    // The Match expression itself doesn't introduce a new scope for *bindings*
-                    // that span across arms or affect expressions outside the match.
-                    self.resolve_nodes(&arms, source_file, symbol_table);
-                }
-                MatchArm(pattern, body) => {
-                    let tok = self.start_scope(source_file, source_file.span(expr));
-                    self.resolve_nodes(&[pattern], source_file, symbol_table);
-                    self.resolve_nodes(&[body], source_file, symbol_table);
-                    self.end_scope(tok);
-                }
-                Pattern(pattern) => {
-                    let pattern = self.resolve_pattern(&pattern, source_file, symbol_table, expr);
-                    source_file.nodes.insert(*expr, Pattern(pattern));
-                }
-                PatternVariant(_, _, _items) => (),
-                FuncSignature {
-                    name,
-                    params,
-                    generics,
-                    ret,
-                } => self.resolve_func(
-                    &Some(name),
-                    expr,
-                    &params,
-                    &generics,
-                    None,
-                    &Some(ret),
-                    symbol_table,
-                    source_file,
-                ),
-                ProtocolDecl {
-                    name,
-                    associated_types,
-                    conformances,
-                    body,
-                } => match name {
-                    Name::Raw(name_str) => {
-                        let symbol_id = self.declare(
-                            name_str.clone(),
-                            SymbolKind::Protocol,
-                            expr,
-                            source_file,
-                            symbol_table,
-                        );
-                        self.type_symbol_stack.push(symbol_id);
-                        source_file.nodes.insert(
-                            *expr,
-                            ProtocolDecl {
-                                name: Name::Resolved(symbol_id, name_str),
-                                associated_types: associated_types.clone(),
-                                conformances: conformances.clone(),
-                                body,
-                            },
-                        );
-
-                        self.resolve_nodes(&associated_types, source_file, symbol_table);
-                        self.resolve_nodes(&conformances, source_file, symbol_table);
-                        self.resolve_nodes(&[body], source_file, symbol_table);
-                        self.type_symbol_stack.pop();
-                    }
-                    _ => continue,
-                },
+                symbol_table.add_initializer(symbol_id, parsed_expr.id);
+                *func_id = Box::new(self.resolve_node(func_id, meta, symbol_table)?);
             }
+            Expr::Property {
+                type_repr,
+                default_value,
+                name,
+            } => {
+                if let Some(type_repr) = type_repr {
+                    *type_repr = Box::new(self.resolve_node(type_repr, meta, symbol_table)?);
+                }
+                if let Some(default_value) = default_value {
+                    *default_value =
+                        Box::new(self.resolve_node(default_value, meta, symbol_table)?);
+                }
+
+                if let Name::Raw(name_str) = name {
+                    let symbol_id = self.declare(
+                        name_str.clone(),
+                        SymbolKind::Property,
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
+                }
+            }
+            Expr::Return(rhs) => {
+                if let Some(rhs) = rhs {
+                    *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
+                }
+            }
+            Expr::If(condi, conseq, alt) => {
+                *condi = Box::new(self.resolve_node(condi, meta, symbol_table)?);
+                *conseq = Box::new(self.resolve_node(conseq, meta, symbol_table)?);
+
+                if let Some(alt) = alt {
+                    *alt = Box::new(self.resolve_node(alt, meta, symbol_table)?);
+                }
+            }
+            Expr::Loop(cond, body) => {
+                if let Some(cond) = cond {
+                    *cond = Box::new(self.resolve_node(cond, meta, symbol_table)?);
+                }
+
+                *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
+            }
+            Expr::Member(receiver, _member) => {
+                if let Some(receiver) = receiver {
+                    *receiver = Box::new(self.resolve_node(receiver, meta, symbol_table)?);
+                }
+            }
+            Expr::Let(name, rhs) => {
+                if let Name::Raw(name_str) = name {
+                    let symbol_id = self.declare(
+                        name_str.clone(),
+                        SymbolKind::Local,
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
+                }
+
+                if let Some(rhs) = rhs {
+                    *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
+                }
+            }
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            } => {
+                *callee = Box::new(self.resolve_node(callee, meta, symbol_table)?);
+                *type_args = self.resolve_nodes(type_args, meta, symbol_table)?;
+                *args = self.resolve_nodes(args, meta, symbol_table)?;
+            }
+            Expr::Assignment(lhs, rhs) => {
+                *lhs = Box::new(self.resolve_node(lhs, meta, symbol_table)?);
+                *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
+            }
+            Expr::Unary(_, rhs) => {
+                *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
+            }
+            Expr::Binary(lhs, _, rhs) => {
+                *lhs = Box::new(self.resolve_node(lhs, meta, symbol_table)?);
+                *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
+            }
+            Expr::Tuple(items) => {
+                *items = self.resolve_nodes(items, meta, symbol_table)?;
+            }
+            Expr::Block(items) => {
+                let tok = self.start_scope(meta.span(&parsed_expr.id));
+                self.hoist_funcs(items, meta, symbol_table);
+                *items = self.resolve_nodes(items, meta, symbol_table)?;
+                self.end_scope(tok);
+            }
+            Expr::Func { .. } => {
+                self.resolve_func(expr, &parsed_expr.id, meta, symbol_table);
+            }
+            Expr::CallArg { value, .. } => {
+                *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
+            }
+            Expr::Parameter(name, ty_repr) => {
+                if let Name::Raw(name_str) = &name {
+                    let symbol_id = self.declare(
+                        name_str.to_string(),
+                        SymbolKind::Param,
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
+                }
+
+                if let Some(ty_repr) = ty_repr {
+                    *ty_repr = Box::new(self.resolve_node(ty_repr, meta, symbol_table)?);
+                }
+            }
+            Expr::Variable(name) => match name {
+                Name::Raw(name_str) => {
+                    *name = if name_str == "self" {
+                        if let Some(last_symbol) = self.type_symbol_stack.last() {
+                            symbol_table.add_map(meta.span(&parsed_expr.id), last_symbol);
+                            Name::_Self(*last_symbol)
+                        } else {
+                            return Err(NameResolverError::InvalidSelf);
+                        }
+                    } else {
+                        let Some((symbol_id, depth)) = self.lookup(&name_str) else {
+                            return Err(NameResolverError::UnresolvedName(name_str.to_string()));
+                        };
+
+                        tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
+
+                        symbol_table.add_map(meta.span(&parsed_expr.id), &symbol_id);
+
+                        // TODO: Resolve captures when we're resolving a func?
+                        // Check to see if this is a capture
+                        // if let Some((func_name, func_depth)) = self.func_stack.last()
+                        //     && &depth < func_depth
+                        //     && symbol_id.0 > 0
+                        // {
+                        //     #[allow(clippy::unwrap_used)]
+                        //     if func_name == name_str {
+                        //         tracing::trace!("the same: {func_name:?} <> {name_str:?}");
+                        //     } else {
+                        //         if !captures.contains(&symbol_id) {
+                        //             (*captures).push(symbol_id);
+                        //         }
+
+                        //         symbol_table.mark_as_captured(&symbol_id);
+                        //     }
+                        // }
+
+                        Name::Resolved(symbol_id, name_str.to_string())
+                    };
+                }
+                Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
+            },
+            Expr::TypeRepr {
+                name,
+                generics,
+                conformances,
+                introduces_type,
+            } => {
+                let resolved_name_for_node = match name.clone() {
+                    Name::Raw(raw_name_str) => {
+                        if *introduces_type {
+                            // Declaration site of a type parameter (e.g., T in `enum Option<T>`)
+                            // Ensure it's declared in the current scope.
+                            let symbol_id = self.declare(
+                                raw_name_str.clone(),
+                                SymbolKind::TypeParameter,
+                                parsed_expr.id,
+                                meta,
+                                symbol_table,
+                            );
+                            Name::Resolved(symbol_id, raw_name_str)
+                        } else {
+                            // Usage site of a type name (e.g., T in `case some(T)`, or `Int`)
+                            // Look up an existing symbol.
+                            if raw_name_str == "Self"
+                                && let Some(last_symbol) = self.type_symbol_stack.last()
+                            {
+                                let name = Name::SelfType;
+                                symbol_table.add_map(meta.span(&parsed_expr.id), last_symbol);
+                                name
+                            } else if let Some((symbol_id, _)) = self.lookup(&raw_name_str) {
+                                Name::Resolved(symbol_id, raw_name_str)
+                            } else {
+                                return Err(NameResolverError::UnresolvedName(raw_name_str));
+                            }
+                        }
+                    }
+                    Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name.clone(), // Already resolved, no change needed to the name itself.
+                };
+
+                // Update the existing TypeRepr node with the resolved name.
+                // The node type remains TypeRepr.
+                *name = resolved_name_for_node;
+                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+            }
+            Expr::FuncTypeRepr(args, ret, _) => {
+                *args = self.resolve_nodes(args, meta, symbol_table)?;
+                *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
+            }
+            Expr::TupleTypeRepr(types, _) => {
+                *types = self.resolve_nodes(types, meta, symbol_table)?;
+            }
+            Expr::EnumDecl {
+                name,
+                generics,
+                conformances,
+                body,
+            } => {
+                if let Name::Raw(name_str) = name {
+                    let symbol_id = self.declare(
+                        name_str.clone(),
+                        SymbolKind::Enum,
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+                    self.type_symbol_stack.push(symbol_id);
+                    *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                    *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                    *body = self.resolve_node(body, meta, symbol_table)?.into();
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
+                    self.type_symbol_stack.pop();
+                }
+            }
+            Expr::EnumVariant(name, values) => {
+                if let Name::Raw(name_str) = name {
+                    let Some(type_sym) = self.type_symbol_stack.last() else {
+                        return Err(NameResolverError::InvalidSelf);
+                    };
+                    let sym = self.declare(
+                        name_str.clone(),
+                        SymbolKind::EnumVariant(SymbolID(type_sym.0)),
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+
+                    *name = Name::Resolved(sym, name_str.to_string());
+                    *values = self.resolve_nodes(values, meta, symbol_table)?;
+                }
+            }
+            Expr::Match(scrutinee, arms) => {
+                // Resolve the scrutinee expression
+                *scrutinee = Box::new(self.resolve_node(scrutinee, meta, symbol_table)?);
+                // Each arm will manage its own scope for pattern bindings.
+                // The Match expression itself doesn't introduce a new scope for *bindings*
+                // that span across arms or affect expressions outside the match.
+                *arms = self.resolve_nodes(arms, meta, symbol_table)?;
+            }
+            Expr::MatchArm(pattern, body) => {
+                let tok = self.start_scope(meta.span(&parsed_expr.id));
+                *pattern = Box::new(self.resolve_node(pattern, meta, symbol_table)?);
+                *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
+                self.end_scope(tok);
+            }
+            Expr::ParsedPattern(pattern) => {
+                self.resolve_pattern(pattern, meta, symbol_table, &parsed_expr.id)?;
+            }
+            Expr::PatternVariant(_, _, _items) => (),
+            Expr::FuncSignature {
+                name,
+                params,
+                generics,
+                ret,
+            } => {
+                self.resolve_func(expr, &parsed_expr.id, meta, symbol_table);
+            }
+            Expr::ProtocolDecl {
+                name,
+                associated_types,
+                conformances,
+                body,
+            } => match name {
+                Name::Raw(name_str) => {
+                    let symbol_id = self.declare(
+                        name_str.clone(),
+                        SymbolKind::Protocol,
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+                    self.type_symbol_stack.push(symbol_id);
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
+                    *associated_types = self.resolve_nodes(associated_types, meta, symbol_table)?;
+                    *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                    *body = self.resolve_node(body, meta, symbol_table)?.into();
+                    self.type_symbol_stack.pop();
+                }
+                _ => return Err(NameResolverError::InvalidSelf),
+            },
+            _ => (),
         }
+
+        Ok(parsed_expr.clone())
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn resolve_func(
         &mut self,
-        name: &Option<Name>,
-        node_id: &ExprID,
-        params: &[ParsedExpr],
-        generics: &[ParsedExpr],
-        body: Option<&ExprID>,
-        ret: &Option<ExprID>,
+        expr: &mut Expr,
+        expr_id: &ExprID,
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-    ) {
+    ) -> Result<(), NameResolverError> {
+        let Expr::Func {
+            name,
+            generics,
+            params,
+            body,
+            ret,
+            ..
+        } = expr
+        else {
+            return Err(NameResolverError::InvalidSelf);
+        };
+
         if !self.type_symbol_stack.is_empty() && name.is_none() {
-            if let Ok(mut lock) = self.session.lock() {
-                lock.add_diagnostic(Diagnostic::resolve(
-                    source_file.path.clone(),
-                    *node_id,
-                    NameResolverError::MissingMethodName,
-                ));
-            }
-
-            return;
+            return Err(NameResolverError::MissingMethodName);
         }
 
-        self.func_stack.push((*node_id, self.scopes.len()));
-        let tok = self.start_scope(source_file, source_file.span(node_id));
+        let Some(Name::Raw(name_str)) = name else {
+            return Err(NameResolverError::InvalidSelf);
+        };
 
-        self.resolve_nodes(generics, source_file, symbol_table);
-        self.resolve_nodes(params, source_file, symbol_table);
+        self.func_stack
+            .push((name_str.to_string(), self.scopes.len()));
+        let tok = self.start_scope(meta.span(expr_id));
 
-        let mut to_resolve = params.to_owned();
+        *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+        *params = self.resolve_nodes(params, meta, symbol_table)?;
 
-        if let Some(body) = body {
-            to_resolve.push(*body);
-        }
+        *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
 
         if let Some(ret) = ret {
-            to_resolve.push(*ret);
+            *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
         }
 
-        self.resolve_nodes(&to_resolve, source_file, symbol_table);
         self.end_scope(tok);
         self.func_stack.pop();
+
+        Ok(())
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn hoist_funcs(
         &mut self,
-        node_ids: &[ParsedExpr],
-        source_file: &mut SourceFile,
+        parsed_exprs: &mut [ParsedExpr],
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-    ) {
-        for id in node_ids {
-            if let Some(Func {
-                name: Some(Name::Raw(name)),
+    ) -> Result<(), NameResolverError> {
+        for parsed_expr in parsed_exprs {
+            if let Expr::Func {
+                name: name,
                 generics,
                 params,
-                body,
                 ret,
-                captures,
-            }) = source_file.get(id).cloned()
+                ..
+            } = &mut parsed_expr.expr
             {
-                let symbol_id = self.declare(
-                    name.clone(),
-                    SymbolKind::FuncDef,
-                    id,
-                    source_file,
-                    symbol_table,
-                );
+                if let Some(Name::Raw(name_str)) = name {
+                    let symbol_id = self.declare(
+                        name_str.to_string(),
+                        SymbolKind::FuncDef,
+                        parsed_expr.id,
+                        meta,
+                        symbol_table,
+                    );
 
-                source_file.nodes.insert(
-                    *id,
-                    Func {
-                        name: Some(Name::Resolved(symbol_id, name)),
-                        generics,
-                        params,
-                        body,
-                        ret,
-                        captures,
-                    },
-                );
+                    *name = Some(Name::Resolved(symbol_id, name_str.to_string()));
+                }
+
+                let tok = self.start_scope(meta.span(&parsed_expr.id));
+
+                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                *params = self.resolve_nodes(params, meta, symbol_table)?;
+
+                if let Some(ret) = ret {
+                    *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
+                }
+
+                self.end_scope(tok);
             }
 
-            if let Some(FuncSignature {
+            if let Expr::FuncSignature {
                 name,
                 generics,
                 params,
                 ret,
-            }) = source_file.get(id).cloned()
+            } = &mut parsed_expr.expr
             {
-                let name = if let Name::Raw(name) = name {
+                if let Name::Raw(name_str) = name {
                     let symbol_id = self.declare(
-                        name.clone(),
+                        name_str.to_string(),
                         SymbolKind::FuncDef,
-                        id,
-                        source_file,
+                        parsed_expr.id,
+                        meta,
                         symbol_table,
                     );
-                    Name::Resolved(symbol_id, name)
-                } else {
-                    name
+                    *name = Name::Resolved(symbol_id, name_str.to_string());
                 };
 
-                let tok = self.start_scope(source_file, source_file.span(id));
+                let tok = self.start_scope(meta.span(&parsed_expr.id));
 
-                self.resolve_nodes(&generics, source_file, symbol_table);
-                self.resolve_nodes(&params, source_file, symbol_table);
-                self.resolve_nodes(&[ret], source_file, symbol_table);
+                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                *params = self.resolve_nodes(params, meta, symbol_table)?;
+                *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
 
                 self.end_scope(tok);
-
-                source_file.nodes.insert(
-                    *id,
-                    FuncSignature {
-                        name,
-                        generics,
-                        params,
-                        ret,
-                    },
-                );
             }
         }
+
+        Ok(())
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn hoise_structs(
         &mut self,
-        node_ids: &[ParsedExpr],
-        source_file: &mut SourceFile,
+        parsed_exprs: &mut [ParsedExpr],
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-    ) {
-        for id in node_ids {
-            let Some(Struct {
-                name: Name::Raw(name_str),
+    ) -> Result<(), NameResolverError> {
+        for parsed_expr in parsed_exprs {
+            let Expr::Struct {
+                name,
                 generics,
                 conformances,
                 body,
-            }) = source_file.get(id).cloned()
+            } = &mut parsed_expr.expr
             else {
                 continue;
             };
 
+            let Name::Raw(name_str) = name else {
+                return Err(NameResolverError::InvalidSelf);
+            };
+
             if let Some((symbol_id, _)) = self.lookup(&name_str)
                 && let Some(info) = symbol_table.get(&symbol_id)
-                && let Some(this_info) = source_file.meta.get(id)
-                && let Some(existing_info) = source_file.meta.get(&info.expr_id)
+                && let Some(this_info) = meta.get(&parsed_expr.id)
+                && let Some(existing_info) = meta.get(&info.expr_id)
                 && this_info != existing_info
                 && let Ok(session) = &mut self.session.lock()
             {
-                session.add_diagnostic(Diagnostic::resolve(
-                    source_file.path.clone(),
-                    *id,
-                    NameResolverError::Redeclaration(name_str.clone(), info.clone()),
+                return Err(NameResolverError::Redeclaration(
+                    name_str.clone(),
+                    info.clone(),
                 ));
             }
 
             let struct_symbol = self.declare(
                 name_str.clone(),
                 SymbolKind::Struct,
-                id,
-                source_file,
+                parsed_expr.id,
+                meta,
                 symbol_table,
             );
 
-            source_file.nodes.insert(
-                *id,
-                Struct {
-                    name: Name::Resolved(struct_symbol, name_str),
-                    generics: generics.clone(),
-                    conformances: conformances.clone(),
-                    body,
-                },
-            );
+            *name = Name::Resolved(struct_symbol, name_str.to_string());
 
             symbol_table.initialize_type_table(struct_symbol);
-            let tok = self.start_scope(source_file, source_file.span(id));
+            let tok = self.start_scope(meta.span(&parsed_expr.id));
             self.type_symbol_stack.push(struct_symbol);
 
-            self.resolve_nodes(&generics, source_file, symbol_table);
-            self.resolve_nodes(&conformances, source_file, symbol_table);
+            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+            *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
 
             // Hoist properties
-            let Some(Block(ids)) = source_file.get(&body).cloned() else {
-                tracing::error!("Didn't get struct body");
-                return;
+            let Expr::Block(body_parsed_exprs) = &mut body.expr else {
+                return Err(NameResolverError::InvalidSelf);
             };
 
             // Get properties for the struct so we can synthesize stuff before
             // type checking
-            for id in &ids {
-                let expr = source_file.get(id).cloned();
-
-                if let Some(Property {
-                    name: Name::Raw(name_str),
+            for body_expr in body_parsed_exprs {
+                if let Expr::Property {
+                    name,
                     type_repr: ty,
                     default_value: val,
-                }) = &expr
+                } = &mut body_expr.expr
                 {
-                    symbol_table.add_property(struct_symbol, name_str.clone(), *ty, *val);
+                    let Name::Raw(name_str) = name else {
+                        return Err(NameResolverError::InvalidSelf);
+                    };
+
+                    symbol_table.add_property(
+                        struct_symbol,
+                        name_str.clone(),
+                        ty.clone(),
+                        val.clone(),
+                    );
                     let property_symbol = self.declare(
                         name_str.clone(),
                         SymbolKind::Property,
-                        id,
-                        source_file,
+                        body_expr.id,
+                        meta,
                         symbol_table,
                     );
-                    source_file.nodes.insert(
-                        *id,
-                        Property {
-                            name: Name::Resolved(property_symbol, name_str.clone()),
-                            type_repr: *ty,
-                            default_value: *val,
-                        },
-                    );
+                    *name = Name::Resolved(property_symbol, name_str.clone());
                 }
-                if let Some(Init(None, func_id)) = &expr {
-                    symbol_table.add_initializer(struct_symbol, *id);
-                    self.resolve_nodes(&[*func_id], source_file, symbol_table);
-                    source_file
-                        .nodes
-                        .insert(*id, Init(Some(struct_symbol), *func_id));
+                if let Expr::Init(None, func_id) = &mut body_expr.expr {
+                    symbol_table.add_initializer(struct_symbol, func_id.id);
+                    *func_id = Box::new(self.resolve_node(func_id, meta, symbol_table)?);
                 }
             }
 
-            self.resolve_nodes(&[body], source_file, symbol_table);
+            *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
 
             self.type_symbol_stack.pop();
             self.end_scope(tok);
         }
+
+        Ok(())
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn hoist_enums(
         &mut self,
-        node_ids: &[ParsedExpr],
-        source_file: &mut SourceFile,
+        parsed_exprs: &mut [ParsedExpr],
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-    ) {
-        for id in node_ids {
-            let Some(EnumDecl {
-                name: Name::Raw(name_str),
+    ) -> Result<(), NameResolverError> {
+        for parsed_expr in parsed_exprs {
+            let Expr::EnumDecl {
+                name,
                 generics,
                 conformances,
                 body,
-            }) = source_file.get(id).cloned()
+            } = &mut parsed_expr.expr
             else {
                 continue;
+            };
+
+            let Name::Raw(name_str) = name else {
+                return Err(NameResolverError::InvalidSelf);
             };
 
             // Declare the enum type
             let enum_symbol = self.declare(
                 name_str.clone(),
                 SymbolKind::Enum,
-                id,
-                source_file,
+                parsed_expr.id,
+                meta,
                 symbol_table,
             );
 
-            let tok = self.start_scope(source_file, source_file.span(id));
-            self.resolve_nodes(&generics, source_file, symbol_table);
-            self.resolve_nodes(&conformances, source_file, symbol_table);
+            let tok = self.start_scope(meta.span(&parsed_expr.id));
+            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+            *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
 
-            source_file.nodes.insert(
-                *id,
-                EnumDecl {
-                    name: Name::Resolved(enum_symbol, name_str),
-                    generics,
-                    conformances,
-                    body,
-                },
-            );
+            *name = Name::Resolved(enum_symbol, name_str.to_string());
 
             // Hoist variants
             self.type_symbol_stack.push(enum_symbol);
-            self.hoist_enum_members(&body, source_file, symbol_table);
+            self.hoist_enum_members(body, meta, symbol_table);
             self.type_symbol_stack.pop();
             self.end_scope(tok);
         }
+
+        Ok(())
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn resolve_pattern(
         &mut self,
-        pattern: &Pattern,
-        source_file: &mut SourceFile,
+        pattern: &mut Pattern,
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-        node_id: &ExprID,
-    ) -> Pattern {
-        match pattern {
+        expr_id: &ExprID,
+    ) -> Result<(), NameResolverError> {
+        *pattern = match pattern {
             Pattern::Bind(Name::Raw(name_str)) => {
                 let symbol = self.declare(
                     name_str.clone(),
                     SymbolKind::PatternBind,
-                    node_id,
-                    source_file,
+                    *expr_id,
+                    meta,
                     symbol_table,
                 );
                 Pattern::Bind(Name::Resolved(symbol, name_str.to_string()))
@@ -937,7 +815,7 @@ impl NameResolver {
                     None
                 };
 
-                self.resolve_nodes(fields, source_file, symbol_table);
+                *fields = self.resolve_nodes(fields, meta, symbol_table)?;
                 Pattern::Variant {
                     enum_name,
                     variant_name: variant_name.clone(),
@@ -945,7 +823,9 @@ impl NameResolver {
                 }
             }
             _ => pattern.clone(),
-        }
+        };
+
+        Ok(())
     }
 
     pub fn resolve_builtin(&self, name: &Name, symbol_table: &mut SymbolTable) -> Option<SymbolID> {
@@ -955,81 +835,73 @@ impl NameResolver {
         }
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn hoist_protocols(
         &mut self,
-        items: &[ParsedExpr],
-        source_file: &mut SourceFile,
+        items: &mut [ParsedExpr],
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-    ) {
-        for id in items {
-            let Some(Expr::ProtocolDecl {
-                name: Name::Raw(name),
+    ) -> Result<(), NameResolverError> {
+        for parsed_expr in items {
+            let Expr::ProtocolDecl {
+                name,
                 associated_types,
                 conformances,
                 body,
-            }) = source_file.get(id).cloned()
+            } = &mut parsed_expr.expr
             else {
                 continue;
             };
 
+            let Name::Raw(name_str) = name else {
+                return Ok(());
+            };
+
             let symbol_id = self.declare(
-                name.clone(),
+                name_str.clone(),
                 SymbolKind::Protocol,
-                id,
-                source_file,
+                parsed_expr.id,
+                meta,
                 symbol_table,
             );
 
-            let tok = self.start_scope(source_file, source_file.span(id));
+            *name = Name::Resolved(symbol_id, name_str.to_string());
+
+            let tok = self.start_scope(meta.span(&parsed_expr.id));
             self.type_symbol_stack.push(symbol_id);
-            self.resolve_nodes(&associated_types, source_file, symbol_table);
-            self.resolve_nodes(&conformances, source_file, symbol_table);
-            self.resolve_nodes(&[body], source_file, symbol_table);
+            *associated_types = self.resolve_nodes(associated_types, meta, symbol_table)?;
+            *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+            *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
             self.type_symbol_stack.pop();
             self.end_scope(tok);
-
-            source_file.nodes.insert(
-                *id,
-                Expr::ProtocolDecl {
-                    name: Name::Resolved(symbol_id, name),
-                    associated_types,
-                    body,
-                    conformances,
-                },
-            );
         }
+
+        Ok(())
     }
 
     // New helper method to hoist enum variants
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn hoist_enum_members(
         &mut self,
-        body_expr_id: &ExprID,
-        source_file: &mut SourceFile,
+        body: &mut ParsedExpr,
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
-    ) {
-        let Some(Block(items)) = source_file.get(body_expr_id).cloned() else {
-            return;
+    ) -> Result<(), NameResolverError> {
+        let Expr::Block(items) = &mut body.expr else {
+            return Ok(());
         };
 
-        for variant_id in &items {
-            let Some(variant_expr) = source_file.get(variant_id).cloned() else {
+        for variant_expr in &mut *items {
+            let Expr::EnumVariant(Name::Raw(_), field_types) = &mut variant_expr.expr else {
                 continue;
             };
 
-            if let EnumVariant(Name::Raw(variant_name), field_types) = variant_expr {
-                self.resolve_nodes(&field_types, source_file, symbol_table);
-
-                // Update the AST
-                source_file.nodes.insert(
-                    *variant_id,
-                    EnumVariant(Name::Raw(variant_name), field_types),
-                );
-            }
+            *field_types = self.resolve_nodes(field_types, meta, symbol_table)?;
         }
 
-        self.resolve_nodes(&items, source_file, symbol_table);
+        *items = self.resolve_nodes(items, meta, symbol_table)?;
+
+        Ok(())
     }
 
     // Helper method to get enum symbol from variant symbol
@@ -1048,45 +920,43 @@ impl NameResolver {
         }
     }
 
-    #[tracing::instrument(skip(self, source_file, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table))]
     fn declare(
         &mut self,
         name: String,
         kind: SymbolKind,
-        expr_id: &ExprID,
-        source_file: &mut SourceFile,
+        expr_id: ExprID,
+        meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
     ) -> SymbolID {
         if self.lookup(&name).is_some() {
             tracing::warn!("Already declared name: {name}");
         }
 
-        let Some(meta) = source_file.meta.get(expr_id) else {
+        let Some(expr_meta) = meta.get(&expr_id) else {
             return SymbolID(0);
         };
 
         let definition = Definition {
-            path: source_file.path.clone(),
-            line: meta.start.line,
-            col: meta.start.col,
+            path: meta.path.clone(),
+            line: expr_meta.start.line,
+            col: expr_meta.start.col,
             sym: None,
         };
 
-        let symbol_id = symbol_table.add(&name, kind.clone(), *expr_id, Some(definition));
+        let symbol_id = symbol_table.add(&name, kind.clone(), expr_id, Some(definition));
 
         tracing::info!("Replacing {kind:?} {name} with {symbol_id:?}");
 
         if let Some(scope_id) = self.scope_tree_ids.last() {
-            source_file
-                .scope_tree
-                .add_symbol_to_scope(*scope_id, symbol_id);
+            self.scope_tree.add_symbol_to_scope(*scope_id, symbol_id);
         }
 
         let Some(scope) = self.scopes.last_mut() else {
             return SymbolID(0);
         };
         scope.insert(name, symbol_id);
-        symbol_table.add_map(source_file, expr_id, &symbol_id);
+        symbol_table.add_map(meta.span(&expr_id), &symbol_id);
         symbol_id
     }
 
@@ -1103,10 +973,9 @@ impl NameResolver {
     }
 
     #[must_use]
-    fn start_scope(&mut self, source_file: &mut SourceFile, span: Span) -> ScopeTok {
+    fn start_scope(&mut self, span: Span) -> ScopeTok {
         self.scope_tree_ids.push(
-            source_file
-                .scope_tree
+            self.scope_tree
                 .new_scope(self.scope_tree_ids.last().copied(), span),
         );
         self.scopes.push(Default::default());
@@ -1122,10 +991,10 @@ impl NameResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::{compiling::driver::Driver, diagnostic::DiagnosticKind, expr::Expr};
+    use crate::{
+        any_expr, compiling::driver::Driver, diagnostic::DiagnosticKind, parsed_expr::Expr,
+    };
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
@@ -1157,110 +1026,112 @@ mod tests {
     #[test]
     fn resolves_literal_int_unchanged() {
         let tree = resolve("123");
-        let root = tree.roots()[0].unwrap();
-        assert_eq!(root, &LiteralInt("123".into()));
+        assert_eq!(tree.roots()[0], any_expr!(Expr::LiteralInt("123".into())));
     }
 
     #[test]
     fn resolves_literal_float_unchanged() {
         let tree = resolve("3.14");
-        let root = tree.roots()[0].unwrap();
-        assert_eq!(root, &LiteralFloat("3.14".into()));
+        assert_eq!(
+            tree.roots()[0],
+            any_expr!(Expr::LiteralFloat("3.14".into()))
+        );
     }
 
     #[test]
     fn resolved_builtin() {
         let tree = resolve("Int");
-        let root = tree.roots()[0].unwrap();
         assert_eq!(
-            root,
-            &Variable(Name::Resolved(SymbolID(-1), "Int".into()), None)
+            tree.roots()[0],
+            any_expr!(Expr::Variable(Name::Resolved(SymbolID(-1), "Int".into())))
         );
     }
 
     #[test]
     fn resolves_simple_variable_to_depth_0() {
         let tree = resolve("let hello = 1; hello");
-        let root = tree.roots()[1].unwrap();
         assert_eq!(
-            root,
-            &Variable(Name::Resolved(SymbolID::resolved(1), "hello".into()), None)
+            tree.roots()[0],
+            any_expr!(Expr::Variable(Name::Resolved(
+                SymbolID::resolved(1),
+                "hello".into()
+            )))
         );
     }
 
     #[test]
     fn resolves_shadowed_variable_in_lambda() {
         let tree = resolve("func(x) { x }\n");
-        let root = tree.roots()[0].unwrap();
 
-        if let Func { params, body, .. } = root {
-            assert_eq!(params.len(), 1);
-            let x_param = tree.get(&params[0]).unwrap();
-            assert_eq!(
-                x_param,
-                &Parameter(Name::Resolved(SymbolID::resolved(1), "x".into()), None)
-            );
-
-            let Block(exprs) = &tree.get(body).unwrap() else {
-                unreachable!("didn't get a block")
-            };
-
-            assert_eq!(exprs.len(), 1);
-            let x = tree.get(&exprs[0]).unwrap();
-            assert_eq!(
-                x,
-                &Variable(Name::Resolved(SymbolID::resolved(1), "x".into()), None)
-            );
-        } else {
-            unreachable!("expected Func node");
-        }
+        assert_eq!(
+            tree.roots()[0],
+            any_expr!(Expr::Func {
+                name: None,
+                generics: vec![],
+                params: vec![any_expr!(Expr::Parameter(
+                    Name::Resolved(SymbolID::resolved(1), "x".into()),
+                    None
+                ))],
+                body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(
+                    Name::Resolved(SymbolID::resolved(1), "x".into())
+                ))]))
+                .into(),
+                ret: None,
+                captures: vec![]
+            })
+        );
     }
 
     #[test]
     fn resolves_nested_shadowing_correctly() {
         let tree = resolve("func(x, y) { func(x) { x \n y }\nx }\n");
-        let outer = tree.roots()[0].unwrap();
-        // outer Func has its body as an inner Func
-        let Func {
-            body: outer_body_id,
-            ..
-        } = outer
-        else {
-            panic!("did not get outer func")
-        };
-        let Block(outer_body) = &tree.get(outer_body_id).unwrap() else {
-            panic!("outer body not a block")
-        };
 
-        let inner = tree.get(&outer_body[0]).unwrap();
-        let Func {
-            body: inner_body_id,
-            ..
-        } = inner
-        else {
-            panic!("didn't get inner func")
-        };
-
-        let Block(inner_body) = &tree.get(inner_body_id).unwrap() else {
-            panic!("outer body not a block")
-        };
-
-        let inner_x = tree.get(&inner_body[0]).unwrap();
         assert_eq!(
-            inner_x,
-            &Variable(Name::Resolved(SymbolID::resolved(3), "x".into()), None)
-        );
-
-        let inner_y = tree.get(&inner_body[1]).unwrap();
-        assert_eq!(
-            inner_y,
-            &Variable(Name::Resolved(SymbolID::resolved(2), "y".into()), None)
-        );
-
-        let outer_x = tree.get(&outer_body[1]).unwrap();
-        assert_eq!(
-            outer_x,
-            &Variable(Name::Resolved(SymbolID::resolved(1), "x".into()), None)
+            tree.roots()[0],
+            any_expr!(Expr::Func {
+                name: None,
+                generics: vec![],
+                params: vec![
+                    any_expr!(Expr::Parameter(
+                        Name::Resolved(SymbolID::resolved(1), "x".into()),
+                        None
+                    )),
+                    any_expr!(Expr::Parameter(
+                        Name::Resolved(SymbolID::resolved(2), "y".into()),
+                        None
+                    )),
+                ],
+                body: any_expr!(Expr::Block(vec![
+                    any_expr!(Expr::Func {
+                        name: None,
+                        generics: vec![],
+                        params: vec![any_expr!(Expr::Parameter(
+                            Name::Resolved(SymbolID::resolved(3), "x".into()),
+                            None
+                        ))],
+                        body: any_expr!(Expr::Block(vec![
+                            any_expr!(Expr::Variable(Name::Resolved(
+                                SymbolID::resolved(3),
+                                "x".into()
+                            ))),
+                            any_expr!(Expr::Variable(Name::Resolved(
+                                SymbolID::resolved(2),
+                                "y".into()
+                            )))
+                        ]))
+                        .into(),
+                        ret: None,
+                        captures: vec![]
+                    }),
+                    any_expr!(Expr::Variable(Name::Resolved(
+                        SymbolID::resolved(1),
+                        "x".into()
+                    ))),
+                ]))
+                .into(),
+                ret: None,
+                captures: vec![]
+            })
         );
     }
 
@@ -1273,13 +1144,61 @@ mod tests {
             ",
         );
 
-        let Expr::LiteralArray(ids) = resolved.get(&resolved.root_ids()[3]).unwrap() else {
-            panic!("did not get literal array");
-        };
+        assert_eq!(
+            resolved.roots()[0],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(1), "a".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::LiteralInt("1".into())).into()
+            ))
+        );
 
         assert_eq!(
-            resolved.get(&ids[0]).unwrap(),
-            &Expr::Variable(Name::Resolved(SymbolID::resolved(1), "a".into()), None)
+            resolved.roots()[1],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(2), "b".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::LiteralInt("2".into())).into()
+            ))
+        );
+
+        assert_eq!(
+            resolved.roots()[2],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(3), "c".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::LiteralInt("3".into())).into()
+            ))
+        );
+
+        assert_eq!(
+            resolved.roots()[3],
+            any_expr!(Expr::LiteralArray(vec![
+                any_expr!(Expr::Variable(Name::Resolved(
+                    SymbolID::resolved(1),
+                    "a".into()
+                )))
+                .into(),
+                any_expr!(Expr::Variable(Name::Resolved(
+                    SymbolID::resolved(2),
+                    "b".into()
+                )))
+                .into(),
+                any_expr!(Expr::Variable(Name::Resolved(
+                    SymbolID::resolved(3),
+                    "c".into()
+                )))
+                .into(),
+            ]))
         );
     }
 
@@ -1318,24 +1237,44 @@ mod tests {
         ",
         );
 
-        let Expr::Assignment(let_expr, int) = tree.get(&tree.root_ids()[0]).unwrap() else {
-            panic!("didnt get assignment")
-        };
-
         assert_eq!(
-            *tree.get(let_expr).unwrap(),
-            Let(Name::Resolved(SymbolID::resolved(1), "x".into()), None)
+            tree.roots()[0],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(1), "x".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::LiteralInt("123".into())).into()
+            ))
         );
 
-        assert_eq!(*tree.get(int).unwrap(), LiteralInt("123".into()));
+        assert_eq!(
+            tree.roots()[1],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(2), "y".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::LiteralInt("345".into())).into()
+            ))
+        );
 
         assert_eq!(
-            *tree.get(&tree.root_ids()[2]).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID::resolved(1), "x".into()), None)
+            tree.roots()[2],
+            any_expr!(Expr::Variable(Name::Resolved(
+                SymbolID::resolved(1),
+                "x".into()
+            )))
         );
+
         assert_eq!(
-            *tree.get(&tree.root_ids()[3]).unwrap(),
-            Variable(Name::Resolved(SymbolID::resolved(2), "y".into()), None)
+            tree.roots()[3],
+            any_expr!(Expr::Variable(Name::Resolved(
+                SymbolID::resolved(2),
+                "y".into()
+            )))
         );
     }
 
@@ -1347,19 +1286,26 @@ mod tests {
         ",
         );
 
-        let Expr::Assignment(_, rhs) = tree.get(&tree.root_ids()[0]).unwrap() else {
-            panic!("didnt get assignment")
-        };
-
-        let Expr::Member(Some(receiver_id), member_name) = tree.get(rhs).unwrap() else {
-            panic!("didn't get member");
-        };
-
-        assert_eq!("none", member_name);
-
         assert_eq!(
-            *tree.get(receiver_id).unwrap(),
-            Variable(Name::Resolved(SymbolID::OPTIONAL, "Optional".into()), None)
+            tree.roots()[0],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(1), "x".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::Member(
+                    Some(
+                        any_expr!(Expr::Variable(Name::Resolved(
+                            SymbolID::OPTIONAL,
+                            "Optional".into()
+                        )))
+                        .into()
+                    ),
+                    "none".into()
+                ))
+                .into()
+            ))
         );
     }
 
@@ -1393,33 +1339,24 @@ mod tests {
         ",
         );
 
-        let Expr::EnumDecl { name, body, .. } = resolved.roots()[0].unwrap() else {
-            panic!("Didn't get enum decl");
-        };
-
-        assert_eq!(name, &Name::Resolved(SymbolID::resolved(1), "Fizz".into()));
-        let Expr::Block(ids) = resolved.get(body).unwrap() else {
-            panic!("did not get ids");
-        };
-
         assert_eq!(
-            *resolved.get(&ids[0]).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID::resolved(2), "foo".into()), vec![])
-        );
-        assert_eq!(
-            *resolved.get(&ids[1]).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID::resolved(3), "bar".into()), vec![])
-        );
-
-        let Expr::Member(receiver, member_name) = resolved.roots()[1].unwrap() else {
-            panic!("did not get member");
-        };
-
-        assert_eq!(member_name, "foo");
-
-        assert_eq!(
-            resolved.get(&receiver.unwrap()).unwrap(),
-            &Variable(Name::Resolved(SymbolID::resolved(1), "Fizz".into()), None)
+            resolved.roots()[0],
+            any_expr!(Expr::EnumDecl {
+                name: Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
+                body: any_expr!(Expr::Block(vec![
+                    any_expr!(Expr::EnumVariant(
+                        Name::Resolved(SymbolID::resolved(2), "foo".into()),
+                        vec![]
+                    )),
+                    any_expr!(Expr::EnumVariant(
+                        Name::Resolved(SymbolID::resolved(3), "bar".into()),
+                        vec![]
+                    )),
+                ]))
+                .into(),
+                generics: vec![],
+                conformances: vec![],
+            })
         );
     }
 
@@ -1435,56 +1372,32 @@ mod tests {
         ",
         );
 
-        let Expr::EnumDecl { name, body, .. } = resolved.roots()[0].unwrap() else {
-            panic!("didn't get enum decl");
-        };
-
-        assert_eq!(name, &Name::Resolved(SymbolID::resolved(1), "Fizz".into()));
-
-        let Expr::Block(ids) = resolved.get(body).unwrap() else {
-            panic!("didn't get body");
-        };
-
-        let EnumVariant(Name::Resolved(_, foo_name), foo_args) = resolved.get(&ids[0]).unwrap()
-        else {
-            panic!("didn't get foo variant");
-        };
-
-        assert_eq!(foo_name, "foo");
         assert_eq!(
-            resolved.get(&foo_args[0]).unwrap(),
-            &Expr::TypeRepr {
-                name: Name::Resolved(SymbolID::INT, "Int".into()),
+            resolved.roots()[0],
+            any_expr!(Expr::EnumDecl {
+                name: Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
+                body: any_expr!(Expr::Block(vec![any_expr!(Expr::EnumVariant(
+                    Name::Resolved(SymbolID::resolved(2), "foo".into()),
+                    vec![any_expr!(Expr::LiteralInt("123".into())).into()]
+                ))]))
+                .into(),
                 generics: vec![],
                 conformances: vec![],
-                introduces_type: false
-            }
+            })
         );
 
         assert_eq!(
-            *resolved.get(&ids[1]).unwrap(),
-            EnumVariant(Name::Resolved(SymbolID::resolved(3), "bar".into()), vec![])
+            resolved.roots()[1],
+            any_expr!(Expr::Call {
+                callee: any_expr!(Expr::Variable(Name::Resolved(
+                    SymbolID::resolved(1),
+                    "Fizz".into()
+                )))
+                .into(),
+                args: vec![any_expr!(Expr::LiteralInt("123".into())).into()],
+                type_args: vec![],
+            })
         );
-
-        let Call { callee, args, .. } = resolved.roots()[1].unwrap() else {
-            panic!("didn't get call");
-        };
-
-        let Expr::Member(Some(receiver), member_name) = resolved.get(callee).unwrap() else {
-            panic!("didn't get .foo member");
-        };
-
-        assert_eq!(member_name, "foo");
-        assert_eq!(
-            *resolved.get(receiver).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Fizz".into()), None)
-        );
-
-        let Expr::CallArg { label: None, value } = resolved.get(&args[0]).unwrap() else {
-            panic!("didn't get call arg");
-        };
-
-        assert_eq!(resolved.get(value), Some(&Expr::LiteralInt("123".into())));
     }
 
     #[test]
@@ -1499,9 +1412,26 @@ mod tests {
         ",
         );
 
-        resolved.find_expr_id(
-            |expr| matches!(expr, Variable(Name::_Self(sym), None) if sym == &SymbolID::resolved(1)),
-        ).unwrap();
+        assert_eq!(
+            resolved.roots()[0],
+            any_expr!(Expr::EnumDecl {
+                name: Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
+                body: any_expr!(Expr::Block(vec![any_expr!(Expr::Func {
+                    name: None,
+                    generics: vec![],
+                    params: vec![],
+                    body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(Name::_Self(
+                        SymbolID::resolved(1)
+                    )))]))
+                    .into(),
+                    ret: None,
+                    captures: vec![]
+                })]))
+                .into(),
+                generics: vec![],
+                conformances: vec![],
+            })
+        );
     }
 
     #[test]
@@ -1537,40 +1467,39 @@ mod tests {
         ",
         );
 
-        let Assignment(lhs, rhs) = resolved.roots()[0].unwrap() else {
-            panic!("didn't get assignment: {:?}", resolved.roots()[0].unwrap());
-        };
-        assert_eq!(*resolved.get(rhs).unwrap(), Expr::LiteralInt("0".into()));
         assert_eq!(
-            *resolved.get(lhs).unwrap(),
-            Let(Name::Resolved(SymbolID::resolved(2), "count".into()), None)
+            resolved.roots()[0],
+            any_expr!(Expr::Assignment(
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::resolved(1), "count".into()),
+                    None
+                ))
+                .into(),
+                any_expr!(Expr::LiteralInt("0".into())).into()
+            ))
+        );
+
+        assert_eq!(
+            resolved.roots()[1],
+            any_expr!(Expr::Func {
+                name: None,
+                generics: vec![],
+                params: vec![],
+                body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(
+                    Name::Resolved(SymbolID::resolved(1), "count".into())
+                ))]))
+                .into(),
+                ret: None,
+                captures: vec![SymbolID::resolved(1)]
+            })
         );
 
         assert!(
             symbol_table
-                .get(&SymbolID::resolved(2))
+                .get(&SymbolID::resolved(1))
                 .unwrap()
                 .is_captured
         );
-
-        let Func {
-            name: Some(name),
-            ret: None,
-            captures,
-            ..
-        } = resolved.get(&resolved.root_ids()[1]).unwrap()
-        else {
-            panic!(
-                "didn't get resolved: {:?}",
-                resolved.get(&resolved.root_ids()[1]).unwrap()
-            );
-        };
-
-        assert_eq!(
-            name,
-            &Name::Resolved(SymbolID::resolved(1), "counter".into())
-        );
-        assert_eq!(captures, &vec![SymbolID::resolved(2)]);
     }
 
     #[test]
@@ -1583,67 +1512,64 @@ mod tests {
         ",
         );
 
-        let Func { captures, .. } = resolved.roots()[0].unwrap() else {
-            panic!("no func");
-        };
-
-        assert!(captures.is_empty());
+        assert_eq!(
+            resolved.roots()[0],
+            any_expr!(Expr::Func {
+                name: None,
+                generics: vec![],
+                params: vec![],
+                body: any_expr!(Expr::Block(vec![any_expr!(Expr::Call {
+                    callee: any_expr!(Expr::Variable(Name::Resolved(
+                        SymbolID::resolved(-5),
+                        "__alloc".into()
+                    ))),
+                    args: vec![any_expr!(Expr::LiteralInt("123".into())).into()],
+                    type_args: vec![],
+                })]))
+                .into(),
+                ret: None,
+                captures: vec![]
+            })
+        );
     }
 
     #[test]
     fn resolves_array_builtin() {
         let resolved = resolve("func c() -> Array<Int> {}");
 
-        let Expr::Func { ret, .. } = resolved.roots()[0].unwrap() else {
-            panic!("didn't get a func");
-        };
-
-        let TypeRepr {
-            name: Name::Resolved(SymbolID::ARRAY, _),
-            generics,
-            introduces_type: false,
-            ..
-        } = resolved.get(&ret.unwrap()).unwrap()
-        else {
-            panic!(
-                "didn't get array type repr: {:?}",
-                resolved.get(&ret.unwrap()).unwrap()
-            );
-        };
-
         assert_eq!(
-            *resolved.get(&generics[0]).unwrap(),
-            TypeRepr {
-                name: Name::Resolved(SymbolID(-1), "Int".into()),
-                conformances: vec![],
+            resolved.roots()[0],
+            any_expr!(Expr::Func {
+                name: None,
                 generics: vec![],
-                introduces_type: false
-            }
+                params: vec![],
+                body: any_expr!(Expr::Block(vec![])).into(),
+                ret: Some(
+                    any_expr!(Expr::TypeRepr {
+                        name: Name::Resolved(SymbolID::ARRAY, "Array".into()),
+                        generics: vec![],
+                        introduces_type: false,
+                        conformances: vec![],
+                    })
+                    .into()
+                ),
+                captures: vec![]
+            })
         );
     }
 
     #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}\nPerson()");
-        let Struct {
-            name: Name::Resolved(sym, person_str),
-            body,
-            ..
-        } = resolved.roots()[0].unwrap()
-        else {
-            panic!("didn't get struct");
-        };
-
-        assert_eq!(SymbolID::resolved(1), *sym);
-        assert_eq!(*person_str, "Person".to_string());
-
-        let Expr::Call { callee, .. } = resolved.get(&resolved.root_ids()[1]).unwrap() else {
-            panic!("didn't get call: {:?}", resolved.get(body));
-        };
         assert_eq!(
-            *resolved.get(callee).unwrap(),
-            Expr::Variable(Name::Resolved(SymbolID::resolved(1), "Person".into()), None)
-        )
+            resolved.roots()[0],
+            any_expr!(Expr::Struct {
+                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                body: any_expr!(Expr::Block(vec![])).into(),
+                generics: vec![],
+                conformances: vec![],
+            })
+        );
     }
 
     #[test]
@@ -1655,42 +1581,31 @@ mod tests {
         }
         ",
         );
-        let Struct {
-            name: Name::Resolved(sym, person_str),
-            body,
-            ..
-        } = resolved.roots()[0].unwrap()
-        else {
-            panic!("didn't get struct");
-        };
-
-        assert_eq!(SymbolID::resolved(1), *sym);
-        assert_eq!(*person_str, "Person".to_string());
-
-        let Expr::Block(body) = resolved.get(body).unwrap() else {
-            panic!("didn't get block");
-        };
-
-        let Expr::Property {
-            name,
-            type_repr,
-            default_value,
-        } = resolved.get(&body[0]).unwrap()
-        else {
-            panic!("didn't get property: {:?}", resolved.get(&body[0]));
-        };
-
-        assert_eq!(*name, Name::Resolved(SymbolID::resolved(2), "age".into()));
-        assert!(default_value.is_none());
 
         assert_eq!(
-            *resolved.get(&type_repr.unwrap()).unwrap(),
-            Expr::TypeRepr {
-                name: Name::Resolved(SymbolID(-1), "Int".into()),
+            resolved.roots()[0],
+            any_expr!(Expr::Struct {
+                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                body: any_expr!(Expr::Block(vec![
+                    any_expr!(Expr::Property {
+                        name: Name::Resolved(SymbolID::resolved(2), "age".into()),
+                        type_repr: Some(
+                            any_expr!(Expr::TypeRepr {
+                                name: Name::Resolved(SymbolID::INT, "Int".into()),
+                                generics: vec![],
+                                conformances: vec![],
+                                introduces_type: false,
+                            })
+                            .into()
+                        ),
+                        default_value: None,
+                    })
+                    .into()
+                ]))
+                .into(),
                 generics: vec![],
                 conformances: vec![],
-                introduces_type: false
-            }
+            })
         );
     }
 
@@ -1708,47 +1623,54 @@ mod tests {
         ",
         );
 
-        let Expr::Struct {
-            name: Name::Resolved(sym, person_str),
-            body,
-            ..
-        } = resolved.roots()[0].unwrap()
-        else {
-            panic!("didn't get struct");
-        };
-
-        assert_eq!(SymbolID::resolved(1), *sym);
-        assert_eq!(*person_str, "Person".to_string());
-
-        let Expr::Block(body) = resolved.get(body).unwrap() else {
-            panic!("didn't get block");
-        };
-
-        let Expr::Property {
-            name,
-            type_repr,
-            default_value,
-        } = resolved.get(&body[0]).unwrap()
-        else {
-            panic!("didn't get property: {:?}", resolved.get(&body[0]));
-        };
-
-        assert_eq!(*name, Name::Resolved(SymbolID::resolved(2), "age".into()));
-        assert!(default_value.is_none());
-
         assert_eq!(
-            *resolved.get(&type_repr.unwrap()).unwrap(),
-            Expr::TypeRepr {
-                name: Name::Resolved(SymbolID(-1), "Int".into()),
+            resolved.roots()[0],
+            any_expr!(Expr::Struct {
+                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                body: any_expr!(Expr::Block(vec![
+                    any_expr!(Expr::Property {
+                        name: Name::Resolved(SymbolID::resolved(2), "age".into()),
+                        type_repr: Some(
+                            any_expr!(Expr::TypeRepr {
+                                name: Name::Resolved(SymbolID::INT, "Int".into()),
+                                generics: vec![],
+                                conformances: vec![],
+                                introduces_type: false,
+                            })
+                            .into()
+                        ),
+                        default_value: None,
+                    }),
+                    any_expr!(Expr::Init(
+                        Some(SymbolID::resolved(3)),
+                        any_expr!(Expr::Func {
+                            name: None,
+                            generics: vec![],
+                            params: vec![any_expr!(Expr::Parameter(
+                                Name::Resolved(SymbolID::resolved(3), "age".into()),
+                                Some(
+                                    any_expr!(Expr::TypeRepr {
+                                        name: Name::Resolved(SymbolID::INT, "Int".into()),
+                                        generics: vec![],
+                                        conformances: vec![],
+                                        introduces_type: false,
+                                    })
+                                    .into()
+                                ),
+                            ))],
+                            body: any_expr!(Expr::Block(vec![])).into(),
+                            ret: None,
+                            captures: vec![],
+                        })
+                        .into()
+                    ))
+                    .into(),
+                ]))
+                .into(),
                 generics: vec![],
                 conformances: vec![],
-                introduces_type: false
-            }
+            })
         );
-
-        let Expr::Init(_, _) = resolved.get(&body[1]).unwrap() else {
-            panic!("didn't get init");
-        };
     }
 
     #[test]
@@ -1760,23 +1682,33 @@ mod tests {
         ",
         );
 
-        let Struct {
-            name: Name::Resolved(person_symbol, _),
-            ..
-        } = resolved.roots()[0].unwrap()
-        else {
-            panic!("didn't get struct");
-        };
+        assert_eq!(
+            resolved.roots()[0],
+            any_expr!(Expr::Struct {
+                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                body: any_expr!(Expr::Block(vec![])).into(),
+                generics: vec![],
+                conformances: vec![],
+            })
+        );
 
-        let Extend {
-            name: Name::Resolved(extend_symbol, _),
-            ..
-        } = resolved.roots()[1].unwrap()
-        else {
-            panic!("didn't get struct");
-        };
-
-        assert_eq!(person_symbol, extend_symbol);
+        assert_eq!(
+            resolved.roots()[1],
+            any_expr!(Expr::Extend {
+                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                body: any_expr!(Expr::Block(vec![])).into(),
+                generics: vec![],
+                conformances: vec![
+                    any_expr!(Expr::TypeRepr {
+                        name: Name::Resolved(SymbolID::resolved(2), "Printable".into()),
+                        generics: vec![],
+                        conformances: vec![],
+                        introduces_type: false,
+                    })
+                    .into()
+                ],
+            })
+        );
     }
 
     #[test]

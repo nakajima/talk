@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::{
     SourceFile, SymbolTable, Typed, compiling::compilation_session::SharedCompilationSession,
-    diagnostic::Diagnostic, environment::Environment, expr::Expr, parser::ExprID, ty::Ty,
+    diagnostic::Diagnostic, environment::Environment, parser::ExprID, ty::Ty,
     type_checker::TypeError, typed_expr::TypedExpr,
 };
 
@@ -46,10 +46,6 @@ impl CheckResult {
 
     pub fn type_for(&self, id: &ExprID) -> Option<Ty> {
         self.source_file.type_for(*id, &self.env)
-    }
-
-    pub fn expr(&self, id: &ExprID) -> Option<&Expr> {
-        self.source_file.get(id)
     }
 
     pub fn typed_expr(&self, id: &ExprID) -> Option<TypedExpr> {

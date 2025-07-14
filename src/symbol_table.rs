@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::{Phase, SourceFile, parser::ExprID, span::Span};
+use crate::{Phase, SourceFile, parsed_expr::ParsedExpr, parser::ExprID, span::Span};
 
 #[derive(Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
@@ -77,8 +77,8 @@ pub struct Definition {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct PropertyInfo {
     pub name: String,
-    pub type_id: Option<ExprID>,
-    pub default_value_id: Option<ExprID>,
+    pub type_id: Option<ParsedExpr>,
+    pub default_value_id: Option<ParsedExpr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -118,13 +118,7 @@ impl SymbolTable {
         table
     }
 
-    pub fn add_map<P: Phase>(
-        &mut self,
-        source_file: &SourceFile<P>,
-        node_id: &ExprID,
-        symbol_id: &SymbolID,
-    ) {
-        let span = source_file.span(node_id);
+    pub fn add_map(&mut self, span: Span, symbol_id: &SymbolID) {
         self.symbol_map.insert(span, *symbol_id);
     }
 
@@ -203,13 +197,13 @@ impl SymbolTable {
         &mut self,
         to_symbol_id: SymbolID,
         name: String,
-        type_id: Option<ExprID>,
-        default_value_id: Option<ExprID>,
+        type_id: Option<Box<ParsedExpr>>,
+        default_value_id: Option<Box<ParsedExpr>>,
     ) {
         let info = PropertyInfo {
             name,
-            type_id,
-            default_value_id,
+            type_id: type_id.map(|e| *e),
+            default_value_id: default_value_id.map(|e| *e),
         };
 
         let Some(table) = self.types.get_mut(&to_symbol_id) else {

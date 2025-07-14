@@ -93,7 +93,7 @@ pub struct Formatter<'a> {
 impl<'a> Formatter<'a> {
     pub fn new(source_file: &'a SourceFile) -> Self {
         let mut meta_cache = HashMap::new();
-        for (i, meta) in &source_file.meta {
+        for (i, meta) in source_file.meta.iter() {
             meta_cache.insert(*i, meta);
         }
         Self {
