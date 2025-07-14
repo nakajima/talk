@@ -102,7 +102,7 @@ impl SourceFile<Parsed> {
 }
 
 impl SourceFile<NameResolved> {
-    pub fn to_typed(self) -> SourceFile<Typed> {
+    pub fn to_typed(&self) -> SourceFile<Typed> {
         SourceFile {
             path: self.path,
             roots: self.roots,
@@ -189,8 +189,8 @@ impl<P: Phase> SourceFile<P> {
     }
 
     // Gets the root expr of the tree
-    pub fn roots(&self) -> &[ParsedExpr] {
-        self.roots.as_ref()
+    pub fn roots(&self) -> &Vec<ParsedExpr> {
+        &self.roots
     }
 
     // Gets the root expr of the tree

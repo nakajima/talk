@@ -53,7 +53,7 @@ pub(super) struct PredeclarationExprIDs<'a> {
 impl<'a> TypeChecker<'a> {
     pub(crate) fn hoist(
         &mut self,
-        items: &'a [ParsedExpr],
+        items: &'a Vec<ParsedExpr>,
         env: &mut Environment,
     ) -> Result<(), TypeError> {
         let _s = info_span!("hoisting", path = self.path.to_str()).entered();
@@ -61,9 +61,9 @@ impl<'a> TypeChecker<'a> {
 
         // The first pass goes through and finds all the named things that need to be predeclared and just defines
         // them with placeholder type variables.
-        let type_defs_with_placeholders = Self::predeclare_types(items, env).map_err(|e| e.1)?;
-        let lets_results = self.predeclare_lets(items, env).map_err(|e| e.1)?;
-        let func_results = self.predeclare_functions(items, env)?;
+        let type_defs_with_placeholders = Self::predeclare_types(&items, env).map_err(|e| e.1)?;
+        let lets_results = self.predeclare_lets(&items, env).map_err(|e| e.1)?;
+        let func_results = self.predeclare_functions(&items, env)?;
 
         // Then go through and actually infer stuff
         self.infer_types(type_defs_with_placeholders, env)
@@ -508,10 +508,9 @@ impl<'a> TypeChecker<'a> {
                     continue;
                 };
 
-                let conformance = Conformance::new(name.0, associated_types.to_vec());
+                let conformance = Conformance::new(name.clone(), associated_types.to_vec());
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
-                    protocol_ty: typed_expr.ty.clone(),
                     ty: def.ty(),
                     conformance,
                 });

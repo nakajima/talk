@@ -12,6 +12,14 @@ pub enum Name {
 pub struct ResolvedName(pub SymbolID, pub String);
 
 impl Name {
+    pub fn resolved(&self) -> Result<ResolvedName, TypeError> {
+        if let Name::Resolved(symbol_id, name_str) = self {
+            Ok(ResolvedName(*symbol_id, name_str.clone()))
+        } else {
+            Err(TypeError::Unresolved(format!("{self:?} is unresolved")))
+        }
+    }
+
     pub fn mangled(&self, _ty: &Ty) -> String {
         match self {
             Name::Raw(_) => "Cannot mangle unresolved Name".into(),

@@ -1,5 +1,13 @@
 use crate::{
-    name::ResolvedName, parser::ExprID, substitutions::Substitutions, ty::Ty, type_checker::Scheme, type_defs::protocol_def::Conformance, type_var_context::TypeVarContext, type_var_id::{TypeVarID, TypeVarKind}, SymbolID
+    SymbolID,
+    name::ResolvedName,
+    parser::ExprID,
+    substitutions::Substitutions,
+    ty::Ty,
+    type_checker::Scheme,
+    type_defs::protocol_def::Conformance,
+    type_var_context::TypeVarContext,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +37,6 @@ pub enum Constraint {
         symbol_id: SymbolID,
     },
     ConformsTo {
-        protocol_ty: ResolvedName,
         ty: Ty,
         conformance: Conformance,
     },

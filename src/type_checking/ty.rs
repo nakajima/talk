@@ -23,7 +23,7 @@ pub enum Ty {
     ),
     Closure {
         func: Box<Ty>, // the func
-        captures: Vec<ResolvedName>,
+        captures: Vec<SymbolID>,
     },
     TypeVar(TypeVarID),
     Enum(ResolvedName, Vec<Ty>), // enum name + type arguments
