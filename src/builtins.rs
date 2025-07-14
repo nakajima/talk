@@ -1,12 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    SymbolID, SymbolInfo, SymbolKind, SymbolTable,
-    name::Name,
-    ty::Ty,
-    type_checker::Scheme,
-    type_defs::{TypeDef, builtin_def::BuiltinDef},
-    type_var_id::{TypeVarID, TypeVarKind},
+    name::Name, parser::ExprID, ty::Ty, type_checker::Scheme, type_defs::{builtin_def::BuiltinDef, TypeDef}, type_var_id::{TypeVarID, TypeVarKind}, SymbolID, SymbolInfo, SymbolKind, SymbolTable
 };
 
 pub struct Builtin {
@@ -24,7 +19,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Int".to_string(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: -1,
+                expr_id: ExprID(-1),
                 is_captured: false,
                 definition: None,
             },
@@ -43,7 +38,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Float".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: -2,
+                expr_id: ExprID(-2),
                 is_captured: false,
                 definition: None,
             },
@@ -62,7 +57,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Bool".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: -3,
+                expr_id: ExprID(-3),
                 is_captured: false,
                 definition: None,
             },
@@ -81,7 +76,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Pointer".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: -4,
+                expr_id: ExprID(-4),
                 is_captured: false,
                 definition: None,
             },
@@ -100,7 +95,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__alloc".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -5,
+                expr_id: ExprID(-5),
                 is_captured: false,
                 definition: None,
             },
@@ -123,7 +118,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__realloc".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -6,
+                expr_id: ExprID(-6),
                 is_captured: false,
                 definition: None,
             },
@@ -146,7 +141,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__free".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -7,
+                expr_id: ExprID(-7),
                 is_captured: false,
                 definition: None,
             },
@@ -159,7 +154,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__store".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -8,
+                expr_id: ExprID(-8),
                 is_captured: false,
                 definition: None,
             },
@@ -189,7 +184,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__load".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -9,
+                expr_id: ExprID(-9),
                 is_captured: false,
                 definition: None,
             },
@@ -217,7 +212,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "print".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -11,
+                expr_id: ExprID(-11),
                 is_captured: false,
                 definition: None,
             },
@@ -243,7 +238,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__ir_instr".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: -12,
+                expr_id: ExprID(-12),
                 is_captured: false,
                 definition: None,
             },
@@ -270,7 +265,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Byte".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: -13,
+                expr_id: ExprID(-13),
                 is_captured: false,
                 definition: None,
             },

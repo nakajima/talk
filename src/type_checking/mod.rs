@@ -57,6 +57,39 @@ impl CheckResult {
             })
             .collect()
     }
+
+    pub fn first_root(&self) -> TypedExpr {
+        self.source_file.phase_data.roots.first().unwrap().clone()
+    }
+
+    pub fn roots(&self) -> &[TypedExpr] {
+        &self.source_file.phase_data.roots
+    }
+
+    pub fn root_ids(&self) -> Vec<ExprID> {
+        self.source_file.roots().iter().map(|r| r.id).collect()
+    }
+
+    pub fn typed_expr(&self, expr_id: ExprID) -> Option<&TypedExpr> {
+        self.source_file.phase_data.type_map.get(&expr_id)
+    }
+
+    pub fn nth(&self, idx: usize) -> Option<Ty> {
+        self.source_file
+            .phase_data
+            .type_map
+            .get(&self.root_ids()[idx])
+            .cloned()
+            .map(|t| t.ty)
+    }
+
+    pub fn type_for(&self, expr_id: ExprID) -> Option<Ty> {
+        if let Some(typed_expr) = self.source_file.phase_data.type_map.get(&expr_id) {
+            Some(typed_expr.ty.clone())
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

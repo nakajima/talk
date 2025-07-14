@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use crate::{parsed_expr::ParsedExpr, span::Span};
+use crate::{parsed_expr::ParsedExpr, span::Span, ty::Ty, typed_expr::TypedExpr};
 
 use super::{expr::ExprMeta, parser::ExprID};
 
@@ -14,8 +14,11 @@ impl Phase for Parsed {}
 pub struct NameResolved;
 impl Phase for NameResolved {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Typed {}
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct Typed {
+    pub(super) type_map: HashMap<ExprID, TypedExpr>,
+    pub roots: Vec<TypedExpr>,
+}
 impl Phase for Typed {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +79,7 @@ pub struct SourceFile<P: Phase = Parsed> {
     pub path: PathBuf,
     roots: Vec<ParsedExpr>,
     pub(crate) meta: Rc<RefCell<ExprMetaStorage>>,
-    phase_data: P,
+    pub(super) phase_data: P,
 }
 
 impl SourceFile {
@@ -102,12 +105,16 @@ impl SourceFile<Parsed> {
 }
 
 impl SourceFile<NameResolved> {
-    pub fn to_typed(&self) -> SourceFile<Typed> {
+    pub fn to_typed(
+        &self,
+        roots: Vec<TypedExpr>,
+        type_map: HashMap<ExprID, TypedExpr>,
+    ) -> SourceFile<Typed> {
         SourceFile {
-            path: self.path,
-            roots: self.roots,
-            meta: self.meta,
-            phase_data: Typed {},
+            path: self.path.clone(),
+            roots: self.roots.clone(),
+            meta: self.meta.clone(),
+            phase_data: Typed { roots, type_map },
         }
     }
 

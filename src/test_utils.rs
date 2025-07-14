@@ -9,6 +9,17 @@ macro_rules! any_expr {
 }
 
 #[macro_export]
+macro_rules! any_typed {
+    ($expr:expr, $ty: expr) => {
+        TypedExpr {
+            id: ExprID::ANY,
+            expr: $expr,
+            ty: $ty,
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! assert_match_capture {
     ($expr:expr, $pattern:pat, $capture_block:block) => {{
         let value = $expr;

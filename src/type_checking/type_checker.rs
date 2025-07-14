@@ -114,6 +114,7 @@ pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
+    type_map: HashMap<ExprID, TypedExpr>,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -144,6 +145,7 @@ impl<'a> TypeChecker<'a> {
             session,
             symbol_table,
             path,
+            type_map: Default::default(),
         }
     }
 
@@ -164,7 +166,7 @@ impl<'a> TypeChecker<'a> {
         // synthesize_inits(&mut source_file, self.symbol_table, env);
 
         // Just define names for all of the funcs, structs and enums
-        if let Err(e) = self.hoist(&roots, env)
+        if let Err(e) = self.hoist(roots, env)
             && let Ok(mut lock) = self.session.lock()
         {
             lock.add_diagnostic(Diagnostic::typing(
@@ -191,7 +193,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        source_file.to_typed()
+        source_file.to_typed(typed_roots, self.type_map.clone())
     }
 
     pub fn infer_nodes(
@@ -466,16 +468,21 @@ impl<'a> TypeChecker<'a> {
             ))),
         };
 
-        if let Err(e) = &ty {
-            tracing::error!("error inferring {parsed_expr:?}: {e:?}");
-            if let Ok(mut lock) = self.session.lock() {
-                lock.add_diagnostic(Diagnostic::typing(
-                    self.path.clone(),
-                    parsed_expr.id,
-                    e.clone(),
-                ));
+        match &ty {
+            Ok(ty) => {
+                self.type_map.insert(parsed_expr.id, ty.clone());
             }
-            ty = Err(TypeError::Handled);
+            Err(e) => {
+                tracing::error!("error inferring {parsed_expr:?}: {e:?}");
+                if let Ok(mut lock) = self.session.lock() {
+                    lock.add_diagnostic(Diagnostic::typing(
+                        self.path.clone(),
+                        parsed_expr.id,
+                        e.clone(),
+                    ));
+                }
+                ty = Err(TypeError::Handled);
+            }
         }
 
         ty

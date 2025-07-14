@@ -1,6 +1,5 @@
 use crate::{
-    NameResolved, SourceFile, SymbolKind, SymbolTable, environment::Environment, expr::ExprMeta,
-    name::Name, parser::ExprID,
+    environment::Environment, expr::ExprMeta, name::Name, parsed_expr::Expr, parser::ExprID, NameResolved, SourceFile, SymbolKind, SymbolTable
 };
 
 pub fn synthesize_inits(
@@ -25,7 +24,7 @@ pub fn synthesize_inits(
 
                 let assignment_receiver = source_file.add(
                     env.next_expr_id(),
-                    Expr::Variable(Name::_Self(sym), None),
+                    Expr::Variable(Name::_Self(sym)),
                     ExprMeta::generated(),
                 );
                 let assignment_lhs = source_file.add(

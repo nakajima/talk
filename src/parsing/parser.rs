@@ -21,6 +21,12 @@ impl ExprID {
     pub const ANY: ExprID = ExprID(i32::MIN);
 }
 
+impl From<i32> for ExprID {
+    fn from(other: i32) -> Self {
+        Self(other)
+    }
+}
+
 pub type VariableID = u32;
 
 #[cfg(not(test))]
