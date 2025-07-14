@@ -163,7 +163,11 @@ impl CompilationUnit<Parsed> {
             crate::builtins::default_name_scope() // Builtins like Int, Float
         };
         for file in self.stage.files {
-            let mut resolver = NameResolver::new(global_scope.clone(), self.session.clone());
+            let mut resolver = NameResolver::new(
+                global_scope.clone(),
+                self.session.clone(),
+                file.path.clone(),
+            );
             let resolved = resolver.resolve(file, symbol_table);
 
             for (name, symbol) in resolver.scopes[0].clone().into_iter() {
@@ -210,10 +214,11 @@ impl CompilationUnit<Resolved> {
             let path = file.path.clone();
 
             let typed = if driver_config.include_prelude {
-                TypeChecker::new(self.session.clone(), symbol_table).infer(file, &mut self.env)
+                TypeChecker::new(self.session.clone(), symbol_table, file.path.clone())
+                    .infer(&file, &mut self.env)
             } else {
-                TypeChecker::new(self.session.clone(), symbol_table)
-                    .infer_without_prelude(&mut self.env, file)
+                TypeChecker::new(self.session.clone(), symbol_table, file.path.clone())
+                    .infer_without_prelude(&mut self.env, &file)
             };
             let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
             let solution = solver.solve();

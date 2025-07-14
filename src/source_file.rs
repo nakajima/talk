@@ -107,9 +107,19 @@ impl SourceFile<Parsed> {
             phase_data: NameResolved { scope_tree },
         }
     }
+
+    // Gets the root expr of the tree
+    pub fn roots(&self) -> &Vec<ParsedExpr> {
+        &self.roots
+    }
 }
 
 impl SourceFile<NameResolved> {
+    // Gets the root expr of the tree
+    pub fn roots(&self) -> &Vec<ParsedExpr> {
+        &self.roots
+    }
+
     pub fn to_typed(
         &self,
         roots: Vec<TypedExpr>,
@@ -174,6 +184,10 @@ impl SourceFile<Typed> {
     //     self.phase_data.env.constraints()
     // }
 
+    pub fn roots(&self) -> &[TypedExpr] {
+        &self.phase_data.roots
+    }
+
     pub fn to_parsed(&self) -> SourceFile<Parsed> {
         SourceFile {
             path: self.path.clone(),
@@ -203,11 +217,6 @@ impl<P: Phase> SourceFile<P> {
 
     pub fn push_root(&mut self, root: ParsedExpr) {
         self.roots.push(root);
-    }
-
-    // Gets the root expr of the tree
-    pub fn roots(&self) -> &Vec<ParsedExpr> {
-        &self.roots
     }
 
     // Gets the root expr of the tree

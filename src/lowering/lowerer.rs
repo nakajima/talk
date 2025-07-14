@@ -22,7 +22,7 @@ use crate::{
         phi_predecessors::PhiPredecessors,
         register::Register,
     },
-    name::Name,
+    name::{Name, ResolvedName},
     parser::ExprID,
     source_file,
     token::Token,
@@ -31,7 +31,7 @@ use crate::{
     type_checker::Scheme,
     type_defs::{TypeDef, protocol_def::Conformance, struct_def::StructDef},
     type_var_id::{TypeVarID, TypeVarKind},
-    typed_expr::TypedExpr,
+    typed_expr::{Expr, TypedExpr},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -353,7 +353,8 @@ impl CurrentFunction {
             for (i, instruction) in block.instructions.into_iter().enumerate() {
                 instructions.push(instruction.instr);
                 if let Some(expr_id) = instruction.expr_id {
-                    instr_expr_ids.insert(i, source_file.meta.get(&expr_id).cloned());
+                    let meta = source_file.meta.borrow();
+                    instr_expr_ids.insert(i, meta.get(&expr_id).cloned());
                 }
             }
 
@@ -438,6 +439,8 @@ impl<'a> Lowerer<'a> {
         module: &mut IRModule,
         driver_config: &DriverConfig,
     ) -> SourceFile<Lowered> {
+        let roots = self.source_file.phase_data.roots.clone();
+
         if driver_config.executable {
             let (expr_id, did_create) =
                 find_or_create_main(&mut self.source_file, self.symbol_table, self.env);
@@ -457,15 +460,9 @@ impl<'a> Lowerer<'a> {
             // If we created the main function, we moved all the typed roots into its body
             // so we don't need to lower them again.
             if !did_create {
-                let typed_roots: Vec<TypedExpr> = self
-                    .source_file
-                    .root_ids()
-                    .iter()
-                    .filter_map(|root| self.env.typed_exprs.get(root).cloned())
-                    .collect();
-                for root in typed_roots {
+                for root in roots.iter() {
                     if let Expr::Func { .. } = &root.expr {
-                        self.lower_function(&root.id);
+                        self.lower_function(root);
                     }
                 }
             }
@@ -474,8 +471,8 @@ impl<'a> Lowerer<'a> {
             let id = self.new_basic_block();
             self.set_current_block(id);
 
-            for root_id in self.source_file.root_ids() {
-                self.lower_expr(&root_id);
+            for root in roots.iter() {
+                self.lower_expr(root);
             }
         }
 
@@ -488,20 +485,19 @@ impl<'a> Lowerer<'a> {
         self.source_file.to_lowered()
     }
 
-    pub fn lower_expr(&mut self, expr_id: &ExprID) -> Option<Register> {
-        self.current_expr_ids.push(*expr_id);
-        let typed_expr = self.source_file.typed_expr(expr_id, self.env).clone()?;
+    pub fn lower_expr(&mut self, typed_expr: &TypedExpr) -> Option<Register> {
+        self.current_expr_ids.push(typed_expr.id);
 
         let res = match typed_expr.expr {
             Expr::LiteralInt(_)
             | Expr::LiteralFloat(_)
             | Expr::LiteralFalse
-            | Expr::LiteralTrue => self.lower_literal(expr_id),
-            Expr::Binary(_, _, _) => self.lower_binary_op(expr_id),
+            | Expr::LiteralTrue => self.lower_literal(typed_expr),
+            Expr::Binary(_, _, _) => self.lower_binary_op(typed_expr),
             Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs),
-            Expr::Variable(name, _) => self.lower_variable(expr_id, &name),
-            Expr::If(_, _, _) => self.lower_if(expr_id),
-            Expr::Block(_) => self.lower_block(expr_id),
+            Expr::Variable(name, _) => self.lower_variable(typed_expr, &name),
+            Expr::If(_, _, _) => self.lower_if(typed_expr),
+            Expr::Block(_) => self.lower_block(typed_expr),
             Expr::Call {
                 callee,
                 type_args,
@@ -513,22 +509,22 @@ impl<'a> Lowerer<'a> {
                 args,
                 typed_expr.ty,
             ),
-            Expr::Func { .. } => self.lower_function(expr_id),
-            Expr::Return(rhs) => self.lower_return(expr_id, &rhs),
+            Expr::Func { .. } => self.lower_function(typed_expr),
+            Expr::Return(rhs) => self.lower_return(typed_expr, &rhs),
             Expr::EnumDecl { .. } => None,
-            Expr::Member(receiver, name) => self.lower_member(&receiver, expr_id, &name, false),
+            Expr::Member(receiver, name) => self.lower_member(&receiver, typed_expr, &name, false),
             Expr::Match(scrutinee, arms) => self.lower_match(&scrutinee, &arms, &typed_expr.ty),
             Expr::CallArg { value, .. } => self.lower_expr(&value),
             Expr::Struct {
                 name: Name::Resolved(struct_id, _),
                 body,
                 ..
-            } => self.lower_struct(expr_id, struct_id, &body),
+            } => self.lower_struct(typed_expr, struct_id, &body),
             Expr::Extend {
                 name: Name::Resolved(type_id, _),
                 body,
                 ..
-            } => self.lower_extend(expr_id, type_id, &body),
+            } => self.lower_extend(typed_expr, type_id, &body),
             Expr::Init(symbol_id, func_id) => symbol_id
                 .map(|symbol_id| self.lower_init(&symbol_id, &func_id))
                 .unwrap_or_else(|| {
@@ -537,13 +533,13 @@ impl<'a> Lowerer<'a> {
                     None
                 }),
             Expr::TypeRepr { .. } => None, // these are just for the type system
-            Expr::LiteralArray(items) => self.lower_array(expr_id, typed_expr.ty, items),
+            Expr::LiteralArray(items) => self.lower_array(typed_expr, typed_expr.ty, items),
             Expr::Loop(cond, body) => self.lower_loop(&cond, &body),
             Expr::Break => {
                 let Some(current_loop_exit) = self.loop_exits.last() else {
                     self.add_diagnostic(Diagnostic::lowering(
                         self.source_file.path.clone(),
-                        *expr_id,
+                        *typed_expr,
                         IRError::Unknown("trying to break while not in a loop".into()),
                     ));
 
@@ -556,15 +552,19 @@ impl<'a> Lowerer<'a> {
             Expr::ProtocolDecl {
                 ref name,
                 ref associated_types,
-                ref body,
+                body:
+                    box TypedExpr {
+                        expr: Expr::Block(items),
+                        ..
+                    },
                 ref conformances,
-            } => self.lower_protocol(&typed_expr, name, associated_types, body, conformances),
-            Expr::Tuple(items) => self.lower_tuple(expr_id, items),
-            Expr::LiteralString(string) => self.lower_string(expr_id, string),
+            } => self.lower_protocol(&typed_expr, name, associated_types, items, conformances),
+            Expr::Tuple(items) => self.lower_tuple(typed_expr, items),
+            Expr::LiteralString(string) => self.lower_string(typed_expr, string),
             expr => {
                 self.add_diagnostic(Diagnostic::lowering(
                     self.source_file.path.clone(),
-                    *expr_id,
+                    typed_expr,
                     IRError::Unknown(format!("Cannot lower {expr:?}")),
                 ));
 
@@ -579,67 +579,41 @@ impl<'a> Lowerer<'a> {
 
     fn lower_protocol(
         &mut self,
-        _typed_expr: &TypedExpr,
-        name: &Name,
+        typed_expr: &TypedExpr,
+        name: &ResolvedName,
         _associated_types: &[ExprID],
-        body: &ExprID,
+        items: &[TypedExpr],
         _conformances: &[ExprID],
     ) -> Option<Register> {
-        let Some(Expr::Block(ids)) = self.source_file.get(body).cloned() else {
-            unreachable!()
-        };
-
-        let Some(protocol_def) = self.env.lookup_protocol(&name.symbol_id().ok()?).cloned() else {
-            self.push_err("No Protocol found", *body);
-            return None;
-        };
-
-        for id in ids {
-            if let Some(TypedExpr {
-                expr: Expr::Func { .. },
-                ..
-            }) = self.source_file.typed_expr(&id, self.env).clone()
-            {
-                self.lower_method(&name.symbol_id().ok()?, &id, &name.name_str())?;
+        for body_expr in items {
+            if let Expr::Func { .. } = &body_expr.expr {
+                self.lower_method(body_expr, name)?;
             }
 
-            if let Some(TypedExpr {
+            if let TypedExpr {
                 expr: Expr::FuncSignature { name, .. },
                 ty,
                 ..
-            }) = self.source_file.typed_expr(&id, self.env).clone()
+            } = &body_expr
             {
-                self.lower_method_stub(
-                    &ty,
-                    &Name::Resolved(protocol_def.symbol_id, protocol_def.name_str.clone()),
-                    &name,
-                )?;
+                self.lower_method_stub(&ty, &name)?;
             }
         }
 
         None
     }
 
-    fn lower_tuple(&mut self, expr_id: &ExprID, items: Vec<ExprID>) -> Option<Register> {
-        let Some(typed_expr) = self.source_file.typed_expr(expr_id, self.env) else {
-            self.push_err("Did not find typed expr", *expr_id);
-            return None;
-        };
-
+    fn lower_tuple(&mut self, typed_expr: &TypedExpr, items: &[TypedExpr]) -> Option<Register> {
         let mut member_registers = vec![];
         let mut member_types = vec![];
 
-        for item_id in items {
-            let Some(item_expr) = self.source_file.typed_expr(&item_id, self.env) else {
-                self.push_err("Did not find typed expr", *expr_id);
-                continue;
-            };
-            if let Some(reg) = self.lower_expr(&item_id) {
-                let ir_type = item_expr.ty.to_ir(self);
+        for item in items {
+            if let Some(reg) = self.lower_expr(&item) {
+                let ir_type = item.ty.to_ir(self);
                 member_registers.push(TypedRegister::new(ir_type.clone(), reg));
                 member_types.push(ir_type);
             } else {
-                self.push_err("Could not lower tuple element", item_id);
+                self.push_err("Could not lower tuple element", item.id);
                 return None;
             }
         }
@@ -655,7 +629,7 @@ impl<'a> Lowerer<'a> {
         Some(dest)
     }
 
-    fn lower_loop(&mut self, cond: &Option<ExprID>, body: &ExprID) -> Option<Register> {
+    fn lower_loop(&mut self, cond: &Option<TypedExpr>, body: &TypedExpr) -> Option<Register> {
         let current_block = self.current_block_mut()?.id;
         let loop_entry = self.new_basic_block();
         let loop_exit = self.new_basic_block();
@@ -665,7 +639,7 @@ impl<'a> Lowerer<'a> {
             let Some(cond_reg) = self.lower_expr(cond) else {
                 self.add_diagnostic(Diagnostic::lowering(
                     self.source_file.path.clone(),
-                    *cond,
+                    cond.id,
                     IRError::Unknown(format!("Cannot lower loop condition {cond:?}")),
                 ));
                 return None;
@@ -697,7 +671,7 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_string(&mut self, _expr_id: &ExprID, string: String) -> Option<Register> {
+    fn lower_string(&mut self, _expr_id: &TypedExpr, string: String) -> Option<Register> {
         // Allocate the storage
         let chars_bytes = string.as_bytes();
         let static_addr = self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
@@ -757,9 +731,9 @@ impl<'a> Lowerer<'a> {
         Some(string_struct_reg)
     }
 
-    fn lower_array(&mut self, expr_id: &ExprID, ty: Ty, items: Vec<ExprID>) -> Option<Register> {
-        let Ty::Struct(SymbolID::ARRAY, els) = ty else {
-            self.push_err("Invalid array type", *expr_id);
+    fn lower_array(&mut self, typed_expr: &TypedExpr, items: &[TypedExpr]) -> Option<Register> {
+        let Ty::Struct(SymbolID::ARRAY, els) = &typed_expr.ty else {
+            self.push_err("Invalid array type", typed_expr.id);
             return None;
         };
 
@@ -837,22 +811,18 @@ impl<'a> Lowerer<'a> {
 
         for (i, item) in items.iter().enumerate() {
             let lowered_item = self.lower_expr(item)?;
-            let ty = self
-                .source_file
-                .type_for(*item, self.env)
-                .map(|ty| ty.to_ir(self))?;
-
             let item_reg = self.allocate_register();
+            let item_ty = item.ty.to_ir(self);
             self.push_instr(Instr::GetElementPointer {
                 dest: item_reg,
                 base: storage_reg,
                 ty: IRType::TypedBuffer {
-                    element: ty.clone().into(),
+                    element: item_ty.clone().into(),
                 },
                 index: IRValue::ImmediateInt(i as i64),
             });
             self.push_instr(Instr::Store {
-                ty,
+                ty: item_ty,
                 val: lowered_item.into(),
                 location: item_reg,
             });
@@ -863,14 +833,14 @@ impl<'a> Lowerer<'a> {
 
     fn lower_struct(
         &mut self,
-        expr_id: &ExprID,
+        expr_id: &TypedExpr,
         struct_id: SymbolID,
-        body_id: &ExprID,
+        body_id: &TypedExpr,
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned() else {
             self.add_diagnostic(Diagnostic::lowering(
                 self.source_file.path.clone(),
-                *expr_id,
+                expr_id.id,
                 IRError::Unknown(format!(
                     "Could not resolve struct for symbol: {struct_id:?}"
                 )),
@@ -924,7 +894,7 @@ impl<'a> Lowerer<'a> {
                 Expr::Func {
                     name: Some(name), ..
                 } => {
-                    self.lower_method(&struct_id, &member_id, &name.name_str());
+                    self.lower_method(&member_id, &name);
                 }
                 Expr::Init(..) | Expr::Property { .. } => {
                     // These are handled by the StructDef or the first loop; ignore them here.
@@ -944,9 +914,9 @@ impl<'a> Lowerer<'a> {
 
     fn lower_extend(
         &mut self,
-        expr_id: &ExprID,
+        expr_id: &TypedExpr,
         type_id: SymbolID,
-        body_id: &ExprID,
+        body_id: &TypedExpr,
     ) -> Option<Register> {
         let Some(type_def) = self.env.lookup_type(&type_id).cloned() else {
             self.add_diagnostic(Diagnostic::lowering(
@@ -997,7 +967,7 @@ impl<'a> Lowerer<'a> {
     fn setup_self_context(
         &mut self,
         symbol_id: &SymbolID,
-        func_id: &ExprID,
+        func_id: &TypedExpr,
     ) -> Option<(IRType, TypeDef, TypedExpr, Register, Option<IRValue>)> {
         let Some(type_def) = self.env.lookup_type(symbol_id).cloned() else {
             tracing::error!("Cannot setup self context for {symbol_id:?}");
@@ -1049,7 +1019,7 @@ impl<'a> Lowerer<'a> {
         ))
     }
 
-    fn lower_init(&mut self, symbol_id: &SymbolID, func_id: &ExprID) -> Option<Register> {
+    fn lower_init(&mut self, symbol_id: &SymbolID, func_id: &TypedExpr) -> Option<Register> {
         let (ty, type_def, typed_func, env, _) = self.setup_self_context(symbol_id, func_id)?;
 
         let loaded_reg = self.allocate_register();
@@ -1084,12 +1054,7 @@ impl<'a> Lowerer<'a> {
         Some(env)
     }
 
-    fn lower_method(
-        &mut self,
-        symbol_id: &SymbolID,
-        func_id: &ExprID,
-        name: &str,
-    ) -> Option<Register> {
+    fn lower_method(&mut self, func_id: &TypedExpr, name: &ResolvedName) -> Option<Register> {
         let (_ty, type_def, typed_func, env, ret) = self.setup_self_context(symbol_id, func_id)?;
 
         let (Ty::Func(_, ret_ty, _)
@@ -1122,12 +1087,7 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_method_stub(
-        &mut self,
-        ty: &Ty,
-        protocol_name: &Name,
-        name: &Name,
-    ) -> Option<Register> {
+    fn lower_method_stub(&mut self, ty: &Ty, name: &ResolvedName) -> Option<Register> {
         let Ty::Func(mut params, ret, generics) = ty.clone() else {
             unreachable!()
         };
@@ -1160,12 +1120,7 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_function(&mut self, expr_id: &ExprID) -> Option<Register> {
-        let Some(typed_expr) = self.env.typed_exprs.get(expr_id).cloned() else {
-            self.push_err("Did not get typed expr", *expr_id);
-            return None;
-        };
-
+    fn lower_function(&mut self, typed_expr: &TypedExpr) -> Option<Register> {
         let Expr::Func {
             ref name,
             ref params,
@@ -1175,7 +1130,7 @@ impl<'a> Lowerer<'a> {
             ..
         } = typed_expr.expr
         else {
-            self.push_err("Did not get typed expr", *expr_id);
+            self.push_err("Did not get typed expr", typed_expr.id);
             return None;
         };
 
@@ -1359,7 +1314,7 @@ impl<'a> Lowerer<'a> {
         ret
     }
 
-    fn lower_match(&mut self, scrutinee: &ExprID, arms: &[ExprID], ty: &Ty) -> Option<Register> {
+    fn lower_match(&mut self, scrutinee: &TypedExpr, arms: &[ExprID], ty: &Ty) -> Option<Register> {
         let scrutinee_reg = self.lower_expr(scrutinee)?;
         let merge_block_id = self.new_basic_block();
 
@@ -1398,7 +1353,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_match_arm(
         &mut self,
-        expr_id: &ExprID,
+        expr_id: &TypedExpr,
         scrutinee: &Register,
         merge_block_id: BasicBlockID,
         cond_block_id: BasicBlockID,
@@ -1440,7 +1395,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_pattern_and_bind(
         &mut self,
-        pattern_id: &ExprID,
+        pattern_id: &TypedExpr,
         scrutinee_reg: &Register,
         cond_block_id: BasicBlockID,
         then_block_id: BasicBlockID,
@@ -1585,7 +1540,7 @@ impl<'a> Lowerer<'a> {
         Some(())
     }
 
-    fn _lower_pattern(&mut self, pattern_id: &ExprID) -> Option<Register> {
+    fn _lower_pattern(&mut self, pattern_id: &TypedExpr) -> Option<Register> {
         let pattern_typed_expr = self.source_file.typed_expr(pattern_id, self.env)?;
         let Expr::Pattern(pattern) = pattern_typed_expr.expr else {
             self.push_err(
@@ -1677,8 +1632,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_member(
         &mut self,
-        receiver_id: &Option<ExprID>,
-        expr_id: &ExprID,
+        receiver_id: &Option<TypedExpr>,
+        expr_id: &TypedExpr,
         name: &str,
         is_lvalue: bool,
     ) -> Option<Register> {
@@ -1805,7 +1760,7 @@ impl<'a> Lowerer<'a> {
         Some(dest)
     }
 
-    fn lower_return(&mut self, expr_id: &ExprID, rhs: &Option<ExprID>) -> Option<Register> {
+    fn lower_return(&mut self, expr_id: &TypedExpr, rhs: &Option<TypedExpr>) -> Option<Register> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         if let Some(rhs) = rhs {
@@ -1819,7 +1774,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_literal(&mut self, expr_id: &ExprID) -> Option<Register> {
+    fn lower_literal(&mut self, expr_id: &TypedExpr) -> Option<Register> {
         let register = self.allocate_register();
         match self.source_file.get(expr_id)?.clone() {
             Expr::LiteralInt(val) => {
@@ -1842,7 +1797,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_binary_op(&mut self, expr_id: &ExprID) -> Option<Register> {
+    fn lower_binary_op(&mut self, expr_id: &TypedExpr) -> Option<Register> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
 
         let Expr::Binary(lhs, op, rhs) = typed_expr.expr else {
@@ -1925,7 +1880,7 @@ impl<'a> Lowerer<'a> {
         Some(return_reg)
     }
 
-    fn lower_assignment(&mut self, lhs_id: &ExprID, rhs_id: &ExprID) -> Option<Register> {
+    fn lower_assignment(&mut self, lhs_id: &TypedExpr, rhs_id: &TypedExpr) -> Option<Register> {
         let rhs = self.lower_expr(rhs_id)?;
         let lhs = self.source_file.typed_expr(lhs_id, self.env)?.clone();
 
@@ -1991,7 +1946,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_block(&mut self, block_id: &ExprID) -> Option<Register> {
+    fn lower_block(&mut self, block_id: &TypedExpr) -> Option<Register> {
         let Expr::Block(exprs) = self.source_file.get(block_id)?.clone() else {
             unreachable!()
         };
@@ -2010,7 +1965,7 @@ impl<'a> Lowerer<'a> {
         None
     }
 
-    fn lower_variable(&mut self, expr_id: &ExprID, name: &Name) -> Option<Register> {
+    fn lower_variable(&mut self, expr_id: &TypedExpr, name: &ResolvedName) -> Option<Register> {
         let (Name::Resolved(symbol_id, _) | Name::_Self(symbol_id)) = name else {
             let expr = self.source_file.get(expr_id)?;
             self.push_err(
@@ -2048,7 +2003,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_if(&mut self, expr_id: &ExprID) -> Option<Register> {
+    fn lower_if(&mut self, expr_id: &TypedExpr) -> Option<Register> {
         let typed_expr = self.source_file.typed_expr(expr_id, self.env)?;
         let Expr::If(cond, conseq, alt) = typed_expr.expr else {
             unreachable!()
@@ -2392,7 +2347,7 @@ impl<'a> Lowerer<'a> {
     fn lower_method_call(
         &mut self,
         callee_typed_expr: &TypedExpr,
-        receiver_id: &Option<ExprID>,
+        receiver_id: &Option<TypedExpr>,
         ret_ty: &IRType,
         name: &str,
         mut arg_registers: Vec<TypedRegister>,
@@ -2692,28 +2647,28 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-fn find_or_create_main(
+fn find_or_create_main<'a>(
     source_file: &mut SourceFile<Typed>,
     symbol_table: &mut SymbolTable,
     env: &mut Environment,
-) -> (ExprID, bool) {
-    for root in source_file.typed_roots(env) {
+) -> (&'a TypedExpr, bool) {
+    for root in source_file.roots() {
         if let TypedExpr {
             expr:
                 Expr::Func {
-                    name: Some(Name::Resolved(_, name)),
+                    name: Some(ResolvedName(_, name)),
                     ..
                 },
             ..
         } = root
             && name == "main"
         {
-            return (root.id, false);
+            return (root, false);
         }
     }
 
     // We didn't find a main, we have to generate one
-    let body = Expr::Block(source_file.root_ids());
+    let body = Expr::Block(source_file.roots());
     let body_id = source_file.add(
         env.next_expr_id(),
         body,

@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use crate::{
     SymbolID,
-    expr::Expr,
     lowering::{
         instr::Instr, ir_error::IRError, ir_type::IRType, ir_value::IRValue, lowerer::Lowerer,
         register::Register,
