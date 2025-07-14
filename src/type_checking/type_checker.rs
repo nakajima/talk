@@ -12,6 +12,7 @@ use crate::{
     expr::{Expr, IncompleteExpr, Pattern},
     name::Name,
     name_resolver::NameResolverError,
+    parsed_expr::ParsedExpr,
     parser::ExprID,
     source_file::SourceFile,
     substitutions::Substitutions,
@@ -220,31 +221,21 @@ impl<'a> TypeChecker<'a> {
 
     pub fn infer_node(
         &mut self,
-        id: &ExprID,
+        parsed_expr: &ParsedExpr,
         env: &mut Environment,
         expected: &Option<Ty>,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Ty, TypeError> {
-        if let Some(typed_expr) = env.typed_exprs.get(id)
-            && expected.is_none()
-        {
-            tracing::trace!("{typed_expr:?}, returning from cache");
-            return Ok(typed_expr.ty.clone());
-        }
-
-        let Some(expr) = source_file.get(id).cloned() else {
-            return Err(TypeError::Unknown(format!("No expr found with id {id}")));
-        };
-
-        use crate::formatter::Formatter;
-
+    ) -> Result<TypedExpr, TypeError> {
         let _s = trace_span!(
             "infer_node",
-            expr = Formatter::format_single_expr(&source_file.as_parsed(), id)
+            expr = crate::formatter::Formatter::format_single_expr(
+                &source_file.as_parsed(),
+                &parsed_expr
+            )
         )
         .entered();
 
-        let mut ty = match &expr {
+        let mut ty = match &parsed_expr.expr {
             Expr::Incomplete(expr_id) => {
                 self.handle_incomplete(expr_id, expected, env, source_file)
             }

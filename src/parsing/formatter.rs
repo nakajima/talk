@@ -87,14 +87,15 @@ fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
 pub struct Formatter<'a> {
     source_file: &'a SourceFile,
     // Track expression metadata for source location info
-    meta_cache: HashMap<ExprID, &'a ExprMeta>,
+    meta_cache: HashMap<ExprID, ExprMeta>,
 }
 
 impl<'a> Formatter<'a> {
     pub fn new(source_file: &'a SourceFile) -> Self {
         let mut meta_cache = HashMap::new();
-        for (i, meta) in source_file.meta.iter() {
-            meta_cache.insert(*i, meta);
+        let meta = source_file.meta.borrow().clone();
+        for (i, meta) in meta.iter() {
+            meta_cache.insert(*i, meta.clone());
         }
         Self {
             source_file,
@@ -127,7 +128,7 @@ impl<'a> Formatter<'a> {
             let doc = self.format_expr(&root);
             output.push_str(&Self::render_doc(doc, width));
 
-            last_meta = self.meta_cache.get(&root.id).map(|v| &**v);
+            last_meta = self.meta_cache.get(&root.id).map(|v| &*v);
         }
 
         output
@@ -367,7 +368,7 @@ impl<'a> Formatter<'a> {
 
             // Add the formatted statement itself.
             final_doc = concat(final_doc, self.format_expr(&stmt));
-            last_meta = meta.map(|v| &**v);
+            last_meta = meta.map(|v| &*v);
         }
 
         concat(

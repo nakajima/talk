@@ -24,6 +24,7 @@ use crate::span::Span;
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub enum NameResolverError {
     InvalidSelf,
+    InvalidSpan,
     MissingMethodName,
     Unknown(String),
     UnresolvedName(String),
@@ -37,6 +38,7 @@ impl NameResolverError {
     pub fn message(&self) -> String {
         match self {
             Self::InvalidSelf => "`self` can't be used outside type".to_string(),
+            Self::InvalidSpan => "Span not found".to_string(),
             Self::UnresolvedName(string) => format!("Unknown identifier: {string}"),
             Self::MissingMethodName => "Missing method name".to_string(),
             Self::Unknown(string) => string.to_string(),
@@ -303,7 +305,10 @@ impl NameResolver {
                 *items = self.resolve_nodes(items, meta, symbol_table)?;
             }
             Expr::Block(items) => {
-                let tok = self.start_scope(meta.span(&parsed_expr.id));
+                let tok = self.start_scope(
+                    meta.span(&parsed_expr.id)
+                        .ok_or(NameResolverError::InvalidSpan)?,
+                );
                 self.hoist_funcs(items, meta, symbol_table);
                 *items = self.resolve_nodes(items, meta, symbol_table)?;
                 self.end_scope(tok);
@@ -335,7 +340,11 @@ impl NameResolver {
                 Name::Raw(name_str) => {
                     *name = if name_str == "self" {
                         if let Some(last_symbol) = self.type_symbol_stack.last() {
-                            symbol_table.add_map(meta.span(&parsed_expr.id), last_symbol);
+                            symbol_table.add_map(
+                                meta.span(&parsed_expr.id)
+                                    .ok_or(NameResolverError::InvalidSpan)?,
+                                last_symbol,
+                            );
                             Name::_Self(*last_symbol)
                         } else {
                             return Err(NameResolverError::InvalidSelf);
@@ -347,7 +356,11 @@ impl NameResolver {
 
                         tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
 
-                        symbol_table.add_map(meta.span(&parsed_expr.id), &symbol_id);
+                        symbol_table.add_map(
+                            meta.span(&parsed_expr.id)
+                                .ok_or(NameResolverError::InvalidSpan)?,
+                            &symbol_id,
+                        );
 
                         // TODO: Resolve captures when we're resolving a func?
                         // Check to see if this is a capture
@@ -398,7 +411,11 @@ impl NameResolver {
                                 && let Some(last_symbol) = self.type_symbol_stack.last()
                             {
                                 let name = Name::SelfType;
-                                symbol_table.add_map(meta.span(&parsed_expr.id), last_symbol);
+                                symbol_table.add_map(
+                                    meta.span(&parsed_expr.id)
+                                        .ok_or(NameResolverError::InvalidSpan)?,
+                                    last_symbol,
+                                );
                                 name
                             } else if let Some((symbol_id, _)) = self.lookup(&raw_name_str) {
                                 Name::Resolved(symbol_id, raw_name_str)
@@ -471,7 +488,10 @@ impl NameResolver {
                 *arms = self.resolve_nodes(arms, meta, symbol_table)?;
             }
             Expr::MatchArm(pattern, body) => {
-                let tok = self.start_scope(meta.span(&parsed_expr.id));
+                let tok = self.start_scope(
+                    meta.span(&parsed_expr.id)
+                        .ok_or(NameResolverError::InvalidSpan)?,
+                );
                 *pattern = Box::new(self.resolve_node(pattern, meta, symbol_table)?);
                 *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
                 self.end_scope(tok);
@@ -548,7 +568,7 @@ impl NameResolver {
 
         self.func_stack
             .push((name_str.to_string(), self.scopes.len()));
-        let tok = self.start_scope(meta.span(expr_id));
+        let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
 
         *generics = self.resolve_nodes(generics, meta, symbol_table)?;
         *params = self.resolve_nodes(params, meta, symbol_table)?;
@@ -593,7 +613,10 @@ impl NameResolver {
                     *name = Some(Name::Resolved(symbol_id, name_str.to_string()));
                 }
 
-                let tok = self.start_scope(meta.span(&parsed_expr.id));
+                let tok = self.start_scope(
+                    meta.span(&parsed_expr.id)
+                        .ok_or(NameResolverError::InvalidSpan)?,
+                );
 
                 *generics = self.resolve_nodes(generics, meta, symbol_table)?;
                 *params = self.resolve_nodes(params, meta, symbol_table)?;
@@ -623,7 +646,10 @@ impl NameResolver {
                     *name = Name::Resolved(symbol_id, name_str.to_string());
                 };
 
-                let tok = self.start_scope(meta.span(&parsed_expr.id));
+                let tok = self.start_scope(
+                    meta.span(&parsed_expr.id)
+                        .ok_or(NameResolverError::InvalidSpan)?,
+                );
 
                 *generics = self.resolve_nodes(generics, meta, symbol_table)?;
                 *params = self.resolve_nodes(params, meta, symbol_table)?;
@@ -682,7 +708,10 @@ impl NameResolver {
             *name = Name::Resolved(struct_symbol, name_str.to_string());
 
             symbol_table.initialize_type_table(struct_symbol);
-            let tok = self.start_scope(meta.span(&parsed_expr.id));
+            let tok = self.start_scope(
+                meta.span(&parsed_expr.id)
+                    .ok_or(NameResolverError::InvalidSpan)?,
+            );
             self.type_symbol_stack.push(struct_symbol);
 
             *generics = self.resolve_nodes(generics, meta, symbol_table)?;
@@ -767,7 +796,10 @@ impl NameResolver {
                 symbol_table,
             );
 
-            let tok = self.start_scope(meta.span(&parsed_expr.id));
+            let tok = self.start_scope(
+                meta.span(&parsed_expr.id)
+                    .ok_or(NameResolverError::InvalidSpan)?,
+            );
             *generics = self.resolve_nodes(generics, meta, symbol_table)?;
             *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
 
@@ -867,7 +899,11 @@ impl NameResolver {
 
             *name = Name::Resolved(symbol_id, name_str.to_string());
 
-            let tok = self.start_scope(meta.span(&parsed_expr.id));
+            let Some(span) = meta.span(&parsed_expr.id) else {
+                return Err(NameResolverError::InvalidSelf);
+            };
+
+            let tok = self.start_scope(span);
             self.type_symbol_stack.push(symbol_id);
             *associated_types = self.resolve_nodes(associated_types, meta, symbol_table)?;
             *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
@@ -955,8 +991,13 @@ impl NameResolver {
         let Some(scope) = self.scopes.last_mut() else {
             return SymbolID(0);
         };
-        scope.insert(name, symbol_id);
-        symbol_table.add_map(meta.span(&expr_id), &symbol_id);
+        scope.insert(name.clone(), symbol_id);
+        if let Some(span) = meta.span(&expr_id) {
+            symbol_table.add_map(span, &symbol_id);
+        } else {
+            tracing::error!("No span for {name}");
+        }
+
         symbol_id
     }
 

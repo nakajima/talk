@@ -36,22 +36,6 @@ pub struct CheckResult {
 
 #[cfg(test)]
 impl CheckResult {
-    pub fn first(&self) -> Option<Ty> {
-        self.type_for(&self.root_ids()[0])
-    }
-
-    pub fn nth(&self, i: usize) -> Option<Ty> {
-        self.type_for(&self.root_ids()[i])
-    }
-
-    pub fn type_for(&self, id: &ExprID) -> Option<Ty> {
-        self.source_file.type_for(*id, &self.env)
-    }
-
-    pub fn typed_expr(&self, id: &ExprID) -> Option<TypedExpr> {
-        self.source_file.typed_expr(id, &self.env)
-    }
-
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         use std::path::PathBuf;
 
@@ -71,18 +55,6 @@ impl CheckResult {
                     None
                 }
             })
-            .collect()
-    }
-
-    pub fn root_ids(&self) -> Vec<ExprID> {
-        self.source_file.root_ids()
-    }
-
-    pub fn roots(&self) -> Vec<Ty> {
-        self.source_file
-            .root_ids()
-            .iter()
-            .filter_map(|id| self.type_for(id))
             .collect()
     }
 }

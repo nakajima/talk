@@ -1,5 +1,6 @@
 use crate::{
     SymbolID,
+    parsed_expr::ParsedExpr,
     parser::ExprID,
     ty::Ty,
     type_defs::{TypeParams, protocol_def::Conformance},
@@ -11,34 +12,28 @@ pub struct Property {
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
-    pub default_value: Option<ExprID>,
 }
 
 impl Property {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty, default_value: Option<ExprID>) -> Self {
-        Self {
-            name,
-            expr_id,
-            ty,
-            default_value,
-        }
+    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
+        Self { name, expr_id, ty }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawProperty {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawProperty<'a> {
     pub name: String,
-    pub expr_id: ExprID,
+    pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
-    pub default_value: Option<ExprID>,
+    pub default_value: &'a Option<Box<ParsedExpr>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawInitializer {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawInitializer<'a> {
     pub name: String,
-    pub expr_id: ExprID,
+    pub expr: &'a ParsedExpr,
     pub func_id: ExprID,
-    pub params: Vec<ExprID>,
+    pub params: &'a [ParsedExpr],
     pub placeholder: TypeVarID,
 }
 
@@ -62,18 +57,18 @@ impl Method {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawMethod {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawMethod<'a> {
     pub name: String,
-    pub expr_id: ExprID,
+    pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
 }
 
-impl RawMethod {
-    pub fn new(name: String, expr_id: ExprID, placeholder: TypeVarID) -> Self {
+impl<'a> RawMethod<'a> {
+    pub fn new(name: String, expr: &'a ParsedExpr, placeholder: TypeVarID) -> Self {
         Self {
             name,
-            expr_id,
+            expr,
             placeholder,
         }
     }

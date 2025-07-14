@@ -1,5 +1,6 @@
 use crate::{
     SymbolID,
+    parsed_expr::ParsedExpr,
     parser::ExprID,
     ty::Ty,
     type_defs::{TypeParams, protocol_def::Conformance, struct_def::Method},
@@ -7,10 +8,10 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RawEnumVariant {
+pub struct RawEnumVariant<'a> {
     pub name: String,
-    pub expr_id: ExprID,
-    pub values: Vec<ExprID>,
+    pub expr: &'a ParsedExpr,
+    pub values: &'a [ParsedExpr],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

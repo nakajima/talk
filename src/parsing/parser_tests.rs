@@ -95,7 +95,8 @@ mod tests {
     #[test]
     fn stores_expr_meta() {
         let parsed = parse("1 + 2");
-        let meta = &parsed.meta.get(&parsed.roots()[0].id).unwrap();
+        let meta = parsed.meta.borrow();
+        let meta = meta.get(&parsed.roots()[0].id).unwrap();
 
         assert_eq!(meta.start.start, 0);
         assert_eq!(meta.start.end, 1);

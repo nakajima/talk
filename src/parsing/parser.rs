@@ -14,7 +14,7 @@ use crate::{
 
 use super::{expr::ExprMeta, name::Name, precedence::Precedence};
 
-#[derive(Debug, Clone, Copy, Hash, Eq)]
+#[derive(Default, Debug, Clone, Copy, Hash, Eq)]
 pub struct ExprID(pub i32);
 impl ExprID {
     #[cfg(test)]
@@ -304,7 +304,8 @@ impl<'a> Parser<'a> {
     #[must_use]
     fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
         #[allow(clippy::unwrap_used)]
-        let meta = &self.parse_tree.meta.get(&lhs).unwrap();
+        let meta = self.parse_tree.meta.borrow();
+        let meta = meta.get(&lhs).unwrap();
         let start = SourceLocationStart {
             token: meta.start.clone(),
             identifiers: vec![],

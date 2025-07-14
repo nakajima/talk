@@ -4,8 +4,8 @@ use crate::{
     NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
-    expr::Expr,
     name::Name,
+    parsed_expr::ParsedExpr,
     parser::ExprID,
     substitutions::Substitutions,
     ty::Ty,
@@ -21,14 +21,14 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct TypePlaceholders {
-    methods: Vec<RawMethod>,
-    method_requirements: Vec<RawMethod>,
-    initializers: Vec<RawInitializer>,
-    properties: Vec<RawProperty>,
-    variants: Vec<RawEnumVariant>,
-    conformances: Vec<ExprID>,
+#[derive(Default, Debug)]
+pub(super) struct TypePlaceholders<'a> {
+    methods: Vec<RawMethod<'a>>,
+    method_requirements: Vec<RawMethod<'a>>,
+    initializers: Vec<RawInitializer<'a>>,
+    properties: Vec<RawProperty<'a>>,
+    variants: Vec<RawEnumVariant<'a>>,
+    conformances: Vec<ParsedExpr>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -40,11 +40,11 @@ pub(super) enum PredeclarationKind {
 }
 
 #[derive(Debug)]
-pub(super) struct PredeclarationExprIDs {
-    name: Name,
-    generics: Vec<ExprID>,
-    conformances: Vec<ExprID>,
-    body: ExprID,
+pub(super) struct PredeclarationExprIDs<'a> {
+    name: &'a Name,
+    generics: &'a Vec<ParsedExpr>,
+    conformances: &'a Vec<ParsedExpr>,
+    body: &'a ParsedExpr,
     kind: PredeclarationKind,
 }
 
@@ -53,7 +53,7 @@ pub(super) struct PredeclarationExprIDs {
 impl<'a> TypeChecker<'a> {
     pub(crate) fn hoist(
         &mut self,
-        items: &[ExprID],
+        items: &'a [ParsedExpr],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<(), TypeError> {
@@ -62,9 +62,8 @@ impl<'a> TypeChecker<'a> {
 
         // The first pass goes through and finds all the named things that need to be predeclared and just defines
         // them with placeholder type variables.
-        let type_defs_with_placeholders = self
-            .predeclare_types(items, env, source_file)
-            .map_err(|e| e.1)?;
+        let type_defs_with_placeholders =
+            Self::predeclare_types(items, env, source_file).map_err(|e| e.1)?;
         let lets_results = self
             .predeclare_lets(items, env, source_file)
             .map_err(|e| e.1)?;
@@ -98,39 +97,33 @@ impl<'a> TypeChecker<'a> {
 
     #[allow(clippy::type_complexity)]
     pub(super) fn predeclare_types(
-        &mut self,
-        root_ids: &[ExprID],
+        roots: &'a [ParsedExpr],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Vec<(SymbolID, TypePlaceholders)>, (ExprID, TypeError)> {
+    ) -> Result<Vec<(SymbolID, TypePlaceholders<'a>)>, (ExprID, TypeError)> {
         let mut placeholders = vec![];
 
-        for id in root_ids {
-            let Some(expr) = source_file.get(id).cloned() else {
-                tracing::warn!("No expr found for id: {id:?}");
-                continue;
-            };
-
-            let Some(expr_ids) = self.predeclarable_type(&expr) else {
+        for root in roots {
+            let Some(expr_ids) = Self::predeclarable_type(root) else {
                 continue;
             };
 
             tracing::debug!("Predeclaring {expr_ids:?}");
 
             let Name::Resolved(symbol_id, name_str) = expr_ids.name else {
-                return Err((*id, TypeError::Unresolved(expr_ids.name.name_str())));
+                return Err((root.id, TypeError::Unresolved(expr_ids.name.name_str())));
             };
 
             let mut raw_type_parameters = vec![];
 
-            for id in expr_ids.generics {
-                let Some(Expr::TypeRepr {
+            for generic in expr_ids.generics {
+                let crate::parsed_expr::Expr::TypeRepr {
                     name: Name::Resolved(symbol_id, name_str),
                     ..
-                }) = source_file.get(&id)
+                } = &generic.expr
                 else {
                     return Err((
-                        id,
+                        generic.id,
                         TypeError::Unresolved(
                             "did not resolve type parameter for predeclarable".into(),
                         ),
@@ -148,11 +141,11 @@ impl<'a> TypeChecker<'a> {
                         vec![],
                     ),
                 )
-                .map_err(|e| (id, e))?;
+                .map_err(|e| (generic.id, e))?;
 
                 raw_type_parameters.push(RawTypeParameter {
                     symbol_id: *symbol_id,
-                    expr_id: id,
+                    expr_id: generic.id,
                     placeholder: type_param,
                 });
             }
@@ -168,9 +161,9 @@ impl<'a> TypeChecker<'a> {
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::Struct(symbol_id, canonical_types.clone()),
-                PredeclarationKind::Enum => Ty::Enum(symbol_id, canonical_types.clone()),
-                PredeclarationKind::Protocol => Ty::Protocol(symbol_id, canonical_types.clone()),
+                PredeclarationKind::Struct => Ty::Struct(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Protocol => Ty::Protocol(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
                     #[allow(clippy::expect_used)]
@@ -180,59 +173,58 @@ impl<'a> TypeChecker<'a> {
 
             if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_)) {
                 let scheme = Scheme::new(ty, unbound_vars, vec![]);
-                env.declare(symbol_id, scheme).map_err(|e| (*id, e))?;
+                env.declare(*symbol_id, scheme).map_err(|e| (root.id, e))?;
             }
 
-            let Some(Expr::Block(body_ids)) = source_file.get(&expr_ids.body).cloned() else {
+            let crate::parsed_expr::Expr::Block(ref body_exprs) = expr_ids.body.expr else {
                 unreachable!()
             };
 
             let mut ty_placeholders = TypePlaceholders {
-                conformances: expr_ids.conformances.clone(),
+                conformances: expr_ids.conformances.to_vec(),
                 ..Default::default()
             };
 
-            for body_id in body_ids {
-                let Some(expr) = &source_file.get(&body_id).cloned() else {
-                    continue;
-                };
-
-                match &expr {
-                    Expr::Property {
+            for body_expr in body_exprs {
+                match &body_expr.expr {
+                    crate::parsed_expr::Expr::Property {
                         name: Name::Resolved(prop_id, name_str),
                         default_value,
                         ..
                     } if expr_ids.kind != PredeclarationKind::Enum => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
-                            &body_id,
+                            &body_expr.id,
                             format!("predecl[{name_str}]"),
-                            prop_id,
+                            &prop_id,
                             vec![],
                         ) else {
                             unreachable!()
                         };
                         let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
-                        env.declare(*prop_id, scheme).map_err(|e| (*id, e))?;
+                        env.declare(*prop_id, scheme)
+                            .map_err(|e| (body_expr.id, e))?;
 
                         ty_placeholders.properties.push(RawProperty {
                             name: name_str.clone(),
-                            expr_id: body_id,
+                            expr: &body_expr,
                             placeholder: type_var.clone(),
-                            default_value: *default_value,
+                            default_value: &default_value,
                         });
                     }
-                    Expr::Init(_, func_id) if expr_ids.kind != PredeclarationKind::Enum => {
-                        let Some(Expr::Func {
+                    crate::parsed_expr::Expr::Init(_, func_expr)
+                        if expr_ids.kind != PredeclarationKind::Enum =>
+                    {
+                        let crate::parsed_expr::Expr::Func {
                             name: Some(Name::Resolved(symbol_id, name)),
                             params,
                             ..
-                        }) = &source_file.get(func_id)
+                        } = &func_expr.expr
                         else {
-                            unreachable!("didn't get resolved init: {:?}", source_file.get(func_id))
+                            unreachable!("didn't get resolved init: {:?}", func_expr.expr)
                         };
 
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
-                            &body_id,
+                            &func_expr.id,
                             format!("predecl[{name}]"),
                             symbol_id,
                             vec![],
@@ -240,73 +232,76 @@ impl<'a> TypeChecker<'a> {
                             unreachable!()
                         };
                         let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
-                        env.declare(*symbol_id, scheme).map_err(|e| (*id, e))?;
+                        env.declare(*symbol_id, scheme)
+                            .map_err(|e| (func_expr.id, e))?;
 
                         ty_placeholders.initializers.push(RawInitializer {
                             name: name.clone(),
-                            expr_id: body_id,
-                            func_id: *func_id,
-                            params: params.clone(),
+                            expr: &body_expr,
+                            func_id: func_expr.id,
+                            params,
                             placeholder: type_var.clone(),
                         });
                     }
-                    Expr::EnumVariant(name, values) => {
+                    crate::parsed_expr::Expr::EnumVariant(name, values) => {
                         ty_placeholders.variants.push(RawEnumVariant {
                             name: name.name_str(),
-                            expr_id: body_id,
-                            values: values.to_vec(),
+                            expr: &body_expr,
+                            values,
                         })
                     }
-                    Expr::Func {
+                    crate::parsed_expr::Expr::Func {
                         name: Some(Name::Resolved(func_id, name_str)),
                         ..
                     } => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
-                            &body_id,
+                            &body_expr.id,
                             format!("predecl[{name_str}]"),
-                            func_id,
+                            &func_id,
                             vec![],
                         ) else {
                             unreachable!()
                         };
                         let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
-                        env.declare(*func_id, scheme).map_err(|e| (*id, e))?;
+                        env.declare(*func_id, scheme)
+                            .map_err(|e| (body_expr.id, e))?;
 
                         ty_placeholders.methods.push(RawMethod {
                             name: name_str.clone(),
-                            expr_id: body_id,
+                            expr: &body_expr,
                             placeholder: type_var.clone(),
                         });
                     }
-                    Expr::FuncSignature {
+                    crate::parsed_expr::Expr::FuncSignature {
                         name: Name::Resolved(func_id, name_str),
                         ..
                     } => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
-                            &body_id,
+                            &body_expr.id,
                             format!("predecl[{name_str}]"),
-                            func_id,
+                            &func_id,
                             vec![],
                         ) else {
                             unreachable!()
                         };
                         let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
-                        env.declare(*func_id, scheme).map_err(|e| (*id, e))?;
+                        env.declare(*func_id, scheme)
+                            .map_err(|e| (body_expr.id, e))?;
 
                         ty_placeholders.method_requirements.push(RawMethod {
                             name: name_str.clone(),
-                            expr_id: body_id,
+                            expr: &body_expr,
                             placeholder: type_var.clone(),
                         });
                     }
                     _ => {
                         return {
-                            tracing::error!("Unhandled property: {:?}", source_file.get(&body_id));
+                            tracing::error!("Unhandled property: {:?}", body_expr.expr);
                             Err((
-                                *id,
+                                body_expr.id,
                                 TypeError::Unknown(format!(
                                     "Unhandled property: {:?}",
-                                    source_file.get(&body_id)
+                                    body_expr.expr
                                 )),
                             ))
                         };
@@ -327,19 +322,21 @@ impl<'a> TypeChecker<'a> {
                     .cloned()
                     .unwrap_or_else(|| match expr_ids.kind {
                         PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
-                            symbol_id,
-                            name_str,
+                            symbol_id: *symbol_id,
+                            name_str: name_str.clone(),
                             type_parameters: type_params,
                             variants: Default::default(),
                             methods: Default::default(),
                             conformances: Default::default(),
                         }),
-                        PredeclarationKind::Struct => {
-                            TypeDef::Struct(StructDef::new(symbol_id, name_str, type_params))
-                        }
+                        PredeclarationKind::Struct => TypeDef::Struct(StructDef::new(
+                            *symbol_id,
+                            name_str.clone(),
+                            type_params,
+                        )),
                         PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
-                            symbol_id,
-                            name_str,
+                            symbol_id: *symbol_id,
+                            name_str: name_str.clone(),
                             associated_types: type_params,
                             conformances: vec![],
                             properties: Default::default(),
@@ -350,7 +347,7 @@ impl<'a> TypeChecker<'a> {
                         PredeclarationKind::Builtin(symbol_id) => builtin_type_def(&symbol_id),
                     });
 
-            env.register(&type_def).map_err(|e| (*id, e))?;
+            env.register(&type_def).map_err(|e| (root.id, e))?;
 
             placeholders.push((type_def.symbol_id(), ty_placeholders));
         }
@@ -388,58 +385,60 @@ impl<'a> TypeChecker<'a> {
             if !matches!(def, TypeDef::Enum(_)) {
                 let mut properties = vec![];
                 for property in placeholders.properties.iter() {
-                    let ty = self
-                        .infer_node(&property.expr_id, env, &None, source_file)
-                        .map_err(|e| (property.expr_id, e))?;
+                    let typed_expr = self
+                        .infer_node(&property.expr, env, &None, source_file)
+                        .map_err(|e| (property.expr.id, e))?;
                     properties.push(Property {
                         name: property.name.clone(),
-                        expr_id: property.expr_id,
-                        ty: ty.clone(),
-                        default_value: property.default_value,
+                        expr_id: property.expr.id,
+                        ty: typed_expr.ty.clone(),
                     });
 
-                    substitutions.insert(property.placeholder.clone(), ty.clone());
+                    substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());
                 }
 
                 def.add_properties(properties.clone());
                 env.register(&def)
-                    .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or(0), e))?;
+                    .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
             }
 
             let mut methods = vec![];
             for method in &placeholders.methods {
-                let ty = self
-                    .infer_node(&method.expr_id, env, &None, source_file)
-                    .map_err(|e| (method.expr_id, e))?;
+                let typed_expr = self
+                    .infer_node(&method.expr, env, &None, source_file)
+                    .map_err(|e| (method.expr.id, e))?;
                 methods.push(Method {
                     name: method.name.clone(),
-                    expr_id: method.expr_id,
-                    ty: ty.clone(),
+                    expr_id: method.expr.id,
+                    ty: typed_expr.ty.clone(),
                 });
-                substitutions.insert(method.placeholder.clone(), ty.clone());
+                substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
             }
             def.add_methods(methods.clone());
             env.register(&def)
-                .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or(0), e))?;
+                .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
 
             if matches!(def, TypeDef::Protocol(_)) {
                 let mut method_requirements = vec![];
                 for method in placeholders.method_requirements.iter() {
-                    let ty = self
-                        .infer_node(&method.expr_id, env, &None, source_file)
-                        .map_err(|e| (method.expr_id, e))?;
+                    let typed_expr = self
+                        .infer_node(&method.expr, env, &None, source_file)
+                        .map_err(|e| (method.expr.id, e))?;
                     method_requirements.push(Method {
                         name: method.name.clone(),
-                        expr_id: method.expr_id,
-                        ty: ty.clone(),
+                        expr_id: method.expr.id,
+                        ty: typed_expr.ty.clone(),
                     });
-                    substitutions.insert(method.placeholder.clone(), ty.clone());
+                    substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
                 }
 
                 def.add_method_requirements(method_requirements.clone());
                 env.register(&def).map_err(|e| {
                     (
-                        method_requirements.last().map(|p| p.expr_id).unwrap_or(0),
+                        method_requirements
+                            .last()
+                            .map(|p| p.expr_id)
+                            .unwrap_or_default(),
                         e,
                     )
                 })?;
@@ -449,71 +448,72 @@ impl<'a> TypeChecker<'a> {
                 let mut initializers = vec![];
 
                 for initializer in placeholders.initializers.iter() {
-                    let ty = self
-                        .infer_node(&initializer.expr_id, env, &None, source_file)
-                        .map_err(|e| (initializer.expr_id, e))?;
+                    let typed_expr = self
+                        .infer_node(&initializer.expr, env, &None, source_file)
+                        .map_err(|e| (initializer.expr.id, e))?;
 
-                    substitutions.insert(initializer.placeholder.clone(), ty.clone());
+                    substitutions.insert(initializer.placeholder.clone(), typed_expr.ty.clone());
 
                     initializers.push(Initializer {
                         name: initializer.name.clone(),
-                        expr_id: initializer.expr_id,
-                        ty,
+                        expr_id: initializer.expr.id,
+                        ty: typed_expr.ty.clone(),
                     });
                 }
 
                 def.add_initializers(initializers.clone());
-                env.register(&def)
-                    .map_err(|e| (initializers.last().map(|p| p.expr_id).unwrap_or(0), e))?;
+                env.register(&def).map_err(|e| {
+                    (
+                        initializers.last().map(|p| p.expr_id).unwrap_or_default(),
+                        e,
+                    )
+                })?;
             }
 
             if matches!(def, TypeDef::Enum(_)) {
                 let mut variants = vec![];
                 for variant in placeholders.variants.iter() {
-                    let ty = self
+                    let typed_expr = self
                         .infer_node(
-                            &variant.expr_id,
+                            &variant.expr,
                             env,
                             &Some(Ty::Enum(def.symbol_id(), vec![])),
                             source_file,
                         )
-                        .map_err(|e| (variant.expr_id, e))?;
+                        .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
                         name: variant.name.clone(),
-                        ty,
+                        ty: typed_expr.ty.clone(),
                     });
                 }
 
                 def.add_variants(variants);
-                env.register(&def).map_err(|e| (0, e))?;
+                env.register(&def).map_err(|e| (Default::default(), e))?;
             }
 
             let mut conformance_constraints = vec![];
             let mut conformances = vec![];
-            for id in placeholders.conformances.iter() {
-                let ty = self
-                    .infer_node(id, env, &None, source_file)
-                    .map_err(|e| (*id, e))?;
+            for conformance_expr in placeholders.conformances.iter() {
+                let typed_expr = self
+                    .infer_node(conformance_expr, env, &None, source_file)
+                    .map_err(|e| (conformance_expr.id, e))?;
 
-                let Ty::Protocol(symbol_id, associated_types) = ty else {
-                    tracing::error!(
-                        "Didn't get protocol for expr id: {id} {ty:?} {:?}",
-                        source_file.get(id)
-                    );
+                let Ty::Protocol(symbol_id, associated_types) = &typed_expr.ty else {
+                    tracing::error!("Didn't get protocol for expr: {typed_expr:?}",);
                     continue;
                 };
 
-                let conformance = Conformance::new(symbol_id, associated_types);
+                let conformance = Conformance::new(*symbol_id, associated_types.to_vec());
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
-                    expr_id: *id,
+                    protocol_ty: typed_expr.ty.clone(),
                     ty: def.ty(),
                     conformance,
                 });
             }
 
             def.add_conformances(conformances);
-            env.register(&def).map_err(|e| (0, e))?;
+            env.register(&def).map_err(|e| (Default::default(), e))?;
 
             for constraint in conformance_constraints {
                 env.constrain(constraint);
@@ -530,34 +530,37 @@ impl<'a> TypeChecker<'a> {
 
     fn predeclare_functions(
         &mut self,
-        root_ids: &[ExprID],
+        roots: &'a [ParsedExpr],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Vec<(ExprID, SymbolID, TypeVarID)>, TypeError> {
+    ) -> Result<Vec<(&'a ParsedExpr, &'a SymbolID, TypeVarID)>, TypeError> {
         tracing::trace!("Predeclaring funcs");
 
         let mut func_ids = vec![];
 
         // Predeclaration pass, just declare placeholders
-        for id in root_ids.iter() {
-            let Some(Expr::Func {
+        for func_expr in roots.iter() {
+            let crate::parsed_expr::Expr::Func {
                 name: Some(Name::Resolved(symbol_id, name_str)),
                 ..
-            }) = source_file.get(id).cloned()
+            } = &func_expr.expr
             else {
                 continue;
             };
 
-            let ref placeholder @ Ty::TypeVar(ref type_var) =
-                env.placeholder(id, format!("predecl[{name_str}]"), &symbol_id, vec![])
-            else {
+            let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
+                &func_expr.id,
+                format!("predecl[{name_str}]"),
+                &symbol_id,
+                vec![],
+            ) else {
                 unreachable!()
             };
 
             // Stash this func ID so we can fully infer it in the next loop
-            func_ids.push((*id, symbol_id, type_var.clone()));
+            func_ids.push((func_expr, symbol_id, type_var.clone()));
 
-            env.declare(symbol_id, Scheme::new(placeholder.clone(), vec![], vec![]))?;
+            env.declare(*symbol_id, Scheme::new(placeholder.clone(), vec![], vec![]))?;
         }
 
         Ok(func_ids)
@@ -565,24 +568,27 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_funcs(
         &mut self,
-        func_ids: &[(ExprID, SymbolID, TypeVarID)],
+        func_ids: &[(&'a ParsedExpr, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
         let mut placeholder_substitutions = Substitutions::new();
         let mut results = vec![];
 
-        for (expr_id, symbol_id, placeholder) in func_ids {
-            let ty = self.infer_node(
-                expr_id,
+        for (func_expr, symbol_id, placeholder) in func_ids {
+            let typed_expr = self.infer_node(
+                func_expr,
                 env,
                 &Some(Ty::TypeVar(placeholder.clone())),
                 source_file,
             )?;
-            env.declare(*symbol_id, Scheme::new(ty.clone(), vec![], vec![]))?;
+            env.declare(
+                **symbol_id,
+                Scheme::new(typed_expr.ty.clone(), vec![], vec![]),
+            )?;
 
-            placeholder_substitutions.insert(placeholder.clone(), ty.clone());
-            results.push((*symbol_id, ty))
+            placeholder_substitutions.insert(placeholder.clone(), typed_expr.ty.clone());
+            results.push((**symbol_id, typed_expr.ty.clone()))
         }
 
         env.replace_typed_exprs_values(&mut placeholder_substitutions);
@@ -594,32 +600,32 @@ impl<'a> TypeChecker<'a> {
     #[allow(clippy::type_complexity)]
     fn predeclare_lets(
         &mut self,
-        items: &[ExprID],
+        items: &'a [ParsedExpr],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
-    ) -> Result<Vec<(ExprID, SymbolID, TypeVarID)>, (ExprID, TypeError)> {
+    ) -> Result<Vec<(&'a Box<ParsedExpr>, &'a SymbolID, TypeVarID)>, (ExprID, TypeError)> {
         tracing::trace!("Predeclaring lets");
         let mut result = vec![];
 
-        for id in items {
-            let Some(Expr::Assignment(lhs, _)) = source_file.get(id).cloned() else {
+        for parsed_expr in items {
+            let crate::parsed_expr::Expr::Assignment(lhs, _) = &parsed_expr.expr else {
                 continue;
             };
 
-            let Some(Expr::Let(Name::Resolved(symbol_id, name_str), _)) = source_file.get(&lhs)
+            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _) = &lhs.expr
             else {
                 continue;
             };
 
             let ref placeholder @ Ty::TypeVar(ref type_var) =
-                env.placeholder(id, format!("predecl[{name_str}]"), symbol_id, vec![])
+                env.placeholder(&lhs.id, format!("predecl[{name_str}]"), symbol_id, vec![])
             else {
                 unreachable!()
             };
 
             let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
-            env.declare(*symbol_id, scheme).map_err(|e| (*id, e))?;
-            result.push((*id, *symbol_id, type_var.clone()));
+            env.declare(*symbol_id, scheme).map_err(|e| (lhs.id, e))?;
+            result.push((lhs, symbol_id, type_var.clone()));
         }
 
         Ok(result)
@@ -627,7 +633,7 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_lets(
         &mut self,
-        let_ids: &[(ExprID, SymbolID, TypeVarID)],
+        let_ids: &[(&'a Box<ParsedExpr>, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
         source_file: &mut SourceFile<NameResolved>,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
@@ -637,10 +643,10 @@ impl<'a> TypeChecker<'a> {
         let mut results = vec![];
 
         for (id, symbol, type_var) in let_ids {
-            let ty = self.infer_node(id, env, &None, source_file)?;
-            placeholder_substitutions.insert(type_var.clone(), ty.clone());
-            results.push((*symbol, ty.clone()));
-            env.declare(*symbol, Scheme::new(ty, vec![], vec![]))?;
+            let typed_expr = self.infer_node(id, env, &None, source_file)?;
+            placeholder_substitutions.insert(type_var.clone(), typed_expr.ty.clone());
+            results.push((**symbol, typed_expr.ty.clone()));
+            env.declare(**symbol, Scheme::new(typed_expr.ty.clone(), vec![], vec![]))?;
         }
 
         env.replace_constraint_values(&mut placeholder_substitutions);
@@ -648,47 +654,45 @@ impl<'a> TypeChecker<'a> {
         Ok(results)
     }
 
-    fn predeclarable_type(&self, expr: &Expr) -> Option<PredeclarationExprIDs> {
-        if let Expr::Struct {
+    fn predeclarable_type(parsed_expr: &'a ParsedExpr) -> Option<PredeclarationExprIDs> {
+        let expr = &parsed_expr.expr;
+
+        if let crate::parsed_expr::Expr::Struct {
             name,
             generics,
             conformances,
             body,
         }
-        | Expr::Extend {
+        | crate::parsed_expr::Expr::Extend {
             name,
             generics,
             conformances,
             body,
-        } = expr.clone()
+        } = expr
         {
-            if let Name::Resolved(sym, _) = name
+            let kind = if let Name::Resolved(sym, _) = name
                 && builtin_type(&sym).is_some()
             {
-                return Some(PredeclarationExprIDs {
-                    name,
-                    generics,
-                    conformances,
-                    body,
-                    kind: PredeclarationKind::Builtin(sym),
-                });
+                PredeclarationKind::Builtin(*sym)
             } else {
-                return Some(PredeclarationExprIDs {
-                    name,
-                    generics,
-                    conformances,
-                    body,
-                    kind: PredeclarationKind::Struct,
-                });
-            }
+                PredeclarationKind::Struct
+            };
+
+            return Some(PredeclarationExprIDs {
+                name,
+                generics,
+                conformances,
+                body,
+                kind,
+            });
         }
 
-        if let Expr::ProtocolDecl {
+        if let crate::parsed_expr::Expr::ProtocolDecl {
             name,
             associated_types: generics,
             body,
             conformances,
-        } = expr.clone()
+        } = expr
         {
             return Some(PredeclarationExprIDs {
                 name,
@@ -699,12 +703,12 @@ impl<'a> TypeChecker<'a> {
             });
         }
 
-        if let Expr::EnumDecl {
+        if let crate::parsed_expr::Expr::EnumDecl {
             name,
             generics,
             conformances,
             body,
-        } = expr.clone()
+        } = expr
         {
             return Some(PredeclarationExprIDs {
                 name,

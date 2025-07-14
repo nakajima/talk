@@ -162,7 +162,8 @@ impl<'a> Higlighter<'a> {
     fn tokens_from_expr(&self, expr: &ParsedExpr) -> Vec<HighlightToken> {
         let mut result = vec![];
 
-        let Some(meta) = self.source_file.meta.get(&expr.id) else {
+        let meta = self.source_file.meta.borrow();
+        let Some(meta) = meta.get(&expr.id) else {
             return vec![];
         };
 
@@ -262,7 +263,8 @@ impl<'a> Higlighter<'a> {
                 conformances,
                 ..
             } => {
-                if let Some(meta) = self.source_file.meta.get(&expr.id) {
+                let meta = self.source_file.meta.borrow();
+                if let Some(meta) = meta.get(&expr.id) {
                     result.extend(
                         meta.identifiers
                             .iter()
@@ -339,7 +341,8 @@ impl<'a> Higlighter<'a> {
                 result.extend(self.tokens_from_exprs(&items))
             }
             Expr::CallArg { value, .. } => {
-                if let Some(meta) = self.source_file.meta.get(&expr.id) {
+                let meta = self.source_file.meta.borrow();
+                if let Some(meta) = meta.get(&expr.id) {
                     result.extend(
                         meta.identifiers
                             .iter()

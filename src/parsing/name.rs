@@ -8,6 +8,9 @@ pub enum Name {
     SelfType,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ResolvedName(pub SymbolID, pub String);
+
 impl Name {
     pub fn mangled(&self, _ty: &Ty) -> String {
         match self {
