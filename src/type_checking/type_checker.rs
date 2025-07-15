@@ -320,6 +320,7 @@ impl<'a> TypeChecker<'a> {
                 body,
                 ret,
                 env,
+                None,
             ),
             crate::parsed_expr::Expr::Let(name, rhs) => {
                 self.infer_let(parsed_expr.id, env, name, rhs, expected)
@@ -418,7 +419,7 @@ impl<'a> TypeChecker<'a> {
                 })
             }
             crate::parsed_expr::Expr::Init(Some(struct_id), func_id) => {
-                self.infer_init(parsed_expr.id, struct_id, func_id, expected, env)
+                self.infer_init(parsed_expr.id, struct_id, func_id, env)
             }
             crate::parsed_expr::Expr::Property {
                 name,
@@ -670,22 +671,54 @@ impl<'a> TypeChecker<'a> {
         })
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env, expected,))]
+    #[tracing::instrument(level = "DEBUG", skip(self, env,))]
     fn infer_init(
         &mut self,
         id: ExprID,
         struct_id: &SymbolID,
-        func_id: &ParsedExpr,
-        expected: &Option<Ty>,
+        func_expr: &ParsedExpr,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let inferred = self.infer_node(func_id, env, expected)?;
-        let params = match inferred.ty.clone() {
-            Ty::Func(params, _, _) => params,
+        let scheme = env.lookup_symbol(struct_id)?.clone();
+        let overridden_ret = env.instantiate(&scheme);
+
+        let ParsedExpr {
+            id: func_id,
+            expr:
+                parsed_expr::Expr::Func {
+                    name,
+                    generics,
+                    params,
+                    body,
+                    ret,
+                    captures,
+                },
+        } = func_expr
+        else {
+            return Err(TypeError::Unknown(format!(
+                "Did not get func for init: {func_expr:?}"
+            )));
+        };
+
+        // TODO: Add a test to make sure ret isn't set (it should never be for inits)
+        let inferred = self.infer_func(
+            *func_id,
+            name,
+            generics,
+            params,
+            captures,
+            body,
+            ret,
+            env,
+            Some(&overridden_ret),
+        )?;
+
+        let params = match &inferred.ty {
+            Ty::Func(params, _, _) => params.clone(),
             Ty::Closure {
                 func: box Ty::Func(params, _, _),
                 ..
-            } => params,
+            } => params.clone(),
             _ => {
                 return Err(TypeError::Unknown(format!(
                     "Did not get init func, got: {inferred:?}"
@@ -695,7 +728,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            expr: crate::typed_expr::Expr::Init(*struct_id, inferred.into()),
+            expr: typed_expr::Expr::Init(*struct_id, inferred.clone().into()),
             ty: Ty::Init(*struct_id, params.clone()),
         })
     }
@@ -1239,6 +1272,7 @@ impl<'a> TypeChecker<'a> {
         body: &ParsedExpr,
         ret: &Option<Box<ParsedExpr>>,
         env: &mut Environment,
+        override_ret: Option<&Ty>,
     ) -> Result<TypedExpr, TypeError> {
         env.start_scope();
 
@@ -1296,7 +1330,7 @@ impl<'a> TypeChecker<'a> {
 
         let func_ty = Ty::Func(
             param_vars.iter().map(|p| p.ty.clone()).collect(),
-            Box::new(ret_ty.ty.clone()),
+            Box::new(override_ret.cloned().unwrap_or(ret_ty.ty.clone())),
             inferred_generics.iter().map(|p| p.ty.clone()).collect(),
         );
         let inferred_ty = if captures.is_empty() {
@@ -1393,13 +1427,6 @@ impl<'a> TypeChecker<'a> {
             }
             Name::Resolved(symbol_id, _) => {
                 let scheme = env.lookup_symbol(symbol_id)?.clone();
-
-                // If the symbol refers to a generic type parameter that is already represented
-                // by a canonical / placeholder type-variable, we should NOT create a fresh
-                // instantiation every time it is referenced inside the same scope. Doing so
-                // would break the expected equality between occurrences (e.g. the return type
-                // of `fizz<T>` must be the same `T` that appears in its parameter list).
-                // Instead, we use the scheme's own type directly.
 
                 match scheme.ty() {
                     Ty::TypeVar(ref tv)

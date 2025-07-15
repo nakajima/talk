@@ -1,6 +1,4 @@
-use crate::{
-    NameResolved, SourceFile, SymbolTable, environment::Environment,
-};
+use crate::{NameResolved, SourceFile, SymbolTable, environment::Environment};
 
 pub fn synthesize_inits(
     source_file: &mut SourceFile<NameResolved>,

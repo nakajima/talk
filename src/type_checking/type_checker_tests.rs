@@ -35,7 +35,11 @@ mod tests {
                 Expr::Call {
                     callee: any_typed!(
                         Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+                        Ty::Func(
+                            vec![Ty::Int],
+                            Ty::Struct(SymbolID::typed(1), vec![]).into(),
+                            vec![]
+                        )
                     )
                     .into(),
                     type_args: vec![],
@@ -414,26 +418,32 @@ mod tests {
         };
         assert_eq!(inner_params.len(), 1);
 
-        let inner_id = match inner_params[0].clone() {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
-            other => panic!("unexpected inner param type: {other:?}"),
+        let Ty::TypeVar(TypeVarID {
+            id: inner_id,
+            kind: TypeVarKind::FuncParam(_),
+            ..
+        }) = inner_params[0]
+        else {
+            panic!("didn't get innerid: {:?}", inner_params[0]);
         };
 
-        let g_arg_id = match g_args[0].clone() {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
-            other => panic!("unexpected g arg type: {other:?}"),
+        let Ty::TypeVar(TypeVarID { id: g_arg, .. }) = g_args[0] else {
+            panic!("didn't get arg: {:?}", g_args[0]);
         };
 
-        assert_eq!(inner_id, g_arg_id);
+        assert_eq!(inner_id, g_arg);
 
-        let inner_ret = match *inner_ret {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
-            other => panic!("didn't get inner_ret: {other:?}"),
+        let Ty::TypeVar(TypeVarID {
+            id: inner_ret,
+            kind: TypeVarKind::CallReturn,
+            ..
+        }) = *inner_ret
+        else {
+            panic!("didn't get inner_ret: {inner_ret:?}");
         };
 
-        let f_ret = match *f_ret {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
-            other => panic!("didn't get f_ret: {other:?}"),
+        let Ty::TypeVar(TypeVarID { id: f_ret, .. }) = *f_ret else {
+            panic!("didn't get f_ret: {f_ret:?}");
         };
 
         assert_eq!(inner_ret, f_ret); // inner returns C
