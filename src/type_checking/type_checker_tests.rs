@@ -665,12 +665,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(person_local.name, "person");
-        let def = person_local.definition.as_ref().expect("didn't get definition");
+        let def = person_local
+            .definition
+            .as_ref()
+            .expect("didn't get definition");
         let sym = def.sym.expect("didn't get definition symbol");
-        assert_eq!(
-            sym,
-            *person_struct
-        );
+        assert_eq!(sym, *person_struct);
         assert_eq!(
             checker.type_for(checker.root_ids()[1]).unwrap(),
             Ty::Struct(*person_struct, vec![])
@@ -1951,7 +1951,7 @@ mod operator_tests {
                             Expr::Binary(
                                 any_typed!(
                                     Expr::Variable(ResolvedName(
-                                        SymbolID::typed(123),
+                                        SymbolID::typed(2),
                                         "x".to_string()
                                     )),
                                     Ty::Int

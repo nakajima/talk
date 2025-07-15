@@ -1,3 +1,4 @@
+use derive_visitor::DriveMut;
 use tracing::trace_span;
 
 use crate::{
@@ -5,34 +6,36 @@ use crate::{
     substitutions::Substitutions, token_kind::TokenKind, ty::Ty,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum Pattern {
-    LiteralInt(String),
-    LiteralFloat(String),
+    LiteralInt(#[drive(skip)] String),
+    LiteralFloat(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
 
-    Bind(ResolvedName),
+    Bind(#[drive(skip)] ResolvedName),
 
     Wildcard,
 
     Variant {
+        #[drive(skip)]
         enum_name: Option<ResolvedName>,
+        #[drive(skip)]
         variant_name: String,
         fields: Vec<TypedExpr>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DriveMut)]
 pub enum Expr {
     LiteralArray(Vec<TypedExpr>),
-    LiteralInt(String),
-    LiteralFloat(String),
+    LiteralInt(#[drive(skip)] String),
+    LiteralFloat(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
-    LiteralString(String),
-    Unary(TokenKind, Box<TypedExpr>),
-    Binary(Box<TypedExpr>, TokenKind, Box<TypedExpr>),
+    LiteralString(#[drive(skip)] String),
+    Unary(#[drive(skip)] TokenKind, Box<TypedExpr>),
+    Binary(Box<TypedExpr>, #[drive(skip)] TokenKind, Box<TypedExpr>),
     Tuple(Vec<TypedExpr>),
     Block(Vec<TypedExpr>),
     Call {
@@ -44,12 +47,14 @@ pub enum Expr {
     Return(Option<Box<TypedExpr>>),
     Break,
     Extend {
+        #[drive(skip)]
         name: ResolvedName,
         generics: Vec<TypedExpr>,
         conformances: Vec<TypedExpr>,
         body: Box<TypedExpr>,
     },
     Struct {
+        #[drive(skip)]
         name: ResolvedName,
         generics: Vec<TypedExpr>,
         conformances: Vec<TypedExpr>,
@@ -57,6 +62,7 @@ pub enum Expr {
     },
 
     Property {
+        #[drive(skip)]
         name: ResolvedName,
         type_repr: Option<Box<TypedExpr>>,
         default_value: Option<Box<TypedExpr>>,
@@ -64,41 +70,49 @@ pub enum Expr {
 
     // A type annotation
     TypeRepr {
+        #[drive(skip)]
         name: ResolvedName,
         generics: Vec<TypedExpr>,
         conformances: Vec<TypedExpr>,
+        #[drive(skip)]
         introduces_type: bool,
     },
 
-    FuncTypeRepr(Vec<TypedExpr>, Box<TypedExpr>, bool),
+    FuncTypeRepr(Vec<TypedExpr>, Box<TypedExpr>, #[drive(skip)] bool),
 
-    TupleTypeRepr(Vec<TypedExpr>, bool),
+    TupleTypeRepr(Vec<TypedExpr>, #[drive(skip)] bool),
 
     // A dot thing
-    Member(Option<Box<TypedExpr>> /* receiver */, String),
+    Member(
+        Option<Box<TypedExpr>>, /* receiver */
+        #[drive(skip)] String,
+    ),
 
-    Init(SymbolID, Box<TypedExpr> /* func */),
+    Init(#[drive(skip)] SymbolID, Box<TypedExpr> /* func */),
 
     // Function stuff
     Func {
+        #[drive(skip)]
         name: Option<ResolvedName>,
         generics: Vec<TypedExpr>,
         params: Vec<TypedExpr>,
         body: Box<TypedExpr>,
         ret: Option<Box<TypedExpr>>,
+        #[drive(skip)]
         captures: Vec<SymbolID>,
     },
 
-    Parameter(ResolvedName, Option<Box<TypedExpr>>),
+    Parameter(#[drive(skip)] ResolvedName, Option<Box<TypedExpr>>),
     CallArg {
+        #[drive(skip)]
         label: Option<ResolvedName>,
         value: Box<TypedExpr>,
     },
 
     // Variables
-    Let(ResolvedName, Option<Box<TypedExpr>>),
+    Let(#[drive(skip)] ResolvedName, Option<Box<TypedExpr>>),
     Assignment(Box<TypedExpr>, Box<TypedExpr>),
-    Variable(ResolvedName),
+    Variable(#[drive(skip)] ResolvedName),
 
     If(Box<TypedExpr>, Box<TypedExpr>, Option<Box<TypedExpr>>),
 
@@ -106,6 +120,7 @@ pub enum Expr {
 
     // Enum declaration
     EnumDecl {
+        #[drive(skip)]
         name: ResolvedName,
         conformances: Vec<TypedExpr>,
         generics: Vec<TypedExpr>,
@@ -113,7 +128,7 @@ pub enum Expr {
     },
 
     // Individual enum variant in declaration
-    EnumVariant(ResolvedName, Vec<TypedExpr>),
+    EnumVariant(#[drive(skip)] ResolvedName, Vec<TypedExpr>),
 
     // Match expression
     Match(Box<TypedExpr>, Vec<TypedExpr>),
@@ -122,9 +137,14 @@ pub enum Expr {
     MatchArm(Box<TypedExpr>, Box<TypedExpr>),
 
     // Patterns (for match arms)
-    PatternVariant(Option<ResolvedName>, ResolvedName, Vec<TypedExpr>),
+    PatternVariant(
+        #[drive(skip)] Option<ResolvedName>,
+        #[drive(skip)] ResolvedName,
+        Vec<TypedExpr>,
+    ),
 
     ProtocolDecl {
+        #[drive(skip)]
         name: ResolvedName,
         associated_types: Vec<TypedExpr>,
         body: Box<TypedExpr>,
@@ -132,6 +152,7 @@ pub enum Expr {
     },
 
     FuncSignature {
+        #[drive(skip)]
         name: ResolvedName,
         params: Vec<TypedExpr>,
         generics: Vec<TypedExpr>,
@@ -139,10 +160,12 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, DriveMut)]
 pub struct TypedExpr {
+    #[drive(skip)]
     pub id: ExprID,
     pub expr: Expr,
+    #[drive(skip)]
     pub ty: Ty,
 }
 
