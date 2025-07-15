@@ -69,49 +69,92 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            checked.roots()[1],
-            any_typed!(
-                Expr::Call {
-                    callee: any_typed!(
-                        Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::Struct(SymbolID::typed(1), vec![])
-                    )
-                    .into(),
-                    type_args: vec![],
-                    args: vec![any_typed!(
-                        Expr::CallArg {
-                            label: Some(ResolvedName(SymbolID::typed(2), "age".to_string())),
-                            value: any_typed!(Expr::LiteralInt("123".into()), Ty::Int).into()
-                        },
-                        Ty::Int
-                    )],
-                },
-                Ty::Int
-            )
+        let expected_int = any_typed!(
+            Expr::Call {
+                callee: any_typed!(
+                    Expr::Member(
+                        Some(
+                            any_typed!(
+                                Expr::Call {
+                                    callee: any_typed!(
+                                        Expr::Variable(ResolvedName(
+                                            SymbolID::ANY,
+                                            "Person".to_string()
+                                        )),
+                                        Ty::Struct(
+                                            SymbolID::ANY,
+                                            vec![Ty::TypeVar(TypeVarID::ANY)]
+                                        )
+                                    )
+                                    .into(),
+                                    type_args: vec![],
+                                    args: vec![]
+                                },
+                                Ty::Struct(SymbolID::ANY, vec![Ty::Int])
+                            )
+                            .into()
+                        ),
+                        "foo".to_string()
+                    ),
+                    Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+                )
+                .into(),
+                args: vec![any_typed!(
+                    Expr::CallArg {
+                        label: None,
+                        value: any_typed!(Expr::LiteralInt("1".to_string()), Ty::Int).into()
+                    },
+                    Ty::Int
+                )],
+                type_args: vec![]
+            },
+            Ty::Int
         );
 
-        assert_eq!(
-            checked.roots()[2],
-            any_typed!(
-                Expr::Call {
-                    callee: any_typed!(
-                        Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::Struct(SymbolID::typed(1), vec![])
-                    )
-                    .into(),
-                    type_args: vec![],
-                    args: vec![any_typed!(
-                        Expr::CallArg {
-                            label: Some(ResolvedName(SymbolID::typed(2), "age".to_string())),
-                            value: any_typed!(Expr::LiteralInt("123".into()), Ty::Float).into()
-                        },
-                        Ty::Float
-                    )],
-                },
-                Ty::Float
-            )
+        let expected_float = any_typed!(
+            Expr::Call {
+                callee: any_typed!(
+                    Expr::Member(
+                        Some(
+                            any_typed!(
+                                Expr::Call {
+                                    callee: any_typed!(
+                                        Expr::Variable(ResolvedName(
+                                            SymbolID::ANY,
+                                            "Person".to_string()
+                                        )),
+                                        Ty::Struct(
+                                            SymbolID::ANY,
+                                            vec![Ty::TypeVar(TypeVarID::ANY)]
+                                        )
+                                    )
+                                    .into(),
+                                    type_args: vec![],
+                                    args: vec![]
+                                },
+                                Ty::Struct(SymbolID::ANY, vec![Ty::Float])
+                            )
+                            .into()
+                        ),
+                        "foo".to_string()
+                    ),
+                    Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
+                )
+                .into(),
+                args: vec![any_typed!(
+                    Expr::CallArg {
+                        label: None,
+                        value: any_typed!(Expr::LiteralFloat("1.23".to_string()), Ty::Float).into()
+                    },
+                    Ty::Float
+                )],
+                type_args: vec![]
+            },
+            Ty::Float
         );
+
+        assert_eq_diff!(checked.roots()[1], expected_int);
+        assert_eq_diff!(checked.roots()[2], expected_float);
     }
 
     #[test]
@@ -1395,7 +1438,7 @@ mod tests {
         assert!(
             matches!(
                 checked.diagnostics()[0].kind,
-                DiagnosticKind::Typing(_, TypeError::UnexpectedType(_, _))
+                DiagnosticKind::Typing(_, TypeError::Mismatch(_, _))
             ),
             "{:?}",
             checked.diagnostics()

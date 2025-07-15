@@ -476,4 +476,12 @@ impl TypedExpr {
 
         None
     }
+
+    pub fn optional(&self) -> TypedExpr {
+        TypedExpr {
+            id: self.id,
+            expr: self.expr.clone(),
+            ty: self.ty.optional(),
+        }
+    }
 }

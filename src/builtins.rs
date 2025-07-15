@@ -443,7 +443,6 @@ mod tests {
 mod optional_tests {
     use crate::{
         any_expr,
-        expr_id::ExprID,
         parsed_expr::{self, ParsedExpr},
         parser::parse,
     };

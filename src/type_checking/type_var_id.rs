@@ -6,6 +6,18 @@ pub struct TypeVarID {
     pub kind: TypeVarKind,
 }
 
+#[cfg(test)]
+impl PartialEq for TypeVarID {
+    fn eq(&self, other: &Self) -> bool {
+        if other.id == u32::MAX {
+            true
+        } else {
+            self.id == other.id
+        }
+    }
+}
+
+#[cfg(not(test))]
 impl PartialEq for TypeVarID {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -21,6 +33,12 @@ impl std::hash::Hash for TypeVarID {
 }
 
 impl TypeVarID {
+    #[cfg(test)]
+    pub const ANY: TypeVarID = TypeVarID {
+        id: u32::MAX,
+        kind: TypeVarKind::Blank,
+    };
+
     pub fn new(id: u32, kind: TypeVarKind) -> Self {
         Self { id, kind }
     }

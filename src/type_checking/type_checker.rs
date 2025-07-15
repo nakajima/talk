@@ -252,8 +252,13 @@ impl<'a> TypeChecker<'a> {
                     &alternative.as_ref().map(|r| &**r),
                     env,
                 );
+
                 if let Ok(ty) = &ty {
-                    checked_expected(expected, ty.ty.clone())?;
+                    env.constrain(Constraint::Equality(
+                        parsed_expr.id,
+                        ty.ty.clone(),
+                        Ty::Bool,
+                    ));
                 }
 
                 ty
@@ -912,20 +917,18 @@ impl<'a> TypeChecker<'a> {
                 consequence.ty.clone(),
                 alternative.ty.clone(),
             ));
-            Some(consequence.clone())
+            consequence.clone()
         } else {
-            // TODO
-            // consequence.optional()
-            None
+            consequence.optional()
         };
 
         Ok(TypedExpr {
             id,
-            ty: consequence.ty.clone(),
+            ty: alt.ty.clone(),
             expr: typed_expr::Expr::If(
                 Box::new(condition),
                 Box::new(consequence),
-                alt.map(Box::new),
+                Some(Box::new(alt)),
             ),
         })
     }
