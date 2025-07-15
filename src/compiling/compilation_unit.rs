@@ -168,14 +168,13 @@ impl CompilationUnit<Parsed> {
                 self.session.clone(),
                 file.path.clone(),
             );
+            let resolved = resolver.resolve(file, symbol_table);
 
-            if let Ok(resolved) = resolver.resolve(file, symbol_table) {
-                for (name, symbol) in resolver.scopes[0].clone().into_iter() {
-                    global_scope.insert(name, symbol);
-                }
-
-                files.push(resolved);
+            for (name, symbol) in resolver.scopes[0].clone().into_iter() {
+                global_scope.insert(name, symbol);
             }
+
+            files.push(resolved);
         }
 
         CompilationUnit {

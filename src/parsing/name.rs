@@ -38,10 +38,13 @@ impl ResolvedName {
 
 impl Name {
     pub fn resolved(&self) -> Result<ResolvedName, TypeError> {
-        if let Name::Resolved(symbol_id, name_str) = self {
-            Ok(ResolvedName(*symbol_id, name_str.clone()))
-        } else {
-            Err(TypeError::Unresolved(format!("{self:?} is unresolved")))
+        match self {
+            Name::Raw(_) => Err(TypeError::Unresolved(format!("{self:?} is unresolved"))),
+            Name::Resolved(symbol_id, name_str) => Ok(ResolvedName(*symbol_id, name_str.clone())),
+            Name::_Self(symbol_id) => Ok(ResolvedName(*symbol_id, "self".to_string())),
+            Name::SelfType => Err(TypeError::Unresolved(format!(
+                "Name::SelfType {self:?} is unresolved"
+            ))),
         }
     }
 

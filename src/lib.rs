@@ -4,7 +4,7 @@
 #![feature(iter_advance_by)]
 #![feature(if_let_guard)]
 #![feature(hash_set_entry)]
-#![feature(slice_pattern)]
+#![feature(stmt_expr_attributes)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![cfg_attr(not(test), warn(clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::panic))]

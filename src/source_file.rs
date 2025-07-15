@@ -90,9 +90,12 @@ pub struct SourceFile<P: Phase = Parsed> {
 impl SourceFile {
     pub fn new(path: PathBuf) -> Self {
         Self {
-            path,
+            path: path.clone(),
             roots: vec![],
-            meta: Default::default(),
+            meta: Rc::new(RefCell::new(ExprMetaStorage {
+                path,
+                ..Default::default()
+            })),
             phase_data: Parsed,
         }
     }

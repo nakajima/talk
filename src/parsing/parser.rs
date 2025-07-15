@@ -15,11 +15,23 @@ use crate::{
 use super::{expr::ExprMeta, name::Name, precedence::Precedence};
 
 #[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Default, Debug, Clone, Copy, Hash, Eq)]
+#[derive(Default, Clone, Copy, Hash, Eq)]
 pub struct ExprID(pub i32);
 impl ExprID {
     #[cfg(test)]
     pub const ANY: ExprID = ExprID(i32::MIN);
+}
+
+impl std::fmt::Debug for ExprID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == i32::MIN {
+            write!(f, "ExprID(ANY)")?;
+        } else {
+            write!(f, "ExprID({})", self.0)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl From<i32> for ExprID {

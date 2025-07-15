@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{Phase, SourceFile, parsed_expr::ParsedExpr, parser::ExprID, span::Span};
 
-#[derive(Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Default, Copy, Clone, Eq, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
 
 impl std::fmt::Debug for SymbolID {
@@ -11,7 +11,26 @@ impl std::fmt::Debug for SymbolID {
     }
 }
 
+impl std::hash::Hash for SymbolID {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl PartialEq for SymbolID {
+    fn eq(&self, other: &Self) -> bool {
+        if other.0 == i32::MIN {
+            true
+        } else {
+            other.0 == self.0
+        }
+    }
+}
+
 impl SymbolID {
+    #[cfg(test)]
+    pub const ANY: SymbolID = SymbolID(i32::MIN);
+
     pub const INT: SymbolID = SymbolID(-1);
     pub const FLOAT: SymbolID = SymbolID(-2);
     pub const BOOL: SymbolID = SymbolID(-3);

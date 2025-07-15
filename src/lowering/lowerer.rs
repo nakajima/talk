@@ -732,7 +732,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_array(&mut self, typed_expr: &TypedExpr, items: &[TypedExpr]) -> Option<Register> {
-        let Ty::Struct(SymbolID::ARRAY, els) = &typed_expr.ty else {
+        let Ty::Struct(sym, els) = &typed_expr.ty else {
             self.push_err("Invalid array type", typed_expr.id);
             return None;
         };

@@ -31,6 +31,12 @@ pub enum NameResolverError {
     Redeclaration(String, SymbolInfo),
 }
 
+struct CurrentFunction {
+    pub name: String,
+    pub depth: usize,
+    pub captures: Vec<SymbolID>,
+}
+
 // Just to make sure we're always ending scopes we started
 struct ScopeTok;
 
@@ -54,7 +60,7 @@ pub struct NameResolver {
     type_symbol_stack: Vec<SymbolID>,
 
     // For resolving captures
-    func_stack: Vec<(ExprID /* func expr id */, usize /* scope depth */)>,
+    func_stack: Vec<CurrentFunction>,
 
     scope_tree_ids: Vec<ScopeId>,
     scope_tree: ScopeTree,
@@ -84,7 +90,7 @@ impl NameResolver {
         &mut self,
         mut source_file: SourceFile,
         symbol_table: &mut SymbolTable,
-    ) -> Result<SourceFile<NameResolved>, NameResolverError> {
+    ) -> SourceFile<NameResolved> {
         // Create the root scope for the file
         #[allow(clippy::unwrap_used)]
         if !source_file.roots().is_empty()
@@ -113,8 +119,18 @@ impl NameResolver {
         }
 
         let meta = source_file.meta.clone();
-        self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table)?;
-        Ok(source_file.to_resolved(self.scope_tree.clone()))
+        if let Err(err) = self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table)
+        {
+            tracing::error!("Error resolving: {err:?}");
+            if let Ok(mut session) = self.session.lock() {
+                session.add_diagnostic(Diagnostic::resolve(
+                    self.path.clone(),
+                    Default::default(),
+                    err,
+                ));
+            }
+        };
+        source_file.to_resolved(self.scope_tree.clone())
     }
 
     #[tracing::instrument(skip(self, symbol_table))]
@@ -205,14 +221,17 @@ impl NameResolver {
                 _ => return Ok(parsed_expr.clone()),
             },
             Expr::Break => (),
-            Expr::Init(_, func_id) => {
+            Expr::Init(initializes_id, func_id) => {
                 let Some(symbol_id) = self.type_symbol_stack.last().cloned() else {
                     tracing::error!("no type found for initializer");
-                    return Err(NameResolverError::InvalidSelf);
+                    return Err(NameResolverError::Unknown(
+                        "No type found for initializer".to_string(),
+                    ));
                 };
 
                 symbol_table.add_initializer(symbol_id, parsed_expr.id);
                 *func_id = Box::new(self.resolve_node(func_id, meta, symbol_table)?);
+                *initializes_id = Some(symbol_id);
             }
             Expr::Property {
                 type_repr,
@@ -239,10 +258,8 @@ impl NameResolver {
                     *name = Name::Resolved(symbol_id, name_str.to_string());
                 }
             }
-            Expr::Return(rhs) => {
-                if let Some(rhs) = rhs {
-                    *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
-                }
+            Expr::Return(Some(rhs)) => {
+                *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
             }
             Expr::If(condi, conseq, alt) => {
                 *condi = Box::new(self.resolve_node(condi, meta, symbol_table)?);
@@ -259,10 +276,8 @@ impl NameResolver {
 
                 *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
             }
-            Expr::Member(receiver, _member) => {
-                if let Some(receiver) = receiver {
-                    *receiver = Box::new(self.resolve_node(receiver, meta, symbol_table)?);
-                }
+            Expr::Member(Some(receiver), _member) => {
+                *receiver = Box::new(self.resolve_node(receiver, meta, symbol_table)?);
             }
             Expr::Let(name, rhs) => {
                 if let Name::Raw(name_str) = name {
@@ -309,12 +324,12 @@ impl NameResolver {
                     meta.span(&parsed_expr.id)
                         .ok_or(NameResolverError::InvalidSpan)?,
                 );
-                self.hoist_funcs(items, meta, symbol_table);
+                self.hoist_funcs(items, meta, symbol_table)?;
                 *items = self.resolve_nodes(items, meta, symbol_table)?;
                 self.end_scope(tok);
             }
             Expr::Func { .. } => {
-                self.resolve_func(expr, &parsed_expr.id, meta, symbol_table);
+                self.resolve_func(expr, &parsed_expr.id, meta, symbol_table)?;
             }
             Expr::CallArg { value, .. } => {
                 *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
@@ -347,10 +362,12 @@ impl NameResolver {
                             );
                             Name::_Self(*last_symbol)
                         } else {
-                            return Err(NameResolverError::InvalidSelf);
+                            return Err(NameResolverError::Unknown(
+                                "No type found for self".to_string(),
+                            ));
                         }
                     } else {
-                        let Some((symbol_id, depth)) = self.lookup(&name_str) else {
+                        let Some((symbol_id, depth)) = self.lookup(name_str) else {
                             return Err(NameResolverError::UnresolvedName(name_str.to_string()));
                         };
 
@@ -364,21 +381,19 @@ impl NameResolver {
 
                         // TODO: Resolve captures when we're resolving a func?
                         // Check to see if this is a capture
-                        // if let Some((func_name, func_depth)) = self.func_stack.last()
-                        //     && &depth < func_depth
-                        //     && symbol_id.0 > 0
-                        // {
-                        //     #[allow(clippy::unwrap_used)]
-                        //     if func_name == name_str {
-                        //         tracing::trace!("the same: {func_name:?} <> {name_str:?}");
-                        //     } else {
-                        //         if !captures.contains(&symbol_id) {
-                        //             (*captures).push(symbol_id);
-                        //         }
+                        if let Some(current_function) = self.func_stack.last_mut()
+                            && depth < current_function.depth
+                            && symbol_id.0 > 0
+                        {
+                            if &current_function.name == name_str {
+                            } else {
+                                if !current_function.captures.contains(&symbol_id) {
+                                    current_function.captures.push(symbol_id);
+                                }
 
-                        //         symbol_table.mark_as_captured(&symbol_id);
-                        //     }
-                        // }
+                                symbol_table.mark_as_captured(&symbol_id);
+                            }
+                        }
 
                         Name::Resolved(symbol_id, name_str.to_string())
                     };
@@ -465,7 +480,9 @@ impl NameResolver {
             Expr::EnumVariant(name, values) => {
                 if let Name::Raw(name_str) = name {
                     let Some(type_sym) = self.type_symbol_stack.last() else {
-                        return Err(NameResolverError::InvalidSelf);
+                        return Err(NameResolverError::Unknown(
+                            "no type found for enum variant".to_string(),
+                        ));
                     };
                     let sym = self.declare(
                         name_str.clone(),
@@ -506,15 +523,15 @@ impl NameResolver {
                 generics,
                 ret,
             } => {
-                self.resolve_func(expr, &parsed_expr.id, meta, symbol_table);
+                self.resolve_func(expr, &parsed_expr.id, meta, symbol_table)?;
             }
             Expr::ProtocolDecl {
                 name,
                 associated_types,
                 conformances,
                 body,
-            } => match name {
-                Name::Raw(name_str) => {
+            } => {
+                if let Name::Raw(name_str) = name {
                     let symbol_id = self.declare(
                         name_str.clone(),
                         SymbolKind::Protocol,
@@ -529,8 +546,7 @@ impl NameResolver {
                     *body = self.resolve_node(body, meta, symbol_table)?.into();
                     self.type_symbol_stack.pop();
                 }
-                _ => return Err(NameResolverError::InvalidSelf),
-            },
+            }
             _ => (),
         }
 
@@ -546,36 +562,61 @@ impl NameResolver {
         meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
     ) -> Result<(), NameResolverError> {
-        let Expr::Func {
+        if let Expr::Func {
             name,
             generics,
             params,
             body,
             ret,
+            captures,
+        } = expr
+        {
+            if !self.type_symbol_stack.is_empty() && name.is_none() {
+                return Err(NameResolverError::MissingMethodName);
+            }
+
+            self.func_stack.push(CurrentFunction {
+                name: name
+                    .as_ref()
+                    .map(|n| n.name_str())
+                    .unwrap_or("<anon>".to_string()),
+                depth: self.scopes.len(),
+                captures: vec![],
+            });
+            let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
+
+            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+            *params = self.resolve_nodes(params, meta, symbol_table)?;
+            *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
+
+            if let Some(ret) = ret {
+                *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
+            }
+
+            self.end_scope(tok);
+            let func = self.func_stack.pop();
+
+            #[allow(clippy::unwrap_used)]
+            {
+                *captures = func.unwrap().captures;
+            }
+        }
+
+        if let Expr::FuncSignature {
+            generics,
+            params,
+            ret,
             ..
         } = expr
-        else {
-            return Err(NameResolverError::InvalidSelf);
-        };
+        {
+            let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
 
-        if !self.type_symbol_stack.is_empty() && name.is_none() {
-            return Err(NameResolverError::MissingMethodName);
-        }
-
-        self.func_stack.push((*expr_id, self.scopes.len()));
-        let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
-
-        *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-        *params = self.resolve_nodes(params, meta, symbol_table)?;
-
-        *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
-
-        if let Some(ret) = ret {
+            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+            *params = self.resolve_nodes(params, meta, symbol_table)?;
             *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
-        }
 
-        self.end_scope(tok);
-        self.func_stack.pop();
+            self.end_scope(tok);
+        }
 
         Ok(())
     }
@@ -589,7 +630,7 @@ impl NameResolver {
     ) -> Result<(), NameResolverError> {
         for parsed_expr in parsed_exprs {
             if let Expr::Func {
-                name: name,
+                name,
                 generics,
                 params,
                 ret,
@@ -614,7 +655,7 @@ impl NameResolver {
                 );
 
                 *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                *params = self.resolve_nodes(params, meta, symbol_table)?;
+                // *params = self.resolve_nodes(params, meta, symbol_table)?;
 
                 if let Some(ret) = ret {
                     *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
@@ -647,7 +688,7 @@ impl NameResolver {
                 );
 
                 *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                *params = self.resolve_nodes(params, meta, symbol_table)?;
+                // *params = self.resolve_nodes(params, meta, symbol_table)?;
                 *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
 
                 self.end_scope(tok);
@@ -675,16 +716,13 @@ impl NameResolver {
                 continue;
             };
 
-            let Name::Raw(name_str) = name else {
-                return Err(NameResolverError::InvalidSelf);
-            };
+            let name_str = name.name_str();
 
             if let Some((symbol_id, _)) = self.lookup(&name_str)
                 && let Some(info) = symbol_table.get(&symbol_id)
                 && let Some(this_info) = meta.get(&parsed_expr.id)
                 && let Some(existing_info) = meta.get(&info.expr_id)
                 && this_info != existing_info
-                && let Ok(session) = &mut self.session.lock()
             {
                 return Err(NameResolverError::Redeclaration(
                     name_str.clone(),
@@ -714,7 +752,9 @@ impl NameResolver {
 
             // Hoist properties
             let Expr::Block(body_parsed_exprs) = &mut body.expr else {
-                return Err(NameResolverError::InvalidSelf);
+                return Err(NameResolverError::Unknown(
+                    "Didn't get block for body".to_string(),
+                ));
             };
 
             // Get properties for the struct so we can synthesize stuff before
@@ -726,9 +766,7 @@ impl NameResolver {
                     default_value: val,
                 } = &mut body_expr.expr
                 {
-                    let Name::Raw(name_str) = name else {
-                        return Err(NameResolverError::InvalidSelf);
-                    };
+                    let name_str = name.name_str();
 
                     symbol_table.add_property(
                         struct_symbol,
@@ -752,7 +790,7 @@ impl NameResolver {
                         id,
                         expr:
                             Expr::Func {
-                                name,
+                                name: _,
                                 generics,
                                 params,
                                 body,
@@ -807,9 +845,7 @@ impl NameResolver {
                 continue;
             };
 
-            let Name::Raw(name_str) = name else {
-                return Err(NameResolverError::InvalidSelf);
-            };
+            let name_str = name.name_str();
 
             // Declare the enum type
             let enum_symbol = self.declare(
@@ -831,7 +867,7 @@ impl NameResolver {
 
             // Hoist variants
             self.type_symbol_stack.push(enum_symbol);
-            self.hoist_enum_members(body, meta, symbol_table);
+            self.hoist_enum_members(body, meta, symbol_table)?;
             self.type_symbol_stack.pop();
             self.end_scope(tok);
         }
@@ -924,7 +960,9 @@ impl NameResolver {
             *name = Name::Resolved(symbol_id, name_str.to_string());
 
             let Some(span) = meta.span(&parsed_expr.id) else {
-                return Err(NameResolverError::InvalidSelf);
+                return Err(NameResolverError::Unknown(format!(
+                    "No span for {parsed_expr:?}"
+                )));
             };
 
             let tok = self.start_scope(span);
@@ -1116,9 +1154,9 @@ mod tests {
     fn resolves_simple_variable_to_depth_0() {
         let tree = resolve("let hello = 1; hello");
         assert_eq!(
-            tree.roots()[0],
+            tree.roots()[1],
             any_expr!(Expr::Variable(Name::Resolved(
-                SymbolID::resolved(1),
+                SymbolID::ANY,
                 "hello".into()
             )))
         );
@@ -1134,11 +1172,11 @@ mod tests {
                 name: None,
                 generics: vec![],
                 params: vec![any_expr!(Expr::Parameter(
-                    Name::Resolved(SymbolID::resolved(1), "x".into()),
+                    Name::Resolved(SymbolID::ANY, "x".into()),
                     None
                 ))],
                 body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(
-                    Name::Resolved(SymbolID::resolved(1), "x".into())
+                    Name::Resolved(SymbolID::ANY, "x".into())
                 ))]))
                 .into(),
                 ret: None,
@@ -1158,11 +1196,11 @@ mod tests {
                 generics: vec![],
                 params: vec![
                     any_expr!(Expr::Parameter(
-                        Name::Resolved(SymbolID::resolved(1), "x".into()),
+                        Name::Resolved(SymbolID::ANY, "x".into()),
                         None
                     )),
                     any_expr!(Expr::Parameter(
-                        Name::Resolved(SymbolID::resolved(2), "y".into()),
+                        Name::Resolved(SymbolID::ANY, "y".into()),
                         None
                     )),
                 ],
@@ -1171,32 +1209,23 @@ mod tests {
                         name: None,
                         generics: vec![],
                         params: vec![any_expr!(Expr::Parameter(
-                            Name::Resolved(SymbolID::resolved(3), "x".into()),
+                            Name::Resolved(SymbolID::ANY, "x".into()),
                             None
                         ))],
                         body: any_expr!(Expr::Block(vec![
-                            any_expr!(Expr::Variable(Name::Resolved(
-                                SymbolID::resolved(3),
-                                "x".into()
-                            ))),
-                            any_expr!(Expr::Variable(Name::Resolved(
-                                SymbolID::resolved(2),
-                                "y".into()
-                            )))
+                            any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "x".into()))),
+                            any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "y".into())))
                         ]))
                         .into(),
                         ret: None,
-                        captures: vec![]
+                        captures: vec![SymbolID::resolved(2)]
                     }),
-                    any_expr!(Expr::Variable(Name::Resolved(
-                        SymbolID::resolved(1),
-                        "x".into()
-                    ))),
+                    any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "x".into()))),
                 ]))
                 .into(),
                 ret: None,
                 captures: vec![]
-            })
+            }),
         );
     }
 
@@ -1212,11 +1241,7 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(1), "a".into()),
-                    None
-                ))
-                .into(),
+                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "a".into()), None)).into(),
                 any_expr!(Expr::LiteralInt("1".into())).into()
             ))
         );
@@ -1224,11 +1249,7 @@ mod tests {
         assert_eq!(
             resolved.roots()[1],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(2), "b".into()),
-                    None
-                ))
-                .into(),
+                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "b".into()), None)).into(),
                 any_expr!(Expr::LiteralInt("2".into())).into()
             ))
         );
@@ -1236,11 +1257,7 @@ mod tests {
         assert_eq!(
             resolved.roots()[2],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(3), "c".into()),
-                    None
-                ))
-                .into(),
+                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "c".into()), None)).into(),
                 any_expr!(Expr::LiteralInt("3".into())).into()
             ))
         );
@@ -1248,18 +1265,9 @@ mod tests {
         assert_eq!(
             resolved.roots()[3],
             any_expr!(Expr::LiteralArray(vec![
-                any_expr!(Expr::Variable(Name::Resolved(
-                    SymbolID::resolved(1),
-                    "a".into()
-                ))),
-                any_expr!(Expr::Variable(Name::Resolved(
-                    SymbolID::resolved(2),
-                    "b".into()
-                ))),
-                any_expr!(Expr::Variable(Name::Resolved(
-                    SymbolID::resolved(3),
-                    "c".into()
-                ))),
+                any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "a".into()))),
+                any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "b".into()))),
+                any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "c".into()))),
             ]))
         );
     }
@@ -1302,11 +1310,7 @@ mod tests {
         assert_eq!(
             tree.roots()[0],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(1), "x".into()),
-                    None
-                ))
-                .into(),
+                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "x".into()), None)).into(),
                 any_expr!(Expr::LiteralInt("123".into())).into()
             ))
         );
@@ -1314,29 +1318,19 @@ mod tests {
         assert_eq!(
             tree.roots()[1],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(2), "y".into()),
-                    None
-                ))
-                .into(),
+                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "y".into()), None)).into(),
                 any_expr!(Expr::LiteralInt("345".into())).into()
             ))
         );
 
         assert_eq!(
             tree.roots()[2],
-            any_expr!(Expr::Variable(Name::Resolved(
-                SymbolID::resolved(1),
-                "x".into()
-            )))
+            any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "x".into())))
         );
 
         assert_eq!(
             tree.roots()[3],
-            any_expr!(Expr::Variable(Name::Resolved(
-                SymbolID::resolved(2),
-                "y".into()
-            )))
+            any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "y".into())))
         );
     }
 
@@ -1351,11 +1345,7 @@ mod tests {
         assert_eq!(
             tree.roots()[0],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(1), "x".into()),
-                    None
-                ))
-                .into(),
+                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "x".into()), None)).into(),
                 any_expr!(Expr::Member(
                     Some(
                         any_expr!(Expr::Variable(Name::Resolved(
@@ -1404,14 +1394,14 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::EnumDecl {
-                name: Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
+                name: Name::Resolved(SymbolID::ANY, "Fizz".into()),
                 body: any_expr!(Expr::Block(vec![
                     any_expr!(Expr::EnumVariant(
-                        Name::Resolved(SymbolID::resolved(2), "foo".into()),
+                        Name::Resolved(SymbolID::ANY, "foo".into()),
                         vec![]
                     )),
                     any_expr!(Expr::EnumVariant(
-                        Name::Resolved(SymbolID::resolved(3), "bar".into()),
+                        Name::Resolved(SymbolID::ANY, "bar".into()),
                         vec![]
                     )),
                 ]))
@@ -1437,11 +1427,22 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::EnumDecl {
-                name: Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
-                body: any_expr!(Expr::Block(vec![any_expr!(Expr::EnumVariant(
-                    Name::Resolved(SymbolID::resolved(2), "foo".into()),
-                    vec![any_expr!(Expr::LiteralInt("123".into())).into()]
-                ))]))
+                name: Name::Resolved(SymbolID::ANY, "Fizz".into()),
+                body: any_expr!(Expr::Block(vec![
+                    any_expr!(Expr::EnumVariant(
+                        Name::Resolved(SymbolID::ANY, "foo".into()),
+                        vec![any_expr!(Expr::TypeRepr {
+                            name: Name::Resolved(SymbolID::INT, "Int".to_string()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
+                        })]
+                    )),
+                    any_expr!(Expr::EnumVariant(
+                        Name::Resolved(SymbolID::ANY, "bar".into()),
+                        vec![]
+                    )),
+                ]))
                 .into(),
                 generics: vec![],
                 conformances: vec![],
@@ -1451,12 +1452,18 @@ mod tests {
         assert_eq!(
             resolved.roots()[1],
             any_expr!(Expr::Call {
-                callee: any_expr!(Expr::Variable(Name::Resolved(
-                    SymbolID::resolved(1),
-                    "Fizz".into()
-                )))
+                callee: any_expr!(Expr::Member(
+                    Some(
+                        any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "Fizz".into())))
+                            .into()
+                    ),
+                    "foo".to_string()
+                ))
                 .into(),
-                args: vec![any_expr!(Expr::LiteralInt("123".into()))],
+                args: vec![any_expr!(Expr::CallArg {
+                    label: None,
+                    value: any_expr!(Expr::LiteralInt("123".into())).into()
+                })],
                 type_args: vec![],
             })
         );
@@ -1477,13 +1484,13 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::EnumDecl {
-                name: Name::Resolved(SymbolID::resolved(1), "Fizz".into()),
+                name: Name::Resolved(SymbolID::ANY, "Fizz".into()),
                 body: any_expr!(Expr::Block(vec![any_expr!(Expr::Func {
-                    name: None,
+                    name: Some(Name::Resolved(SymbolID::ANY, "sup".to_string())),
                     generics: vec![],
                     params: vec![],
                     body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(Name::_Self(
-                        SymbolID::resolved(1)
+                        SymbolID::ANY
                     )))]))
                     .into(),
                     ret: None,
@@ -1533,7 +1540,7 @@ mod tests {
             resolved.roots()[0],
             any_expr!(Expr::Assignment(
                 any_expr!(Expr::Let(
-                    Name::Resolved(SymbolID::resolved(1), "count".into()),
+                    Name::Resolved(SymbolID::ANY, "count".into()),
                     None
                 ))
                 .into(),
@@ -1544,21 +1551,28 @@ mod tests {
         assert_eq!(
             resolved.roots()[1],
             any_expr!(Expr::Func {
-                name: None,
+                name: Some(Name::Resolved(SymbolID::ANY, "counter".to_string())),
                 generics: vec![],
                 params: vec![],
-                body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(
-                    Name::Resolved(SymbolID::resolved(1), "count".into())
-                ))]))
+                body: any_expr!(Expr::Block(vec![
+                    any_expr!(Expr::Variable(Name::Resolved(
+                        SymbolID::ANY,
+                        "count".into()
+                    ))),
+                    any_expr!(Expr::Variable(Name::Resolved(
+                        SymbolID::ANY,
+                        "count".into()
+                    )))
+                ]))
                 .into(),
                 ret: None,
-                captures: vec![SymbolID::resolved(1)]
+                captures: vec![SymbolID::ANY]
             })
         );
 
         assert!(
             symbol_table
-                .get(&SymbolID::resolved(1))
+                .get(&SymbolID::resolved(2))
                 .unwrap()
                 .is_captured
         );
@@ -1577,17 +1591,26 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Func {
-                name: None,
+                name: Some(Name::Resolved(SymbolID::ANY, "fizz".to_string())),
                 generics: vec![],
                 params: vec![],
                 body: any_expr!(Expr::Block(vec![any_expr!(Expr::Call {
                     callee: any_expr!(Expr::Variable(Name::Resolved(
-                        SymbolID::resolved(-5),
+                        SymbolID::ANY,
                         "__alloc".into()
                     )))
                     .into(),
-                    args: vec![any_expr!(Expr::LiteralInt("123".into()))],
-                    type_args: vec![],
+                    args: vec![any_expr!(Expr::CallArg {
+                        label: None,
+                        value: any_expr!(Expr::LiteralInt("123".into())).into(),
+                    })],
+
+                    type_args: vec![any_expr!(Expr::TypeRepr {
+                        name: Name::Resolved(SymbolID::INT, "Int".to_string()),
+                        generics: vec![],
+                        conformances: vec![],
+                        introduces_type: false
+                    })],
                 })]))
                 .into(),
                 ret: None,
@@ -1603,14 +1626,19 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Func {
-                name: None,
+                name: Some(Name::Resolved(SymbolID::ANY, "c".to_string())),
                 generics: vec![],
                 params: vec![],
                 body: any_expr!(Expr::Block(vec![])).into(),
                 ret: Some(
                     any_expr!(Expr::TypeRepr {
                         name: Name::Resolved(SymbolID::ARRAY, "Array".into()),
-                        generics: vec![],
+                        generics: vec![any_expr!(Expr::TypeRepr {
+                            name: Name::Resolved(SymbolID::INT, "Int".to_string()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
+                        })],
                         introduces_type: false,
                         conformances: vec![],
                     })
@@ -1627,7 +1655,7 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Struct {
-                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                name: Name::Resolved(SymbolID::ANY, "Person".into()),
                 body: any_expr!(Expr::Block(vec![])).into(),
                 generics: vec![],
                 conformances: vec![],
@@ -1648,9 +1676,9 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Struct {
-                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                name: Name::Resolved(SymbolID::ANY, "Person".into()),
                 body: any_expr!(Expr::Block(vec![any_expr!(Expr::Property {
-                    name: Name::Resolved(SymbolID::resolved(2), "age".into()),
+                    name: Name::Resolved(SymbolID::ANY, "age".into()),
                     type_repr: Some(
                         any_expr!(Expr::TypeRepr {
                             name: Name::Resolved(SymbolID::INT, "Int".into()),
@@ -1686,10 +1714,10 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Struct {
-                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                name: Name::Resolved(SymbolID::ANY, "Person".into()),
                 body: any_expr!(Expr::Block(vec![
                     any_expr!(Expr::Property {
-                        name: Name::Resolved(SymbolID::resolved(2), "age".into()),
+                        name: Name::Resolved(SymbolID::ANY, "age".into()),
                         type_repr: Some(
                             any_expr!(Expr::TypeRepr {
                                 name: Name::Resolved(SymbolID::INT, "Int".into()),
@@ -1702,12 +1730,12 @@ mod tests {
                         default_value: None,
                     }),
                     any_expr!(Expr::Init(
-                        Some(SymbolID::resolved(3)),
+                        Some(SymbolID::ANY),
                         any_expr!(Expr::Func {
-                            name: None,
+                            name: Some(Name::Resolved(SymbolID::ANY, "init".to_string())),
                             generics: vec![],
                             params: vec![any_expr!(Expr::Parameter(
-                                Name::Resolved(SymbolID::resolved(3), "age".into()),
+                                Name::Resolved(SymbolID::ANY, "age".into()),
                                 Some(
                                     any_expr!(Expr::TypeRepr {
                                         name: Name::Resolved(SymbolID::INT, "Int".into()),
@@ -1718,7 +1746,22 @@ mod tests {
                                     .into()
                                 ),
                             ))],
-                            body: any_expr!(Expr::Block(vec![])).into(),
+                            body: any_expr!(Expr::Block(vec![any_expr!(Expr::Assignment(
+                                any_expr!(Expr::Member(
+                                    Some(
+                                        any_expr!(Expr::Variable(Name::_Self(SymbolID::ANY)))
+                                            .into()
+                                    ),
+                                    "age".to_string()
+                                ))
+                                .into(),
+                                any_expr!(Expr::Variable(Name::Resolved(
+                                    SymbolID::ANY,
+                                    "age".to_string()
+                                )))
+                                .into()
+                            ))]))
+                            .into(),
                             ret: None,
                             captures: vec![],
                         })
@@ -1738,13 +1781,14 @@ mod tests {
             "
         struct Person {}
         extend Person: Printable {}
+        protocol Printable {}
         ",
         );
 
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Struct {
-                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                name: Name::Resolved(SymbolID::ANY, "Person".into()),
                 body: any_expr!(Expr::Block(vec![])).into(),
                 generics: vec![],
                 conformances: vec![],
@@ -1754,11 +1798,11 @@ mod tests {
         assert_eq!(
             resolved.roots()[1],
             any_expr!(Expr::Extend {
-                name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
+                name: Name::Resolved(SymbolID::ANY, "Person".into()),
                 body: any_expr!(Expr::Block(vec![])).into(),
                 generics: vec![],
                 conformances: vec![any_expr!(Expr::TypeRepr {
-                    name: Name::Resolved(SymbolID::resolved(2), "Printable".into()),
+                    name: Name::Resolved(SymbolID::ANY, "Printable".into()),
                     generics: vec![],
                     conformances: vec![],
                     introduces_type: false,
