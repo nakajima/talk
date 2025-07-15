@@ -1121,6 +1121,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_func_with_generic_param() {
+        let resolved = resolve("func c(a: Array<Int>) { a }");
+        let Expr::Func { params, .. } = &resolved.roots()[0].expr else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(1, params.len());
+    }
+
+    #[test]
     fn resolves_simple_variable_to_depth_0() {
         let tree = resolve("let hello = 1; hello");
         assert_eq!(

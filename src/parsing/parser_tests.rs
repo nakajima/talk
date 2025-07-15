@@ -406,6 +406,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_func_with_generic_param() {
+        let parsed = parse("func c(a: Array<Int>) { a }");
+        let Expr::Func { params, .. } = &parsed.roots()[0].expr else {
+            panic!("didn't get func");
+        };
+
+        assert_eq!(1, params.len());
+    }
+
+    #[test]
     fn parses_func_literal_with_newlines() {
         let parsed = parse(
             "func greet(a) {

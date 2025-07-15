@@ -1311,6 +1311,8 @@ impl<'a> TypeChecker<'a> {
             param_vars.push(param_ty);
         }
 
+        tracing::error!("Inferring params: {params:?}");
+
         let mut ret_ty =
             self.infer_node(body, env, &annotated_ret_ty.as_ref().map(|t| t.ty.clone()))?;
 

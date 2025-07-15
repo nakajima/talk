@@ -1276,6 +1276,15 @@ mod tests {
     #[test]
     fn checks_array_builtin() {
         let checked = check("func c(a: Array<Int>) { a }").unwrap();
+
+        let Expr::Func { params, .. } = &checked.roots()[0].expr else {
+            panic!("didn't get func");
+        };
+
+        println!("ARRAY PARAMS: {params:#?}");
+
+        assert_eq!(1, params.len());
+
         let root = checked.typed_expr(checked.root_ids()[0]).unwrap();
         assert_eq!(
             root.ty,
