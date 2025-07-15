@@ -54,7 +54,7 @@ pub struct NameResolver {
     type_symbol_stack: Vec<SymbolID>,
 
     // For resolving captures
-    func_stack: Vec<(String /* func expr id */, usize /* scope depth */)>,
+    func_stack: Vec<(ExprID /* func expr id */, usize /* scope depth */)>,
 
     scope_tree_ids: Vec<ScopeId>,
     scope_tree: ScopeTree,
@@ -562,12 +562,7 @@ impl NameResolver {
             return Err(NameResolverError::MissingMethodName);
         }
 
-        let Some(Name::Raw(name_str)) = name else {
-            return Err(NameResolverError::InvalidSelf);
-        };
-
-        self.func_stack
-            .push((name_str.to_string(), self.scopes.len()));
+        self.func_stack.push((*expr_id, self.scopes.len()));
         let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
 
         *generics = self.resolve_nodes(generics, meta, symbol_table)?;
@@ -750,9 +745,38 @@ impl NameResolver {
                     );
                     *name = Name::Resolved(property_symbol, name_str.clone());
                 }
-                if let Expr::Init(None, func_id) = &mut body_expr.expr {
-                    symbol_table.add_initializer(struct_symbol, func_id.id);
-                    *func_id = Box::new(self.resolve_node(func_id, meta, symbol_table)?);
+                if let Expr::Init(None, func) = &mut body_expr.expr {
+                    symbol_table.add_initializer(struct_symbol, func.id);
+
+                    let ParsedExpr {
+                        id,
+                        expr:
+                            Expr::Func {
+                                name,
+                                generics,
+                                params,
+                                body,
+                                ret,
+                                captures,
+                            },
+                    } = self.resolve_node(func, meta, symbol_table)?
+                    else {
+                        return Err(NameResolverError::Unknown(
+                            "Could not resolve init func".into(),
+                        ));
+                    };
+
+                    *func = Box::new(ParsedExpr {
+                        id,
+                        expr: Expr::Func {
+                            name: Some(Name::Resolved(struct_symbol, "init".into())),
+                            generics,
+                            params,
+                            body,
+                            ret,
+                            captures,
+                        },
+                    });
                 }
             }
 

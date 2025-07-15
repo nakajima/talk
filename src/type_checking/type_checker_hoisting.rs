@@ -1,10 +1,10 @@
 use tracing::info_span;
 
 use crate::{
-    NameResolved, SourceFile, SymbolID, builtin_type, builtin_type_def,
+    SymbolID, builtin_type, builtin_type_def,
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
-    name::{Name, ResolvedName},
+    name::Name,
     parsed_expr::ParsedExpr,
     parser::ExprID,
     substitutions::Substitutions,
@@ -62,9 +62,9 @@ impl<'a> TypeChecker<'a> {
 
         // The first pass goes through and finds all the named things that need to be predeclared and just defines
         // them with placeholder type variables.
-        let type_defs_with_placeholders = Self::predeclare_types(&items, env).map_err(|e| e.1)?;
-        let lets_results = self.predeclare_lets(&items, env).map_err(|e| e.1)?;
-        let func_results = self.predeclare_functions(&items, env)?;
+        let type_defs_with_placeholders = Self::predeclare_types(items, env).map_err(|e| e.1)?;
+        let lets_results = self.predeclare_lets(items, env).map_err(|e| e.1)?;
+        let func_results = self.predeclare_functions(items, env)?;
 
         // Then go through and actually infer stuff
         self.infer_types(type_defs_with_placeholders, env)
@@ -191,7 +191,7 @@ impl<'a> TypeChecker<'a> {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_expr.id,
                             format!("predecl[{name_str}]"),
-                            &prop_id,
+                            prop_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -202,9 +202,9 @@ impl<'a> TypeChecker<'a> {
 
                         ty_placeholders.properties.push(RawProperty {
                             name: name_str.clone(),
-                            expr: &body_expr,
+                            expr: body_expr,
                             placeholder: type_var.clone(),
-                            default_value: &default_value,
+                            default_value,
                         });
                     }
                     crate::parsed_expr::Expr::Init(_, func_expr)
@@ -233,7 +233,7 @@ impl<'a> TypeChecker<'a> {
 
                         ty_placeholders.initializers.push(RawInitializer {
                             name: name.clone(),
-                            expr: &body_expr,
+                            expr: body_expr,
                             func_id: func_expr.id,
                             params,
                             placeholder: type_var.clone(),
@@ -242,7 +242,7 @@ impl<'a> TypeChecker<'a> {
                     crate::parsed_expr::Expr::EnumVariant(name, values) => {
                         ty_placeholders.variants.push(RawEnumVariant {
                             name: name.name_str(),
-                            expr: &body_expr,
+                            expr: body_expr,
                             values,
                         })
                     }
@@ -253,7 +253,7 @@ impl<'a> TypeChecker<'a> {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_expr.id,
                             format!("predecl[{name_str}]"),
-                            &func_id,
+                            func_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -264,7 +264,7 @@ impl<'a> TypeChecker<'a> {
 
                         ty_placeholders.methods.push(RawMethod {
                             name: name_str.clone(),
-                            expr: &body_expr,
+                            expr: body_expr,
                             placeholder: type_var.clone(),
                         });
                     }
@@ -275,7 +275,7 @@ impl<'a> TypeChecker<'a> {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                             &body_expr.id,
                             format!("predecl[{name_str}]"),
-                            &func_id,
+                            func_id,
                             vec![],
                         ) else {
                             unreachable!()
@@ -286,7 +286,7 @@ impl<'a> TypeChecker<'a> {
 
                         ty_placeholders.method_requirements.push(RawMethod {
                             name: name_str.clone(),
-                            expr: &body_expr,
+                            expr: body_expr,
                             placeholder: type_var.clone(),
                         });
                     }
@@ -314,7 +314,7 @@ impl<'a> TypeChecker<'a> {
                 .collect();
 
             let type_def =
-                env.lookup_type(&symbol_id)
+                env.lookup_type(symbol_id)
                     .cloned()
                     .unwrap_or_else(|| match expr_ids.kind {
                         PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
@@ -407,7 +407,7 @@ impl<'a> TypeChecker<'a> {
             let mut methods = vec![];
             for method in &placeholders.methods {
                 let typed_expr = self
-                    .infer_node(&method.expr, env, &None)
+                    .infer_node(method.expr, env, &None)
                     .map_err(|e| (method.expr.id, e))?;
                 methods.push(Method {
                     name: method.name.clone(),
@@ -424,7 +424,7 @@ impl<'a> TypeChecker<'a> {
                 let mut method_requirements = vec![];
                 for method in placeholders.method_requirements.iter() {
                     let typed_expr = self
-                        .infer_node(&method.expr, env, &None)
+                        .infer_node(method.expr, env, &None)
                         .map_err(|e| (method.expr.id, e))?;
                     method_requirements.push(Method {
                         name: method.name.clone(),
@@ -451,7 +451,7 @@ impl<'a> TypeChecker<'a> {
 
                 for initializer in placeholders.initializers.iter() {
                     let typed_expr = self
-                        .infer_node(&initializer.expr, env, &None)
+                        .infer_node(initializer.expr, env, &None)
                         .map_err(|e| (initializer.expr.id, e))?;
 
                     substitutions.insert(initializer.placeholder.clone(), typed_expr.ty.clone());
@@ -476,7 +476,7 @@ impl<'a> TypeChecker<'a> {
                 let mut variants = vec![];
                 for variant in placeholders.variants.iter() {
                     let typed_expr = self
-                        .infer_node(&variant.expr, env, &Some(Ty::Enum(def.symbol_id(), vec![])))
+                        .infer_node(variant.expr, env, &Some(Ty::Enum(def.symbol_id(), vec![])))
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
                         name: variant.name.clone(),

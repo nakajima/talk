@@ -577,6 +577,7 @@ impl<'a> TypeChecker<'a> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(level = "DEBUG", skip(self, env))]
     fn infer_enum_decl(
         &mut self,
@@ -589,15 +590,16 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let scheme = env.lookup_symbol(enum_id)?;
+        let ty = scheme.ty.clone();
 
         Ok(TypedExpr {
             id,
-            ty: scheme.ty.clone(),
+            ty: ty.clone(),
             expr: typed_expr::Expr::EnumDecl {
                 name: ResolvedName(*enum_id, name),
                 conformances: self.infer_nodes(conformances, env)?,
                 generics: self.infer_nodes(generics, env)?,
-                body: self.infer_node(body, env, &None)?.into(),
+                body: self.infer_node(body, env, &Some(ty))?.into(),
             },
         })
     }
@@ -612,13 +614,10 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let Some(Ty::Enum(enum_id, _)) = expected else {
-            unreachable!("should always be called with expected = Enum");
+            unreachable!("should always be called with expected = Enum, got: {expected:?}",);
         };
         let values = self.infer_nodes(values, env)?;
-        let ty = Ty::EnumVariant(
-            enum_id.clone(),
-            values.iter().map(|v| v.ty.clone()).collect(),
-        );
+        let ty = Ty::EnumVariant(*enum_id, values.iter().map(|v| v.ty.clone()).collect());
 
         Ok(TypedExpr {
             id,
