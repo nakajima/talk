@@ -6,6 +6,7 @@ use crate::{
     ty::Ty,
     type_defs::{TypeParams, protocol_def::Conformance},
     type_var_id::TypeVarID,
+    typed_expr::TypedExpr,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -13,11 +14,17 @@ pub struct Property {
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
+    pub has_default: bool,
 }
 
 impl Property {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
-        Self { name, expr_id, ty }
+    pub fn new(name: String, expr_id: ExprID, ty: Ty, has_default: bool) -> Self {
+        Self {
+            name,
+            expr_id,
+            ty,
+            has_default,
+        }
     }
 }
 

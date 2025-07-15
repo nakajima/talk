@@ -19,6 +19,7 @@ use crate::{
         },
     },
     type_var_id::{TypeVarID, TypeVarKind},
+    typed_expr::Expr,
 };
 
 #[derive(Default, Debug)]
@@ -386,6 +387,13 @@ impl<'a> TypeChecker<'a> {
                         name: property.name.clone(),
                         expr_id: property.expr.id,
                         ty: typed_expr.ty.clone(),
+                        has_default: matches!(
+                            typed_expr.expr,
+                            Expr::Property {
+                                default_value: Some(_),
+                                ..
+                            }
+                        ),
                     });
 
                     substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());

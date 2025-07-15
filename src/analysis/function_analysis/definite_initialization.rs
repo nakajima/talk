@@ -70,11 +70,10 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
         }
 
         let all_properties: HashSet<Property> = HashSet::from_iter(
-            self
-                .struct_def
+            self.struct_def
                 .properties
                 .iter()
-                .filter(|p| p.default_value.is_none())
+                .filter(|p| p.has_default)
                 .cloned(),
         );
         let mut props_initialized_on_all_paths: Option<HashSet<Property>> = None;

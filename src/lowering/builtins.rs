@@ -8,13 +8,13 @@ use crate::{
     },
     parser::ExprID,
     ty::Ty,
-    typed_expr::TypedExpr,
+    typed_expr::{Expr, TypedExpr},
 };
 
 pub fn lower_builtin(
     symbol_id: &SymbolID,
     typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
     lowerer: &mut Lowerer,
 ) -> Result<Option<Register>, IRError> {
     match symbol_id {
@@ -32,7 +32,7 @@ pub fn lower_builtin(
 fn lower_free(
     _lowerer: &mut Lowerer,
     _typed_callee: &TypedExpr,
-    _args: &[ExprID],
+    _args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     tracing::warn!("TODO: lower __free");
 
@@ -42,7 +42,7 @@ fn lower_free(
 fn lower_alloc(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
@@ -56,24 +56,16 @@ fn lower_alloc(
         )));
     }
 
-    let Some(Expr::CallArg { value: val, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
+    let Expr::CallArg { value: val, .. } = &args[0].expr else {
         return Err(IRError::Unknown(format!(
             "Did not get argument for __alloc, got: {:?}",
-            lowerer.source_file.get(&args[0])
+            &args[0]
         )));
     };
 
-    let Some(typed_expr) = lowerer.source_file.typed_expr(&val, lowerer.env) else {
+    if !matches!(val.ty, Ty::Int) {
         return Err(IRError::Unknown(format!(
-            "__alloc takes an Int, got {:?}",
-            lowerer.source_file.get(&val)
-        )));
-    };
-
-    if !matches!(typed_expr.ty, Ty::Int) {
-        return Err(IRError::Unknown(format!(
-            "__alloc takes an Int, got {:?}",
-            lowerer.source_file.get(&val)
+            "__alloc takes an Int, got {val:?}"
         )));
     }
 
@@ -91,7 +83,7 @@ fn lower_alloc(
 fn lower_realloc(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
@@ -99,18 +91,18 @@ fn lower_realloc(
         return Err(IRError::Unknown("Did not get __realloc func".to_string()));
     };
 
-    let Some(Expr::CallArg {
+    let Expr::CallArg {
         value: _old_pointer,
         ..
-    }) = lowerer.source_file.get(&args[0]).cloned()
+    } = &args[0].expr
     else {
         unreachable!("didn't get call arg for realloc")
     };
 
-    let Some(Expr::CallArg {
+    let Expr::CallArg {
         value: new_capacity,
         ..
-    }) = lowerer.source_file.get(&args[1]).cloned()
+    } = &args[1].expr
     else {
         unreachable!("didn't get call arg for realloc")
     };
@@ -130,7 +122,7 @@ fn lower_realloc(
 fn lower_print(
     lowerer: &mut Lowerer,
     _typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     if args.is_empty() {
         return Err(IRError::Unknown("No arg to print".to_string()));
@@ -141,14 +133,8 @@ fn lower_print(
         return Err(IRError::Unknown("Could not lower print arg".to_string()));
     };
 
-    let Some(typed_expr) = lowerer.env.typed_exprs.get(&args[0]) else {
-        return Err(IRError::Unknown(
-            "Could not figure out type of print arg".to_string(),
-        ));
-    };
-
     lowerer.push_instr(Instr::Print {
-        ty: typed_expr.ty.to_ir(lowerer),
+        ty: args[0].ty.to_ir(lowerer),
         val: reg.into(),
     });
 
@@ -158,13 +144,13 @@ fn lower_print(
 fn lower_store(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let Ty::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __store func".to_string()));
     };
 
-    let Some(Expr::CallArg { value: ptr, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
+    let Expr::CallArg { value: ptr, .. } = &args[0].expr else {
         return Err(IRError::Unknown("Didn't get __store pointer".into()));
     };
 
@@ -172,8 +158,7 @@ fn lower_store(
         return Err(IRError::Unknown("Didn't get __store pointer".into()));
     };
 
-    let Some(Expr::CallArg { value: offset, .. }) = lowerer.source_file.get(&args[1]).cloned()
-    else {
+    let Expr::CallArg { value: offset, .. } = &args[1].expr else {
         return Err(IRError::Unknown("Didn't get __store offset".into()));
     };
 
@@ -181,7 +166,7 @@ fn lower_store(
         return Err(IRError::Unknown("Didn't get __store offset".into()));
     };
 
-    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[2]).cloned() else {
+    let Expr::CallArg { value, .. } = &args[2].expr else {
         return Err(IRError::Unknown("Didn't get __store argument".into()));
     };
 
@@ -211,7 +196,7 @@ fn lower_store(
 fn lower_load(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
@@ -219,7 +204,7 @@ fn lower_load(
         return Err(IRError::Unknown("Did not get __load func".to_string()));
     };
 
-    let Some(Expr::CallArg { value: ptr, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
+    let Expr::CallArg { value: ptr, .. } = &args[0].expr else {
         unreachable!("didn't get call arg for load")
     };
 
@@ -227,8 +212,7 @@ fn lower_load(
         unreachable!("didn't get ptr for load")
     };
 
-    let Some(Expr::CallArg { value: offset, .. }) = lowerer.source_file.get(&args[1]).cloned()
-    else {
+    let Expr::CallArg { value: offset, .. } = &args[1].expr else {
         unreachable!("didn't get offset arg for load")
     };
 
@@ -258,21 +242,20 @@ fn lower_load(
 fn lower_ir_instr(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[ExprID],
+    args: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let Ty::Func(_, _, _) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __ir_instr func".to_string()));
     };
 
-    let Some(Expr::CallArg { value, .. }) = lowerer.source_file.get(&args[0]).cloned() else {
+    let Expr::CallArg { value, .. } = &args[0].expr else {
         unreachable!("didn't get call arg for load")
     };
 
-    let Some(Expr::LiteralString(instruction_string)) = lowerer.source_file.get(&value).cloned()
-    else {
+    let Expr::LiteralString(instruction_string) = &value.expr else {
         unreachable!(
             "didn't get call instruction string: {:?} {typed_callee:?}",
-            lowerer.source_file.get(&args[0])
+            &args[0]
         );
     };
 

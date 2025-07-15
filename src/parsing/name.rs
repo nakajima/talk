@@ -11,27 +11,37 @@ pub enum Name {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ResolvedName(pub SymbolID, pub String);
 
+impl ResolvedName {
+    pub fn mangled(&self, _ty: &Ty) -> String {
+        if self.1 == "main" {
+            "@main".into()
+        } else {
+            format!("@_{:?}_{}", self.0.0, self.1)
+        }
+
+        // match self {
+        //     Name::Raw(_) => "Cannot mangle unresolved Name".into(),
+        //     Name::Resolved(symbol_id, name_str) => {}
+        //     Name::_Self(symbol) => format!("self{symbol:?}"),
+        //     Name::SelfType => "Self".to_string(),
+        // }
+    }
+
+    pub fn name_str(&self) -> String {
+        self.1.to_string()
+    }
+
+    pub fn symbol_id(&self) -> SymbolID {
+        self.0
+    }
+}
+
 impl Name {
     pub fn resolved(&self) -> Result<ResolvedName, TypeError> {
         if let Name::Resolved(symbol_id, name_str) = self {
             Ok(ResolvedName(*symbol_id, name_str.clone()))
         } else {
             Err(TypeError::Unresolved(format!("{self:?} is unresolved")))
-        }
-    }
-
-    pub fn mangled(&self, _ty: &Ty) -> String {
-        match self {
-            Name::Raw(_) => "Cannot mangle unresolved Name".into(),
-            Name::Resolved(symbol_id, name_str) => {
-                if name_str == "main" {
-                    "@main".into()
-                } else {
-                    format!("@_{:?}_{}", symbol_id.0, name_str)
-                }
-            }
-            Name::_Self(symbol) => format!("self{symbol:?}"),
-            Name::SelfType => "Self".to_string(),
         }
     }
 

@@ -18,7 +18,7 @@ pub enum Pattern {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     LiteralArray(Vec<TypedExpr>),
     LiteralInt(String),

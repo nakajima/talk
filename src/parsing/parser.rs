@@ -14,6 +14,7 @@ use crate::{
 
 use super::{expr::ExprMeta, name::Name, precedence::Precedence};
 
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Default, Debug, Clone, Copy, Hash, Eq)]
 pub struct ExprID(pub i32);
 impl ExprID {

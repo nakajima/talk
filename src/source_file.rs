@@ -112,12 +112,22 @@ impl SourceFile<Parsed> {
     pub fn roots(&self) -> &Vec<ParsedExpr> {
         &self.roots
     }
+
+    // Gets the root expr of the tree
+    pub fn roots_mut(&mut self) -> &mut Vec<ParsedExpr> {
+        &mut self.roots
+    }
 }
 
 impl SourceFile<NameResolved> {
     // Gets the root expr of the tree
     pub fn roots(&self) -> &Vec<ParsedExpr> {
         &self.roots
+    }
+
+    // Gets the root expr of the tree
+    pub fn roots_mut(&mut self) -> &mut Vec<ParsedExpr> {
+        &mut self.roots
     }
 
     pub fn to_typed(
@@ -205,6 +215,11 @@ impl SourceFile<Typed> {
             phase_data: Lowered {},
         }
     }
+
+    // Gets the root expr of the tree
+    pub fn roots_mut(&mut self) -> &mut Vec<TypedExpr> {
+        &mut self.phase_data.roots
+    }
 }
 
 impl SourceFile<Lowered> {}
@@ -217,11 +232,6 @@ impl<P: Phase> SourceFile<P> {
 
     pub fn push_root(&mut self, root: ParsedExpr) {
         self.roots.push(root);
-    }
-
-    // Gets the root expr of the tree
-    pub fn roots_mut(&mut self) -> &mut [ParsedExpr] {
-        self.roots.as_mut_slice()
     }
 
     pub fn span(&self, expr_id: &ExprID) -> Span {
