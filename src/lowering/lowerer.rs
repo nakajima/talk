@@ -2557,6 +2557,18 @@ fn find_or_create_main(
     symbol_table: &mut SymbolTable,
     env: &mut Environment,
 ) -> (TypedExpr, bool) {
+    // If we've already generated a `main` for this file, reuse it so we don't
+    // continually duplicate the AST on subsequent lowering passes.
+    if symbol_table.get(&SymbolID::GENERATED_MAIN).is_some() {
+        if let Some(existing) = source_file
+            .roots()
+            .iter()
+            .find(|expr| expr.id == ExprID(SymbolID::GENERATED_MAIN.0))
+        {
+            return (existing.clone(), false);
+        }
+    }
+
     for root in source_file.roots() {
         if let TypedExpr {
             expr:
