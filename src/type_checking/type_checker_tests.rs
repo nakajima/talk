@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        SymbolID, any_typed, check,
+        SymbolID, any_typed, assert_eq_diff, check,
         diagnostic::{Diagnostic, DiagnosticKind},
         name::ResolvedName,
         parser::ExprID,
@@ -29,26 +29,26 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
+        assert_eq_diff!(
             checked.roots()[1],
             any_typed!(
                 Expr::Call {
                     callee: any_typed!(
                         Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::Struct(SymbolID::typed(1), vec![])
+                        Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
                     )
                     .into(),
                     type_args: vec![],
                     args: vec![any_typed!(
                         Expr::CallArg {
-                            label: Some(ResolvedName(SymbolID::typed(2), "age".to_string())),
+                            label: None,
                             value: any_typed!(Expr::LiteralInt("123".into()), Ty::Int).into()
                         },
                         Ty::Int
                     )],
                 },
                 Ty::Struct(SymbolID::typed(1), vec![])
-            )
+            ),
         );
     }
 
