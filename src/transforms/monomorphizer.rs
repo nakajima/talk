@@ -674,7 +674,7 @@ mod tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![IRType::TypeVar("T12".into())], IRType::Int.into()),
+                            IRType::Func(vec![IRType::TypeVar("T15".into())], IRType::Int.into()),
                             RefKind::Func("@_3_get".into())
                         ),
                         Instr::Alloc {
@@ -747,7 +747,7 @@ mod tests {
                             callee: Callee::Name("@_4_Person_getAge".into()),
                             args: RegisterList(vec![TypedRegister::new(
                                 IRType::Pointer {
-                                    hint: Some("T12".into())
+                                    hint: Some("T15".into())
                                 },
                                 Register(0)
                             )])

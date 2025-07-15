@@ -499,9 +499,7 @@ impl<'a> Lowerer<'a> {
             Expr::Variable(name) => self.lower_variable(typed_expr, name),
             Expr::If(_, _, _) => self.lower_if(typed_expr),
             Expr::Block(_) => self.lower_block(typed_expr),
-            Expr::Call { callee, args, .. } => {
-                self.lower_call(callee, &typed_expr.ty, args)
-            }
+            Expr::Call { callee, args, .. } => self.lower_call(callee, &typed_expr.ty, args),
             Expr::Func { .. } => self.lower_function(typed_expr),
             Expr::Return(rhs) => self.lower_return(typed_expr, rhs),
             Expr::EnumDecl { .. } => None,
@@ -573,7 +571,7 @@ impl<'a> Lowerer<'a> {
     fn lower_protocol(&mut self, name: &ResolvedName, items: &[TypedExpr]) -> Option<Register> {
         for body_expr in items {
             if let Expr::Func { .. } = &body_expr.expr {
-                self.lower_method(body_expr, name)?;
+                self.lower_method(&name.0, body_expr, name)?;
             }
 
             if let TypedExpr {
@@ -877,7 +875,7 @@ impl<'a> Lowerer<'a> {
                 Expr::Func {
                     name: Some(name), ..
                 } => {
-                    self.lower_method(&member, name);
+                    self.lower_method(&struct_id, &member, name);
                 }
                 Expr::Init(..) | Expr::Property { .. } => {
                     // These are handled by the StructDef or the first loop; ignore them here.
@@ -921,7 +919,7 @@ impl<'a> Lowerer<'a> {
                 Expr::Func {
                     name: Some(name), ..
                 } => {
-                    self.lower_method(&member, name);
+                    self.lower_method(&type_id, &member, name);
                 }
                 Expr::Init(..) | Expr::Property { .. } => {
                     // These are handled by the type defs; ignore them here.
@@ -943,7 +941,7 @@ impl<'a> Lowerer<'a> {
         typed_func: &TypedExpr,
     ) -> Option<(IRType, TypeDef, TypedExpr, Register, Option<IRValue>)> {
         let Some(type_def) = self.env.lookup_type(symbol_id).cloned() else {
-            tracing::error!("Cannot setup self context for {symbol_id:?}");
+            tracing::error!("Cannot setup self context for {symbol_id:?} {typed_func:?}");
             return None;
         };
 
@@ -951,6 +949,8 @@ impl<'a> Lowerer<'a> {
             tracing::error!("Typed expr not a func: {typed_func:?}");
             return None;
         };
+
+        println!("wtf tho: {:#?}", typed_func.expr);
 
         self.current_functions.push(CurrentFunction::new(Some(
             type_def.ty().to_ir(self).clone(),
@@ -1020,8 +1020,13 @@ impl<'a> Lowerer<'a> {
         Some(env)
     }
 
-    fn lower_method(&mut self, func_id: &TypedExpr, name: &ResolvedName) -> Option<Register> {
-        let (_ty, type_def, typed_func, env, ret) = self.setup_self_context(&name.0, func_id)?;
+    fn lower_method(
+        &mut self,
+        type_id: &SymbolID,
+        func_id: &TypedExpr,
+        name: &ResolvedName,
+    ) -> Option<Register> {
+        let (_ty, type_def, typed_func, env, ret) = self.setup_self_context(type_id, func_id)?;
 
         let (Ty::Func(_, ret_ty, _)
         | Ty::Closure {
@@ -1847,7 +1852,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_block(&mut self, typed_expr: &TypedExpr) -> Option<Register> {
         let Expr::Block(exprs) = &typed_expr.expr else {
-            unreachable!()
+            unreachable!("Didn't get a block: {:?}", typed_expr.expr)
         };
 
         if exprs.is_empty() {
@@ -2197,7 +2202,7 @@ impl<'a> Lowerer<'a> {
         struct_id: &SymbolID,
         ty: &Ty,
         mut arg_registers: Vec<TypedRegister>,
-        arg_tys: &[Ty]
+        arg_tys: &[Ty],
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned() else {
             unreachable!()
