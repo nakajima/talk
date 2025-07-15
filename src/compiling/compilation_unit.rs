@@ -15,6 +15,7 @@ use crate::{
     parser::{Parser, ParserError},
     source_file,
     type_checker::{TypeChecker, TypeError},
+    typed_expr::TypedExpr,
 };
 
 pub trait StageTrait: std::fmt::Debug {
@@ -213,7 +214,7 @@ impl CompilationUnit<Resolved> {
         for file in self.stage.files {
             let path = file.path.clone();
 
-            let typed = if driver_config.include_prelude {
+            let mut typed = if driver_config.include_prelude {
                 TypeChecker::new(self.session.clone(), symbol_table, file.path.clone())
                     .infer(&file, &mut self.env)
             } else {
@@ -221,7 +222,13 @@ impl CompilationUnit<Resolved> {
                     .infer_without_prelude(&mut self.env, &file)
             };
             let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
-            let solution = solver.solve();
+            let mut solution = solver.solve();
+
+            TypedExpr::apply_mult(
+                typed.roots_mut(),
+                &mut solution.substitutions,
+                &mut self.env,
+            );
 
             for (expr_id, err) in solution.errors {
                 if let Ok(session) = &mut self.session.lock() {

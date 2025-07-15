@@ -1,4 +1,16 @@
-use crate::{SymbolID, name::ResolvedName, parser::ExprID, token_kind::TokenKind, ty::Ty};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
+
+use tracing::trace_span;
+
+use crate::{
+    SymbolID, environment::Environment, name::ResolvedName, parser::ExprID,
+    substitutions::Substitutions, token_kind::TokenKind, ty::Ty,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -144,5 +156,194 @@ pub struct TypedExpr {
 impl TypedExpr {
     pub fn new(id: ExprID, expr: Expr, ty: Ty) -> Self {
         Self { id, expr, ty }
+    }
+
+    pub fn apply(&mut self, substitutions: &mut Substitutions, env: &mut Environment) {
+        let _s = trace_span!(
+            "applying",
+            self = format!("{self:?}"),
+            subs = format!("{:?}", substitutions.apply(&self.ty, 0, &mut env.context))
+        )
+        .entered();
+
+        self.ty = substitutions.apply(&self.ty, 0, &mut env.context);
+
+        match &mut self.expr {
+            Expr::LiteralArray(items) => {
+                Self::apply_mult(items, substitutions, env);
+            }
+            Expr::LiteralInt(_) => (),
+            Expr::LiteralFloat(_) => (),
+            Expr::LiteralTrue => (),
+            Expr::LiteralFalse => (),
+            Expr::LiteralString(_) => (),
+            Expr::Unary(_, rhs) => rhs.apply(substitutions, env),
+            Expr::Binary(lhs, _, rhs) => {
+                lhs.apply(substitutions, env);
+                rhs.apply(substitutions, env);
+            }
+            Expr::Tuple(items) => {
+                Self::apply_mult(items, substitutions, env);
+            }
+            Expr::Block(items) => {
+                Self::apply_mult(items, substitutions, env);
+            }
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            } => {
+                callee.apply(substitutions, env);
+                Self::apply_mult(type_args, substitutions, env);
+                Self::apply_mult(args, substitutions, env);
+            }
+            Expr::ParsedPattern(pattern) => todo!(),
+            Expr::Return(ret) => {
+                if let Some(ret) = ret {
+                    ret.apply(substitutions, env)
+                }
+            }
+            Expr::Break => (),
+            Expr::Extend {
+                generics,
+                conformances,
+                body,
+                ..
+            } => {
+                Self::apply_mult(conformances, substitutions, env);
+                Self::apply_mult(generics, substitutions, env);
+                body.apply(substitutions, env);
+            }
+            Expr::Struct {
+                generics,
+                conformances,
+                body,
+                ..
+            } => {
+                Self::apply_mult(conformances, substitutions, env);
+                Self::apply_mult(generics, substitutions, env);
+                body.apply(substitutions, env);
+            }
+            Expr::Property {
+                type_repr,
+                default_value,
+                ..
+            } => {
+                type_repr.as_mut().map(|t| t.apply(substitutions, env));
+                default_value.as_mut().map(|t| t.apply(substitutions, env));
+            }
+            Expr::TypeRepr {
+                generics,
+                conformances,
+                ..
+            } => {
+                Self::apply_mult(conformances, substitutions, env);
+                Self::apply_mult(generics, substitutions, env);
+            }
+            Expr::FuncTypeRepr(params, ret, _) => {
+                Self::apply_mult(params, substitutions, env);
+                ret.apply(substitutions, env);
+            }
+            Expr::TupleTypeRepr(typed_exprs, _) => {
+                Self::apply_mult(typed_exprs, substitutions, env)
+            }
+            Expr::Member(typed_expr, _) => {
+                typed_expr.as_mut().map(|t| t.apply(substitutions, env));
+            }
+            Expr::Init(_, typed_expr) => typed_expr.apply(substitutions, env),
+            Expr::Func {
+                generics,
+                params,
+                body,
+                ret,
+                ..
+            } => {
+                Self::apply_mult(generics, substitutions, env);
+                Self::apply_mult(params, substitutions, env);
+                body.apply(substitutions, env);
+                ret.as_mut().map(|t| t.apply(substitutions, env));
+            }
+            Expr::Parameter(_, typed_expr) => {
+                if let Some(t) = typed_expr.as_mut() {
+                    t.apply(substitutions, env)
+                }
+            }
+            Expr::CallArg { value, .. } => value.apply(substitutions, env),
+            Expr::Let(_, typed_expr) => {
+                if let Some(t) = typed_expr.as_mut() {
+                    t.apply(substitutions, env)
+                }
+            }
+            Expr::Assignment(lhs, rhs) => {
+                lhs.apply(substitutions, env);
+                rhs.apply(substitutions, env);
+            }
+            Expr::Variable(_) => (),
+            Expr::If(cond, conseq, alt) => {
+                cond.apply(substitutions, env);
+                conseq.apply(substitutions, env);
+                if let Some(t) = alt.as_mut() {
+                    t.apply(substitutions, env)
+                }
+            }
+            Expr::Loop(cond, body) => {
+                if let Some(t) = cond.as_mut() {
+                    t.apply(substitutions, env)
+                }
+                body.apply(substitutions, env);
+            }
+            Expr::EnumDecl {
+                conformances,
+                generics,
+                body,
+                ..
+            } => {
+                Self::apply_mult(conformances, substitutions, env);
+                Self::apply_mult(generics, substitutions, env);
+                body.apply(substitutions, env);
+            }
+            Expr::EnumVariant(_, typed_exprs) => Self::apply_mult(typed_exprs, substitutions, env),
+            Expr::Match(pattern, arms) => {
+                pattern.apply(substitutions, env);
+                Self::apply_mult(arms, substitutions, env);
+            }
+            Expr::MatchArm(pattern, body) => {
+                pattern.apply(substitutions, env);
+                body.apply(substitutions, env);
+            }
+            Expr::PatternVariant(_, _, values) => {
+                Self::apply_mult(values, substitutions, env);
+            }
+            Expr::ProtocolDecl {
+                associated_types,
+                body,
+                conformances,
+                ..
+            } => {
+                Self::apply_mult(associated_types, substitutions, env);
+                Self::apply_mult(conformances, substitutions, env);
+                body.apply(substitutions, env);
+            }
+            Expr::FuncSignature {
+                params,
+                generics,
+                ret,
+                ..
+            } => {
+                Self::apply_mult(params, substitutions, env);
+                Self::apply_mult(generics, substitutions, env);
+                ret.apply(substitutions, env);
+            }
+        }
+    }
+
+    pub fn apply_mult(
+        exprs: &mut [TypedExpr],
+        substitutions: &mut Substitutions,
+        env: &mut Environment,
+    ) {
+        for expr in exprs {
+            expr.apply(substitutions, env);
+        }
     }
 }

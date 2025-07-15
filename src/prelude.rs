@@ -1,4 +1,3 @@
-use lazy_static::lazy_static;
 use std::{collections::BTreeMap, path::PathBuf, process::exit};
 
 use crate::{
@@ -13,14 +12,6 @@ pub struct Prelude {
     pub environment: Environment,
     pub module: IRModule,
     pub global_scope: BTreeMap<String, SymbolID>,
-}
-
-lazy_static! {
-    static ref PRELUDE_TYPED: Prelude = _compile_prelude();
-}
-
-pub fn compile_prelude() -> &'static Prelude {
-    &PRELUDE_TYPED
 }
 
 #[cfg(feature = "wasm")]
@@ -51,7 +42,7 @@ fn load_files(driver: &mut Driver) {
     }
 }
 
-pub fn _compile_prelude() -> Prelude {
+pub fn compile_prelude() -> Prelude {
     let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
 
     let mut driver = Driver::new(DriverConfig {

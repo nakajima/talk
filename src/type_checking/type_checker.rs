@@ -223,7 +223,7 @@ impl<'a> TypeChecker<'a> {
         let mut ty = match &parsed_expr.expr {
             crate::parsed_expr::Expr::Incomplete(expr_id) => self.handle_incomplete(expr_id),
             crate::parsed_expr::Expr::LiteralTrue => {
-                checked_expected(expected, Ty::Bool);
+                checked_expected(expected, Ty::Bool)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
                     ty: Ty::Bool,
@@ -231,7 +231,7 @@ impl<'a> TypeChecker<'a> {
                 })
             }
             crate::parsed_expr::Expr::LiteralFalse => {
-                checked_expected(expected, Ty::Bool);
+                checked_expected(expected, Ty::Bool)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
                     ty: Ty::Bool,
@@ -255,18 +255,18 @@ impl<'a> TypeChecker<'a> {
                 args,
             } => self.infer_call(parsed_expr.id, env, callee, type_args, args, expected),
             crate::parsed_expr::Expr::LiteralInt(v) => {
-                checked_expected(expected, Ty::Int);
+                checked_expected(expected, Ty::Int)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Bool,
+                    ty: Ty::Int,
                     expr: typed_expr::Expr::LiteralInt(v.to_string()),
                 })
             }
             crate::parsed_expr::Expr::LiteralFloat(v) => {
-                checked_expected(expected, Ty::Float);
+                checked_expected(expected, Ty::Float)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Bool,
+                    ty: Ty::Float,
                     expr: typed_expr::Expr::LiteralFloat(v.to_string()),
                 })
             }

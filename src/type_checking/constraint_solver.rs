@@ -42,27 +42,6 @@ impl<'a> ConstraintSolver<'a> {
         while let Some(constraint) = self.constraints.pop() {
             match self.solve_constraint(&constraint, &mut substitutions) {
                 Ok(_) => (),
-                // Err(TypeError::Defer(_)) => {
-                //     if let Constraint::Retry(c, retries) = constraint {
-                //         if retries > 0 {
-                //             let constraint = c.replacing(&mut substitutions, &mut self.env.context);
-                //             self.constraints
-                //                 .insert(0, Constraint::Retry(constraint.into(), retries - 1));
-                //         } else {
-                //             unsolved_constraints.push(*c.clone());
-                //         }
-                //     } else {
-                //         self.constraints.insert(
-                //             0,
-                //             Constraint::Retry(
-                //                 constraint
-                //                     .replacing(&mut substitutions, &mut self.env.context)
-                //                     .into(),
-                //                 3,
-                //             ),
-                //         );
-                //     }
-                // }
                 Err(err) => {
                     if let Constraint::Retry(constraint, retries) = constraint {
                         if retries > 0 {
