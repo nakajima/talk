@@ -315,7 +315,7 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Tuple(vec![any_expr!(Expr::Binary(
                 any_expr!(Expr::LiteralInt("1".into())).into(),
-                TokenKind::EqualsEquals,
+                TokenKind::Plus,
                 any_expr!(Expr::LiteralInt("2".into())).into()
             ))]))
         );
@@ -343,7 +343,7 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Expr::Unary(
                 TokenKind::Bang,
-                any_expr!(LiteralInt("1".into())).into()
+                any_expr!(Variable("hello".into())).into()
             ))
         );
     }
@@ -372,7 +372,7 @@ mod tests {
             any_expr!(Expr::Tuple(vec![
                 any_expr!(LiteralInt("1".into())).into(),
                 any_expr!(LiteralInt("2".into())).into(),
-                any_expr!(LiteralInt("fizz".into())).into(),
+                any_expr!(Variable("fizz".into())).into(),
             ]))
         );
     }
@@ -419,10 +419,7 @@ mod tests {
                 name: Some(Name::Raw("greet".to_string())),
                 generics: vec![],
                 params: vec![any_expr!(Parameter("a".into(), None)).into()],
-                body: any_expr!(Block(vec![any_expr!(Return(Some(
-                    any_expr!(Variable("a".into())).into()
-                )))]))
-                .into(),
+                body: any_expr!(Block(vec![any_expr!(Variable("a".into()))])).into(),
                 ret: None,
                 captures: vec![],
             })
@@ -462,13 +459,10 @@ mod tests {
                     name: "T".into(),
                     generics: vec![],
                     conformances: vec![],
-                    introduces_type: false
+                    introduces_type: true
                 })],
                 params: vec![any_expr!(Parameter("t".into(), None))],
-                body: any_expr!(Block(vec![any_expr!(Return(Some(
-                    any_expr!(Variable("t".into())).into()
-                )))]))
-                .into(),
+                body: any_expr!(Block(vec![any_expr!(Variable("t".into()))])).into(),
                 ret: Some(
                     any_expr!(TypeRepr {
                         name: "T".into(),
@@ -678,10 +672,7 @@ mod tests {
                 name: Some(Name::Raw("fizz".to_string())),
                 generics: vec![],
                 params: vec![],
-                body: any_expr!(Block(vec![any_expr!(Return(Some(
-                    any_expr!(LiteralInt("123".into())).into()
-                )))]))
-                .into(),
+                body: any_expr!(Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
                 ret: Some(
                     any_expr!(TypeRepr {
                         name: "Int".into(),
@@ -736,13 +727,7 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Expr::Loop(
                 None,
-                any_expr!(
-                    Expr::Block(vec![any_expr!(Return(Some(
-                        any_expr!(LiteralInt("123".into())).into()
-                    )))])
-                    .into()
-                )
-                .into()
+                any_expr!(Expr::Block(vec![any_expr!(LiteralInt("123".into())).into()])).into()
             ))
         );
     }
@@ -766,13 +751,7 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Expr::Loop(
                 Some(any_expr!(LiteralTrue).into()),
-                any_expr!(
-                    Expr::Block(vec![any_expr!(Return(Some(
-                        any_expr!(LiteralInt("123".into())).into()
-                    )))])
-                    .into()
-                )
-                .into()
+                any_expr!(Expr::Block(vec![any_expr!(LiteralInt("123".into())).into()])).into()
             ))
         );
     }
@@ -793,15 +772,9 @@ mod tests {
                         ))
                         .into()
                     ))
-                    .into()
+                    .into(),
                 ),
-                any_expr!(
-                    Expr::Block(vec![any_expr!(Return(Some(
-                        any_expr!(LiteralInt("123".into())).into()
-                    )))])
-                    .into()
-                )
-                .into()
+                any_expr!(Expr::Block(vec![any_expr!(LiteralInt("123".into())).into()])).into()
             ))
         );
     }
@@ -841,10 +814,14 @@ mod tests {
         assert_eq!(
             parsed.roots()[1],
             any_expr!(Expr::Call {
-                callee: any_expr!(Variable("Fizz".into())).into(),
+                callee: any_expr!(Member(
+                    Some(any_expr!(Variable("Fizz".into())).into()),
+                    "foo".into()
+                ))
+                .into(),
                 type_args: vec![],
                 args: vec![any_expr!(CallArg {
-                    label: Some("foo".into()),
+                    label: None,
                     value: any_expr!(LiteralInt("123".into())).into()
                 })]
             })
@@ -872,34 +849,36 @@ mod tests {
                         name: "T".into(),
                         generics: vec![],
                         conformances: vec![],
-                        introduces_type: false
+                        introduces_type: true
                     }),
                     any_expr!(TypeRepr {
                         name: "Y".into(),
                         generics: vec![],
                         conformances: vec![],
-                        introduces_type: false
+                        introduces_type: true
                     }),
                 ],
                 conformances: vec![],
-                body: any_expr!(Block(vec![any_expr!(EnumVariant(
-                    Name::Raw("foo".into()),
-                    vec![
-                        any_expr!(TypeRepr {
-                            name: "T".into(),
-                            generics: vec![],
-                            conformances: vec![],
-                            introduces_type: false
-                        })
-                        .into(),
-                        any_expr!(TypeRepr {
-                            name: "Y".into(),
-                            generics: vec![],
-                            conformances: vec![],
-                            introduces_type: false
-                        })
-                    ]
-                )),]))
+                body: any_expr!(Block(vec![
+                    any_expr!(EnumVariant(
+                        Name::Raw("foo".into()),
+                        vec![
+                            any_expr!(TypeRepr {
+                                name: "T".into(),
+                                generics: vec![],
+                                conformances: vec![],
+                                introduces_type: false
+                            }).into(),
+                            any_expr!(TypeRepr {
+                                name: "Y".into(),
+                                generics: vec![],
+                                conformances: vec![],
+                                introduces_type: false
+                            })
+                        ]
+                    )),
+                    any_expr!(EnumVariant(Name::Raw("bar".into()), vec![]))
+                ]))
                 .into()
             })
         );
@@ -1035,17 +1014,23 @@ mod tests {
                 generics: vec![],
                 params: vec![any_expr!(Parameter(
                     Name::Raw("using".into()),
-                    Some(
-                        any_expr!(TypeRepr {
+                    Some(any_expr!(FuncTypeRepr(
+                        vec![any_expr!(TypeRepr {
                             name: "T".into(),
                             generics: vec![],
                             conformances: vec![],
                             introduces_type: false
-                        })
-                        .into()
-                    )
+                        })],
+                        any_expr!(TypeRepr {
+                            name: "Y".into(),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
+                        }).into(),
+                        false
+                    )).into())
                 ))],
-                body: any_expr!(Block(vec![any_expr!(Return(None))])).into(),
+                body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
             })
@@ -1087,7 +1072,7 @@ mod tests {
                         name: Some(Name::Raw("fizz".into())),
                         generics: vec![],
                         params: vec![],
-                        body: any_expr!(Block(vec![any_expr!(Return(None))])).into(),
+                        body: any_expr!(Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
                         ret: None,
                         captures: vec![],
                     })
@@ -1350,21 +1335,32 @@ mod tests {
                         ),
                         default_value: None
                     }),
-                    any_expr!(Property {
-                        name: Name::Raw("age".into()),
-                        type_repr: Some(
-                            any_expr!(TypeRepr {
-                                name: Name::Raw("Int".into()),
-                                generics: vec![],
-                                conformances: vec![],
-                                introduces_type: false
-                            })
-                            .into()
-                        ),
-                        default_value: Some(any_expr!(LiteralInt("456".into())).into()),
-                    }),
-                ]))
-                .into()
+                    any_expr!(Init(
+                        None,
+                        any_expr!(Expr::Func {
+                            name: Some(Name::Raw("init".into())),
+                            generics: vec![],
+                            params: vec![any_expr!(Parameter(
+                                Name::Raw("age".into()),
+                                Some(any_expr!(TypeRepr {
+                                    name: Name::Raw("Int".into()),
+                                    generics: vec![],
+                                    conformances: vec![],
+                                    introduces_type: false
+                                }).into())
+                            ))],
+                            body: any_expr!(Block(vec![any_expr!(Assignment(
+                                any_expr!(Member(
+                                    Some(any_expr!(Variable("self".into())).into()),
+                                    "age".into()
+                                )).into(),
+                                any_expr!(Variable("age".into())).into()
+                            ))])).into(),
+                            ret: None,
+                            captures: vec![],
+                        }).into()
+                    ))
+                ])).into()
             })
         );
     }
@@ -1431,14 +1427,13 @@ mod tests {
 
         assert_eq!(
             parsed.roots()[0],
-            any_expr!(Expr::Func {
-                name: Some(Name::Raw("fizz".into())),
-                generics: vec![],
-                params: vec![],
-                body: any_expr!(Block(vec![])).into(),
+            any_expr!(Expr::Incomplete(IncompleteExpr::Func {
+                name: Some(Name::Raw("foo".into())),
+                params: Some(vec![]),
+                generics: Some(vec![]),
                 ret: None,
-                captures: vec![]
-            })
+                body: None
+            }))
         );
     }
 
@@ -1457,7 +1452,12 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Expr::ProtocolDecl {
                 name: "Aged".into(),
-                associated_types: vec![],
+                associated_types: vec![any_expr!(TypeRepr {
+                    name: Name::Raw("T".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                    introduces_type: true
+                })],
                 body: any_expr!(Block(vec![
                     any_expr!(Property {
                         name: Name::Raw("age".into()),
@@ -1486,7 +1486,12 @@ mod tests {
                     })
                 ]))
                 .into(),
-                conformances: vec![],
+                conformances: vec![any_expr!(TypeRepr {
+                    name: Name::Raw("X".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                    introduces_type: false
+                })],
             })
         );
     }
@@ -1543,15 +1548,14 @@ mod tests {
                             })
                             .into()
                         ],
-                        introduces_type: false
+                        introduces_type: true
                     })
                     .into()
                 ],
                 params: vec![any_expr!(Parameter(Name::Raw("x".into()), None.into()))],
                 body: any_expr!(Block(vec![
                     any_expr!(Variable(Name::Raw("x".into()))).into()
-                ]))
-                .into(),
+                ])).into(),
                 ret: Some(
                     any_expr!(TypeRepr {
                         name: Name::Raw("T".into()),
