@@ -500,7 +500,7 @@ impl<'a> Lowerer<'a> {
             Expr::If(_, _, _) => self.lower_if(typed_expr),
             Expr::Block(_) => self.lower_block(typed_expr),
             Expr::Call { callee, args, .. } => {
-                self.lower_call(callee, &typed_expr.ty.to_ir(self), args)
+                self.lower_call(callee, &typed_expr.ty, args)
             }
             Expr::Func { .. } => self.lower_function(typed_expr),
             Expr::Return(rhs) => self.lower_return(typed_expr, rhs),
@@ -1961,11 +1961,9 @@ impl<'a> Lowerer<'a> {
     fn lower_call(
         &mut self,
         callee_typed_expr: &TypedExpr,
-        ret_ty: &IRType,
+        ret_ty: &Ty,
         args: &[TypedExpr],
     ) -> Option<Register> {
-        let ty = &callee_typed_expr.ty;
-
         let mut arg_registers = vec![];
         let mut arg_tys = vec![];
         for (i, arg) in args.iter().enumerate() {
@@ -2015,7 +2013,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle enum variant construction
-        if let Ty::Enum(enum_id, _) = &ty {
+        if let Ty::Enum(enum_id, _) = &ret_ty {
             let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
                 self.push_err("didn't get member expr for enum call", callee_typed_expr.id);
                 return None;
@@ -2025,13 +2023,13 @@ impl<'a> Lowerer<'a> {
                 callee_typed_expr,
                 *enum_id,
                 variant_name,
-                ty,
+                ret_ty,
                 &arg_registers,
             );
         }
 
         // Handle enum variant construction
-        if let Ty::EnumVariant(enum_id, _) = &ty {
+        if let Ty::EnumVariant(enum_id, _) = &ret_ty {
             let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
                 self.push_err("didn't get member expr for enum call", callee_typed_expr.id);
                 return None;
@@ -2041,7 +2039,7 @@ impl<'a> Lowerer<'a> {
                 callee_typed_expr,
                 *enum_id,
                 variant_name,
-                ty,
+                ret_ty,
                 &arg_registers,
             );
         }
@@ -2051,7 +2049,7 @@ impl<'a> Lowerer<'a> {
             return self.lower_method_call(
                 callee_typed_expr,
                 receiver,
-                ret_ty,
+                &ret_ty.to_ir(self),
                 name,
                 arg_registers,
             );
@@ -2085,7 +2083,7 @@ impl<'a> Lowerer<'a> {
 
                 self.push_instr(Instr::Call {
                     dest_reg,
-                    ty: ty.to_ir(self),
+                    ty: ret_ty.to_ir(self),
                     callee: Callee::Name(callee_name),
                     args: RegisterList(arg_registers),
                 });
@@ -2128,7 +2126,7 @@ impl<'a> Lowerer<'a> {
             let dest_reg = self.allocate_register();
             self.push_instr(Instr::Call {
                 dest_reg,
-                ty: ty.to_ir(self),
+                ty: ret_ty.to_ir(self),
                 callee: Callee::Name(callee_name),
                 args: RegisterList(arg_registers),
             });
@@ -2182,7 +2180,7 @@ impl<'a> Lowerer<'a> {
             );
 
             let dest_reg = self.allocate_register();
-            let ir_type = ty.to_ir(self);
+            let ir_type = ret_ty.to_ir(self);
             self.push_instr(Instr::Call {
                 ty: ir_type,
                 dest_reg,

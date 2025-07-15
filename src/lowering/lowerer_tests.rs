@@ -269,7 +269,7 @@ pub mod lowering_tests {
     fn lowers_calls() {
         let lowered = lower("func foo(x) { x }\nfoo(123)").unwrap();
 
-        let type_var = format!("T{}", compile_prelude().environment.next_type_var_id() + 1);
+        let type_var = format!("T{}", compile_prelude().environment.next_type_var_id() + 2);
 
         let foo_func_type = IRType::Func(
             vec![IRType::TypeVar(type_var.clone())],
