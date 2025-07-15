@@ -1355,21 +1355,19 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
-            let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
-                tracing::trace!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
-                existing_scheme.ty = inferred_ty.clone();
-                existing_scheme.unbound_vars = free_type_vars(&inferred_ty).into_iter().collect();
-                existing_scheme.clone()
-            } else {
-                Scheme::new(
+            // During hoisting we already declared a scheme for this function.
+            // Avoid overwriting it here so that the previously solved type
+            // (potentially including protocol-associated information) is
+            // preserved for later instantiations.
+            if env.lookup_symbol(symbol_id).is_err() {
+                let new_scheme = Scheme::new(
                     inferred_ty.clone(),
                     free_type_vars(&inferred_ty).into_iter().collect(),
                     vec![],
-                )
-            };
+                );
 
-            // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
-            env.declare(*symbol_id, new_scheme)?;
+                env.declare(*symbol_id, new_scheme)?;
+            }
         }
 
         Ok(TypedExpr {
