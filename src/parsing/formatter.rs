@@ -3,7 +3,7 @@ use crate::{
     expr::ExprMeta,
     name::Name,
     parsed_expr::{Expr, ParsedExpr, Pattern},
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     source_file::SourceFile,
     token_kind::TokenKind,
 };

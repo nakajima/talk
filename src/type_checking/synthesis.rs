@@ -1,225 +1,246 @@
-use crate::{NameResolved, SourceFile, SymbolTable, environment::Environment};
+use derive_visitor::{DriveMut, VisitorMut};
+
+use crate::{
+    NameResolved, SourceFile, SymbolID, SymbolKind, SymbolTable,
+    environment::Environment,
+    name::Name,
+    parsed_expr::{Expr, ParsedExpr},
+    parsing::expr_id::ExprID,
+};
+
+#[derive(VisitorMut)]
+#[visitor(ParsedExpr(enter))]
+struct InitInserter {
+    struct_id: SymbolID,
+    initializer: ParsedExpr,
+}
+
+impl InitInserter {
+    fn enter_parsed_expr(&mut self, parsed_expr: &mut ParsedExpr) {
+        if let Expr::Struct {
+            name: Name::Resolved(symbol_id, _),
+            body:
+                box ParsedExpr {
+                    expr: Expr::Block(exprs),
+                    ..
+                },
+            ..
+        } = &mut parsed_expr.expr
+            && self.struct_id == *symbol_id
+        {
+            exprs.insert(0, self.initializer.clone());
+        }
+    }
+}
 
 pub fn synthesize_inits(
     source_file: &mut SourceFile<NameResolved>,
     symbol_table: &mut SymbolTable,
     env: &mut Environment,
 ) {
-    // for (sym, table) in symbol_table.types.clone() {
-    //     if table.initializers.is_empty() {
-    //         tracing::trace!("Synthesizing init for {sym:?}");
-    //         let mut body_exprs: Vec<ExprID> = vec![];
+    for (sym, table) in symbol_table.types.clone() {
+        if table.initializers.is_empty() {
+            tracing::trace!("Synthesizing init for {sym:?}");
+            // We need to generate an initializer for this struct
+            let mut param_exprs: Vec<ParsedExpr> = vec![];
+            let mut body_exprs: Vec<ParsedExpr> = vec![];
+            for property in table.properties {
+                let param_sym = symbol_table.add(
+                    &property.name,
+                    crate::SymbolKind::Param,
+                    env.next_expr_id(),
+                    None,
+                );
 
-    //         // We need to generate an initializer for this struct
-    //         let mut params: Vec<ExprID> = vec![];
-    //         for property in table.properties {
-    //             let param_sym = symbol_table.add(
-    //                 &property.name,
-    //                 crate::SymbolKind::Param,
-    //                 -(source_file.nodes.len() as i32),
-    //                 None,
-    //             );
+                param_exprs.push(gen_expr(
+                    env,
+                    Expr::Parameter(Name::Resolved(param_sym, property.name.to_string()), None),
+                ));
 
-    //             let assignment_receiver = source_file.add(
-    //                 env.next_expr_id(),
-    //                 Expr::Variable(Name::_Self(sym)),
-    //                 ExprMeta::generated(),
-    //             );
-    //             let assignment_lhs = source_file.add(
-    //                 env.next_expr_id(),
-    //                 Expr::Member(Some(assignment_receiver), property.name.clone()),
-    //                 ExprMeta::generated(),
-    //             );
-    //             let assignment_rhs = source_file.add(
-    //                 env.next_expr_id(),
-    //                 Expr::Variable(Name::Resolved(param_sym, property.name.clone()), None),
-    //                 ExprMeta::generated(),
-    //             );
-    //             let assignment = source_file.add(
-    //                 env.next_expr_id(),
-    //                 Expr::Assignment(assignment_lhs, assignment_rhs),
-    //                 ExprMeta::generated(),
-    //             );
-    //             body_exprs.push(assignment);
+                let member_expr = Expr::Member(
+                    Some(gen_expr(env, Expr::Variable(Name::_Self(sym))).into()),
+                    property.name.to_string(),
+                );
+                let assignment_expr = Expr::Assignment(
+                    gen_expr(env, member_expr).into(),
+                    gen_expr(
+                        env,
+                        Expr::Variable(Name::Resolved(param_sym, property.name.clone())),
+                    )
+                    .into(),
+                );
 
-    //             params.push(source_file.add(
-    //                 env.next_expr_id(),
-    //                 Expr::Parameter(
-    //                     Name::Resolved(param_sym, property.name.to_string()),
-    //                     property.type_id,
-    //                 ),
-    //                 ExprMeta::generated(),
-    //             ));
-    //         }
+                body_exprs.push(gen_expr(env, assignment_expr));
+            }
 
-    //         // Make sure the func always returns self
-    //         let self_ret = source_file.add(
-    //             env.next_expr_id(),
-    //             Expr::Variable(Name::_Self(sym), None),
-    //             ExprMeta::generated(),
-    //         );
-    //         body_exprs.push(self_ret);
+            // Make sure the func always returns self
+            let self_ret = gen_expr(env, Expr::Variable(Name::_Self(sym)));
+            body_exprs.push(self_ret);
 
-    //         let body = source_file.add(
-    //             env.next_expr_id(),
-    //             Expr::Block(body_exprs),
-    //             ExprMeta::generated(),
-    //         );
+            let body = gen_expr(env, Expr::Block(body_exprs));
 
-    //         let name = Some(Name::Raw("PLACEHOLD".into()));
-    //         let init_func = source_file.add(
-    //             env.next_expr_id(),
-    //             Expr::Func {
-    //                 name,
-    //                 generics: vec![],
-    //                 params: params.clone(),
-    //                 body,
-    //                 ret: None,
-    //                 captures: vec![],
-    //             },
-    //             ExprMeta::generated(),
-    //         );
+            let func = gen_expr(
+                env,
+                Expr::Func {
+                    name: Some(Name::Resolved(sym, "init".to_string())),
+                    generics: vec![],
+                    params: param_exprs,
+                    body: Box::new(body),
+                    ret: None,
+                    captures: vec![],
+                },
+            );
 
-    //         #[allow(clippy::expect_used)]
-    //         let struct_info = symbol_table
-    //             .get(&sym)
-    //             .cloned()
-    //             .expect("didn't get struct for struct???");
+            #[allow(clippy::expect_used)]
+            let struct_info = symbol_table
+                .get(&sym)
+                .cloned()
+                .expect("didn't get struct for struct???");
 
-    //         let init_expr = source_file.add(
-    //             env.next_expr_id(),
-    //             Expr::Init(Some(sym), init_func),
-    //             ExprMeta::generated(),
-    //         );
-    //         let definition = struct_info.definition.clone();
-    //         let init_sym = symbol_table.add(
-    //             "init",
-    //             SymbolKind::SyntheticConstructor,
-    //             init_expr,
-    //             definition,
-    //         );
+            let init = gen_expr(env, Expr::Init(Some(sym), Box::new(func)));
 
-    //         // Make sure it's resolved
-    //         source_file.nodes.insert(
-    //             init_func,
-    //             Expr::Func {
-    //                 name: Some(Name::Resolved(init_sym, "init".into())),
-    //                 generics: vec![],
-    //                 params: params.clone(),
-    //                 body,
-    //                 ret: None,
-    //                 captures: vec![],
-    //             },
-    //         );
+            let definition = struct_info.definition.clone();
+            let init_sym = symbol_table.add(
+                "init",
+                SymbolKind::SyntheticConstructor,
+                init.id,
+                definition,
+            );
 
-    //         let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
-    //         else {
-    //             tracing::error!(
-    //                 "didn't get struct from expr id: {:?}",
-    //                 source_file.get(&struct_info.expr_id)
-    //             );
-    //             return;
-    //         };
+            symbol_table.add_initializer(init_sym, init.id);
 
-    //         let Some(Expr::Block(existing_body_ids)) = source_file.get_mut(&body) else {
-    //             tracing::error!("didn't get block body");
-    //             return;
-    //         };
+            let mut inserter = InitInserter {
+                struct_id: sym,
+                initializer: init,
+            };
 
-    //         symbol_table.add_initializer(sym, init_expr);
+            for root in source_file.roots_mut() {
+                root.drive_mut(&mut inserter);
+            }
 
-    //         existing_body_ids.insert(0, init_expr);
-    //     }
-    // }
+            // let Some(Expr::Struct { body, .. }) = source_file.get(&struct_info.expr_id).cloned()
+            // else {
+            //     tracing::error!(
+            //         "didn't get struct from expr id: {:?}",
+            //         source_file.get(&struct_info.expr_id)
+            //     );
+            //     return;
+            // };
+
+            // let Some(Expr::Block(existing_body_ids)) = source_file.get_mut(&body) else {
+            //     tracing::error!("didn't get block body");
+            //     return;
+            // };
+
+            //
+
+            // existing_body_ids.insert(0, init_expr);
+        }
+    }
+}
+
+fn gen_expr(env: &mut Environment, expr: Expr) -> ParsedExpr {
+    ParsedExpr {
+        id: env.next_expr_id(),
+        expr,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    // use std::path::PathBuf;
+    use std::path::PathBuf;
 
-    // use crate::{
-    //     NameResolved, SourceFile, SymbolID, SymbolTable, compiling::driver::Driver,
-    //     environment::Environment, expr::Expr, name::Name, synthesis::synthesize_inits,
-    // };
+    use crate::{
+        NameResolved, SourceFile, SymbolID, SymbolTable,
+        compiling::driver::Driver,
+        environment::Environment,
+        name::Name,
+        parsed_expr::{Expr, ParsedExpr},
+        synthesis::synthesize_inits,
+    };
 
-    // pub fn resolve_with_symbols(
-    //     code: &'static str,
-    // ) -> (SourceFile<NameResolved>, SymbolTable, Environment) {
-    //     let mut driver = Driver::with_str(code);
-    //     let resolved = driver
-    //         .parse()
-    //         .into_iter()
-    //         .next()
-    //         .unwrap()
-    //         .resolved(&mut driver.symbol_table, &driver.config);
-    //     let source_file = resolved.source_file(&PathBuf::from("-")).unwrap().clone();
+    pub fn resolve_with_symbols(
+        code: &'static str,
+    ) -> (SourceFile<NameResolved>, SymbolTable, Environment) {
+        let mut driver = Driver::with_str(code);
+        let resolved = driver
+            .parse()
+            .into_iter()
+            .next()
+            .unwrap()
+            .resolved(&mut driver.symbol_table, &driver.config);
+        let source_file = resolved.source_file(&PathBuf::from("-")).unwrap().clone();
 
-    //     (source_file, driver.symbol_table, resolved.env)
-    // }
+        (source_file, driver.symbol_table, resolved.env)
+    }
 
-    // #[test]
-    // fn synthesizes_init() {
-    //     let (mut resolved, mut symbol_table, mut env) = resolve_with_symbols(
-    //         "
-    //     struct Person {
-    //         let age: Int
-    //     }
-    //     ",
-    //     );
+    #[test]
+    fn synthesizes_init() {
+        let (mut resolved, mut symbol_table, mut env) = resolve_with_symbols(
+            "
+        struct Person {
+            let age: Int
+        }
+        ",
+        );
 
-    //     synthesize_inits(&mut resolved, &mut symbol_table, &mut env);
+        synthesize_inits(&mut resolved, &mut symbol_table, &mut env);
 
-    //     let Some(Expr::Struct { body, .. }) = resolved.get(&resolved.root_ids()[0]) else {
-    //         panic!("didn't get struct: {:?}", resolved.roots()[0]);
-    //     };
+        let Expr::Struct {
+            body:
+                box ParsedExpr {
+                    expr: Expr::Block(items),
+                    ..
+                },
+            ..
+        } = &resolved.roots()[0].expr
+        else {
+            panic!("didn't get struct: {:?}", resolved.roots()[0]);
+        };
 
-    //     let Some(Expr::Block(ids)) = resolved.get(body) else {
-    //         panic!("didn't get struct body")
-    //     };
+        let Expr::Init(_, func_expr) = &items[0].expr else {
+            panic!("didn't get init")
+        };
 
-    //     let Some(Expr::Init(_, func_id)) = resolved.get(&ids[0]) else {
-    //         panic!("didn't get init")
-    //     };
+        let Expr::Func {
+            name,
+            generics,
+            params,
+            body,
+            ret,
+            captures,
+        } = &func_expr.expr
+        else {
+            panic!("didn't get init func")
+        };
 
-    //     let Some(Expr::Func {
-    //         name,
-    //         generics,
-    //         params,
-    //         body,
-    //         ret,
-    //         captures,
-    //     }) = resolved.get(func_id)
-    //     else {
-    //         panic!("didn't get init func")
-    //     };
+        let Some(Name::Resolved(_, init_name)) = name else {
+            panic!("didn't get init");
+        };
+        assert_eq!(init_name, "init");
+        assert!(generics.is_empty());
+        assert_eq!(params.len(), 1);
+        assert_eq!(ret, &None);
+        assert!(captures.is_empty());
 
-    //     let Some(Name::Resolved(_, init_name)) = name else {
-    //         panic!("didn't get init");
-    //     };
-    //     assert_eq!(init_name, "init");
-    //     assert!(generics.is_empty());
-    //     assert_eq!(params.len(), 1);
-    //     assert_eq!(ret, &None);
-    //     assert!(captures.is_empty());
+        let Expr::Block(body_exprs) = &body.expr else {
+            panic!("didn't get body")
+        };
 
-    //     let Some(Expr::Block(body_ids)) = resolved.get(body) else {
-    //         panic!("didn't get body")
-    //     };
+        assert_eq!(body_exprs.len(), 2);
+        let Expr::Assignment(lhs, rhs) = &body_exprs[0].expr else {
+            panic!("didn't get assignment");
+        };
 
-    //     assert_eq!(body_ids.len(), 2);
-    //     let Some(&Expr::Assignment(lhs, rhs)) = resolved.get(&body_ids[0]) else {
-    //         panic!("didn't get assignment");
-    //     };
+        let Expr::Member(_, name) = &lhs.expr else {
+            panic!("didn't get member");
+        };
 
-    //     let Expr::Member(_, name) = resolved.get(&lhs).unwrap() else {
-    //         panic!("didn't get member");
-    //     };
+        assert_eq!(name, "age");
 
-    //     assert_eq!(name, "age");
-
-    //     assert_eq!(
-    //         resolved.get(&rhs).unwrap(),
-    //         &Expr::Variable(Name::Resolved(SymbolID::resolved(3), "age".into()), None)
-    //     );
-    // }
+        assert_eq!(
+            rhs.expr,
+            Expr::Variable(Name::Resolved(SymbolID::resolved(3), "age".into()))
+        );
+    }
 }

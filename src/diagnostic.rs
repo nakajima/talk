@@ -1,13 +1,8 @@
 use std::{hash::Hash, path::PathBuf};
 
 use crate::{
-    SourceFile,
-    lexer::LexerError,
-    lowering::ir_error::IRError,
-    name_resolver::NameResolverError,
-    parser::{ExprID, ParserError},
-    token::Token,
-    type_checker::TypeError,
+    SourceFile, expr_id::ExprID, lexer::LexerError, lowering::ir_error::IRError,
+    name_resolver::NameResolverError, parser::ParserError, token::Token, type_checker::TypeError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

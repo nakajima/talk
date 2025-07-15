@@ -41,6 +41,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 ena = "0.14.3"
 tracing-tree = "0.4.0"
+derive-visitor = "0.4.0"
 
 [features]
 default = ["cli"]

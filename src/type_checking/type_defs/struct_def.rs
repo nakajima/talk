@@ -1,7 +1,7 @@
 use crate::{
     SymbolID,
     parsed_expr::ParsedExpr,
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     ty::Ty,
     type_defs::{TypeParams, protocol_def::Conformance},
     type_var_id::TypeVarID,

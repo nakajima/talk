@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
     name::Name,
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     ty::Ty,
     type_checker::Scheme,
     type_defs::{TypeDef, builtin_def::BuiltinDef},
@@ -443,8 +443,9 @@ mod tests {
 mod optional_tests {
     use crate::{
         any_expr,
+        expr_id::ExprID,
         parsed_expr::{self, ParsedExpr},
-        parser::{ExprID, parse},
+        parser::parse,
     };
 
     #[test]

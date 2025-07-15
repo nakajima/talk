@@ -1,7 +1,7 @@
 use tracing::trace_span;
 
 use crate::{
-    SymbolID, environment::Environment, name::ResolvedName, parser::ExprID,
+    SymbolID, environment::Environment, name::ResolvedName, parsing::expr_id::ExprID,
     substitutions::Substitutions, token_kind::TokenKind, ty::Ty,
 };
 

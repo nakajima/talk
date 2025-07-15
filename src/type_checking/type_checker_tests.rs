@@ -4,7 +4,7 @@ mod tests {
         SymbolID, any_typed, assert_eq_diff, check,
         diagnostic::{Diagnostic, DiagnosticKind},
         name::ResolvedName,
-        parser::ExprID,
+        parsing::expr_id::ExprID,
         ty::Ty,
         type_checker::TypeError,
         type_defs::TypeDef,
@@ -35,11 +35,7 @@ mod tests {
                 Expr::Call {
                     callee: any_typed!(
                         Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::Func(
-                            vec![Ty::Int],
-                            Ty::Struct(SymbolID::typed(1), vec![]).into(),
-                            vec![]
-                        )
+                        Ty::Struct(SymbolID::typed(1), vec![])
                     )
                     .into(),
                     type_args: vec![],
@@ -1281,8 +1277,6 @@ mod tests {
             panic!("didn't get func");
         };
 
-        println!("ARRAY PARAMS: {params:#?}");
-
         assert_eq!(1, params.len());
 
         let root = checked.typed_expr(checked.root_ids()[0]).unwrap();
@@ -1885,7 +1879,7 @@ mod operator_tests {
     use crate::{
         SymbolID, any_typed, check,
         name::ResolvedName,
-        parser::ExprID,
+        parsing::expr_id::ExprID,
         token_kind::TokenKind,
         ty::Ty,
         typed_expr::{Expr, TypedExpr},

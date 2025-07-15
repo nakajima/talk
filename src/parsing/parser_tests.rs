@@ -8,7 +8,7 @@ mod tests {
     use crate::environment::Environment;
     use crate::lexer::Lexer;
     use crate::parsed_expr::{IncompleteExpr, ParsedExpr, Pattern};
-    use crate::parser::{ExprID, Parser, parse_with_session};
+    use crate::parser::{Parser, parse_with_session};
     use crate::token::Token;
     use crate::{
         Parsed, SourceFile, name::Name, parser::parse_with_comments, token_kind::TokenKind,

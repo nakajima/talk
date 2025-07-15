@@ -1,9 +1,12 @@
-use crate::{SymbolID, name::Name, parser::ExprID, token_kind::TokenKind};
+use derive_visitor::DriveMut;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+use crate::{SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind};
+
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum IncompleteExpr {
     Member(Option<Box<ParsedExpr>>), // Receiver
     Func {
+        #[drive(skip)]
         name: Option<Name>,
         params: Option<Vec<ParsedExpr>>,
         generics: Option<Vec<ParsedExpr>>,
@@ -12,15 +15,18 @@ pub enum IncompleteExpr {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum Pattern {
     // Literals that must match exactly
+    #[drive(skip)]
     LiteralInt(String),
+    #[drive(skip)]
     LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
 
     // Variable binding (always succeeds, binds value)
+    #[drive(skip)]
     Bind(Name),
 
     // Wildcard (always succeeds, ignores value)
@@ -28,7 +34,9 @@ pub enum Pattern {
 
     // Enum variant destructuring
     Variant {
+        #[drive(skip)]
         enum_name: Option<Name>, // None for .some, Some for Option.some
+        #[drive(skip)]
         variant_name: String,
         fields: Vec<ParsedExpr>, // Recursive patterns for fields
     },
@@ -39,20 +47,23 @@ pub enum Pattern {
     // PatternRef(Box<Pattern>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum Expr {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
 
     // Start of the real expressions
     LiteralArray(Vec<ParsedExpr>),
+    #[drive(skip)]
     LiteralInt(String),
+    #[drive(skip)]
     LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
+    #[drive(skip)]
     LiteralString(String),
-    Unary(TokenKind, Box<ParsedExpr>),
-    Binary(Box<ParsedExpr>, TokenKind, Box<ParsedExpr>),
+    Unary(#[drive(skip)] TokenKind, Box<ParsedExpr>),
+    Binary(Box<ParsedExpr>, #[drive(skip)] TokenKind, Box<ParsedExpr>),
     Tuple(Vec<ParsedExpr>),
     Block(Vec<ParsedExpr>),
     Call {
@@ -64,19 +75,22 @@ pub enum Expr {
     Return(Option<Box<ParsedExpr>>),
     Break,
     Extend {
-        name: Name,                /* name */
+        #[drive(skip)]
+        name: Name, /* name */
         generics: Vec<ParsedExpr>, /* generics */
         conformances: Vec<ParsedExpr>,
         body: Box<ParsedExpr>, /* body */
     },
     Struct {
-        name: Name,                /* name */
+        #[drive(skip)]
+        name: Name, /* name */
         generics: Vec<ParsedExpr>, /* generics */
         conformances: Vec<ParsedExpr>,
         body: Box<ParsedExpr>, /* body */
     },
 
     Property {
+        #[drive(skip)]
         name: Name,
         type_repr: Option<Box<ParsedExpr>>,
         default_value: Option<Box<ParsedExpr>>,
@@ -84,57 +98,68 @@ pub enum Expr {
 
     // A type annotation
     TypeRepr {
+        #[drive(skip)]
         name: Name,
         generics: Vec<ParsedExpr>, /* generics */
         conformances: Vec<ParsedExpr>,
+        #[drive(skip)]
         introduces_type: bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     },
 
     FuncTypeRepr(
-        Vec<ParsedExpr>, /* [TypeRepr] args */
-        Box<ParsedExpr>, /* return TypeRepr */
-        bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
+        Vec<ParsedExpr>,     /* [TypeRepr] args */
+        Box<ParsedExpr>,     /* return TypeRepr */
+        #[drive(skip)] bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
     TupleTypeRepr(
-        Vec<ParsedExpr>, /* (T1, T2) */
-        bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
+        Vec<ParsedExpr>,     /* (T1, T2) */
+        #[drive(skip)] bool, /* is this a generic type parameter (if so we need to declare it in a scope) */
     ),
 
     // A dot thing
-    Member(Option<Box<ParsedExpr>> /* receiver */, String),
+    Member(
+        Option<Box<ParsedExpr>>, /* receiver */
+        #[drive(skip)] String,
+    ),
 
-    Init(Option<SymbolID>, Box<ParsedExpr> /* func */),
+    Init(
+        #[drive(skip)] Option<SymbolID>,
+        Box<ParsedExpr>, /* func */
+    ),
 
     // Function stuff
     Func {
+        #[drive(skip)]
         name: Option<Name>,
         generics: Vec<ParsedExpr>,
         params: Vec<ParsedExpr>,      /* params tuple */
         body: Box<ParsedExpr>,        /* body */
         ret: Option<Box<ParsedExpr>>, /* return type */
+        #[drive(skip)]
         captures: Vec<SymbolID>,
     },
 
     Parameter(
-        Name,                    /* name */
+        #[drive(skip)] Name,     /* name */
         Option<Box<ParsedExpr>>, /* TypeRepr */
     ),
     CallArg {
+        #[drive(skip)]
         label: Option<Name>,
         value: Box<ParsedExpr>,
     },
 
     // Variables
     Let(
-        Name,                    /* name */
+        #[drive(skip)] Name,     /* name */
         Option<Box<ParsedExpr>>, /* type annotation */
     ),
     Assignment(
         Box<ParsedExpr>, /* LHS */
         Box<ParsedExpr>, /* RHS */
     ),
-    Variable(Name),
+    Variable(#[drive(skip)] Name),
 
     // For name resolution
     // ResolvedVariable(SymbolID, Option<ParsedExpr>),
@@ -154,6 +179,7 @@ pub enum Expr {
 
     // Enum declaration
     EnumDecl {
+        #[drive(skip)]
         name: Name, // TypeRepr name: Option
         conformances: Vec<ParsedExpr>,
         generics: Vec<ParsedExpr>, // Generics TypeParams <T>
@@ -162,8 +188,8 @@ pub enum Expr {
 
     // Individual enum variant in declaration
     EnumVariant(
-        Name,            // name: "some"
-        Vec<ParsedExpr>, // associated types: [TypeRepr("T")]
+        #[drive(skip)] Name, // name: "some"
+        Vec<ParsedExpr>,     // associated types: [TypeRepr("T")]
     ),
 
     // Match expression
@@ -180,12 +206,13 @@ pub enum Expr {
 
     // Patterns (for match arms)
     PatternVariant(
-        Option<Name>,    // enum name (None for unqualified .some)
-        Name,            // variant name: "some"
-        Vec<ParsedExpr>, // bindings: ["wrapped"]
+        #[drive(skip)] Option<Name>, // enum name (None for unqualified .some)
+        #[drive(skip)] Name,         // variant name: "some"
+        Vec<ParsedExpr>,             // bindings: ["wrapped"]
     ),
 
     ProtocolDecl {
+        #[drive(skip)]
         name: Name,
         associated_types: Vec<ParsedExpr>,
         body: Box<ParsedExpr>,
@@ -193,6 +220,7 @@ pub enum Expr {
     },
 
     FuncSignature {
+        #[drive(skip)]
         name: Name,
         params: Vec<ParsedExpr>,
         generics: Vec<ParsedExpr>,
@@ -200,8 +228,9 @@ pub enum Expr {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub struct ParsedExpr {
+    #[drive(skip)]
     pub id: ExprID,
     pub expr: Expr,
 }

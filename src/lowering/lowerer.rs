@@ -11,6 +11,7 @@ use crate::{
     diagnostic::Diagnostic,
     environment::Environment,
     expr::ExprMeta,
+    expr_id::ExprID,
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -23,7 +24,6 @@ use crate::{
         register::Register,
     },
     name::ResolvedName,
-    parser::ExprID,
     source_file,
     token::Token,
     token_kind::TokenKind,

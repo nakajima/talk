@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::{
     SourceFile, SymbolTable, Typed, compiling::compilation_session::SharedCompilationSession,
-    diagnostic::Diagnostic, environment::Environment, parser::ExprID, ty::Ty,
+    diagnostic::Diagnostic, environment::Environment, parsing::expr_id::ExprID, ty::Ty,
     type_checker::TypeError, typed_expr::TypedExpr,
 };
 

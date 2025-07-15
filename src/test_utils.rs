@@ -1,22 +1,24 @@
 #[macro_export]
 macro_rules! any_expr {
-    ($expr:expr) => {
+    ($expr:expr) => {{
+        use $crate::expr_id::ExprID;
         ParsedExpr {
             id: ExprID::ANY,
             expr: $expr,
         }
-    };
+    }};
 }
 
 #[macro_export]
 macro_rules! any_typed {
-    ($expr:expr, $ty: expr) => {
+    ($expr:expr, $ty: expr) => {{
+        use $crate::expr_id::ExprID;
         TypedExpr {
             id: ExprID::ANY,
             expr: $expr,
             ty: $ty,
         }
-    };
+    }};
 }
 
 #[macro_export]

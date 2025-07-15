@@ -4,7 +4,7 @@ use crate::{
     SymbolID, SymbolTable,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,

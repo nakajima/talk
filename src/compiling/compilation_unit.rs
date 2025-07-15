@@ -211,25 +211,16 @@ impl CompilationUnit<Resolved> {
     ) -> CompilationUnit<Typed> {
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
-        for file in self.stage.files {
+        for mut file in self.stage.files {
             let path = file.path.clone();
+            let meta = file.meta.borrow().clone();
 
             let mut typed = if driver_config.include_prelude {
-                TypeChecker::new(
-                    self.session.clone(),
-                    symbol_table,
-                    file.path.clone(),
-                    &file.meta.borrow(),
-                )
-                .infer(&file, &mut self.env)
+                TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
+                    .infer(&mut file, &mut self.env)
             } else {
-                TypeChecker::new(
-                    self.session.clone(),
-                    symbol_table,
-                    file.path.clone(),
-                    &file.meta.borrow(),
-                )
-                .infer_without_prelude(&mut self.env, &file)
+                TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
+                    .infer_without_prelude(&mut self.env, &mut file)
             };
             let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
             let mut solution = solver.solve();

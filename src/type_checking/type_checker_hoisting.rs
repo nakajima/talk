@@ -6,7 +6,7 @@ use crate::{
     environment::{Environment, RawTypeParameter, TypeParameter},
     name::Name,
     parsed_expr::ParsedExpr,
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeChecker, TypeError},

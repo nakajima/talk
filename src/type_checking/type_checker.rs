@@ -10,12 +10,13 @@ use crate::{
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     environment::free_type_vars,
+    expr_id::ExprID,
     name::{Name, ResolvedName},
     name_resolver::NameResolverError,
     parsed_expr::{self, IncompleteExpr, ParsedExpr, Pattern},
-    parser::ExprID,
     source_file::SourceFile,
     substitutions::Substitutions,
+    synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
     type_defs::{TypeDef, protocol_def::Conformance},
@@ -152,7 +153,7 @@ impl<'a> TypeChecker<'a> {
 
     pub fn infer(
         &mut self,
-        source_file: &'a SourceFile<NameResolved>,
+        source_file: &'a mut SourceFile<NameResolved>,
         env: &mut Environment,
     ) -> SourceFile<Typed> {
         self.infer_without_prelude(env, source_file)
@@ -161,10 +162,11 @@ impl<'a> TypeChecker<'a> {
     pub fn infer_without_prelude(
         &mut self,
         env: &mut Environment,
-        source_file: &'a SourceFile<NameResolved>,
+        source_file: &'a mut SourceFile<NameResolved>,
     ) -> SourceFile<Typed> {
+        synthesize_inits(source_file, self.symbol_table, env);
+
         let roots = source_file.roots();
-        // synthesize_inits(&mut source_file, self.symbol_table, env);
 
         // Just define names for all of the funcs, structs and enums
         if let Err(e) = self.hoist(roots, env)
@@ -686,7 +688,12 @@ impl<'a> TypeChecker<'a> {
             id: func_id,
             expr:
                 parsed_expr::Expr::Func {
-                    name,
+                    // Initializers share their struct's symbol ID for convenience during
+                    // name resolution. However, using that ID when inferring the function
+                    // would overwrite the struct's own type scheme. The initializer does not
+                    // need a named symbol during inference, so we explicitly ignore its
+                    // resolved name here.
+                    name: _,
                     generics,
                     params,
                     body,
@@ -701,9 +708,10 @@ impl<'a> TypeChecker<'a> {
         };
 
         // TODO: Add a test to make sure ret isn't set (it should never be for inits)
+
         let inferred = self.infer_func(
             *func_id,
-            name,
+            &None,
             generics,
             params,
             captures,
@@ -1310,8 +1318,6 @@ impl<'a> TypeChecker<'a> {
             let param_ty = self.infer_node(param, env, &None)?;
             param_vars.push(param_ty);
         }
-
-        tracing::error!("Inferring params: {params:?}");
 
         let mut ret_ty =
             self.infer_node(body, env, &annotated_ret_ty.as_ref().map(|t| t.ty.clone()))?;

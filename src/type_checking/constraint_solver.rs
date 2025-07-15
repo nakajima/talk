@@ -4,7 +4,7 @@ use crate::{
     constraint::Constraint,
     environment::{Environment, TypeParameter},
     name::{Name, ResolvedName},
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},

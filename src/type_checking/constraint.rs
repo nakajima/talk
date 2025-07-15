@@ -1,6 +1,6 @@
 use crate::{
     SymbolID,
-    parser::ExprID,
+    parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
@@ -13,7 +13,7 @@ use crate::{
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
-    UnqualifiedMember(ExprID, String, Ty), // member name, expected type
+    UnqualifiedMember(ExprID, String, Ty),         // member name, expected type
     InitializerCall {
         expr_id: ExprID,
         initializes_id: SymbolID,
