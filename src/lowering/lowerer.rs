@@ -22,7 +22,7 @@ use crate::{
         phi_predecessors::PhiPredecessors,
         register::Register,
     },
-    name::{Name, ResolvedName},
+    name::ResolvedName,
     parser::ExprID,
     source_file,
     token::Token,
@@ -494,8 +494,8 @@ impl<'a> Lowerer<'a> {
             | Expr::LiteralFalse
             | Expr::LiteralTrue => self.lower_literal(typed_expr),
             Expr::Binary(_, _, _) => self.lower_binary_op(typed_expr),
-            Expr::Assignment(lhs, rhs) => self.lower_assignment(&lhs, &rhs),
-            Expr::Variable(name) => self.lower_variable(typed_expr, &name),
+            Expr::Assignment(lhs, rhs) => self.lower_assignment(lhs, rhs),
+            Expr::Variable(name) => self.lower_variable(typed_expr, name),
             Expr::If(_, _, _) => self.lower_if(typed_expr),
             Expr::Block(_) => self.lower_block(typed_expr),
             Expr::Call { callee, args, .. } => {
@@ -509,18 +509,18 @@ impl<'a> Lowerer<'a> {
             }
             Expr::Member(None, name) => self.lower_member(&None, typed_expr, name, false),
             Expr::Match(scrutinee, arms) => self.lower_match(scrutinee, arms, &typed_expr.ty),
-            Expr::CallArg { value, .. } => self.lower_expr(&value),
+            Expr::CallArg { value, .. } => self.lower_expr(value),
             Expr::Struct {
                 name: ResolvedName(struct_id, _),
                 body,
                 ..
-            } => self.lower_struct(typed_expr, *struct_id, &body),
+            } => self.lower_struct(typed_expr, *struct_id, body),
             Expr::Extend {
                 name: ResolvedName(type_id, _),
                 body,
                 ..
-            } => self.lower_extend(typed_expr, *type_id, &body),
-            Expr::Init(symbol_id, func_id) => self.lower_init(&symbol_id, &func_id).or_else(|| {
+            } => self.lower_extend(typed_expr, *type_id, body),
+            Expr::Init(symbol_id, func_id) => self.lower_init(symbol_id, func_id).or_else(|| {
                 self.push_err(format!("No symbol for ID {func_id:?}").as_str(), func_id.id);
 
                 None
@@ -592,7 +592,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } = &body_expr
             {
-                self.lower_method_stub(&ty, &name, &func_name)?;
+                self.lower_method_stub(ty, name, func_name)?;
             }
         }
 
@@ -604,7 +604,7 @@ impl<'a> Lowerer<'a> {
         let mut member_types = vec![];
 
         for item in items {
-            if let Some(reg) = self.lower_expr(&item) {
+            if let Some(reg) = self.lower_expr(item) {
                 let ir_type = item.ty.to_ir(self);
                 member_registers.push(TypedRegister::new(ir_type.clone(), reg));
                 member_types.push(ir_type);
@@ -888,7 +888,7 @@ impl<'a> Lowerer<'a> {
                 Expr::Func {
                     name: Some(name), ..
                 } => {
-                    self.lower_method(&member, &name);
+                    self.lower_method(&member, name);
                 }
                 Expr::Init(..) | Expr::Property { .. } => {
                     // These are handled by the StructDef or the first loop; ignore them here.
@@ -1334,14 +1334,14 @@ impl<'a> Lowerer<'a> {
         let then_block_id = self.new_basic_block();
 
         self.lower_pattern_and_bind(
-            &pattern_id,
+            pattern_id,
             scrutinee,
             cond_block_id,
             then_block_id,
             else_block_id,
         );
         self.set_current_block(then_block_id);
-        let Some(body_ret_reg) = self.lower_expr(&body_id) else {
+        let Some(body_ret_reg) = self.lower_expr(body_id) else {
             tracing::error!("Did not get body return: {:?}", body_id);
             return (Register(0), BasicBlockID(u32::MAX));
         };
@@ -1399,7 +1399,7 @@ impl<'a> Lowerer<'a> {
                 };
 
                 /* ... find variant by name in type_def ... */
-                let Some((tag, variant_def)) = type_def.tag_with_variant_for(&variant_name) else {
+                let Some((tag, variant_def)) = type_def.tag_with_variant_for(variant_name) else {
                     self.push_err("message", pattern_typed_expr.id);
                     return None;
                 };
@@ -1511,12 +1511,12 @@ impl<'a> Lowerer<'a> {
             Pattern::Bind(_) => None,
             Pattern::LiteralInt(val) => {
                 let reg = self.allocate_register();
-                self.push_instr(Instr::ConstantInt(reg, str::parse(&val).ok()?));
+                self.push_instr(Instr::ConstantInt(reg, str::parse(val).ok()?));
                 Some(reg)
             }
             Pattern::LiteralFloat(val) => {
                 let reg = self.allocate_register();
-                self.push_instr(Instr::ConstantFloat(reg, str::parse(&val).ok()?));
+                self.push_instr(Instr::ConstantFloat(reg, str::parse(val).ok()?));
                 Some(reg)
             }
             Pattern::LiteralTrue => {
@@ -1619,7 +1619,7 @@ impl<'a> Lowerer<'a> {
 
         match &receiver.ty {
             Ty::Struct(struct_id, _) => {
-                let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned()
+                let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned()
                 else {
                     unreachable!("didn't get struct def");
                 };
@@ -1731,11 +1731,11 @@ impl<'a> Lowerer<'a> {
         let register = self.allocate_register();
         match &typed_expr.expr {
             Expr::LiteralInt(val) => {
-                self.push_instr(Instr::ConstantInt(register, str::parse(&val).ok()?));
+                self.push_instr(Instr::ConstantInt(register, str::parse(val).ok()?));
                 Some(register)
             }
             Expr::LiteralFloat(val) => {
-                self.push_instr(Instr::ConstantFloat(register, str::parse(&val).ok()?));
+                self.push_instr(Instr::ConstantFloat(register, str::parse(val).ok()?));
                 Some(register)
             }
             Expr::LiteralFalse => {
@@ -1758,8 +1758,8 @@ impl<'a> Lowerer<'a> {
 
         let operand_ty = lhs.ty.clone();
 
-        let operand_1 = self.lower_expr(&lhs)?;
-        let operand_2 = self.lower_expr(&rhs)?;
+        let operand_1 = self.lower_expr(lhs)?;
+        let operand_2 = self.lower_expr(rhs)?;
         let return_reg = self.allocate_register();
 
         use TokenKind::*;
@@ -1918,7 +1918,7 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        let cond_reg = self.lower_expr(&cond)?;
+        let cond_reg = self.lower_expr(cond)?;
         let then_id = self.new_basic_block();
 
         let mut else_reg: Option<Register> = None;
@@ -1936,12 +1936,12 @@ impl<'a> Lowerer<'a> {
         });
 
         self.set_current_block(then_id);
-        let then_reg = self.lower_expr(&conseq);
+        let then_reg = self.lower_expr(conseq);
         self.push_instr(Instr::Jump(merge_id));
 
         if let Some(alt) = alt {
             self.set_current_block(else_id?);
-            else_reg = self.lower_expr(&alt);
+            else_reg = self.lower_expr(alt);
             self.push_instr(Instr::Jump(merge_id));
         }
 
@@ -1996,7 +1996,7 @@ impl<'a> Lowerer<'a> {
         if let Expr::Variable(ResolvedName(symbol, _)) = &callee_typed_expr.expr
             && crate::builtins::is_builtin_func(symbol)
         {
-            return match super::builtins::lower_builtin(symbol, &callee_typed_expr, &args, self) {
+            return match super::builtins::lower_builtin(symbol, callee_typed_expr, args, self) {
                 Ok(res) => return res,
                 Err(e) => {
                     self.push_err(e.message().as_str(), callee_typed_expr.id);
@@ -2032,7 +2032,7 @@ impl<'a> Lowerer<'a> {
                 callee_typed_expr,
                 *enum_id,
                 variant_name,
-                &ty,
+                ty,
                 &arg_registers,
             );
         }
@@ -2048,21 +2048,21 @@ impl<'a> Lowerer<'a> {
                 callee_typed_expr,
                 *enum_id,
                 variant_name,
-                &ty,
+                ty,
                 &arg_registers,
             );
         }
 
         // Handle struct construction
         if let Ty::Init(struct_id, params) = &callee_typed_expr.ty {
-            return self.lower_init_call(struct_id, &ty, arg_registers, params);
+            return self.lower_init_call(struct_id, ty, arg_registers, params);
         }
 
         // Handle method calls
         if let Expr::Member(receiver, name) = &callee_typed_expr.expr {
             return self.lower_method_call(
-                &callee_typed_expr,
-                &receiver,
+                callee_typed_expr,
+                receiver,
                 ret_ty,
                 name,
                 arg_registers,
@@ -2106,7 +2106,7 @@ impl<'a> Lowerer<'a> {
             }
 
             // First, get the register holding the pointer to the closure object itself.
-            let Some(callee_reg) = self.lower_expr(&callee_typed_expr) else {
+            let Some(callee_reg) = self.lower_expr(callee_typed_expr) else {
                 self.push_err(
                     &format!(
                         "Could not lower function variable to get its closure object: {callee_typed_expr:?}",
@@ -2148,7 +2148,7 @@ impl<'a> Lowerer<'a> {
         } else {
             // Fallback for indirect calls (e.g., `(if c then f else g)()` ).
             // Here, the callee is not a static name, so we must use the original call-by-reference.
-            let Some(callee_reg) = self.lower_expr(&callee_typed_expr) else {
+            let Some(callee_reg) = self.lower_expr(callee_typed_expr) else {
                 self.push_err(
                     &format!("did not get callee: {callee_typed_expr:?}"),
                     callee_typed_expr.id,
@@ -2559,15 +2559,14 @@ fn find_or_create_main(
 ) -> (TypedExpr, bool) {
     // If we've already generated a `main` for this file, reuse it so we don't
     // continually duplicate the AST on subsequent lowering passes.
-    if symbol_table.get(&SymbolID::GENERATED_MAIN).is_some() {
-        if let Some(existing) = source_file
+    if symbol_table.get(&SymbolID::GENERATED_MAIN).is_some()
+        && let Some(existing) = source_file
             .roots()
             .iter()
             .find(|expr| expr.id == ExprID(SymbolID::GENERATED_MAIN.0))
         {
             return (existing.clone(), false);
         }
-    }
 
     for root in source_file.roots() {
         if let TypedExpr {
@@ -2586,7 +2585,7 @@ fn find_or_create_main(
 
     // We didn't find a main, we have to generate one
     let body_expr = Expr::Block(source_file.roots().to_vec());
-    let _ = source_file.add(
+    source_file.add(
         env.next_expr_id(),
         ExprMeta {
             start: Token::GENERATED,

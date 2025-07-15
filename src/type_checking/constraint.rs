@@ -1,6 +1,5 @@
 use crate::{
     SymbolID,
-    name::ResolvedName,
     parser::ExprID,
     substitutions::Substitutions,
     ty::Ty,

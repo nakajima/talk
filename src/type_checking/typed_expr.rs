@@ -1,9 +1,3 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
 
 use tracing::trace_span;
 
@@ -229,8 +223,8 @@ impl TypedExpr {
                 default_value,
                 ..
             } => {
-                type_repr.as_mut().map(|t| t.apply(substitutions, env));
-                default_value.as_mut().map(|t| t.apply(substitutions, env));
+                if let Some(t) = type_repr.as_mut() { t.apply(substitutions, env) }
+                if let Some(t) = default_value.as_mut() { t.apply(substitutions, env) }
             }
             Expr::TypeRepr {
                 generics,
@@ -248,7 +242,7 @@ impl TypedExpr {
                 Self::apply_mult(typed_exprs, substitutions, env)
             }
             Expr::Member(typed_expr, _) => {
-                typed_expr.as_mut().map(|t| t.apply(substitutions, env));
+                if let Some(t) = typed_expr.as_mut() { t.apply(substitutions, env) }
             }
             Expr::Init(_, typed_expr) => typed_expr.apply(substitutions, env),
             Expr::Func {
@@ -261,7 +255,7 @@ impl TypedExpr {
                 Self::apply_mult(generics, substitutions, env);
                 Self::apply_mult(params, substitutions, env);
                 body.apply(substitutions, env);
-                ret.as_mut().map(|t| t.apply(substitutions, env));
+                if let Some(t) = ret.as_mut() { t.apply(substitutions, env) }
             }
             Expr::Parameter(_, typed_expr) => {
                 if let Some(t) = typed_expr.as_mut() {
@@ -465,7 +459,7 @@ impl TypedExpr {
         }
     }
 
-    pub fn find_in<'a>(exprs: &'a [TypedExpr], id: ExprID) -> Option<&'a TypedExpr> {
+    pub fn find_in(exprs: &[TypedExpr], id: ExprID) -> Option<&TypedExpr> {
         for expr in exprs {
             if let Some(result) = expr.find(id) {
                 return Some(result);

@@ -1,12 +1,10 @@
 use crate::{
     SymbolID,
-    name::ResolvedName,
     parsed_expr::ParsedExpr,
     parser::ExprID,
     ty::Ty,
     type_defs::{TypeParams, protocol_def::Conformance},
     type_var_id::TypeVarID,
-    typed_expr::TypedExpr,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

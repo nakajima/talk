@@ -1,6 +1,5 @@
 use crate::{
-    NameResolved, SourceFile, SymbolKind, SymbolTable, environment::Environment, expr::ExprMeta,
-    name::Name, parsed_expr::Expr, parser::ExprID,
+    NameResolved, SourceFile, SymbolTable, environment::Environment,
 };
 
 pub fn synthesize_inits(

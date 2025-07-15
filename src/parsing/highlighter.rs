@@ -74,7 +74,7 @@ impl<'a> Higlighter<'a> {
         result.extend(self.collect_lexed_tokens());
 
         for root in self.source_file.roots() {
-            result.extend(self.tokens_from_expr(&root));
+            result.extend(self.tokens_from_expr(root));
         }
 
         result
@@ -174,37 +174,37 @@ impl<'a> Higlighter<'a> {
             Expr::Incomplete(e) => match e {
                 IncompleteExpr::Member(rec) => {
                     if let Some(receiver) = rec {
-                        result.extend(self.tokens_from_expr(&receiver))
+                        result.extend(self.tokens_from_expr(receiver))
                     }
                 }
                 IncompleteExpr::Func { .. } => (),
             },
             Expr::LiteralString(_) => (), // already handled by lexed
-            Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(&items)),
+            Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {
                 result.push(HighlightToken::new(Kind::NUMBER, start, end));
             }
             Expr::LiteralTrue | Expr::LiteralFalse => {
                 result.push(HighlightToken::new(Kind::KEYWORD, start, end))
             }
-            Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(&rhs)),
+            Expr::Unary(_token_kind, rhs) => result.extend(self.tokens_from_expr(rhs)),
             Expr::Binary(box lhs, _token_kind, box rhs) => {
                 result.extend(self.tokens_from_expr_refs(&[lhs, rhs]))
             }
             Expr::Tuple(items) => {
                 result.push(HighlightToken::new(Kind::KEYWORD, start, end));
-                result.extend(self.tokens_from_exprs(&items));
+                result.extend(self.tokens_from_exprs(items));
             }
             Expr::Break => result.push(HighlightToken::new(Kind::KEYWORD, start, end)),
-            Expr::Block(items) => result.extend(self.tokens_from_exprs(&items)),
+            Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Call {
                 callee,
                 type_args,
                 args,
             } => {
-                result.extend(self.tokens_from_expr(&callee));
-                result.extend(self.tokens_from_exprs(&type_args));
-                result.extend(self.tokens_from_exprs(&args));
+                result.extend(self.tokens_from_expr(callee));
+                result.extend(self.tokens_from_exprs(type_args));
+                result.extend(self.tokens_from_exprs(args));
             }
             Expr::ParsedPattern(pattern) => match pattern {
                 Pattern::LiteralInt(_) => {
@@ -219,11 +219,11 @@ impl<'a> Higlighter<'a> {
                 }
                 Pattern::Bind(_name) => {}
                 Pattern::Wildcard => {}
-                Pattern::Variant { fields, .. } => result.extend(self.tokens_from_exprs(&fields)),
+                Pattern::Variant { fields, .. } => result.extend(self.tokens_from_exprs(fields)),
             },
             Expr::Return(rhs) => {
                 if let Some(rhs) = rhs {
-                    result.extend(self.tokens_from_expr(&rhs))
+                    result.extend(self.tokens_from_expr(rhs))
                 }
             }
             Expr::Struct {
@@ -232,9 +232,9 @@ impl<'a> Higlighter<'a> {
                 body,
                 ..
             } => {
-                result.extend(self.tokens_from_exprs(&generics));
-                result.extend(self.tokens_from_exprs(&conformances));
-                result.extend(self.tokens_from_expr(&body));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
+                result.extend(self.tokens_from_expr(body));
             }
             Expr::Extend {
                 generics,
@@ -242,9 +242,9 @@ impl<'a> Higlighter<'a> {
                 body,
                 ..
             } => {
-                result.extend(self.tokens_from_exprs(&generics));
-                result.extend(self.tokens_from_exprs(&conformances));
-                result.extend(self.tokens_from_expr(&body));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
+                result.extend(self.tokens_from_expr(body));
             }
             Expr::Property {
                 name: _name,
@@ -252,10 +252,10 @@ impl<'a> Higlighter<'a> {
                 default_value,
             } => {
                 if let Some(type_repr) = type_repr {
-                    result.extend(self.tokens_from_expr(&type_repr));
+                    result.extend(self.tokens_from_expr(type_repr));
                 }
                 if let Some(default_value) = default_value {
-                    result.extend(self.tokens_from_expr(&default_value));
+                    result.extend(self.tokens_from_expr(default_value));
                 }
             }
             Expr::TypeRepr {
@@ -271,19 +271,19 @@ impl<'a> Higlighter<'a> {
                             .map(|i| HighlightToken::new(Kind::TYPE_PARAMETER, i.start, i.end)),
                     )
                 }
-                result.extend(self.tokens_from_exprs(&generics));
-                result.extend(self.tokens_from_exprs(&conformances));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(conformances));
             }
             Expr::FuncTypeRepr(items, ret, _) => {
-                result.extend(self.tokens_from_exprs(&items));
-                result.extend(self.tokens_from_expr(&ret));
+                result.extend(self.tokens_from_exprs(items));
+                result.extend(self.tokens_from_expr(ret));
             }
             Expr::TupleTypeRepr(items, _) => {
-                result.extend(self.tokens_from_exprs(&items));
+                result.extend(self.tokens_from_exprs(items));
             }
             Expr::Member(receiver, _) => {
                 if let Some(receiver) = receiver {
-                    result.extend(self.tokens_from_expr(&receiver));
+                    result.extend(self.tokens_from_expr(receiver));
                 }
             }
             Expr::Func {
@@ -293,22 +293,22 @@ impl<'a> Higlighter<'a> {
                 ret,
                 ..
             } => {
-                result.extend(self.tokens_from_exprs(&generics));
-                result.extend(self.tokens_from_exprs(&params));
-                result.extend(self.tokens_from_expr(&body));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_exprs(params));
+                result.extend(self.tokens_from_expr(body));
                 if let Some(ret) = ret {
-                    result.extend(self.tokens_from_expr(&ret));
+                    result.extend(self.tokens_from_expr(ret));
                 }
             }
-            Expr::Init(_, func_id) => result.extend(self.tokens_from_expr(&func_id)),
+            Expr::Init(_, func_id) => result.extend(self.tokens_from_expr(func_id)),
             Expr::Parameter(_name, ty) => {
                 if let Some(ty) = ty {
-                    result.extend(self.tokens_from_expr(&ty));
+                    result.extend(self.tokens_from_expr(ty));
                 }
             }
             Expr::Let(_name, rhs) => {
                 if let Some(rhs) = rhs {
-                    result.extend(self.tokens_from_expr(&rhs));
+                    result.extend(self.tokens_from_expr(rhs));
                 }
             }
             Expr::Assignment(box lhs, box rhs) => {
@@ -316,29 +316,29 @@ impl<'a> Higlighter<'a> {
             }
             Expr::Variable(_name) => {}
             Expr::If(cond, then, alt) => {
-                result.extend(self.tokens_from_expr(&cond));
-                result.extend(self.tokens_from_expr(&then));
+                result.extend(self.tokens_from_expr(cond));
+                result.extend(self.tokens_from_expr(then));
                 if let Some(alt) = alt {
-                    result.extend(self.tokens_from_expr(&alt));
+                    result.extend(self.tokens_from_expr(alt));
                 }
             }
             Expr::Loop(cond, body) => {
                 if let Some(cond) = cond {
-                    result.extend(self.tokens_from_expr(&cond));
+                    result.extend(self.tokens_from_expr(cond));
                 }
-                result.extend(self.tokens_from_expr(&body));
+                result.extend(self.tokens_from_expr(body));
             }
             Expr::EnumDecl { generics, body, .. } => {
                 result.extend(self.tokens_from_exprs(generics));
-                result.extend(self.tokens_from_expr(&body));
+                result.extend(self.tokens_from_expr(body));
             }
-            Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(&items)),
-            Expr::Match(_, items) => result.extend(self.tokens_from_exprs(&items)),
+            Expr::EnumVariant(_name, items) => result.extend(self.tokens_from_exprs(items)),
+            Expr::Match(_, items) => result.extend(self.tokens_from_exprs(items)),
             Expr::MatchArm(box pattern, box body) => {
                 result.extend(self.tokens_from_expr_refs(&[pattern, body]))
             }
             Expr::PatternVariant(_name, _name1, items) => {
-                result.extend(self.tokens_from_exprs(&items))
+                result.extend(self.tokens_from_exprs(items))
             }
             Expr::CallArg { value, .. } => {
                 let meta = self.source_file.meta.borrow();
@@ -350,7 +350,7 @@ impl<'a> Higlighter<'a> {
                     )
                 }
 
-                result.extend(self.tokens_from_expr(&value));
+                result.extend(self.tokens_from_expr(value));
             }
             Expr::ProtocolDecl {
                 associated_types,
@@ -358,9 +358,9 @@ impl<'a> Higlighter<'a> {
                 conformances,
                 ..
             } => {
-                result.extend(self.tokens_from_exprs(&associated_types));
-                result.extend(self.tokens_from_expr(&body));
-                result.extend(self.tokens_from_exprs(&conformances));
+                result.extend(self.tokens_from_exprs(associated_types));
+                result.extend(self.tokens_from_expr(body));
+                result.extend(self.tokens_from_exprs(conformances));
             }
             Expr::FuncSignature {
                 params,
@@ -368,9 +368,9 @@ impl<'a> Higlighter<'a> {
                 ret,
                 ..
             } => {
-                result.extend(self.tokens_from_exprs(&params));
-                result.extend(self.tokens_from_exprs(&generics));
-                result.extend(self.tokens_from_expr(&ret));
+                result.extend(self.tokens_from_exprs(params));
+                result.extend(self.tokens_from_exprs(generics));
+                result.extend(self.tokens_from_expr(ret));
             }
         };
 

@@ -193,7 +193,7 @@ impl NameResolver {
                 conformances,
             } => match name {
                 Name::Raw(name_str) => {
-                    let Some(symbol_id) = self.lookup(&name_str) else {
+                    let Some(symbol_id) = self.lookup(name_str) else {
                         tracing::error!("Did not find symbol for {name_str}");
                         if let Ok(mut session) = self.session.lock() {
                             session.add_diagnostic(Diagnostic::resolve(
@@ -632,7 +632,7 @@ impl NameResolver {
             if let Expr::Func {
                 name,
                 generics,
-                params,
+                
                 ret,
                 ..
             } = &mut parsed_expr.expr

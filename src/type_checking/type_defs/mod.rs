@@ -2,7 +2,6 @@ use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
     environment::{Environment, TypeParameter},
-    name::ResolvedName,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,

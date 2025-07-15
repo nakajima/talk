@@ -500,7 +500,7 @@ impl<'a> TypeChecker<'a> {
                     continue;
                 };
 
-                let conformance = Conformance::new(name.clone(), associated_types.to_vec());
+                let conformance = Conformance::new(*name, associated_types.to_vec());
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: conformance_expr.id,
@@ -547,7 +547,7 @@ impl<'a> TypeChecker<'a> {
             let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
                 &func_expr.id,
                 format!("predecl[{name_str}]"),
-                &symbol_id,
+                symbol_id,
                 vec![],
             ) else {
                 unreachable!()
@@ -660,7 +660,7 @@ impl<'a> TypeChecker<'a> {
         } = expr
         {
             let kind = if let Name::Resolved(sym, _) = name
-                && builtin_type(&sym).is_some()
+                && builtin_type(sym).is_some()
             {
                 PredeclarationKind::Builtin(*sym)
             } else {

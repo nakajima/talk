@@ -217,7 +217,7 @@ impl<'a> ConformanceChecker<'a> {
     fn type_def(&self) -> Option<&TypeDef> {
         match self.ty {
             Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _) => {
-                self.env.lookup_type(&symbol_id)
+                self.env.lookup_type(symbol_id)
             }
             Ty::Int => self.env.lookup_type(&SymbolID::INT),
             Ty::Float => self.env.lookup_type(&SymbolID::FLOAT),

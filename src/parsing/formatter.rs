@@ -125,10 +125,10 @@ impl<'a> Formatter<'a> {
                 }
             }
 
-            let doc = self.format_expr(&root);
+            let doc = self.format_expr(root);
             output.push_str(&Self::render_doc(doc, width));
 
-            last_meta = self.meta_cache.get(&root.id).map(|v| &*v);
+            last_meta = self.meta_cache.get(&root.id).map(|v| v);
         }
 
         output
@@ -367,8 +367,8 @@ impl<'a> Formatter<'a> {
             }
 
             // Add the formatted statement itself.
-            final_doc = concat(final_doc, self.format_expr(&stmt));
-            last_meta = meta.map(|v| &*v);
+            final_doc = concat(final_doc, self.format_expr(stmt));
+            last_meta = meta.map(|v| v);
         }
 
         concat(
@@ -701,10 +701,10 @@ impl<'a> Formatter<'a> {
                 && stmts.len() == 1
                 && !self.contains_control_flow(&stmts[0])
             {
-                return group(concat_space(result, self.format_expr(*body)));
+                return group(concat_space(result, self.format_expr(body)));
             }
 
-            concat_space(result, self.format_expr(*body))
+            concat_space(result, self.format_expr(body))
         } else {
             result
         }
@@ -815,7 +815,7 @@ impl<'a> Formatter<'a> {
 
         let mut docs = Vec::new();
         for item_id in items {
-            docs.push(self.format_expr(&item_id));
+            docs.push(self.format_expr(item_id));
         }
 
         concat(

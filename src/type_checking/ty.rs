@@ -3,7 +3,6 @@ use std::fmt::Display;
 use crate::{
     SymbolID,
     environment::Environment,
-    name::ResolvedName,
     type_checker::{FuncParams, FuncReturning},
     type_defs::TypeDef,
     type_var_id::TypeVarID,
@@ -177,7 +176,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Enum(
-                        symbol_id.clone(),
+                        *symbol_id,
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -190,7 +189,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::EnumVariant(
-                        symbol_id.clone(),
+                        *symbol_id,
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -222,7 +221,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Struct(
-                        symbol_id.clone(),
+                        *symbol_id,
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -235,7 +234,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Protocol(
-                        symbol_id.clone(),
+                        *symbol_id,
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))

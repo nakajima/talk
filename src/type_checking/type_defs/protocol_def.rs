@@ -1,6 +1,5 @@
 use crate::{
     SymbolID,
-    name::ResolvedName,
     ty::Ty,
     type_defs::{
         TypeParams,

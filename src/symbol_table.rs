@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::{Phase, SourceFile, parsed_expr::ParsedExpr, parser::ExprID, span::Span};
+use crate::{parsed_expr::ParsedExpr, parser::ExprID, span::Span};
 
 #[derive(Default, Copy, Clone, Eq, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);

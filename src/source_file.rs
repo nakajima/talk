@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use crate::{
-    parsed_expr::ParsedExpr, scope_tree::ScopeTree, span::Span, ty::Ty, typed_expr::TypedExpr,
+    parsed_expr::ParsedExpr, scope_tree::ScopeTree, span::Span, typed_expr::TypedExpr,
 };
 
 use super::{expr::ExprMeta, parser::ExprID};

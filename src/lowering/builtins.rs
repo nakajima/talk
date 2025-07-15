@@ -6,7 +6,6 @@ use crate::{
         instr::Instr, ir_error::IRError, ir_type::IRType, ir_value::IRValue, lowerer::Lowerer,
         register::Register,
     },
-    parser::ExprID,
     ty::Ty,
     typed_expr::{Expr, TypedExpr},
 };
@@ -69,7 +68,7 @@ fn lower_alloc(
         )));
     }
 
-    let register = lowerer.lower_expr(&val);
+    let register = lowerer.lower_expr(val);
 
     lowerer.push_instr(Instr::Alloc {
         dest,
@@ -108,7 +107,7 @@ fn lower_realloc(
     };
 
     // let old_pointer = lowerer.lower_expr(&old_pointer);
-    let new_capacity = lowerer.lower_expr(&new_capacity);
+    let new_capacity = lowerer.lower_expr(new_capacity);
 
     lowerer.push_instr(Instr::Alloc {
         dest,
@@ -154,7 +153,7 @@ fn lower_store(
         return Err(IRError::Unknown("Didn't get __store pointer".into()));
     };
 
-    let Some(ptr) = lowerer.lower_expr(&ptr) else {
+    let Some(ptr) = lowerer.lower_expr(ptr) else {
         return Err(IRError::Unknown("Didn't get __store pointer".into()));
     };
 
@@ -162,7 +161,7 @@ fn lower_store(
         return Err(IRError::Unknown("Didn't get __store offset".into()));
     };
 
-    let Some(offset) = lowerer.lower_expr(&offset) else {
+    let Some(offset) = lowerer.lower_expr(offset) else {
         return Err(IRError::Unknown("Didn't get __store offset".into()));
     };
 
@@ -170,7 +169,7 @@ fn lower_store(
         return Err(IRError::Unknown("Didn't get __store argument".into()));
     };
 
-    let Some(value) = lowerer.lower_expr(&value) else {
+    let Some(value) = lowerer.lower_expr(value) else {
         return Err(IRError::Unknown("Didn't get __store value".into()));
     };
 
@@ -208,7 +207,7 @@ fn lower_load(
         unreachable!("didn't get call arg for load")
     };
 
-    let Some(ptr) = lowerer.lower_expr(&ptr) else {
+    let Some(ptr) = lowerer.lower_expr(ptr) else {
         unreachable!("didn't get ptr for load")
     };
 
@@ -216,7 +215,7 @@ fn lower_load(
         unreachable!("didn't get offset arg for load")
     };
 
-    let Some(offset) = lowerer.lower_expr(&offset) else {
+    let Some(offset) = lowerer.lower_expr(offset) else {
         unreachable!("didn't get offset for load")
     };
 

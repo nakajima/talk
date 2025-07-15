@@ -15,7 +15,6 @@ use crate::{
     parser::ExprID,
     source_file::SourceFile,
     substitutions::Substitutions,
-    synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
     type_defs::{TypeDef, protocol_def::Conformance},
@@ -537,11 +536,11 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         let type_repr = type_repr
             .as_ref()
-            .map(|expr| self.infer_node(&expr, env, &None))
+            .map(|expr| self.infer_node(expr, env, &None))
             .transpose()?;
         let default_value = default_value
             .as_ref()
-            .map(|expr| self.infer_node(&expr, env, &None))
+            .map(|expr| self.infer_node(expr, env, &None))
             .transpose()?;
 
         let ty = match (&type_repr, &default_value) {
@@ -827,7 +826,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let cond = if let Some(cond) = cond {
-            Some(Box::new(self.infer_node(&cond, env, &Some(Ty::Bool))?))
+            Some(Box::new(self.infer_node(cond, env, &Some(Ty::Bool))?))
         } else {
             None
         };
@@ -1087,7 +1086,7 @@ impl<'a> TypeChecker<'a> {
                 let constraint = Constraint::ConformsTo {
                     expr_id: id,
                     ty: ty.clone(),
-                    conformance: Conformance::new(protocol_id.clone(), associated_types.to_vec()),
+                    conformance: Conformance::new(protocol_id, associated_types.to_vec()),
                 };
 
                 tracing::info!("Constraining type repr {constraint:?}");
@@ -1586,7 +1585,7 @@ impl<'a> TypeChecker<'a> {
             typed_arms.push(typed);
         }
 
-        let ret_ty = arm_tys.first().map(|t| t.clone()).unwrap_or(Ty::Void);
+        let ret_ty = arm_tys.first().cloned().unwrap_or(Ty::Void);
 
         // Make sure the return type is the same for all arms
         if arm_tys.len() > 1 {
@@ -1771,7 +1770,7 @@ impl<'a> TypeChecker<'a> {
                 // The expected type should be an Enum type
                 match expected {
                     Ty::Enum(enum_id, type_args) => {
-                        let Some(enum_def) = env.lookup_enum(&enum_id).cloned() else {
+                        let Some(enum_def) = env.lookup_enum(enum_id).cloned() else {
                             return Err(TypeError::Unknown(format!(
                                 "Could not resolve enum with symbol: {enum_id:?}"
                             )));
