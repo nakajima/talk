@@ -23,7 +23,7 @@ use crate::{
     typed_expr,
 };
 
-use super::{environment::Environment, typed_expr::TypedExpr};
+use super::{environment::{Environment, free_type_vars}, typed_expr::TypedExpr};
 
 pub type TypeDefs = HashMap<SymbolID, TypeDef>;
 pub type FuncParams = Vec<Ty>;
@@ -1298,9 +1298,14 @@ impl<'a> TypeChecker<'a> {
             let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
                 tracing::trace!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
                 existing_scheme.ty = inferred_ty.clone();
+                existing_scheme.unbound_vars = free_type_vars(&inferred_ty).into_iter().collect();
                 existing_scheme.clone()
             } else {
-                Scheme::new(inferred_ty.clone(), vec![], vec![])
+                Scheme::new(
+                    inferred_ty.clone(),
+                    free_type_vars(&inferred_ty).into_iter().collect(),
+                    vec![],
+                )
             };
 
             // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
