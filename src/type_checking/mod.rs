@@ -83,11 +83,9 @@ impl CheckResult {
     }
 
     pub fn type_for(&self, expr_id: ExprID) -> Option<Ty> {
-        if let Some(typed_expr) = self.source_file.typed_expr(expr_id) {
-            Some(typed_expr.ty.clone())
-        } else {
-            None
-        }
+        self.source_file
+            .typed_expr(expr_id)
+            .map(|typed_expr| typed_expr.ty.clone())
     }
 }
 

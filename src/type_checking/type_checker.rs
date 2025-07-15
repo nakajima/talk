@@ -22,7 +22,10 @@ use crate::{
     typed_expr,
 };
 
-use super::{environment::{Environment, free_type_vars}, typed_expr::TypedExpr};
+use super::{
+    environment::{Environment, free_type_vars},
+    typed_expr::TypedExpr,
+};
 
 pub type TypeDefs = HashMap<SymbolID, TypeDef>;
 pub type FuncParams = Vec<Ty>;
@@ -235,7 +238,13 @@ impl<'a> TypeChecker<'a> {
                 self.infer_loop(parsed_expr.id, cond, body, env)
             }
             crate::parsed_expr::Expr::If(condition, consequence, alternative) => {
-                let ty = self.infer_if(parsed_expr.id, condition, consequence, alternative, env);
+                let ty = self.infer_if(
+                    parsed_expr.id,
+                    condition,
+                    consequence,
+                    &alternative.as_ref().map(|r| &**r),
+                    env,
+                );
                 if let Ok(ty) = &ty {
                     checked_expected(expected, ty.ty.clone())?;
                 }
@@ -466,7 +475,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         match &ty {
-            Ok(ty) => {}
+            Ok(_ty) => {}
             Err(e) => {
                 tracing::error!("error inferring: {e:?}");
                 if let Ok(mut lock) = self.session.lock() {
@@ -495,7 +504,7 @@ impl<'a> TypeChecker<'a> {
         name: &Name,
         associated_types: &[ParsedExpr],
         conformances: &[ParsedExpr],
-        body: &Box<ParsedExpr>,
+        body: &ParsedExpr,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let mut inferred_associated_types: Vec<TypedExpr> = vec![];
@@ -575,7 +584,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         enum_id: &SymbolID,
         name: String,
-        body: &Box<ParsedExpr>,
+        body: &ParsedExpr,
         conformances: &[ParsedExpr],
         generics: &[ParsedExpr],
         env: &mut Environment,
@@ -660,7 +669,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         struct_id: &SymbolID,
-        func_id: &Box<ParsedExpr>,
+        func_id: &ParsedExpr,
         expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
@@ -693,7 +702,7 @@ impl<'a> TypeChecker<'a> {
         name: &Name,
         generics: &[ParsedExpr],
         conformances: &[ParsedExpr],
-        body: &Box<ParsedExpr>,
+        body: &ParsedExpr,
         env: &mut Environment,
         expected: &Option<Ty>,
     ) -> Result<TypedExpr, TypeError> {
@@ -735,7 +744,7 @@ impl<'a> TypeChecker<'a> {
         name: &Name,
         generics: &[ParsedExpr],
         conformances: &[ParsedExpr],
-        body: &Box<ParsedExpr>,
+        body: &ParsedExpr,
         env: &mut Environment,
         expected: &Option<Ty>,
     ) -> Result<TypedExpr, TypeError> {
@@ -822,7 +831,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         cond: &Option<Box<ParsedExpr>>,
-        body: &Box<ParsedExpr>,
+        body: &ParsedExpr,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let cond = if let Some(cond) = cond {
@@ -842,9 +851,9 @@ impl<'a> TypeChecker<'a> {
     fn infer_if(
         &mut self,
         id: ExprID,
-        condition: &Box<ParsedExpr>,
-        consequence: &Box<ParsedExpr>,
-        alternative: &Option<Box<ParsedExpr>>,
+        condition: &ParsedExpr,
+        consequence: &ParsedExpr,
+        alternative: &Option<&ParsedExpr>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let condition = self.infer_node(condition, env, &Some(Ty::Bool))?;
@@ -880,7 +889,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         env: &mut Environment,
-        callee: &Box<ParsedExpr>,
+        callee: &ParsedExpr,
         type_args: &[ParsedExpr],
         args: &[ParsedExpr],
         expected: &Option<Ty>,
@@ -908,7 +917,7 @@ impl<'a> TypeChecker<'a> {
 
         match &callee.expr {
             // Handle struct initialization
-            typed_expr::Expr::Variable(ResolvedName(symbol_id, name_str))
+            typed_expr::Expr::Variable(ResolvedName(symbol_id, _name_str))
                 if env.is_struct_symbol(symbol_id) =>
             {
                 let Some(struct_def) = env.lookup_struct(symbol_id).cloned() else {
@@ -1000,8 +1009,8 @@ impl<'a> TypeChecker<'a> {
     fn infer_assignment(
         &mut self,
         id: ExprID,
-        lhs: &Box<ParsedExpr>,
-        rhs: &Box<ParsedExpr>,
+        lhs: &ParsedExpr,
+        rhs: &ParsedExpr,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let rhs_ty = self.infer_node(rhs, env, &None)?;
@@ -1164,7 +1173,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         env: &mut Environment,
         args: &[ParsedExpr],
-        ret: &Box<ParsedExpr>,
+        ret: &ParsedExpr,
         expected: &Option<Ty>,
         introduces_type: bool,
     ) -> Result<TypedExpr, TypeError> {
@@ -1221,7 +1230,7 @@ impl<'a> TypeChecker<'a> {
         generics: &[ParsedExpr],
         params: &[ParsedExpr],
         captures: &[SymbolID],
-        body: &Box<ParsedExpr>,
+        body: &ParsedExpr,
         ret: &Option<Box<ParsedExpr>>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
@@ -1370,8 +1379,9 @@ impl<'a> TypeChecker<'a> {
                         self_.clone()
                     }
                 } else {
-                    panic!("oh no: {name:?}");
-                    return Err(TypeError::Unknown("No value found for `self`".into()));
+                    return Err(TypeError::Unknown(format!(
+                        "No value found for `self`: {name:?}"
+                    )));
                 }
             }
             Name::Resolved(symbol_id, _) => {
@@ -1445,7 +1455,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         token_kind: TokenKind,
-        rhs: &Box<ParsedExpr>,
+        rhs: &ParsedExpr,
         expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
@@ -1463,8 +1473,8 @@ impl<'a> TypeChecker<'a> {
     fn infer_binary(
         &mut self,
         id: ExprID,
-        lhs_id: &Box<ParsedExpr>,
-        rhs_id: &Box<ParsedExpr>,
+        lhs_id: &ParsedExpr,
+        rhs_id: &ParsedExpr,
         op: &TokenKind,
         expected: &Option<Ty>,
         env: &mut Environment,
@@ -1570,7 +1580,7 @@ impl<'a> TypeChecker<'a> {
     fn infer_match(
         &mut self,
         id: ExprID,
-        pattern: &Box<ParsedExpr>,
+        pattern: &ParsedExpr,
         arms: &[ParsedExpr],
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
@@ -1609,8 +1619,8 @@ impl<'a> TypeChecker<'a> {
     fn infer_match_arm(
         &mut self,
         id: ExprID,
-        pattern: &Box<ParsedExpr>,
-        body: &Box<ParsedExpr>,
+        pattern: &ParsedExpr,
+        body: &ParsedExpr,
         expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {

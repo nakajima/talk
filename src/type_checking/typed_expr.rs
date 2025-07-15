@@ -1,4 +1,3 @@
-
 use tracing::trace_span;
 
 use crate::{
@@ -191,7 +190,7 @@ impl TypedExpr {
                 Self::apply_mult(type_args, substitutions, env);
                 Self::apply_mult(args, substitutions, env);
             }
-            Expr::ParsedPattern(pattern) => todo!(),
+            Expr::ParsedPattern(_pattern) => (),
             Expr::Return(ret) => {
                 if let Some(ret) = ret {
                     ret.apply(substitutions, env)
@@ -223,8 +222,12 @@ impl TypedExpr {
                 default_value,
                 ..
             } => {
-                if let Some(t) = type_repr.as_mut() { t.apply(substitutions, env) }
-                if let Some(t) = default_value.as_mut() { t.apply(substitutions, env) }
+                if let Some(t) = type_repr.as_mut() {
+                    t.apply(substitutions, env)
+                }
+                if let Some(t) = default_value.as_mut() {
+                    t.apply(substitutions, env)
+                }
             }
             Expr::TypeRepr {
                 generics,
@@ -242,7 +245,9 @@ impl TypedExpr {
                 Self::apply_mult(typed_exprs, substitutions, env)
             }
             Expr::Member(typed_expr, _) => {
-                if let Some(t) = typed_expr.as_mut() { t.apply(substitutions, env) }
+                if let Some(t) = typed_expr.as_mut() {
+                    t.apply(substitutions, env)
+                }
             }
             Expr::Init(_, typed_expr) => typed_expr.apply(substitutions, env),
             Expr::Func {
@@ -255,7 +260,9 @@ impl TypedExpr {
                 Self::apply_mult(generics, substitutions, env);
                 Self::apply_mult(params, substitutions, env);
                 body.apply(substitutions, env);
-                if let Some(t) = ret.as_mut() { t.apply(substitutions, env) }
+                if let Some(t) = ret.as_mut() {
+                    t.apply(substitutions, env)
+                }
             }
             Expr::Parameter(_, typed_expr) => {
                 if let Some(t) = typed_expr.as_mut() {
@@ -357,7 +364,7 @@ impl TypedExpr {
                 .find(id)
                 .or_else(|| Self::find_in(type_args, id))
                 .or_else(|| Self::find_in(args, id)),
-            Expr::ParsedPattern(pattern) => None,
+            Expr::ParsedPattern(_pattern) => None,
             Expr::Return(ret) => ret.as_ref().and_then(|t| t.find(id)),
             Expr::Break => None,
             Expr::Extend {

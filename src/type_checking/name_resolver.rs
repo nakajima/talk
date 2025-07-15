@@ -173,13 +173,7 @@ impl NameResolver {
                         *receiver_brw = self.resolve_node(receiver_brw, meta, symbol_table)?;
                     }
                 }
-                IncompleteExpr::Func {
-                    name,
-                    params,
-                    generics,
-                    ret,
-                    body,
-                } => {
+                IncompleteExpr::Func { .. } => {
                     // self.resolve_func(&name, expr, symbol_table);
                 }
             },
@@ -517,12 +511,7 @@ impl NameResolver {
                 self.resolve_pattern(pattern, meta, symbol_table, &parsed_expr.id)?;
             }
             Expr::PatternVariant(_, _, _items) => (),
-            Expr::FuncSignature {
-                name,
-                params,
-                generics,
-                ret,
-            } => {
+            Expr::FuncSignature { .. } => {
                 self.resolve_func(expr, &parsed_expr.id, meta, symbol_table)?;
             }
             Expr::ProtocolDecl {
@@ -632,7 +621,7 @@ impl NameResolver {
             if let Expr::Func {
                 name,
                 generics,
-                
+
                 ret,
                 ..
             } = &mut parsed_expr.expr
@@ -667,8 +656,8 @@ impl NameResolver {
             if let Expr::FuncSignature {
                 name,
                 generics,
-                params,
                 ret,
+                ..
             } = &mut parsed_expr.expr
             {
                 if let Name::Raw(name_str) = name {

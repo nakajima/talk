@@ -248,7 +248,7 @@ impl<'a> ConformanceChecker<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        check, conformance_checker::ConformanceChecker, name::ResolvedName, ty::Ty,
+        check, conformance_checker::ConformanceChecker, ty::Ty,
         type_defs::protocol_def::Conformance,
     };
 

@@ -481,7 +481,6 @@ mod array_tests {
             lowerer::{BasicBlock, BasicBlockID},
             register::Register,
         },
-        parser::parse,
         ty::Ty,
     };
 

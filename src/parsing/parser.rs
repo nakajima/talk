@@ -321,6 +321,7 @@ impl<'a> Parser<'a> {
     }
 
     #[must_use]
+    #[allow(clippy::unwrap_used)]
     fn push_lhs_location(&mut self, lhs: ExprID) -> LocToken {
         #[allow(clippy::unwrap_used)]
         let meta = self.parse_tree.meta.borrow();

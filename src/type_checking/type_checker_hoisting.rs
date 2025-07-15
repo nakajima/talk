@@ -54,7 +54,7 @@ pub(super) struct PredeclarationExprIDs<'a> {
 impl<'a> TypeChecker<'a> {
     pub(crate) fn hoist(
         &mut self,
-        items: &'a Vec<ParsedExpr>,
+        items: &'a [ParsedExpr],
         env: &mut Environment,
     ) -> Result<(), TypeError> {
         let _s = info_span!("hoisting", path = self.path.to_str()).entered();
@@ -593,7 +593,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         items: &'a [ParsedExpr],
         env: &mut Environment,
-    ) -> Result<Vec<(&'a Box<ParsedExpr>, &'a SymbolID, TypeVarID)>, (ExprID, TypeError)> {
+    ) -> Result<Vec<(&'a ParsedExpr, &'a SymbolID, TypeVarID)>, (ExprID, TypeError)> {
         tracing::trace!("Predeclaring lets");
         let mut result = vec![];
 
@@ -615,7 +615,7 @@ impl<'a> TypeChecker<'a> {
 
             let scheme = Scheme::new(placeholder.clone(), vec![], vec![]);
             env.declare(*symbol_id, scheme).map_err(|e| (lhs.id, e))?;
-            result.push((lhs, symbol_id, type_var.clone()));
+            result.push((&**lhs, symbol_id, type_var.clone()));
         }
 
         Ok(result)
@@ -623,7 +623,7 @@ impl<'a> TypeChecker<'a> {
 
     fn infer_lets(
         &mut self,
-        let_ids: &[(&'a Box<ParsedExpr>, &'a SymbolID, TypeVarID)],
+        let_ids: &[(&'a ParsedExpr, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
     ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
         tracing::trace!("infer lets");
@@ -643,7 +643,7 @@ impl<'a> TypeChecker<'a> {
         Ok(results)
     }
 
-    fn predeclarable_type(parsed_expr: &'a ParsedExpr) -> Option<PredeclarationExprIDs> {
+    fn predeclarable_type(parsed_expr: &ParsedExpr) -> Option<PredeclarationExprIDs<'_>> {
         let expr = &parsed_expr.expr;
 
         if let crate::parsed_expr::Expr::Struct {

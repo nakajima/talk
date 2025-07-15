@@ -128,7 +128,7 @@ impl<'a> Formatter<'a> {
             let doc = self.format_expr(root);
             output.push_str(&Self::render_doc(doc, width));
 
-            last_meta = self.meta_cache.get(&root.id).map(|v| v);
+            last_meta = self.meta_cache.get(&root.id);
         }
 
         output
@@ -188,7 +188,14 @@ impl<'a> Formatter<'a> {
                 body,
                 ret,
                 ..
-            } => self.format_func(name, generics, params, &Some(body), &ret.as_ref(), false),
+            } => self.format_func(
+                name,
+                generics,
+                params,
+                &Some(body),
+                &ret.as_ref().map(|r| &**r),
+                false,
+            ),
             Expr::Parameter(name, type_repr) => self.format_parameter(name, type_repr),
             Expr::Let(name, type_repr) => self.format_let(name, type_repr),
             Expr::Assignment(lhs, rhs) => self.format_assignment(lhs, rhs),
@@ -225,7 +232,14 @@ impl<'a> Formatter<'a> {
                     return Doc::Empty;
                 };
 
-                self.format_func(name, generics, params, &Some(body), &ret.as_ref(), true)
+                self.format_func(
+                    name,
+                    generics,
+                    params,
+                    &Some(body),
+                    &ret.as_ref().map(|r| &**r),
+                    true,
+                )
             }
             Expr::ProtocolDecl {
                 name,
@@ -340,7 +354,7 @@ impl<'a> Formatter<'a> {
         }
 
         // Handle the special case for single-line blocks
-        if stmts.len() == 1 && !self.contains_control_flow(&stmts[0]) {
+        if stmts.len() == 1 && !Self::contains_control_flow(&stmts[0]) {
             return group(concat(
                 text("{"),
                 concat(concat(text(" "), self.format_expr(&stmts[0])), text(" }")),
@@ -368,7 +382,7 @@ impl<'a> Formatter<'a> {
 
             // Add the formatted statement itself.
             final_doc = concat(final_doc, self.format_expr(stmt));
-            last_meta = meta.map(|v| v);
+            last_meta = meta;
         }
 
         concat(
@@ -651,8 +665,8 @@ impl<'a> Formatter<'a> {
         name: &Option<Name>,
         generics: &[ParsedExpr],
         params: &[ParsedExpr],
-        body: &Option<&Box<ParsedExpr>>,
-        ret: &Option<&Box<ParsedExpr>>,
+        body: &Option<&ParsedExpr>,
+        ret: &Option<&ParsedExpr>,
         is_init: bool,
     ) -> Doc {
         let mut result;
@@ -694,12 +708,12 @@ impl<'a> Formatter<'a> {
 
         // Check if the body is a single-statement block that could be formatted inline
         if let Some(body) = body {
-            if let box ParsedExpr {
+            if let ParsedExpr {
                 expr: Expr::Block(stmts),
                 ..
             } = *body
                 && stmts.len() == 1
-                && !self.contains_control_flow(&stmts[0])
+                && !Self::contains_control_flow(&stmts[0])
             {
                 return group(concat_space(result, self.format_expr(body)));
             }
@@ -908,10 +922,10 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn contains_control_flow(&self, expr: &ParsedExpr) -> bool {
+    fn contains_control_flow(expr: &ParsedExpr) -> bool {
         match &expr.expr {
             Expr::Func { .. } | Expr::If(..) | Expr::Loop(..) | Expr::Match(..) => true,
-            Expr::Block(stmts) => stmts.iter().any(|id| self.contains_control_flow(id)),
+            Expr::Block(stmts) => stmts.iter().any(Self::contains_control_flow),
             _ => false,
         }
     }
