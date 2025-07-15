@@ -244,25 +244,13 @@ impl<'a> TypeChecker<'a> {
             crate::parsed_expr::Expr::Loop(cond, body) => {
                 self.infer_loop(parsed_expr.id, cond, body, env)
             }
-            crate::parsed_expr::Expr::If(condition, consequence, alternative) => {
-                let ty = self.infer_if(
-                    parsed_expr.id,
-                    condition,
-                    consequence,
-                    &alternative.as_ref().map(|r| &**r),
-                    env,
-                );
-
-                if let Ok(ty) = &ty {
-                    env.constrain(Constraint::Equality(
-                        parsed_expr.id,
-                        ty.ty.clone(),
-                        Ty::Bool,
-                    ));
-                }
-
-                ty
-            }
+            crate::parsed_expr::Expr::If(condition, consequence, alternative) => self.infer_if(
+                parsed_expr.id,
+                condition,
+                consequence,
+                &alternative.as_ref().map(|r| &**r),
+                env,
+            ),
             crate::parsed_expr::Expr::Call {
                 callee,
                 type_args,
@@ -887,7 +875,9 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let cond = if let Some(cond) = cond {
-            Some(Box::new(self.infer_node(cond, env, &Some(Ty::Bool))?))
+            let cond = self.infer_node(cond, env, &Some(Ty::Bool))?;
+            env.constrain(Constraint::Equality(id, cond.ty.clone(), Ty::Bool));
+            Some(Box::new(cond))
         } else {
             None
         };
@@ -909,6 +899,9 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let condition = self.infer_node(condition, env, &Some(Ty::Bool))?;
+
+        env.constrain(Constraint::Equality(id, condition.ty.clone(), Ty::Bool));
+
         let consequence = self.infer_node(consequence, env, &None)?;
         let alt = if let Some(alternative) = alternative {
             let alternative = self.infer_node(alternative, env, &None)?;

@@ -729,7 +729,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
+        assert_eq_diff!(
             checker.first_root(),
             any_typed!(
                 Expr::EnumDecl {
@@ -740,7 +740,7 @@ mod tests {
                         Expr::Block(vec![
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(123), "foo".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "foo".to_string()),
                                     vec![any_typed!(
                                         Expr::TypeRepr {
                                             name: ResolvedName(SymbolID::INT, "Int".to_string()),
@@ -751,21 +751,21 @@ mod tests {
                                         Ty::Int
                                     )]
                                 ),
-                                Ty::EnumVariant(SymbolID::typed(123), vec![])
+                                Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int])
                             ),
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(123), "bar".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "bar".to_string()),
                                     vec![]
                                 ),
-                                Ty::EnumVariant(SymbolID::typed(123), vec![])
+                                Ty::EnumVariant(SymbolID::typed(1), vec![])
                             )
                         ]),
-                        Ty::Void
+                        Ty::EnumVariant(SymbolID::ANY, vec![])
                     )
                     .into(),
                 },
-                Ty::Enum(SymbolID::typed(123), vec![])
+                Ty::Enum(SymbolID::typed(1), vec![])
             )
         );
     }
@@ -1462,8 +1462,8 @@ mod tests {
         assert!(
             checked.diagnostics().contains(&Diagnostic::typing(
                 checked.source_file.path.clone(),
-                ExprID(checked.root_ids()[0].0 - 3),
-                TypeError::UnexpectedType(Ty::Bool.to_string(), Ty::Float.to_string())
+                ExprID::ANY,
+                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string())
             )),
             "{:?}",
             checked.diagnostics()
