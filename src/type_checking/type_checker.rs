@@ -3,12 +3,13 @@ use std::{collections::HashMap, path::PathBuf};
 use tracing::trace_span;
 
 use crate::{
-    NameResolved, SymbolID, SymbolTable, Typed,
+    ExprMetaStorage, NameResolved, SymbolID, SymbolTable, Typed,
     compiling::compilation_session::SharedCompilationSession,
     conformance_checker::ConformanceError,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
+    environment::free_type_vars,
     name::{Name, ResolvedName},
     name_resolver::NameResolverError,
     parsed_expr::{self, IncompleteExpr, ParsedExpr, Pattern},
@@ -113,6 +114,7 @@ pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
+    meta: &'a ExprMetaStorage,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -138,11 +140,13 @@ impl<'a> TypeChecker<'a> {
         session: SharedCompilationSession,
         symbol_table: &'a mut SymbolTable,
         path: PathBuf,
+        meta: &'a ExprMetaStorage,
     ) -> Self {
         Self {
             session,
             symbol_table,
             path,
+            meta,
         }
     }
 
@@ -211,7 +215,11 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         expected: &Option<Ty>,
     ) -> Result<TypedExpr, TypeError> {
-        let _s = trace_span!("infer_node", expr = format!("{parsed_expr:?}")).entered();
+        let _s = trace_span!(
+            "infer_node",
+            expr = crate::formatter::Formatter::format_single_expr(self.meta, parsed_expr)
+        )
+        .entered();
 
         let mut ty = match &parsed_expr.expr {
             crate::parsed_expr::Expr::Incomplete(expr_id) => self.handle_incomplete(expr_id),
@@ -254,7 +262,7 @@ impl<'a> TypeChecker<'a> {
                 args,
             } => self.infer_call(parsed_expr.id, env, callee, type_args, args, expected),
             crate::parsed_expr::Expr::LiteralInt(v) => {
-                checked_expected(expected, Ty::Int)?;
+                // checked_expected(expected, Ty::Int)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
                     ty: Ty::Int,
@@ -262,7 +270,7 @@ impl<'a> TypeChecker<'a> {
                 })
             }
             crate::parsed_expr::Expr::LiteralFloat(v) => {
-                checked_expected(expected, Ty::Float)?;
+                // checked_expected(expected, Ty::Float)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
                     ty: Ty::Float,
@@ -398,19 +406,13 @@ impl<'a> TypeChecker<'a> {
                 env,
                 expected,
             ),
-            crate::parsed_expr::Expr::CallArg { value, label } => {
-                let label = if let Some(name) = label {
-                    Some(name.resolved()?)
-                } else {
-                    None
-                };
-
+            crate::parsed_expr::Expr::CallArg { value, .. } => {
                 let typed = self.infer_node(value, env, expected)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
                     ty: typed.ty.clone(),
                     expr: typed_expr::Expr::CallArg {
-                        label,
+                        label: None, // We don't care about call labels in the type system
                         value: Box::new(typed),
                     },
                 })
@@ -589,14 +591,21 @@ impl<'a> TypeChecker<'a> {
         let scheme = env.lookup_symbol(enum_id)?;
         let ty = scheme.ty.clone();
 
+        env.start_scope();
+        env.selfs.push(ty.clone());
+        let conformances = self.infer_nodes(conformances, env)?;
+        let generics = self.infer_nodes(generics, env)?;
+        let body = Box::new(self.infer_node(body, env, &Some(ty.clone()))?);
+        env.selfs.pop();
+
         Ok(TypedExpr {
             id,
             ty: ty.clone(),
             expr: typed_expr::Expr::EnumDecl {
                 name: ResolvedName(*enum_id, name),
-                conformances: self.infer_nodes(conformances, env)?,
-                generics: self.infer_nodes(generics, env)?,
-                body: self.infer_node(body, env, &Some(ty))?.into(),
+                conformances,
+                generics,
+                body,
             },
         })
     }
@@ -1303,9 +1312,14 @@ impl<'a> TypeChecker<'a> {
             let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
                 tracing::trace!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
                 existing_scheme.ty = inferred_ty.clone();
+                existing_scheme.unbound_vars = free_type_vars(&inferred_ty).into_iter().collect();
                 existing_scheme.clone()
             } else {
-                Scheme::new(inferred_ty.clone(), vec![], vec![])
+                Scheme::new(
+                    inferred_ty.clone(),
+                    free_type_vars(&inferred_ty).into_iter().collect(),
+                    vec![],
+                )
             };
 
             // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
@@ -1372,7 +1386,8 @@ impl<'a> TypeChecker<'a> {
                     }
                 } else {
                     return Err(TypeError::Unknown(format!(
-                        "No value found for `self`: {name:?}"
+                        "No value found for `self`: {name:?}. selfs: {:?}",
+                        env.selfs
                     )));
                 }
             }

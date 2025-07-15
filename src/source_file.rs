@@ -1,8 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
-use crate::{
-    parsed_expr::ParsedExpr, scope_tree::ScopeTree, span::Span, typed_expr::TypedExpr,
-};
+use crate::{parsed_expr::ParsedExpr, scope_tree::ScopeTree, span::Span, typed_expr::TypedExpr};
 
 use super::{expr::ExprMeta, parser::ExprID};
 

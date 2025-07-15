@@ -339,9 +339,10 @@ impl TypedExpr {
     }
 
     pub fn find(&self, id: ExprID) -> Option<&TypedExpr> {
-        let _s = trace_span!("finding",).entered();
+        let _s = trace_span!("finding", id = id.0).entered();
 
         if id == self.id {
+            tracing::trace!("found: {self:?}");
             return Some(self);
         }
 

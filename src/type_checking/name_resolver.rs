@@ -455,21 +455,18 @@ impl NameResolver {
                 conformances,
                 body,
             } => {
-                if let Name::Raw(name_str) = name {
-                    let symbol_id = self.declare(
-                        name_str.clone(),
-                        SymbolKind::Enum,
-                        parsed_expr.id,
-                        meta,
-                        symbol_table,
-                    );
-                    self.type_symbol_stack.push(symbol_id);
-                    *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                    *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
-                    *body = self.resolve_node(body, meta, symbol_table)?.into();
-                    *name = Name::Resolved(symbol_id, name_str.to_string());
-                    self.type_symbol_stack.pop();
-                }
+                // Name should already be resolved by hoisting
+                let Name::Resolved(symbol_id, _name_str) = name else {
+                    return Err(NameResolverError::Unknown(format!(
+                        "Enum name was not resolved during hoisting: {name:?}"
+                    )));
+                };
+
+                self.type_symbol_stack.push(*symbol_id);
+                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                *body = self.resolve_node(body, meta, symbol_table)?.into();
+                self.type_symbol_stack.pop();
             }
             Expr::EnumVariant(name, values) => {
                 if let Name::Raw(name_str) = name {
@@ -572,6 +569,7 @@ impl NameResolver {
                 depth: self.scopes.len(),
                 captures: vec![],
             });
+
             let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
 
             *generics = self.resolve_nodes(generics, meta, symbol_table)?;
@@ -618,14 +616,7 @@ impl NameResolver {
         symbol_table: &mut SymbolTable,
     ) -> Result<(), NameResolverError> {
         for parsed_expr in parsed_exprs {
-            if let Expr::Func {
-                name,
-                generics,
-
-                ret,
-                ..
-            } = &mut parsed_expr.expr
-            {
+            if let Expr::Func { name, .. } = &mut parsed_expr.expr {
                 if let Some(Name::Raw(name_str)) = name {
                     let symbol_id = self.declare(
                         name_str.to_string(),
@@ -643,23 +634,17 @@ impl NameResolver {
                         .ok_or(NameResolverError::InvalidSpan)?,
                 );
 
-                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
+                // *generics = self.resolve_nodes(generics, meta, symbol_table)?;
                 // *params = self.resolve_nodes(params, meta, symbol_table)?;
 
-                if let Some(ret) = ret {
-                    *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
-                }
+                // if let Some(ret) = ret {
+                //     *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
+                // }
 
                 self.end_scope(tok);
             }
 
-            if let Expr::FuncSignature {
-                name,
-                generics,
-                ret,
-                ..
-            } = &mut parsed_expr.expr
-            {
+            if let Expr::FuncSignature { name, .. } = &mut parsed_expr.expr {
                 if let Name::Raw(name_str) = name {
                     let symbol_id = self.declare(
                         name_str.to_string(),
@@ -675,10 +660,6 @@ impl NameResolver {
                     meta.span(&parsed_expr.id)
                         .ok_or(NameResolverError::InvalidSpan)?,
                 );
-
-                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                // *params = self.resolve_nodes(params, meta, symbol_table)?;
-                *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
 
                 self.end_scope(tok);
             }

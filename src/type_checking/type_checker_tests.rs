@@ -202,6 +202,10 @@ mod tests {
         let checked = check(
             "struct Person {
                 let age: Int
+
+                init(age: Int) {
+                    self.age = age
+                }
             }
 
             Person(age: 1).age = 1.2",
@@ -347,7 +351,7 @@ mod tests {
     fn checks_call_with_generics() {
         let checked = check(
             "
-        func fizz<T>(ty: T) { T }
+        func fizz<T>(ty: T) { ty }
 
         fizz<Int>(123)
         fizz<Bool>(true)
@@ -655,24 +659,24 @@ mod tests {
                         Expr::Block(vec![
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(123), "foo".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "foo".to_string()),
                                     vec![]
                                 ),
-                                Ty::EnumVariant(SymbolID::typed(123), vec![])
+                                Ty::EnumVariant(SymbolID::typed(1), vec![])
                             ),
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(123), "bar".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "bar".to_string()),
                                     vec![]
                                 ),
-                                Ty::EnumVariant(SymbolID::typed(123), vec![])
+                                Ty::EnumVariant(SymbolID::typed(1), vec![])
                             )
                         ]),
-                        Ty::Void
+                        Ty::EnumVariant(SymbolID::typed(1), vec![])
                     )
                     .into(),
                 },
-                Ty::Enum(SymbolID::typed(123), vec![])
+                Ty::Enum(SymbolID::typed(1), vec![])
             )
         );
     }

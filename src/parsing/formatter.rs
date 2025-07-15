@@ -1,4 +1,5 @@
 use crate::{
+    ExprMetaStorage, Phase,
     expr::ExprMeta,
     name::Name,
     parsed_expr::{Expr, ParsedExpr, Pattern},
@@ -85,35 +86,26 @@ fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
 }
 
 pub struct Formatter<'a> {
-    source_file: &'a SourceFile,
     // Track expression metadata for source location info
-    meta_cache: HashMap<ExprID, ExprMeta>,
+    meta_cache: &'a ExprMetaStorage,
 }
 
 impl<'a> Formatter<'a> {
-    pub fn new(source_file: &'a SourceFile) -> Self {
-        let mut meta_cache = HashMap::new();
-        let meta = source_file.meta.borrow().clone();
-        for (i, meta) in meta.iter() {
-            meta_cache.insert(*i, meta.clone());
-        }
-        Self {
-            source_file,
-            meta_cache,
-        }
+    pub fn new(meta_cache: &'a ExprMetaStorage) -> Self {
+        Self { meta_cache }
     }
 
-    pub fn format_single_expr(source_file: &'a SourceFile, expr_id: &'a ParsedExpr) -> String {
-        let formatter = Self::new(source_file);
-        let doc = formatter.format_expr(expr_id);
+    pub fn format_single_expr(meta: &'a ExprMetaStorage, parsed_expr: &'a ParsedExpr) -> String {
+        let formatter = Self::new(meta);
+        let doc = formatter.format_expr(parsed_expr);
         Self::render_doc(doc, 80)
     }
 
-    pub fn format(&self, width: usize) -> String {
+    pub fn format(&self, roots: &[ParsedExpr], width: usize) -> String {
         let mut output = String::new();
         let mut last_meta: Option<&ExprMeta> = None;
 
-        for (i, root) in self.source_file.roots().iter().enumerate() {
+        for (i, root) in roots.iter().enumerate() {
             if i > 0 {
                 output.push('\n');
 
@@ -1015,8 +1007,9 @@ impl<'a> Formatter<'a> {
 
 // Public API
 pub fn format(source_file: &SourceFile, width: usize) -> String {
-    let formatter = Formatter::new(source_file);
-    formatter.format(width)
+    let meta = source_file.meta.borrow();
+    let formatter = Formatter::new(&meta);
+    formatter.format(&source_file.roots(), width)
 }
 
 #[cfg(test)]
