@@ -1965,6 +1965,31 @@ impl<'a> Lowerer<'a> {
         args: &[TypedExpr],
     ) -> Option<Register> {
         let ty = &callee_typed_expr.ty;
+
+        let mut arg_registers = vec![];
+        let mut arg_tys = vec![];
+        for (i, arg) in args.iter().enumerate() {
+            if let Some(arg_reg) = self.lower_expr(arg) {
+                arg_tys.push(args[i].ty.clone());
+                arg_registers.push(TypedRegister {
+                    ty: args[i].ty.to_ir(self),
+                    register: arg_reg,
+                });
+            } else {
+                self.push_err(
+                    format!("Argument expression did not produce a value for call: {arg:?}",)
+                        .as_str(),
+                    arg.id,
+                );
+                continue;
+            }
+        }
+
+        // Handle struct construction
+        if let Ty::Struct(struct_id, params) = &callee_typed_expr.ty {
+            return self.lower_init_call(struct_id, &callee_typed_expr.ty, arg_registers, &arg_tys);
+        }
+
         let (Ty::Func(params, _, _)
         | Ty::Closure {
             func: box Ty::Func(params, _, _),
@@ -1987,22 +2012,6 @@ impl<'a> Lowerer<'a> {
                     None
                 }
             };
-        }
-
-        let mut arg_registers = vec![];
-        for (i, arg) in args.iter().enumerate() {
-            if let Some(arg_reg) = self.lower_expr(arg) {
-                arg_registers.push(TypedRegister {
-                    ty: params[i].to_ir(self),
-                    register: arg_reg,
-                });
-            } else {
-                self.push_err(
-                    "Argument expression did not produce a value for call",
-                    arg.id,
-                );
-                continue;
-            }
         }
 
         // Handle enum variant construction
@@ -2035,11 +2044,6 @@ impl<'a> Lowerer<'a> {
                 ty,
                 &arg_registers,
             );
-        }
-
-        // Handle struct construction
-        if let Ty::Init(struct_id, params) = &callee_typed_expr.ty {
-            return self.lower_init_call(struct_id, ty, arg_registers, params);
         }
 
         // Handle method calls
@@ -2195,7 +2199,7 @@ impl<'a> Lowerer<'a> {
         struct_id: &SymbolID,
         ty: &Ty,
         mut arg_registers: Vec<TypedRegister>,
-        params: &[Ty],
+        arg_tys: &[Ty]
     ) -> Option<Register> {
         let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned() else {
             unreachable!()
@@ -2220,7 +2224,7 @@ impl<'a> Lowerer<'a> {
         );
 
         let init_func_ty = Ty::Func(
-            params.to_vec(),
+            arg_tys.to_vec(),
             Box::new(ty.clone()),
             vec![], // No generics on init
         );
@@ -2541,21 +2545,6 @@ fn find_or_create_main(
     symbol_table: &mut SymbolTable,
     env: &mut Environment,
 ) -> (TypedExpr, bool) {
-    // If we've already generated a `main` for this file, reuse it so we don't
-    // continually duplicate the AST on subsequent lowering passes.
-    if symbol_table.get(&SymbolID::GENERATED_MAIN).is_some()
-        && let Some(existing) = source_file
-            .roots()
-            .iter()
-            .find(|expr| expr.id == ExprID(SymbolID::GENERATED_MAIN.0))
-    {
-        panic!(
-            "already have a generated main: {:#?} {existing:#?}",
-            symbol_table.get(&SymbolID::GENERATED_MAIN)
-        );
-        return (existing.clone(), false);
-    }
-
     for root in source_file.roots() {
         if let TypedExpr {
             expr:
@@ -2570,6 +2559,8 @@ fn find_or_create_main(
             return (root.clone(), false);
         }
     }
+
+    tracing::info!("Generating main func");
 
     // We didn't find a main, we have to generate one
     let body_expr = Expr::Block(source_file.roots().to_vec());
@@ -2601,16 +2592,7 @@ fn find_or_create_main(
         ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
     };
 
-    source_file.roots_mut().insert(0, typed_expr.clone());
-
-    source_file.add(
-        env.next_expr_id(),
-        ExprMeta {
-            start: Token::GENERATED,
-            end: Token::GENERATED,
-            identifiers: vec![],
-        },
-    );
+    // source_file.roots_mut().insert(0, typed_expr.clone());
 
     symbol_table.import(
         &SymbolID::GENERATED_MAIN,

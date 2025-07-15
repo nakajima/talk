@@ -133,7 +133,7 @@ impl NameResolver {
         source_file.to_resolved(self.scope_tree.clone())
     }
 
-    #[tracing::instrument(skip(self, symbol_table))]
+    #[tracing::instrument(skip(self, symbol_table, exprs, meta))]
     fn resolve_nodes(
         &mut self,
         exprs: &mut [ParsedExpr],
@@ -608,7 +608,7 @@ impl NameResolver {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, parsed_exprs))]
     fn hoist_funcs(
         &mut self,
         parsed_exprs: &mut [ParsedExpr],
@@ -668,7 +668,7 @@ impl NameResolver {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, parsed_exprs))]
     fn hoise_structs(
         &mut self,
         parsed_exprs: &mut [ParsedExpr],
@@ -797,7 +797,7 @@ impl NameResolver {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, parsed_exprs))]
     fn hoist_enums(
         &mut self,
         parsed_exprs: &mut [ParsedExpr],
@@ -845,7 +845,7 @@ impl NameResolver {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, pattern))]
     fn resolve_pattern(
         &mut self,
         pattern: &mut Pattern,
@@ -897,7 +897,7 @@ impl NameResolver {
         }
     }
 
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, items))]
     fn hoist_protocols(
         &mut self,
         items: &mut [ParsedExpr],
@@ -948,7 +948,7 @@ impl NameResolver {
     }
 
     // New helper method to hoist enum variants
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, body))]
     fn hoist_enum_members(
         &mut self,
         body: &mut ParsedExpr,
