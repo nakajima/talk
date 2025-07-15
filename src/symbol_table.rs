@@ -19,7 +19,7 @@ impl std::hash::Hash for SymbolID {
 
 impl PartialEq for SymbolID {
     fn eq(&self, other: &Self) -> bool {
-        if other.0 == i32::MIN {
+        if other.0 == i32::MIN + 2 {
             true
         } else {
             other.0 == self.0
@@ -29,7 +29,7 @@ impl PartialEq for SymbolID {
 
 impl SymbolID {
     #[cfg(test)]
-    pub const ANY: SymbolID = SymbolID(i32::MIN);
+    pub const ANY: SymbolID = SymbolID(i32::MIN + 2);
 
     pub const INT: SymbolID = SymbolID(-1);
     pub const FLOAT: SymbolID = SymbolID(-2);

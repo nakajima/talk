@@ -460,6 +460,7 @@ impl<'a> Lowerer<'a> {
             // If we created the main function, we moved all the typed roots into its body
             // so we don't need to lower them again.
             if !did_create {
+                // We _didn't_ create the main function so lower the roots.
                 for root in roots.iter() {
                     if let Expr::Func { .. } = &root.expr {
                         self.lower_function(root);
@@ -2548,6 +2549,10 @@ fn find_or_create_main(
             .iter()
             .find(|expr| expr.id == ExprID(SymbolID::GENERATED_MAIN.0))
     {
+        panic!(
+            "already have a generated main: {:#?} {existing:#?}",
+            symbol_table.get(&SymbolID::GENERATED_MAIN)
+        );
         return (existing.clone(), false);
     }
 
