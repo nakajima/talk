@@ -1295,16 +1295,8 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(Name::Resolved(symbol_id, _)) = name {
-            let new_scheme = if let Ok(existing_scheme) = env.lookup_symbol_mut(symbol_id) {
-                tracing::trace!("merging schemes: {existing_scheme:?}.ty = {inferred_ty:?}");
-                existing_scheme.ty = inferred_ty.clone();
-                existing_scheme.clone()
-            } else {
-                Scheme::new(inferred_ty.clone(), vec![], vec![])
-            };
-
-            // Declare a monomorphized scheme. It'll be generalized by the hoisting pass.
-            env.declare(*symbol_id, new_scheme)?;
+            let scheme = env.generalize(&inferred_ty, symbol_id);
+            env.declare(*symbol_id, scheme)?;
         }
 
         Ok(TypedExpr {
