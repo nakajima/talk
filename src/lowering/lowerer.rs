@@ -849,12 +849,7 @@ impl<'a> Lowerer<'a> {
         };
 
         for initializer in &struct_def.initializers {
-            let Some(typed_initializer) = self
-                .source_file
-                .phase_data
-                .type_map
-                .get(&initializer.expr_id)
-                .cloned()
+            let Some(typed_initializer) = self.source_file.typed_expr(initializer.expr_id).cloned()
             else {
                 tracing::error!("didn't get initializer");
                 return None;
@@ -1181,8 +1176,7 @@ impl<'a> Lowerer<'a> {
                                 let Some(info) = self.symbol_table.get(&sym) else {
                                     return Scheme::new(Ty::Void, vec![], vec![]);
                                 };
-                                let Some(typed_expr) =
-                                    self.source_file.phase_data.type_map.get(&info.expr_id)
+                                let Some(typed_expr) = self.source_file.typed_expr(info.expr_id)
                                 else {
                                     return Scheme::new(Ty::Void, vec![], vec![]);
                                 };

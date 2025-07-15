@@ -20,7 +20,6 @@ impl Phase for NameResolved {}
 
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Typed {
-    pub(super) type_map: HashMap<ExprID, TypedExpr>,
     pub roots: Vec<TypedExpr>,
     pub scope_tree: ScopeTree,
 }
@@ -133,21 +132,12 @@ impl SourceFile<NameResolved> {
         &mut self.roots
     }
 
-    pub fn to_typed(
-        &self,
-        roots: Vec<TypedExpr>,
-        type_map: HashMap<ExprID, TypedExpr>,
-        scope_tree: ScopeTree,
-    ) -> SourceFile<Typed> {
+    pub fn to_typed(&self, roots: Vec<TypedExpr>, scope_tree: ScopeTree) -> SourceFile<Typed> {
         SourceFile {
             path: self.path.clone(),
             roots: self.roots.clone(),
             meta: self.meta.clone(),
-            phase_data: Typed {
-                roots,
-                type_map,
-                scope_tree,
-            },
+            phase_data: Typed { roots, scope_tree },
         }
     }
 
@@ -196,6 +186,10 @@ impl SourceFile<Typed> {
     // pub fn constraints(&self) -> Vec<Constraint> {
     //     self.phase_data.env.constraints()
     // }
+
+    pub fn typed_expr(&self, id: ExprID) -> Option<&TypedExpr> {
+        TypedExpr::find_in(self.roots(), id)
+    }
 
     pub fn roots(&self) -> &[TypedExpr] {
         &self.phase_data.roots

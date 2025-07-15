@@ -114,7 +114,6 @@ pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
-    type_map: HashMap<ExprID, TypedExpr>,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -145,7 +144,6 @@ impl<'a> TypeChecker<'a> {
             session,
             symbol_table,
             path,
-            type_map: Default::default(),
         }
     }
 
@@ -193,11 +191,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        source_file.to_typed(
-            typed_roots,
-            self.type_map.clone(),
-            source_file.phase_data.scope_tree.clone(),
-        )
+        source_file.to_typed(typed_roots, source_file.phase_data.scope_tree.clone())
     }
 
     pub fn infer_nodes(
@@ -473,11 +467,9 @@ impl<'a> TypeChecker<'a> {
         };
 
         match &ty {
-            Ok(ty) => {
-                self.type_map.insert(parsed_expr.id, ty.clone());
-            }
+            Ok(ty) => {}
             Err(e) => {
-                tracing::error!("error inferring {parsed_expr:?}: {e:?}");
+                tracing::error!("error inferring: {e:?}");
                 if let Ok(mut lock) = self.session.lock() {
                     lock.add_diagnostic(Diagnostic::typing(
                         self.path.clone(),
@@ -720,13 +712,17 @@ impl<'a> TypeChecker<'a> {
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
 
+        env.selfs.push(ty.clone());
+        let body = Box::new(self.infer_node(body, env, &None)?);
+        env.selfs.pop();
+
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::Extend {
                 name: ResolvedName(*symbol_id, name_str.to_string()),
                 generics: inferred_generics,
                 conformances: self.infer_nodes(conformances, env)?,
-                body: Box::new(self.infer_node(body, env, &None)?),
+                body,
             },
             ty,
         })
@@ -758,13 +754,17 @@ impl<'a> TypeChecker<'a> {
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
 
+        env.selfs.push(ty.clone());
+        let body = Box::new(self.infer_node(body, env, &None)?);
+        env.selfs.pop();
+
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::Struct {
                 name: ResolvedName(*symbol_id, name_str.to_string()),
                 generics: inferred_generics,
                 conformances: self.infer_nodes(conformances, env)?,
-                body: Box::new(self.infer_node(body, env, &None)?),
+                body,
             },
             ty,
         })
@@ -1366,6 +1366,7 @@ impl<'a> TypeChecker<'a> {
                         self_.clone()
                     }
                 } else {
+                    panic!("oh no: {name:?}");
                     return Err(TypeError::Unknown("No value found for `self`".into()));
                 }
             }

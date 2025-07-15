@@ -337,6 +337,124 @@ impl TypedExpr {
         }
     }
 
+    pub fn find(&self, id: ExprID) -> Option<&TypedExpr> {
+        let _s = trace_span!("finding",).entered();
+
+        if id == self.id {
+            return Some(self);
+        }
+
+        match &self.expr {
+            Expr::LiteralArray(items) => Self::find_in(items, id),
+            Expr::LiteralInt(_) => None,
+            Expr::LiteralFloat(_) => None,
+            Expr::LiteralTrue => None,
+            Expr::LiteralFalse => None,
+            Expr::LiteralString(_) => None,
+            Expr::Unary(_, rhs) => rhs.find(id),
+            Expr::Binary(lhs, _, rhs) => lhs.find(id).or_else(|| rhs.find(id)),
+            Expr::Tuple(items) => Self::find_in(items, id),
+            Expr::Block(items) => Self::find_in(items, id),
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+            } => callee
+                .find(id)
+                .or_else(|| Self::find_in(type_args, id))
+                .or_else(|| Self::find_in(args, id)),
+            Expr::ParsedPattern(pattern) => None,
+            Expr::Return(ret) => ret.as_ref().and_then(|t| t.find(id)),
+            Expr::Break => None,
+            Expr::Extend {
+                generics,
+                conformances,
+                body,
+                ..
+            } => Self::find_in(conformances, id)
+                .or_else(|| Self::find_in(generics, id))
+                .or_else(|| body.find(id)),
+            Expr::Struct {
+                generics,
+                conformances,
+                body,
+                ..
+            } => Self::find_in(conformances, id)
+                .or_else(|| Self::find_in(generics, id))
+                .or_else(|| body.find(id)),
+            Expr::Property {
+                type_repr,
+                default_value,
+                ..
+            } => type_repr
+                .as_ref()
+                .and_then(|t| t.find(id))
+                .or_else(|| default_value.as_ref().and_then(|t| t.find(id))),
+            Expr::TypeRepr {
+                generics,
+                conformances,
+                ..
+            } => Self::find_in(conformances, id).or_else(|| Self::find_in(generics, id)),
+            Expr::FuncTypeRepr(params, ret, _) => {
+                Self::find_in(params, id).or_else(|| ret.find(id))
+            }
+            Expr::TupleTypeRepr(typed_exprs, _) => Self::find_in(typed_exprs, id),
+            Expr::Member(receiver, _) => receiver.as_ref().and_then(|t| t.find(id)),
+            Expr::Init(_, typed_expr) => typed_expr.find(id),
+            Expr::Func {
+                generics,
+                params,
+                body,
+                ret,
+                ..
+            } => body
+                .find(id)
+                .or_else(|| Self::find_in(generics, id))
+                .or_else(|| Self::find_in(params, id))
+                .or_else(|| ret.as_ref().and_then(|t| t.find(id))),
+            Expr::Parameter(_, typed_expr) => typed_expr.as_ref().and_then(|t| t.find(id)),
+            Expr::CallArg { value, .. } => value.find(id),
+            Expr::Let(_, typed_expr) => typed_expr.as_ref().and_then(|t| t.find(id)),
+            Expr::Assignment(lhs, rhs) => lhs.find(id).or_else(|| rhs.find(id)),
+            Expr::Variable(_) => None,
+            Expr::If(cond, conseq, alt) => cond
+                .find(id)
+                .or_else(|| conseq.find(id))
+                .or_else(|| alt.as_ref().and_then(|t| t.find(id))),
+            Expr::Loop(cond, body) => body
+                .find(id)
+                .or_else(|| cond.as_ref().and_then(|t| t.find(id))),
+            Expr::EnumDecl {
+                conformances,
+                generics,
+                body,
+                ..
+            } => Self::find_in(conformances, id)
+                .or_else(|| Self::find_in(generics, id))
+                .or_else(|| body.find(id)),
+            Expr::EnumVariant(_, typed_exprs) => Self::find_in(typed_exprs, id),
+            Expr::Match(pattern, arms) => pattern.find(id).or_else(|| Self::find_in(arms, id)),
+            Expr::MatchArm(pattern, body) => pattern.find(id).or_else(|| body.find(id)),
+            Expr::PatternVariant(_, _, values) => Self::find_in(values, id),
+            Expr::ProtocolDecl {
+                associated_types,
+                body,
+                conformances,
+                ..
+            } => Self::find_in(associated_types, id)
+                .or_else(|| Self::find_in(conformances, id))
+                .or_else(|| body.find(id)),
+            Expr::FuncSignature {
+                params,
+                generics,
+                ret,
+                ..
+            } => Self::find_in(params, id)
+                .or_else(|| Self::find_in(generics, id))
+                .or_else(|| ret.find(id)),
+        }
+    }
+
     pub fn apply_mult(
         exprs: &mut [TypedExpr],
         substitutions: &mut Substitutions,
@@ -345,5 +463,15 @@ impl TypedExpr {
         for expr in exprs {
             expr.apply(substitutions, env);
         }
+    }
+
+    pub fn find_in<'a>(exprs: &'a [TypedExpr], id: ExprID) -> Option<&'a TypedExpr> {
+        for expr in exprs {
+            if let Some(result) = expr.find(id) {
+                return Some(result);
+            }
+        }
+
+        None
     }
 }

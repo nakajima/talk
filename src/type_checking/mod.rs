@@ -71,20 +71,19 @@ impl CheckResult {
     }
 
     pub fn typed_expr(&self, expr_id: ExprID) -> Option<&TypedExpr> {
-        self.source_file.phase_data.type_map.get(&expr_id)
+        self.source_file.typed_expr(expr_id)
     }
 
     pub fn nth(&self, idx: usize) -> Option<Ty> {
         self.source_file
             .phase_data
-            .type_map
-            .get(&self.root_ids()[idx])
-            .cloned()
-            .map(|t| t.ty)
+            .roots
+            .get(idx)
+            .map(|t| t.ty.clone())
     }
 
     pub fn type_for(&self, expr_id: ExprID) -> Option<Ty> {
-        if let Some(typed_expr) = self.source_file.phase_data.type_map.get(&expr_id) {
+        if let Some(typed_expr) = self.source_file.typed_expr(expr_id) {
             Some(typed_expr.ty.clone())
         } else {
             None
