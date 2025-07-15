@@ -84,7 +84,7 @@ impl NameResolver {
         &mut self,
         mut source_file: SourceFile,
         symbol_table: &mut SymbolTable,
-    ) -> SourceFile<NameResolved> {
+    ) -> Result<SourceFile<NameResolved>, NameResolverError> {
         // Create the root scope for the file
         #[allow(clippy::unwrap_used)]
         if !source_file.roots().is_empty()
@@ -113,8 +113,8 @@ impl NameResolver {
         }
 
         let meta = source_file.meta.clone();
-        self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table);
-        source_file.to_resolved(self.scope_tree.clone())
+        self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table)?;
+        Ok(source_file.to_resolved(self.scope_tree.clone()))
     }
 
     #[tracing::instrument(skip(self, symbol_table))]
@@ -124,10 +124,10 @@ impl NameResolver {
         meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
     ) -> Result<Vec<ParsedExpr>, NameResolverError> {
-        self.hoist_protocols(exprs, meta, symbol_table);
-        self.hoist_enums(exprs, meta, symbol_table);
-        self.hoist_funcs(exprs, meta, symbol_table);
-        self.hoise_structs(exprs, meta, symbol_table);
+        self.hoist_protocols(exprs, meta, symbol_table)?;
+        self.hoist_enums(exprs, meta, symbol_table)?;
+        self.hoist_funcs(exprs, meta, symbol_table)?;
+        self.hoise_structs(exprs, meta, symbol_table)?;
 
         let mut result = vec![];
 
@@ -1227,18 +1227,15 @@ mod tests {
                 any_expr!(Expr::Variable(Name::Resolved(
                     SymbolID::resolved(1),
                     "a".into()
-                )))
-                .into(),
+                ))),
                 any_expr!(Expr::Variable(Name::Resolved(
                     SymbolID::resolved(2),
                     "b".into()
-                )))
-                .into(),
+                ))),
                 any_expr!(Expr::Variable(Name::Resolved(
                     SymbolID::resolved(3),
                     "c".into()
-                )))
-                .into(),
+                ))),
             ]))
         );
     }
@@ -1435,7 +1432,7 @@ mod tests {
                     "Fizz".into()
                 )))
                 .into(),
-                args: vec![any_expr!(Expr::LiteralInt("123".into())).into()],
+                args: vec![any_expr!(Expr::LiteralInt("123".into()))],
                 type_args: vec![],
             })
         );
@@ -1565,7 +1562,7 @@ mod tests {
                         "__alloc".into()
                     )))
                     .into(),
-                    args: vec![any_expr!(Expr::LiteralInt("123".into())).into()],
+                    args: vec![any_expr!(Expr::LiteralInt("123".into()))],
                     type_args: vec![],
                 })]))
                 .into(),
@@ -1628,22 +1625,19 @@ mod tests {
             resolved.roots()[0],
             any_expr!(Expr::Struct {
                 name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
-                body: any_expr!(Expr::Block(vec![
-                    any_expr!(Expr::Property {
-                        name: Name::Resolved(SymbolID::resolved(2), "age".into()),
-                        type_repr: Some(
-                            any_expr!(Expr::TypeRepr {
-                                name: Name::Resolved(SymbolID::INT, "Int".into()),
-                                generics: vec![],
-                                conformances: vec![],
-                                introduces_type: false,
-                            })
-                            .into()
-                        ),
-                        default_value: None,
-                    })
-                    .into()
-                ]))
+                body: any_expr!(Expr::Block(vec![any_expr!(Expr::Property {
+                    name: Name::Resolved(SymbolID::resolved(2), "age".into()),
+                    type_repr: Some(
+                        any_expr!(Expr::TypeRepr {
+                            name: Name::Resolved(SymbolID::INT, "Int".into()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false,
+                        })
+                        .into()
+                    ),
+                    default_value: None,
+                })]))
                 .into(),
                 generics: vec![],
                 conformances: vec![],
@@ -1706,7 +1700,6 @@ mod tests {
                         })
                         .into()
                     ))
-                    .into(),
                 ]))
                 .into(),
                 generics: vec![],
@@ -1740,15 +1733,12 @@ mod tests {
                 name: Name::Resolved(SymbolID::resolved(1), "Person".into()),
                 body: any_expr!(Expr::Block(vec![])).into(),
                 generics: vec![],
-                conformances: vec![
-                    any_expr!(Expr::TypeRepr {
-                        name: Name::Resolved(SymbolID::resolved(2), "Printable".into()),
-                        generics: vec![],
-                        conformances: vec![],
-                        introduces_type: false,
-                    })
-                    .into()
-                ],
+                conformances: vec![any_expr!(Expr::TypeRepr {
+                    name: Name::Resolved(SymbolID::resolved(2), "Printable".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                    introduces_type: false,
+                })],
             })
         );
     }

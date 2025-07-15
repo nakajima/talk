@@ -381,7 +381,7 @@ impl<'a> TypeChecker<'a> {
                 let mut properties = vec![];
                 for property in placeholders.properties.iter() {
                     let typed_expr = self
-                        .infer_node(&property.expr, env, &None)
+                        .infer_node(property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
                     properties.push(Property {
                         name: property.name.clone(),
