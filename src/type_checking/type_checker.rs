@@ -918,19 +918,19 @@ impl<'a> TypeChecker<'a> {
                 consequence.ty.clone(),
                 alternative.ty.clone(),
             ));
-            consequence.clone()
+            Some(Box::new(alternative.clone()))
         } else {
-            consequence.optional()
+            None
         };
 
         Ok(TypedExpr {
             id,
-            ty: alt.ty.clone(),
-            expr: typed_expr::Expr::If(
-                Box::new(condition),
-                Box::new(consequence),
-                Some(Box::new(alt)),
-            ),
+            ty: if alt.is_some() {
+                consequence.ty.clone()
+            } else {
+                consequence.ty.optional()
+            },
+            expr: typed_expr::Expr::If(Box::new(condition), Box::new(consequence), alt),
         })
     }
 

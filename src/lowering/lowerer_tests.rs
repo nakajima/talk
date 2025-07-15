@@ -141,8 +141,8 @@ pub mod lowering_tests {
         .unwrap();
 
         let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
-        let t3 = format!("T{}", compile_prelude().environment.next_type_var_id() + 1);
-        let t4 = format!("T{}", compile_prelude().environment.next_type_var_id() + 2);
+        let t3 = format!("T{}", compile_prelude().environment.next_type_var_id() + 3);
+        let t4 = format!("T{}", compile_prelude().environment.next_type_var_id() + 4);
 
         assert_lowered_function!(
             lowered,
@@ -336,7 +336,7 @@ pub mod lowering_tests {
 
     #[test]
     fn lowers_func_with_params() {
-        let type_var = format!("T{}", compile_prelude().environment.next_type_var_id() + 1);
+        let type_var = format!("T{}", compile_prelude().environment.next_type_var_id() + 2);
         let lowered = lower("func foo(x) { x }").unwrap();
         let foo_name = format!("@_{}_foo", SymbolID::resolved(1).0);
         assert_lowered_function!(
@@ -1852,7 +1852,7 @@ mod protocol_lowering_tests {
                     instructions: vec![
                         Instr::Ref(
                             Register(0),
-                            IRType::Func(vec![IRType::TypeVar("T12".into())], IRType::Int.into()),
+                            IRType::Func(vec![IRType::TypeVar("T15".into())], IRType::Int.into()),
                             RefKind::Func("@_3_get".into())
                         ),
                         Instr::Alloc {
