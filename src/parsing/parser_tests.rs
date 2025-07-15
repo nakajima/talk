@@ -710,13 +710,7 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Expr::If(
                 any_expr!(Expr::LiteralTrue).into(),
-                any_expr!(
-                    Expr::Block(vec![any_expr!(Return(Some(
-                        any_expr!(LiteralInt("123".into())).into()
-                    )))])
-                    .into()
-                )
-                .into(),
+                any_expr!(Expr::Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
                 None
             ))
         );
@@ -729,22 +723,8 @@ mod tests {
             parsed.roots()[0],
             any_expr!(Expr::If(
                 any_expr!(Expr::LiteralTrue).into(),
-                any_expr!(
-                    Expr::Block(vec![any_expr!(Return(Some(
-                        any_expr!(LiteralInt("123".into())).into()
-                    )))])
-                    .into()
-                )
-                .into(),
-                Some(
-                    any_expr!(
-                        Expr::Block(vec![any_expr!(Return(Some(
-                            any_expr!(LiteralInt("456".into())).into()
-                        )))])
-                        .into()
-                    )
-                    .into()
-                )
+                any_expr!(Expr::Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
+                Some(any_expr!(Expr::Block(vec![any_expr!(LiteralInt("456".into()))])).into())
             ))
         );
     }
