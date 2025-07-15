@@ -91,26 +91,6 @@ impl<'a> ConstraintSolver<'a> {
             if let Ty::TypeVar(var) = &typed_expr.ty {
                 remaining_type_vars.push(var.clone());
             }
-
-            // Try to fill in the symbol ID of types of variables
-            let this_symbol = match typed_expr.expr {
-                typed_expr::Expr::Variable(ResolvedName(symbol_id, _)) => symbol_id,
-                _ => continue,
-            };
-
-            let def_symbol = match &typed_expr.ty {
-                Ty::Struct(struct_id, _) => struct_id,
-                Ty::Enum(enum_id, _) => enum_id,
-                _ => continue,
-            };
-
-            let Some(symbol_info) = self.symbol_table.get_mut(&this_symbol) else {
-                continue;
-            };
-
-            if let Some(definition) = symbol_info.definition.as_mut() {
-                definition.sym = Some(*def_symbol);
-            }
         }
 
         // We've applied these constraints, we don't need them anymore.. probably??

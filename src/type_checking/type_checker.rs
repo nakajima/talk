@@ -502,6 +502,8 @@ impl<'a> TypeChecker<'a> {
         body: &ParsedExpr,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
+        env.start_scope();
+
         let mut inferred_associated_types: Vec<TypedExpr> = vec![];
         for generic in associated_types {
             inferred_associated_types.push(self.infer_node(generic, env, &None)?);
@@ -510,22 +512,28 @@ impl<'a> TypeChecker<'a> {
         let Name::Resolved(symbol_id, name_str) = name else {
             return Err(TypeError::Unresolved(name.name_str()));
         };
+        let ty = Ty::Protocol(
+            *symbol_id,
+            inferred_associated_types
+                .iter()
+                .map(|t| t.ty.clone())
+                .collect(),
+        );
+
+        env.selfs.push(ty.clone());
+        let body = self.infer_node(body, env, &None)?;
+        env.selfs.pop();
+        env.end_scope();
 
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::ProtocolDecl {
                 name: ResolvedName(*symbol_id, name_str.to_string()),
                 associated_types: inferred_associated_types.clone(),
-                body: self.infer_node(body, env, &None)?.into(),
                 conformances: self.infer_nodes(conformances, env)?,
+                body: Box::new(body),
             },
-            ty: Ty::Protocol(
-                *symbol_id,
-                inferred_associated_types
-                    .iter()
-                    .map(|t| t.ty.clone())
-                    .collect(),
-            ),
+            ty,
         })
     }
 
