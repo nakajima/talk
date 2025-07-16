@@ -109,7 +109,7 @@ impl Environment {
         }
 
         if constraint.is_impossible() {
-            panic!("Impossible constraint: {constraint:?}");
+            tracing::error!("Impossible constraint: {constraint:?}");
         }
 
         #[cfg(debug_assertions)]

@@ -1567,11 +1567,11 @@ pub mod lowering_tests {
         );
         assert_lowered_function!(
             lowered,
-            format!("@_{}_Person_getAge", SymbolID::resolved(1).0),
+            format!("@_{}_Person_getAge", SymbolID::resolved(4).0),
             IRFunction {
                 debug_info: Default::default(),
                 ty: IRType::Func(vec![], IRType::Int.into()),
-                name: format!("@_{}_Person_getAge", SymbolID::resolved(1).0),
+                name: format!("@_{}_Person_getAge", SymbolID::resolved(4).0),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID::ENTRY,
                     instructions: vec![

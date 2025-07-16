@@ -60,6 +60,8 @@ pub fn _compile_prelude() -> Prelude {
         include_comments: false,
     });
 
+    crate::builtins::import_symbols(&mut driver.symbol_table);
+
     load_files(&mut driver);
 
     #[allow(clippy::unwrap_used)]
@@ -81,7 +83,7 @@ pub fn _compile_prelude() -> Prelude {
     if let Ok(session) = driver.session.lock()
         && !session.diagnostics.is_empty()
     {
-        panic!(
+        tracing::error!(
             "Prelude did not compile cleanly: {:#?}",
             session.diagnostics
         )

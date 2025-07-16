@@ -20,7 +20,7 @@ struct ArrayIterator<Element>: Iterator<Element> {
 }
 
 extend Array<Element>: Iterable<Element> {
-	func iter() -> ArrayIterator {
+	func iter() -> ArrayIterator<Element> {
 		ArrayIterator(array: self, cur: 0)
 	}
 }
