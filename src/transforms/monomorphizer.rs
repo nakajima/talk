@@ -577,6 +577,8 @@ mod tests {
             "
         let a = [1,2,3]
         a.get(0)
+        let b = [1.1,2.2,3.3]
+        b.get(0)
       ",
         );
 
