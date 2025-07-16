@@ -340,7 +340,9 @@ impl<'a> TypeChecker<'a> {
                             initializers: Default::default(),
                             method_requirements: Default::default(),
                         }),
-                        PredeclarationKind::Builtin(symbol_id) => builtin_type_def(&symbol_id),
+                        PredeclarationKind::Builtin(symbol_id) => {
+                            builtin_type_def(&symbol_id).expect("didn't get builtin")
+                        }
                     });
 
             env.register(&type_def).map_err(|e| (root.id, e))?;

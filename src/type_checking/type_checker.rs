@@ -973,6 +973,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         let callee = self.infer_node(callee, env, expected)?;
+        println!("callee = {callee:?}\nexpected: {expected:?}");
 
         match &callee.expr {
             // Handle struct initialization
@@ -1613,8 +1614,6 @@ impl<'a> TypeChecker<'a> {
                         ret_ty.clone(),
                     ));
                 }
-            } else {
-                block_return_ty = Some(ty);
             }
         }
 

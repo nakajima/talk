@@ -292,15 +292,15 @@ pub fn builtin_type(symbol_id: &SymbolID) -> Option<Ty> {
     None
 }
 
-pub fn builtin_type_def(symbol_id: &SymbolID) -> TypeDef {
+pub fn builtin_type_def(symbol_id: &SymbolID) -> Option<TypeDef> {
     for builtin in builtins() {
         if symbol_id == &SymbolID(builtin.id) {
             #[allow(clippy::expect_used)]
-            return builtin.type_def.expect("No builtin type def found");
+            return builtin.type_def
         }
     }
 
-    unreachable!()
+    None
 }
 
 pub fn default_env_types() -> BTreeMap<SymbolID, TypeDef> {

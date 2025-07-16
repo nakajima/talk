@@ -3,12 +3,7 @@ use std::fmt::Display;
 use derive_visitor::{Drive, Visitor};
 
 use crate::{
-    SymbolID,
-    environment::Environment,
-    expr_id::ExprID,
-    type_checker::{FuncParams, FuncReturning},
-    type_defs::TypeDef,
-    type_var_id::{TypeVarID, TypeVarKind},
+    builtin_type_def, environment::Environment, expr_id::ExprID, type_checker::{FuncParams, FuncReturning}, type_defs::TypeDef, type_var_id::{TypeVarID, TypeVarKind}, SymbolID
 };
 
 #[derive(Clone, PartialEq, Debug, Drive)]
@@ -84,9 +79,19 @@ impl Display for Ty {
                     .join(", ")
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
-            Ty::Struct(_, _) => write!(f, "struct"),
+            Ty::Struct(sym, _) => write!(f, "{}", {
+                if let Some(builtin) = builtin_type_def(sym) {
+                    builtin.name().to_string()
+                } else if sym == &SymbolID::ARRAY {
+                    "Array".to_string()
+                } else if sym == &SymbolID::STRING {
+                    "String".to_string()
+                } else {
+                    format!("Struct({sym:?})")
+                }
+            }),
             Ty::Pointer => write!(f, "pointer"),
-            Ty::Protocol(_, _) => write!(f, "protocol"),
+            Ty::Protocol(sym, _) => write!(f, "{sym:?} (protocol)"),
         }
     }
 }
