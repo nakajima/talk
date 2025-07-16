@@ -1334,8 +1334,6 @@ impl<'a> TypeChecker<'a> {
                 ret_ty.ty.clone(),
                 annotated_ret_ty.ty.clone(),
             ));
-
-            ret_ty = annotated_ret_ty.clone();
         }
 
         env.end_scope();

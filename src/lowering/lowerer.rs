@@ -950,8 +950,6 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        println!("wtf tho: {:#?}", typed_func.expr);
-
         self.current_functions.push(CurrentFunction::new(Some(
             type_def.ty().to_ir(self).clone(),
         )));

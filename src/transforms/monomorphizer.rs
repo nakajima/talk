@@ -802,7 +802,7 @@ mod tests {
         .unwrap();
 
         let mono = Monomorphizer::new(&env).run(lowered);
-        let t3 = IRType::TypeVar("T9".to_string());
+        let t3 = IRType::TypeVar("T12".to_string());
 
         assert_lowered_function!(
             mono,
