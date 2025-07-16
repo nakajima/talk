@@ -74,7 +74,7 @@ impl<'a> TypeChecker<'a> {
         to_generalize.extend(self.infer_funcs(&func_results, env)?);
 
         // Solve what we can
-        let mut substitutions = env.flush_constraints(self.symbol_table, self.meta)?;
+        let mut substitutions = env.flush_constraints(self.meta)?;
 
         // Update typed exprs
         env.replace_typed_exprs_values(&mut substitutions);

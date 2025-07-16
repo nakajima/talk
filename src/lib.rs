@@ -5,6 +5,7 @@
 #![feature(if_let_guard)]
 #![feature(hash_set_entry)]
 #![feature(stmt_expr_attributes)]
+#![feature(error_generic_member_access)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![cfg_attr(not(test), warn(clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::panic))]

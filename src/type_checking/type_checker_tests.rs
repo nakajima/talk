@@ -4,7 +4,6 @@ mod tests {
         SymbolID, any_typed, assert_eq_diff, check,
         diagnostic::{Diagnostic, DiagnosticKind},
         name::ResolvedName,
-        parsing::expr_id::ExprID,
         ty::Ty,
         type_checker::TypeError,
         type_defs::TypeDef,
@@ -1441,7 +1440,7 @@ mod tests {
         assert!(
             matches!(
                 checked.diagnostics()[0].kind,
-                DiagnosticKind::Typing(_, TypeError::Mismatch(_, _))
+                DiagnosticKind::Typing(TypeError::Mismatch(_, _))
             ),
             "{:?}",
             checked.diagnostics()
@@ -1465,7 +1464,7 @@ mod tests {
         assert!(
             checked.diagnostics().contains(&Diagnostic::typing(
                 checked.source_file.path.clone(),
-                ExprID::ANY,
+                (0, 0),
                 TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string())
             )),
             "{:?}",
@@ -1801,7 +1800,7 @@ mod protocol_tests {
         assert!(checked.diagnostics().iter().any(|d| matches!(
             d,
             Diagnostic {
-                kind: DiagnosticKind::Typing(_, TypeError::ConformanceError(_)),
+                kind: DiagnosticKind::Typing(TypeError::ConformanceError(_)),
                 ..
             }
         )));
@@ -1837,7 +1836,7 @@ mod protocol_tests {
             matches!(
                 checked.diagnostics()[0],
                 Diagnostic {
-                    kind: DiagnosticKind::Typing(_, TypeError::Mismatch(_, _)),
+                    kind: DiagnosticKind::Typing(TypeError::Mismatch(_, _)),
                     ..
                 }
             ),
@@ -1919,7 +1918,6 @@ mod operator_tests {
     use crate::{
         SymbolID, any_typed, check,
         name::ResolvedName,
-        parsing::expr_id::ExprID,
         token_kind::TokenKind,
         ty::Ty,
         typed_expr::{Expr, TypedExpr},

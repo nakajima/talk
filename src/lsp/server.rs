@@ -465,7 +465,7 @@ impl ServerState {
         for unit in units {
             tracing::info!("checking for diagnostics in {path:?}");
             if unit.has_file(path)
-                && let Some(source_file) = unit.source_file(path)
+                && let Some(_source_file) = unit.source_file(path)
             {
                 let Ok(session) = self.driver.session.lock() else {
                     return None;
@@ -477,11 +477,14 @@ impl ServerState {
                         continue;
                     }
 
-                    let diag_range = diag.range(source_file);
-                    let range = Range::new(
-                        Position::new(diag_range.0.line, diag_range.0.col),
-                        Position::new(diag_range.1.line, diag_range.1.col),
-                    );
+                    let source = self.driver.contents(path);
+                    let start = self
+                        .line_col_for(diag.span.0 as u32, &source)
+                        .unwrap_or_default();
+                    let end = self
+                        .line_col_for(diag.span.1 as u32, &source)
+                        .unwrap_or_default();
+                    let range = Range::new(start, end);
                     result.push(Diagnostic::new(
                         range,
                         Some(DiagnosticSeverity::ERROR),
@@ -496,6 +499,23 @@ impl ServerState {
         }
 
         Some(result)
+    }
+
+    fn line_col_for(&self, position: u32, source: &str) -> Option<Position> {
+        if position as usize > source.len() {
+            return None;
+        }
+
+        let before = &source[..position as usize];
+        let line = before.matches('\n').count(); // Remove the +1 here
+        let column = before
+            .rfind('\n')
+            .map(|i| &before[i + 1..])
+            .unwrap_or(before)
+            .chars()
+            .count(); // Also remove the +1 here
+
+        Some(Position::new(line as u32, column as u32))
     }
 }
 

@@ -38,6 +38,10 @@ impl CompilationSession {
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         if diagnostic.is_unhandled() {
+            if self.diagnostics.contains(&diagnostic) {
+                return;
+            }
+
             tracing::warn!("adding diagnostic to {:?}: {diagnostic:?}", diagnostic.path);
             self.diagnostics.insert(diagnostic);
         }

@@ -63,7 +63,7 @@ impl TypeError {
                 format!("Unexpected type: {expected}, expected: {actual}")
             }
             Self::Mismatch(expected, actual) => {
-                format!("Unexpected type: {expected}, expected: {actual}")
+                format!("Type mismatch: {expected}, expected: {actual}")
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),
@@ -172,11 +172,15 @@ impl<'a> TypeChecker<'a> {
         if let Err(e) = self.hoist(roots, env)
             && let Ok(mut lock) = self.session.lock()
         {
-            lock.add_diagnostic(Diagnostic::typing(
-                source_file.path.clone(),
-                roots.first().map(|r| r.id).unwrap_or_default(),
-                e,
-            ));
+            let span = if let Some(first_root) = roots.first().map(|r| r.id)
+                && let Some(meta) = source_file.meta.borrow().get(&first_root)
+            {
+                meta.span()
+            } else {
+                (0, 0)
+            };
+
+            lock.add_diagnostic(Diagnostic::typing(source_file.path.clone(), span, e));
         }
 
         let mut typed_roots = vec![];
@@ -185,12 +189,14 @@ impl<'a> TypeChecker<'a> {
             match self.infer_node(parsed_expr, env, &None) {
                 Ok(typed_expr) => typed_roots.push(typed_expr),
                 Err(e) => {
+                    let span = if let Some(meta) = source_file.meta.borrow().get(&parsed_expr.id) {
+                        meta.span()
+                    } else {
+                        (0, 0)
+                    };
+
                     if let Ok(mut lock) = self.session.lock() {
-                        lock.add_diagnostic(Diagnostic::typing(
-                            source_file.path.clone(),
-                            parsed_expr.id,
-                            e,
-                        ))
+                        lock.add_diagnostic(Diagnostic::typing(source_file.path.clone(), span, e))
                     }
                 }
             }
@@ -474,11 +480,13 @@ impl<'a> TypeChecker<'a> {
             Err(e) => {
                 tracing::error!("error inferring: {e:?}");
                 if let Ok(mut lock) = self.session.lock() {
-                    lock.add_diagnostic(Diagnostic::typing(
-                        self.path.clone(),
-                        parsed_expr.id,
-                        e.clone(),
-                    ));
+                    let span = if let Some(meta) = self.meta.get(&parsed_expr.id) {
+                        meta.span()
+                    } else {
+                        (0, 0)
+                    };
+
+                    lock.add_diagnostic(Diagnostic::typing(self.path.clone(), span, e.clone()));
                 }
                 ty = Err(TypeError::Handled);
             }
@@ -1323,7 +1331,7 @@ impl<'a> TypeChecker<'a> {
             param_vars.push(param_ty);
         }
 
-        let mut ret_ty =
+        let ret_ty =
             self.infer_node(body, env, &annotated_ret_ty.as_ref().map(|t| t.ty.clone()))?;
 
         if let Some(annotated_ret_ty) = &annotated_ret_ty
@@ -1424,6 +1432,7 @@ impl<'a> TypeChecker<'a> {
                     if let Ty::Protocol(symbol_id, _) = self_ {
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id)))
                     } else {
+                        tracing::error!("Name::_Self -> {self_:?}");
                         self_.clone()
                     }
                 } else {

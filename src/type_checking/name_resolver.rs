@@ -190,9 +190,13 @@ impl NameResolver {
                     let Some(symbol_id) = self.lookup(name_str) else {
                         tracing::error!("Did not find symbol for {name_str}");
                         if let Ok(mut session) = self.session.lock() {
+                            #[allow(clippy::expect_used)]
+                            let meta = meta
+                                .get(&parsed_expr.id)
+                                .expect("Did not get meta for parsed expr");
                             session.add_diagnostic(Diagnostic::resolve(
                                 self.path.clone(),
-                                parsed_expr.id,
+                                meta.span(),
                                 NameResolverError::UnresolvedName(name_str.to_string()),
                             ))
                         }
@@ -1350,7 +1354,8 @@ mod tests {
         assert!(!diagnostics.is_empty());
         let Diagnostic {
             path: _,
-            kind: DiagnosticKind::Resolve(_, NameResolverError::UnresolvedName(name)),
+            kind: DiagnosticKind::Resolve(NameResolverError::UnresolvedName(name)),
+            span: _,
         } = diagnostics.iter().find(|_| true).unwrap()
         else {
             panic!("didn't get diagnostic");
@@ -1807,19 +1812,16 @@ mod tests {
 
         let Diagnostic {
             kind:
-                DiagnosticKind::Resolve(
+                DiagnosticKind::Resolve(NameResolverError::Redeclaration(
                     _,
-                    NameResolverError::Redeclaration(
-                        _,
-                        SymbolInfo {
-                            name: _,
-                            kind: SymbolKind::Struct,
-                            expr_id: _,
-                            is_captured: false,
-                            definition: Some(Definition { .. }),
-                        },
-                    ),
-                ),
+                    SymbolInfo {
+                        name: _,
+                        kind: SymbolKind::Struct,
+                        expr_id: _,
+                        is_captured: false,
+                        definition: Some(Definition { .. }),
+                    },
+                )),
             ..
         } = diagnostics.iter().find(|_| true).unwrap()
         else {

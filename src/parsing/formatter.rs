@@ -1,13 +1,11 @@
 use crate::{
-    ExprMetaStorage, Phase,
+    ExprMetaStorage,
     expr::ExprMeta,
     name::Name,
     parsed_expr::{Expr, ParsedExpr, Pattern},
-    parsing::expr_id::ExprID,
     source_file::SourceFile,
     token_kind::TokenKind,
 };
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Doc {
@@ -1009,7 +1007,7 @@ impl<'a> Formatter<'a> {
 pub fn format(source_file: &SourceFile, width: usize) -> String {
     let meta = source_file.meta.borrow();
     let formatter = Formatter::new(&meta);
-    formatter.format(&source_file.roots(), width)
+    formatter.format(source_file.roots(), width)
 }
 
 #[cfg(test)]

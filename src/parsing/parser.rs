@@ -178,7 +178,7 @@ impl<'a> Parser<'a> {
                     tracing::error!("{}", err.message());
                     self.add_diagnostic(Diagnostic::parser(
                         self.parse_tree.path.clone(),
-                        current,
+                        current.span(),
                         err,
                     ));
                     self.recover();
@@ -928,7 +928,7 @@ impl<'a> Parser<'a> {
             Err(e) => {
                 self.add_diagnostic(Diagnostic::parser(
                     self.parse_tree.path.clone(),
-                    self.current.clone().unwrap_or(Token::EOF),
+                    self.current.as_ref().map(|c| c.span()).unwrap_or_default(),
                     e,
                 ));
                 let incomplete_func = IncompleteExpr::Func {
@@ -950,7 +950,7 @@ impl<'a> Parser<'a> {
             Err(e) => {
                 self.add_diagnostic(Diagnostic::parser(
                     self.parse_tree.path.clone(),
-                    self.current.clone().unwrap_or(Token::EOF),
+                    self.current.as_ref().map(|c| c.span()).unwrap_or_default(),
                     e,
                 ));
                 let incomplete_func = IncompleteExpr::Func {
@@ -976,7 +976,7 @@ impl<'a> Parser<'a> {
             Err(e) => {
                 self.add_diagnostic(Diagnostic::parser(
                     self.parse_tree.path.clone(),
-                    self.current.clone().unwrap_or(Token::EOF),
+                    self.current.as_ref().map(|c| c.span()).unwrap_or_default(),
                     e,
                 ));
                 let incomplete_func = IncompleteExpr::Func {

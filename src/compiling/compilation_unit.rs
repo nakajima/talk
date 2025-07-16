@@ -222,7 +222,7 @@ impl CompilationUnit<Resolved> {
                 TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
                     .infer_without_prelude(&mut self.env, &mut file)
             };
-            let mut solver = ConstraintSolver::new(&mut self.env, &meta, symbol_table);
+            let mut solver = ConstraintSolver::new(&mut self.env, &meta);
             let mut solution = solver.solve();
 
             TypedExpr::apply_mult(
@@ -233,7 +233,13 @@ impl CompilationUnit<Resolved> {
 
             for (expr_id, err) in solution.errors {
                 if let Ok(session) = &mut self.session.lock() {
-                    session.add_diagnostic(Diagnostic::typing(path.clone(), expr_id, err));
+                    let span = typed
+                        .meta
+                        .borrow()
+                        .get(&expr_id)
+                        .map(|m| m.span())
+                        .unwrap_or_default();
+                    session.add_diagnostic(Diagnostic::typing(path.clone(), span, err));
                 }
             }
 

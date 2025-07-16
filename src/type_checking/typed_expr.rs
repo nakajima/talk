@@ -1,9 +1,11 @@
+use std::{cell::RefCell, rc::Rc};
+
 use derive_visitor::DriveMut;
 use tracing::trace_span;
 
 use crate::{
-    SymbolID, environment::Environment, name::ResolvedName, parsing::expr_id::ExprID,
-    substitutions::Substitutions, token_kind::TokenKind, ty::Ty,
+    ExprMetaStorage, SymbolID, environment::Environment, name::ResolvedName,
+    parsing::expr_id::ExprID, substitutions::Substitutions, token_kind::TokenKind, ty::Ty,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
@@ -175,13 +177,6 @@ impl TypedExpr {
     }
 
     pub fn apply(&mut self, substitutions: &mut Substitutions, env: &mut Environment) {
-        let _s = trace_span!(
-            "applying",
-            self = format!("{self:?}"),
-            subs = format!("{:?}", substitutions.apply(&self.ty, 0, &mut env.context))
-        )
-        .entered();
-
         self.ty = substitutions.apply(&self.ty, 0, &mut env.context);
 
         match &mut self.expr {
@@ -582,6 +577,14 @@ impl TypedExpr {
         }
 
         None
+    }
+
+    pub fn span(&self, in_meta: &Rc<RefCell<ExprMetaStorage>>) -> (usize, usize) {
+        if let Some(meta) = in_meta.borrow().get(&self.id) {
+            meta.span()
+        } else {
+            Default::default()
+        }
     }
 
     pub fn optional(&self) -> TypedExpr {

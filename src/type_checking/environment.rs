@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::{
-    ExprMetaStorage, SymbolID, SymbolTable,
+    ExprMetaStorage, SymbolID,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
     parsing::expr_id::ExprID,
@@ -130,13 +130,12 @@ impl Environment {
         self.constraints.clear()
     }
 
-    #[tracing::instrument(skip(self, symbol_table))]
+    #[tracing::instrument(skip(self, meta))]
     pub fn flush_constraints(
         &mut self,
-        symbol_table: &mut SymbolTable,
         meta: &ExprMetaStorage,
     ) -> Result<Substitutions, TypeError> {
-        let mut solver = ConstraintSolver::new(self, meta, symbol_table);
+        let mut solver = ConstraintSolver::new(self, meta);
         let solution = solver.solve();
 
         for constraint in solution.unsolved_constraints {
@@ -235,7 +234,7 @@ impl Environment {
         self.instantiate_with_args(scheme, Default::default())
     }
 
-    #[tracing::instrument(skip(self), fields(result))]
+    #[tracing::instrument(skip(self, args, scheme), fields(result))]
     pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
         let mut var_map = Substitutions::new();
         for old in &scheme.unbound_vars() {

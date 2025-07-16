@@ -1,9 +1,61 @@
 use std::{hash::Hash, path::PathBuf};
 
+use miette::{SourceOffset, SourceSpan};
+
 use crate::{
-    SourceFile, expr_id::ExprID, lexer::LexerError, lowering::ir_error::IRError,
-    name_resolver::NameResolverError, parser::ParserError, token::Token, type_checker::TypeError,
+    lexer::LexerError, lowering::ir_error::IRError, name_resolver::NameResolverError,
+    parser::ParserError, type_checker::TypeError,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, miette::Diagnostic)]
+#[diagnostic(code(Talk::Diagnostic))]
+pub struct ExpandedDiagnostic {
+    kind: DiagnosticKind,
+    message: String,
+
+    // The `Source` that miette will use.
+    #[source_code]
+    src: String,
+
+    // This will underline/mark the specific code inside the larger
+    // snippet context.
+    #[label = "This is the highlight"]
+    err_span: SourceSpan,
+    // // You can add as many labels as you want.
+    // // They'll be rendered sequentially.
+    // #[label("This is bad")]
+    // snip2: (usize, usize), // `(usize, usize)` is `Into<SourceSpan>`!
+
+    // // Snippets can be optional, by using Option:
+    // #[label("some text")]
+    // snip3: Option<SourceSpan>,
+
+    // // with or without label text
+    // #[label]
+    // snip4: Option<SourceSpan>,
+}
+
+impl std::fmt::Display for ExpandedDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ExpandedDiagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+
+    fn description(&self) -> &str {
+        "description() is deprecated; use Display"
+    }
+
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        self.source()
+    }
+
+    fn provide<'a>(&'a self, request: &mut std::error::Request<'a>) {}
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Position {
@@ -13,17 +65,20 @@ pub struct Position {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticKind {
-    Lexer(Position, LexerError),
-    Parse(Token, ParserError),
-    Resolve(ExprID, NameResolverError),
-    Typing(ExprID, TypeError),
-    Lowering(ExprID, IRError),
+    Lexer(LexerError),
+    Parse(ParserError),
+    Resolve(NameResolverError),
+    Typing(TypeError),
+    Lowering(IRError),
 }
+
+pub type ErrorSpan = (usize, usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
     pub path: PathBuf,
+    pub span: ErrorSpan,
 }
 
 impl Hash for Diagnostic {
@@ -33,127 +88,141 @@ impl Hash for Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn lexer(path: PathBuf, position: Position, err: LexerError) -> Diagnostic {
+    pub fn lexer(path: PathBuf, span: ErrorSpan, err: LexerError) -> Diagnostic {
         Self {
             path,
-            kind: DiagnosticKind::Lexer(position, err),
+            kind: DiagnosticKind::Lexer(err),
+            span,
         }
     }
 
-    pub fn parser(path: PathBuf, token: Token, err: ParserError) -> Diagnostic {
+    pub fn parser(path: PathBuf, span: ErrorSpan, err: ParserError) -> Diagnostic {
         Self {
             path,
-            kind: DiagnosticKind::Parse(token, err),
+            kind: DiagnosticKind::Parse(err),
+            span,
         }
     }
 
-    pub fn resolve(path: PathBuf, expr_id: ExprID, err: NameResolverError) -> Diagnostic {
+    pub fn resolve(path: PathBuf, span: ErrorSpan, err: NameResolverError) -> Diagnostic {
         Self {
             path,
-            kind: DiagnosticKind::Resolve(expr_id, err),
+            kind: DiagnosticKind::Resolve(err),
+            span,
         }
     }
 
-    pub fn typing(path: PathBuf, expr_id: ExprID, err: TypeError) -> Diagnostic {
+    pub fn typing(path: PathBuf, span: ErrorSpan, err: TypeError) -> Diagnostic {
         Self {
             path,
-            kind: DiagnosticKind::Typing(expr_id, err),
+            kind: DiagnosticKind::Typing(err),
+            span,
         }
     }
 
-    pub fn lowering(path: PathBuf, expr_id: ExprID, err: IRError) -> Diagnostic {
+    pub fn lowering(path: PathBuf, span: ErrorSpan, err: IRError) -> Diagnostic {
         Self {
             path,
-            kind: DiagnosticKind::Lowering(expr_id, err),
+            kind: DiagnosticKind::Lowering(err),
+            span,
         }
     }
 
     pub fn message(&self) -> String {
         match &self.kind {
-            DiagnosticKind::Lexer(_, e) => e.message(),
-            DiagnosticKind::Parse(_, e) => e.message(),
-            DiagnosticKind::Resolve(_, e) => e.message(),
-            DiagnosticKind::Typing(_, e) => e.message(),
-            DiagnosticKind::Lowering(_, e) => e.message(),
+            DiagnosticKind::Lexer(e) => e.message(),
+            DiagnosticKind::Parse(e) => e.message(),
+            DiagnosticKind::Resolve(e) => e.message(),
+            DiagnosticKind::Typing(e) => e.message(),
+            DiagnosticKind::Lowering(e) => e.message(),
         }
     }
 
     pub fn is_unhandled(&self) -> bool {
         match &self.kind {
-            DiagnosticKind::Typing(_, err) => {
+            DiagnosticKind::Typing(err) => {
                 *err != TypeError::Handled && !matches!(err, TypeError::Defer(_))
             }
             _ => true,
         }
     }
 
-    pub fn range<S: crate::source_file::Phase>(
-        &self,
-        source_file: &SourceFile<S>,
-    ) -> (Position, Position) {
-        match &self.kind {
-            DiagnosticKind::Lexer(position, _lexer_error) => (position.clone(), position.clone()),
-            DiagnosticKind::Parse(token, _parser_error) => (
-                Position {
-                    line: token.line,
-                    col: token.col,
-                },
-                Position {
-                    line: token.line,
-                    col: token.col,
-                },
-            ),
-            DiagnosticKind::Resolve(expr_id, _name_resolver_error) => {
-                let meta = source_file.meta.borrow();
-                let Some(expr) = meta.get(expr_id) else {
-                    return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
-                };
-
-                (
-                    Position {
-                        line: expr.start.line,
-                        col: expr.start.col,
-                    },
-                    Position {
-                        line: expr.end.line,
-                        col: expr.end.col,
-                    },
-                )
-            }
-            DiagnosticKind::Typing(expr_id, _type_error) => {
-                let meta = source_file.meta.borrow();
-                let Some(expr) = meta.get(expr_id) else {
-                    return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
-                };
-
-                (
-                    Position {
-                        line: expr.start.line,
-                        col: expr.start.col,
-                    },
-                    Position {
-                        line: expr.end.line,
-                        col: expr.end.col,
-                    },
-                )
-            }
-            DiagnosticKind::Lowering(expr_id, _type_error) => {
-                let meta = source_file.meta.borrow();
-                let Some(expr) = meta.get(expr_id) else {
-                    return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
-                };
-
-                (
-                    Position {
-                        line: expr.start.line,
-                        col: expr.start.col,
-                    },
-                    Position {
-                        line: expr.end.line,
-                        col: expr.end.col,
-                    },
-                )
-            }
+    pub fn expand(&self, source: &str) -> ExpandedDiagnostic {
+        ExpandedDiagnostic {
+            kind: self.kind.clone(),
+            message: self.message(),
+            src: source.to_string(),
+            err_span: self.span.into(),
         }
     }
+
+    // pub fn range<S: crate::source_file::Phase>(
+    //     &self,
+    //     source_file: &SourceFile<S>,
+    // ) -> (Position, Position) {
+    //     match &self.kind {
+    //         DiagnosticKind::Lexer(_lexer_error) => (position.clone(), position.clone()),
+    //         DiagnosticKind::Parse(_parser_error) => (
+    //             Position {
+    //                 line: token.line,
+    //                 col: token.col,
+    //             },
+    //             Position {
+    //                 line: token.line,
+    //                 col: token.col,
+    //             },
+    //         ),
+    //         DiagnosticKind::Resolve(expr_id, _name_resolver_error) => {
+    //             let meta = source_file.meta.borrow();
+    //             let Some(expr) = meta.get(expr_id) else {
+    //                 return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
+    //             };
+
+    //             (
+    //                 Position {
+    //                     line: expr.start.line,
+    //                     col: expr.start.col,
+    //                 },
+    //                 Position {
+    //                     line: expr.end.line,
+    //                     col: expr.end.col,
+    //                 },
+    //             )
+    //         }
+    //         DiagnosticKind::Typing(expr_id, _type_error) => {
+    //             let meta = source_file.meta.borrow();
+    //             let Some(expr) = meta.get(expr_id) else {
+    //                 return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
+    //             };
+
+    //             (
+    //                 Position {
+    //                     line: expr.start.line,
+    //                     col: expr.start.col,
+    //                 },
+    //                 Position {
+    //                     line: expr.end.line,
+    //                     col: expr.end.col,
+    //                 },
+    //             )
+    //         }
+    //         DiagnosticKind::Lowering(expr_id, _type_error) => {
+    //             let meta = source_file.meta.borrow();
+    //             let Some(expr) = meta.get(expr_id) else {
+    //                 return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
+    //             };
+
+    //             (
+    //                 Position {
+    //                     line: expr.start.line,
+    //                     col: expr.start.col,
+    //                 },
+    //                 Position {
+    //                     line: expr.end.line,
+    //                     col: expr.end.col,
+    //                 },
+    //             )
+    //         }
+    //     }
+    // }
 }

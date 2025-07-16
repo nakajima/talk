@@ -1,7 +1,7 @@
 use tracing::Level;
 
 use crate::{
-    ExprMetaStorage, SymbolID, SymbolTable,
+    ExprMetaStorage, SymbolID,
     conformance_checker::{ConformanceChecker, ConformanceError},
     constraint::Constraint,
     environment::{Environment, TypeParameter},
@@ -23,21 +23,15 @@ pub struct ConstraintSolverSolution {
 pub struct ConstraintSolver<'a> {
     env: &'a mut Environment,
     meta: &'a ExprMetaStorage,
-    symbol_table: &'a mut SymbolTable,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(
-        env: &'a mut Environment,
-        meta: &'a ExprMetaStorage,
-        symbol_table: &'a mut SymbolTable,
-    ) -> Self {
+    pub fn new(env: &'a mut Environment, meta: &'a ExprMetaStorage) -> Self {
         Self {
             constraints: env.constraints().clone(),
             env,
             meta,
-            symbol_table,
         }
     }
 
@@ -50,42 +44,42 @@ impl<'a> ConstraintSolver<'a> {
             match self.solve_constraint(&constraint, &mut substitutions) {
                 Ok(_) => (),
                 Err(err) => {
-                    if let Constraint::Retry(constraint, retries) = constraint {
-                        if retries > 0 {
-                            let constraint =
-                                constraint.replacing(&mut substitutions, &mut self.env.context);
-                            self.constraints.insert(
-                                0,
-                                Constraint::Retry(
-                                    constraint
-                                        .replacing(&mut substitutions, &mut self.env.context)
-                                        .into(),
-                                    retries - 1,
-                                ),
-                            );
-                        } else {
-                            unsolved_constraints.push(*constraint.clone());
-                            // If the last retry produced a Defer(TypeCannotConform) we want a
-                            // deterministic, user-facing ConformanceError instead of an opaque
-                            // deferred error – this mirrors the behaviour that tests expect.
-                            let processed_err = match err {
-                                TypeError::Defer(e) => TypeError::ConformanceError(vec![e]),
-                                other => other,
-                            };
+                    // if let Constraint::Retry(constraint, retries) = constraint {
+                    //     if retries > 0 {
+                    //         let constraint =
+                    //             constraint.replacing(&mut substitutions, &mut self.env.context);
+                    //         self.constraints.insert(
+                    //             0,
+                    //             Constraint::Retry(
+                    //                 constraint
+                    //                     .replacing(&mut substitutions, &mut self.env.context)
+                    //                     .into(),
+                    //                 retries - 1,
+                    //             ),
+                    //         );
+                    //     } else {
+                    unsolved_constraints.push(constraint.clone());
+                    // If the last retry produced a Defer(TypeCannotConform) we want a
+                    // deterministic, user-facing ConformanceError instead of an opaque
+                    // deferred error – this mirrors the behaviour that tests expect.
+                    let processed_err = match err {
+                        TypeError::Defer(e) => TypeError::ConformanceError(vec![e]),
+                        other => other,
+                    };
 
-                            errors.push((*constraint.expr_id(), processed_err))
-                        }
-                    } else {
-                        self.constraints.insert(
-                            0,
-                            Constraint::Retry(
-                                constraint
-                                    .replacing(&mut substitutions, &mut self.env.context)
-                                    .into(),
-                                3,
-                            ),
-                        );
-                    }
+                    errors.push((*constraint.expr_id(), processed_err))
+                    //     }
+                    // } else {
+                    //     self.constraints.insert(
+                    //         0,
+                    //         Constraint::Retry(
+                    //             constraint
+                    //                 .replacing(&mut substitutions, &mut self.env.context)
+                    //                 .into(),
+                    //             3,
+                    //         ),
+                    //     );
+                    // }
                 }
             }
         }

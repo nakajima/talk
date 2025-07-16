@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use derive_visitor::{Drive, Visitor, VisitorMut};
+use derive_visitor::Drive;
 
 use crate::{
     SymbolID,

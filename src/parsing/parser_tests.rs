@@ -9,7 +9,6 @@ mod tests {
     use crate::lexer::Lexer;
     use crate::parsed_expr::{IncompleteExpr, ParsedExpr, Pattern};
     use crate::parser::{Parser, parse_with_session};
-    use crate::token::Token;
     use crate::{
         Parsed, SourceFile, name::Name, parser::parse_with_comments, token_kind::TokenKind,
     };
@@ -1391,13 +1390,7 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics.contains(&Diagnostic::parser(
             PathBuf::from("-"),
-            Token {
-                kind: TokenKind::LeftParen,
-                col: 1,
-                line: 0,
-                start: 0,
-                end: 1,
-            },
+            (0, 0),
             crate::parser::ParserError::UnexpectedEndOfInput(None)
         )))
     }
@@ -1411,13 +1404,7 @@ mod tests {
         assert!(
             diagnostics.contains(&Diagnostic::parser(
                 PathBuf::from("-"),
-                Token {
-                    kind: TokenKind::EOF,
-                    col: 12,
-                    line: 0,
-                    start: 12,
-                    end: 12,
-                },
+                (0, 0),
                 crate::parser::ParserError::UnexpectedEndOfInput(None)
             )),
             "{:?}",
@@ -1433,13 +1420,7 @@ mod tests {
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(diagnostics.contains(&Diagnostic::parser(
             PathBuf::from("-"),
-            Token {
-                kind: TokenKind::EOF,
-                col: 14,
-                line: 2,
-                start: 28,
-                end: 28,
-            },
+            (0, 0),
             crate::parser::ParserError::UnexpectedEndOfInput(None)
         )));
 

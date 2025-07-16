@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+use miette::Report;
 use std::{collections::BTreeMap, path::PathBuf, process::exit};
 
 use crate::{
@@ -77,12 +78,17 @@ pub fn _compile_prelude() -> Prelude {
         .lower(&mut driver.symbol_table, &driver.config, IRModule::new());
     let mut environment = unit.env.clone();
     let module = unit.module();
-    let symbols = driver.symbol_table;
+    let symbols = &driver.symbol_table;
 
     #[allow(clippy::panic)]
-    if let Ok(session) = driver.session.lock()
+    if let Ok(session) = &driver.session.lock()
         && !session.diagnostics.is_empty()
     {
+        for diagnostic in session.diagnostics.iter() {
+            let source = driver.contents(&diagnostic.path);
+            tracing::error!("{:?}", Report::new(diagnostic.expand(&source)));
+        }
+
         panic!(
             "Prelude did not compile cleanly: {:#?}",
             session.diagnostics
@@ -126,7 +132,7 @@ pub fn _compile_prelude() -> Prelude {
     environment.clear_constraints();
 
     Prelude {
-        symbols,
+        symbols: symbols.clone(),
         environment,
         global_scope,
         module,

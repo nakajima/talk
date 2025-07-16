@@ -29,4 +29,8 @@ impl Token {
     pub fn as_str(&self) -> String {
         self.kind.as_str()
     }
+
+    pub fn span(&self) -> (usize, usize) {
+        (self.start as usize, self.end as usize)
+    }
 }

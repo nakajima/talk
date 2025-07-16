@@ -5,7 +5,6 @@ use crate::{
     environment::Environment,
     name::Name,
     parsed_expr::{Expr, ParsedExpr},
-    parsing::expr_id::ExprID,
 };
 
 #[derive(VisitorMut)]

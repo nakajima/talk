@@ -1,4 +1,4 @@
-use derive_visitor::{Drive, Event, Visitor, visitor_enter_fn, visitor_fn};
+use derive_visitor::{Drive, Visitor};
 
 use crate::{
     SymbolID,
@@ -19,7 +19,7 @@ struct TypeVarVisitor {
 
 impl TypeVarVisitor {
     fn enter_ty(&mut self, ty: &Ty) {
-        if self.contains_type_var == true {
+        if self.contains_type_var {
             return;
         }
 
