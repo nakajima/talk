@@ -208,8 +208,6 @@ impl TypeVarContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::dumb_dot::dump_unification_dot;
-
     use super::*;
 
     #[test]
@@ -223,12 +221,12 @@ mod tests {
         let checked = crate::check(source).unwrap();
 
         assert_eq!(checked.nth(3).unwrap(), Ty::Int);
-        dump_unification_dot(
-            &checked.type_var_context.history,
-            "unification.dot",
-            &checked.meta,
-            &source.to_string(),
-        )
-        .unwrap();
+        // dump_unification_dot(
+        //     &checked.type_var_context.history,
+        //     "unification.dot",
+        //     &checked.meta,
+        //     &source.to_string(),
+        // )
+        // .unwrap();
     }
 }

@@ -138,7 +138,7 @@ impl Diagnostic {
         }
     }
 
-    pub fn expand(&self, meta: &ExprMetaStorage, source: &str) -> ExpandedDiagnostic {
+    pub fn expand(&self, _meta: &ExprMetaStorage, source: &str) -> ExpandedDiagnostic {
         ExpandedDiagnostic {
             kind: self.kind.clone(),
             message: self.message(),

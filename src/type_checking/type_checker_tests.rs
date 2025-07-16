@@ -1517,7 +1517,7 @@ mod tests {
             &checked.type_var_context.history,
             "unification.dot",
             &checked.meta,
-            &"1 + 2".to_string(),
+            "1 + 2",
         )
         .unwrap();
         assert_eq!(checked.first_root().ty, Ty::Int);

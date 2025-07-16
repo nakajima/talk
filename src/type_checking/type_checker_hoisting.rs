@@ -19,7 +19,7 @@ use crate::{
         },
     },
     type_var_id::{TypeVarID, TypeVarKind},
-    typed_expr::{Expr, TypedExpr},
+    typed_expr::Expr,
 };
 
 #[derive(Default, Debug)]

@@ -24,8 +24,6 @@ pub mod type_var_id;
 pub mod typed_expr;
 
 #[cfg(test)]
-pub mod ascii_dump;
-#[cfg(test)]
 pub mod dumb_dot;
 #[cfg(test)]
 pub mod type_checker_tests;

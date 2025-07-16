@@ -58,7 +58,7 @@ pub fn dump_unification_dot<P>(
     log: &[UnificationEntry],
     out: P,
     meta: &ExprMetaStorage,
-    source: &String,
+    source: &str,
 ) -> std::io::Result<()>
 where
     P: AsRef<Path>,
@@ -72,7 +72,7 @@ where
                 handles: &mut HashMap<Ty, (usize, String)>,
                 uf: &mut UF|
      -> usize {
-        if let Some((h, label)) = handles.get(ty) {
+        if let Some((h, _label)) = handles.get(ty) {
             *h
         } else {
             let h = uf.make();
@@ -90,7 +90,7 @@ where
     }
     let mut edges = Vec::<Edge>::new();
 
-    for (step, ev) in log.iter().enumerate() {
+    for ev in log.iter() {
         match ev {
             /* 2.a  Create – node already registered by h_of side‑effect */
             UnificationEntry::Create {
