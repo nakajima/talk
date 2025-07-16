@@ -2,7 +2,6 @@ use tracing::Level;
 
 use crate::{
     SymbolID,
-    constraint_solver::ConstraintSolver,
     environment::{Environment, free_type_vars},
     substitutions::Substitutions,
     ty::Ty,
@@ -96,8 +95,8 @@ impl<'a> ConformanceChecker<'a> {
             }
 
             unifications.push((
-                ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
-                ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
+                substitutions.apply(&method.ty, 0, &mut self.env.context),
+                substitutions.apply(&ty_method, 0, &mut self.env.context),
             ));
         }
 
@@ -128,11 +127,6 @@ impl<'a> ConformanceChecker<'a> {
                 substitutions.apply(&method.ty, 0, &mut self.env.context),
                 substitutions.apply(&ty_method, 0, &mut self.env.context),
             ))
-
-            //unifications.push((
-            //    ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
-            //    ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
-            //));
         }
 
         for property in protocol.properties.iter() {
@@ -153,8 +147,8 @@ impl<'a> ConformanceChecker<'a> {
             }
 
             unifications.push((
-                ConstraintSolver::substitute_ty_with_map(&property.ty, &substitutions),
-                ConstraintSolver::substitute_ty_with_map(&ty_property.ty, &substitutions),
+                substitutions.apply(&property.ty, 0, &mut self.env.context),
+                substitutions.apply(&ty_property.ty, 0, &mut self.env.context),
             ));
         }
 
@@ -234,9 +228,7 @@ impl<'a> ConformanceChecker<'a> {
     }
 
     fn check_conformance_of_ty(&mut self, protocol_def: &ProtocolDef) -> Option<&Conformance> {
-        let Some(type_def) = self.ty.type_def(self.env) else {
-            return None;
-        };
+        let type_def = self.ty.type_def(self.env)?;
 
         let conformance = type_def
             .conformances()
