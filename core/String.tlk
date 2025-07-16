@@ -32,8 +32,6 @@ struct String {
     self.length = newCapacity
     self.capacity = newCapacity
     self.storage = newStorage
-
-		return
   }
 }
 
