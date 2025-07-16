@@ -222,7 +222,7 @@ impl CompilationUnit<Resolved> {
                 TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
                     .infer_without_prelude(&mut self.env, &mut file)
             };
-            let mut solver = ConstraintSolver::new(&mut self.env, symbol_table);
+            let mut solver = ConstraintSolver::new(&mut self.env, &meta, symbol_table);
             let mut solution = solver.solve();
 
             TypedExpr::apply_mult(

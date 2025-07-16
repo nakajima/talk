@@ -1,3 +1,5 @@
+use derive_visitor::{Drive, Event, Visitor, visitor_enter_fn, visitor_fn};
+
 use crate::{
     SymbolID,
     parsing::expr_id::ExprID,
@@ -9,11 +11,27 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
+#[derive(Visitor)]
+#[visitor(Ty(enter))]
+struct TypeVarVisitor {
+    contains_type_var: bool,
+}
+
+impl TypeVarVisitor {
+    fn enter_ty(&mut self, ty: &Ty) {
+        if self.contains_type_var == true {
+            return;
+        }
+
+        self.contains_type_var = matches!(ty, Ty::TypeVar(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
-    UnqualifiedMember(ExprID, String, Ty),         // member name, expected type
+    UnqualifiedMember(ExprID, String, Ty), // member name, expected type
     InitializerCall {
         expr_id: ExprID,
         initializes_id: SymbolID,
@@ -129,6 +147,26 @@ impl Constraint {
                 !scheme.unbound_vars().is_empty() || &scheme.ty() != ty
             }
             _ => true,
+        }
+    }
+
+    pub fn is_impossible(&self) -> bool {
+        match self {
+            Constraint::Equality(_, lhs, rhs) => {
+                let mut visitor = TypeVarVisitor {
+                    contains_type_var: false,
+                };
+
+                lhs.drive(&mut visitor);
+                rhs.drive(&mut visitor);
+
+                if visitor.contains_type_var {
+                    return false;
+                }
+
+                lhs != rhs
+            }
+            _ => false, // TODO
         }
     }
 

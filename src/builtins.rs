@@ -453,17 +453,23 @@ mod optional_tests {
 
         assert_eq!(
             parsed.roots()[0],
-            any_expr!(parsed_expr::Expr::TypeRepr {
-                name: "Optional".into(),
-                generics: vec![any_expr!(parsed_expr::Expr::TypeRepr {
-                    name: "Int".into(),
-                    generics: vec![],
-                    conformances: vec![],
-                    introduces_type: false
-                })],
-                conformances: vec![],
-                introduces_type: false
-            })
+            any_expr!(parsed_expr::Expr::Let(
+                "a".into(),
+                Some(
+                    any_expr!(parsed_expr::Expr::TypeRepr {
+                        name: "Optional".into(),
+                        generics: vec![any_expr!(parsed_expr::Expr::TypeRepr {
+                            name: "Int".into(),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
+                        })],
+                        conformances: vec![],
+                        introduces_type: false
+                    })
+                    .into()
+                )
+            ))
         );
     }
 }

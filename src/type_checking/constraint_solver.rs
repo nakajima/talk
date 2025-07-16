@@ -1,16 +1,17 @@
+use tracing::Level;
+
 use crate::{
-    SymbolID, SymbolTable,
+    ExprMetaStorage, SymbolID, SymbolTable,
     conformance_checker::{ConformanceChecker, ConformanceError},
     constraint::Constraint,
     environment::{Environment, TypeParameter},
-    name::{Name, ResolvedName},
+    name::Name,
     parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
     type_defs::TypeDef,
     type_var_id::TypeVarKind,
-    typed_expr,
 };
 
 pub struct ConstraintSolverSolution {
@@ -21,15 +22,21 @@ pub struct ConstraintSolverSolution {
 
 pub struct ConstraintSolver<'a> {
     env: &'a mut Environment,
+    meta: &'a ExprMetaStorage,
     symbol_table: &'a mut SymbolTable,
     constraints: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(env: &'a mut Environment, symbol_table: &'a mut SymbolTable) -> Self {
+    pub fn new(
+        env: &'a mut Environment,
+        meta: &'a ExprMetaStorage,
+        symbol_table: &'a mut SymbolTable,
+    ) -> Self {
         Self {
             constraints: env.constraints().clone(),
             env,
+            meta,
             symbol_table,
         }
     }
@@ -103,7 +110,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    #[tracing::instrument(skip(self, substitutions), fields(result))]
+    #[tracing::instrument(level = Level::TRACE, skip(self, substitutions), fields(result))]
     fn solve_constraint(
         &mut self,
         constraint: &Constraint,
@@ -217,14 +224,16 @@ impl<'a> ConstraintSolver<'a> {
                     substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
                 }
             }
-            Constraint::Equality(_node_id, lhs, rhs) => {
+            Constraint::Equality(expr_id, lhs, rhs) => {
                 let lhs = substitutions.apply(lhs, 0, &mut self.env.context);
                 let rhs = substitutions.apply(rhs, 0, &mut self.env.context);
 
                 substitutions
                     .unify(&lhs, &rhs, &mut self.env.context)
                     .map_err(|err| {
-                        tracing::error!("{err:?}");
+                        let meta = self.meta.get(expr_id);
+
+                        tracing::error!("Equality check failed {expr_id:?} {err:?}\n{meta:?}");
                         err
                     })?;
             }
@@ -625,7 +634,7 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
-    #[tracing::instrument(fields(result))]
+    #[tracing::instrument(level = Level::TRACE, fields(result))]
     pub fn substitute_ty_with_map(ty: &Ty, substitutions: &Substitutions) -> Ty {
         match ty {
             Ty::TypeVar(type_var_id) => {

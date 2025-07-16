@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use derive_visitor::{Drive, Visitor, VisitorMut};
+
 use crate::{
     SymbolID,
     environment::Environment,
@@ -8,13 +10,13 @@ use crate::{
     type_var_id::TypeVarID,
 };
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Drive)]
 pub enum Ty {
     Void,
     Int,
     Bool,
     Float,
-    Init(SymbolID, Vec<Ty> /* params */),
+    Init(#[drive(skip)] SymbolID, Vec<Ty> /* params */),
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
@@ -22,15 +24,19 @@ pub enum Ty {
     ),
     Closure {
         func: Box<Ty>, // the func
+        #[drive(skip)]
         captures: Vec<SymbolID>,
     },
-    TypeVar(TypeVarID),
-    Enum(SymbolID, Vec<Ty>), // enum name + type arguments
-    EnumVariant(SymbolID /* Enum */, Vec<Ty> /* Values */),
+    TypeVar(#[drive(skip)] TypeVarID),
+    Enum(#[drive(skip)] SymbolID, Vec<Ty>), // enum name + type arguments
+    EnumVariant(
+        #[drive(skip)] SymbolID, /* Enum */
+        Vec<Ty>,                 /* Values */
+    ),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
-    Struct(SymbolID, Vec<Ty> /* generics */),
-    Protocol(SymbolID, Vec<Ty> /* generics */),
+    Struct(#[drive(skip)] SymbolID, Vec<Ty> /* generics */),
+    Protocol(#[drive(skip)] SymbolID, Vec<Ty> /* generics */),
     Byte,
     Pointer,
     SelfType,

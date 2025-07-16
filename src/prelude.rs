@@ -81,7 +81,7 @@ pub fn _compile_prelude() -> Prelude {
     if let Ok(session) = driver.session.lock()
         && !session.diagnostics.is_empty()
     {
-        tracing::error!(
+        panic!(
             "Prelude did not compile cleanly: {:#?}",
             session.diagnostics
         )

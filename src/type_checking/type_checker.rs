@@ -115,7 +115,7 @@ pub struct TypeChecker<'a> {
     pub(crate) symbol_table: &'a mut SymbolTable,
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
-    meta: &'a ExprMetaStorage,
+    pub(super) meta: &'a ExprMetaStorage,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {

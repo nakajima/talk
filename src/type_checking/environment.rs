@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::{
-    SymbolID, SymbolTable,
+    ExprMetaStorage, SymbolID, SymbolTable,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
     parsing::expr_id::ExprID,
@@ -101,12 +101,22 @@ impl Environment {
         self.constraints.clone()
     }
 
+    #[cfg_attr(test, track_caller)]
+    #[tracing::instrument(skip(self))]
     pub fn constrain(&mut self, constraint: Constraint) {
         if !constraint.needs_solving() {
             return;
         }
 
-        tracing::info!("⊢ {:#?})", constraint);
+        if constraint.is_impossible() {
+            panic!("Impossible constraint: {constraint:?}");
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let loc = std::panic::Location::caller();
+            tracing::trace!("From {}:{}", loc.file(), loc.line());
+        }
 
         // #[allow(clippy::panic)]
         // if constraint.contains_canonical_type_parameter() {
@@ -124,8 +134,9 @@ impl Environment {
     pub fn flush_constraints(
         &mut self,
         symbol_table: &mut SymbolTable,
+        meta: &ExprMetaStorage,
     ) -> Result<Substitutions, TypeError> {
-        let mut solver = ConstraintSolver::new(self, symbol_table);
+        let mut solver = ConstraintSolver::new(self, meta, symbol_table);
         let solution = solver.solve();
 
         for constraint in solution.unsolved_constraints {
