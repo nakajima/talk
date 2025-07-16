@@ -119,7 +119,8 @@ impl NameResolver {
         }
 
         let meta = source_file.meta.clone();
-        if let Err(err) = self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table)
+        if let Err(err) =
+            self.resolve_nodes(source_file.roots_mut(), &meta.borrow(), symbol_table, true)
         {
             tracing::error!("Error resolving: {err:?}");
             if let Ok(mut session) = self.session.lock() {
@@ -139,11 +140,14 @@ impl NameResolver {
         exprs: &mut [ParsedExpr],
         meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
+        hoist: bool,
     ) -> Result<Vec<ParsedExpr>, NameResolverError> {
-        self.hoist_protocols(exprs, meta, symbol_table)?;
-        self.hoist_enums(exprs, meta, symbol_table)?;
-        self.hoist_funcs(exprs, meta, symbol_table)?;
-        self.hoise_structs(exprs, meta, symbol_table)?;
+        if hoist {
+            self.hoist_protocols(exprs, meta, symbol_table)?;
+            self.hoist_enums(exprs, meta, symbol_table)?;
+            self.hoist_funcs(exprs, meta, symbol_table)?;
+            self.hoise_structs(exprs, meta, symbol_table)?;
+        }
 
         let mut result = vec![];
 
@@ -165,7 +169,7 @@ impl NameResolver {
 
         match expr {
             Expr::LiteralArray(items) => {
-                *items = self.resolve_nodes(items, meta, symbol_table)?;
+                *items = self.resolve_nodes(items, meta, symbol_table, false)?;
             }
             Expr::Incomplete(incomplete) => match &mut *incomplete {
                 IncompleteExpr::Member(receiver) => {
@@ -210,8 +214,8 @@ impl NameResolver {
                     self.type_symbol_stack.push(symbol_id);
 
                     *name = Name::Resolved(symbol_id, name_str.to_string());
-                    *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                    *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                    *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+                    *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
                     *body = self.resolve_node(body, meta, symbol_table)?.into();
 
                     self.type_symbol_stack.pop();
@@ -300,8 +304,8 @@ impl NameResolver {
                 args,
             } => {
                 *callee = Box::new(self.resolve_node(callee, meta, symbol_table)?);
-                *type_args = self.resolve_nodes(type_args, meta, symbol_table)?;
-                *args = self.resolve_nodes(args, meta, symbol_table)?;
+                *type_args = self.resolve_nodes(type_args, meta, symbol_table, false)?;
+                *args = self.resolve_nodes(args, meta, symbol_table, false)?;
             }
             Expr::Assignment(lhs, rhs) => {
                 *lhs = Box::new(self.resolve_node(lhs, meta, symbol_table)?);
@@ -315,7 +319,7 @@ impl NameResolver {
                 *rhs = Box::new(self.resolve_node(rhs, meta, symbol_table)?);
             }
             Expr::Tuple(items) => {
-                *items = self.resolve_nodes(items, meta, symbol_table)?;
+                *items = self.resolve_nodes(items, meta, symbol_table, false)?;
             }
             Expr::Block(items) => {
                 let tok = self.start_scope(
@@ -323,7 +327,7 @@ impl NameResolver {
                         .ok_or(NameResolverError::InvalidSpan)?,
                 );
                 self.hoist_funcs(items, meta, symbol_table)?;
-                *items = self.resolve_nodes(items, meta, symbol_table)?;
+                *items = self.resolve_nodes(items, meta, symbol_table, false)?;
                 self.end_scope(tok);
             }
             Expr::Func { .. } => {
@@ -443,15 +447,15 @@ impl NameResolver {
                 // Update the existing TypeRepr node with the resolved name.
                 // The node type remains TypeRepr.
                 *name = resolved_name_for_node;
-                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+                *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
             }
             Expr::FuncTypeRepr(args, ret, _) => {
-                *args = self.resolve_nodes(args, meta, symbol_table)?;
+                *args = self.resolve_nodes(args, meta, symbol_table, false)?;
                 *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
             }
             Expr::TupleTypeRepr(types, _) => {
-                *types = self.resolve_nodes(types, meta, symbol_table)?;
+                *types = self.resolve_nodes(types, meta, symbol_table, false)?;
             }
             Expr::EnumDecl {
                 name,
@@ -467,8 +471,8 @@ impl NameResolver {
                 };
 
                 self.type_symbol_stack.push(*symbol_id);
-                *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-                *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+                *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
                 *body = self.resolve_node(body, meta, symbol_table)?.into();
                 self.type_symbol_stack.pop();
             }
@@ -488,7 +492,7 @@ impl NameResolver {
                     );
 
                     *name = Name::Resolved(sym, name_str.to_string());
-                    *values = self.resolve_nodes(values, meta, symbol_table)?;
+                    *values = self.resolve_nodes(values, meta, symbol_table, false)?;
                 }
             }
             Expr::Match(scrutinee, arms) => {
@@ -497,7 +501,7 @@ impl NameResolver {
                 // Each arm will manage its own scope for pattern bindings.
                 // The Match expression itself doesn't introduce a new scope for *bindings*
                 // that span across arms or affect expressions outside the match.
-                *arms = self.resolve_nodes(arms, meta, symbol_table)?;
+                *arms = self.resolve_nodes(arms, meta, symbol_table, false)?;
             }
             Expr::MatchArm(pattern, body) => {
                 let tok = self.start_scope(
@@ -531,8 +535,9 @@ impl NameResolver {
                     );
                     self.type_symbol_stack.push(symbol_id);
                     *name = Name::Resolved(symbol_id, name_str.to_string());
-                    *associated_types = self.resolve_nodes(associated_types, meta, symbol_table)?;
-                    *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+                    *associated_types =
+                        self.resolve_nodes(associated_types, meta, symbol_table, false)?;
+                    *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
                     *body = self.resolve_node(body, meta, symbol_table)?.into();
                     self.type_symbol_stack.pop();
                 }
@@ -576,8 +581,8 @@ impl NameResolver {
 
             let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
 
-            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-            *params = self.resolve_nodes(params, meta, symbol_table)?;
+            *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+            *params = self.resolve_nodes(params, meta, symbol_table, false)?;
             *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
 
             if let Some(ret) = ret {
@@ -602,8 +607,8 @@ impl NameResolver {
         {
             let tok = self.start_scope(meta.span(expr_id).ok_or(NameResolverError::InvalidSpan)?);
 
-            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-            *params = self.resolve_nodes(params, meta, symbol_table)?;
+            *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+            *params = self.resolve_nodes(params, meta, symbol_table, false)?;
             *ret = Box::new(self.resolve_node(ret, meta, symbol_table)?);
 
             self.end_scope(tok);
@@ -721,8 +726,8 @@ impl NameResolver {
             );
             self.type_symbol_stack.push(struct_symbol);
 
-            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-            *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+            *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+            *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
 
             // Hoist properties
             let Expr::Block(body_parsed_exprs) = &mut body.expr else {
@@ -834,8 +839,8 @@ impl NameResolver {
                 meta.span(&parsed_expr.id)
                     .ok_or(NameResolverError::InvalidSpan)?,
             );
-            *generics = self.resolve_nodes(generics, meta, symbol_table)?;
-            *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+            *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
+            *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
 
             *name = Name::Resolved(enum_symbol, name_str.to_string());
 
@@ -881,7 +886,7 @@ impl NameResolver {
                     None
                 };
 
-                *fields = self.resolve_nodes(fields, meta, symbol_table)?;
+                *fields = self.resolve_nodes(fields, meta, symbol_table, false)?;
                 Pattern::Variant {
                     enum_name,
                     variant_name: variant_name.clone(),
@@ -941,8 +946,8 @@ impl NameResolver {
 
             let tok = self.start_scope(span);
             self.type_symbol_stack.push(symbol_id);
-            *associated_types = self.resolve_nodes(associated_types, meta, symbol_table)?;
-            *conformances = self.resolve_nodes(conformances, meta, symbol_table)?;
+            *associated_types = self.resolve_nodes(associated_types, meta, symbol_table, false)?;
+            *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
             *body = Box::new(self.resolve_node(body, meta, symbol_table)?);
             self.type_symbol_stack.pop();
             self.end_scope(tok);
@@ -968,10 +973,10 @@ impl NameResolver {
                 continue;
             };
 
-            *field_types = self.resolve_nodes(field_types, meta, symbol_table)?;
+            *field_types = self.resolve_nodes(field_types, meta, symbol_table, false)?;
         }
 
-        *items = self.resolve_nodes(items, meta, symbol_table)?;
+        *items = self.resolve_nodes(items, meta, symbol_table, false)?;
 
         Ok(())
     }
