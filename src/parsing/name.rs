@@ -18,13 +18,6 @@ impl ResolvedName {
         } else {
             format!("@_{:?}_{}", self.0.0, self.1)
         }
-
-        // match self {
-        //     Name::Raw(_) => "Cannot mangle unresolved Name".into(),
-        //     Name::Resolved(symbol_id, name_str) => {}
-        //     Name::_Self(symbol) => format!("self{symbol:?}"),
-        //     Name::SelfType => "Self".to_string(),
-        // }
     }
 
     pub fn name_str(&self) -> String {
