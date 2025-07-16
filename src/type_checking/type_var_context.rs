@@ -202,6 +202,8 @@ impl TypeVarContext {
 
 #[cfg(test)]
 mod tests {
+    use crate::dumb_dot::dump_unification_dot;
+
     use super::*;
 
     #[test]
@@ -217,6 +219,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(checked.nth(3).unwrap(), Ty::Int);
+        dump_unification_dot(&checked.type_var_context.history, "unification.dot").unwrap();
         println!("{:#?}", checked.type_var_context.history);
     }
 }
