@@ -20,7 +20,7 @@
       "patterns": [
         {
           "name": "keyword.control.talktalk",
-          "match": "\\b(func|let|if|else|true|false|loop|enum|case|match|return|struct)\\b"
+          "match": "\\b(func|let|if|else|true|false|loop|enum|case|match|return|struct|extend|break|init|protocol)\\b"
         }
       ]
     },

@@ -111,11 +111,13 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty::TypeVar(TypeVarID {
                     id: 0,
                     kind: TypeVarKind::Element,
+                    expr_id: ExprID(-5),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 0,
                 kind: TypeVarKind::Element,
+                expr_id: ExprID(-5),
             }],
             type_def: None,
         },
@@ -134,11 +136,13 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty::TypeVar(TypeVarID {
                     id: 1,
                     kind: TypeVarKind::Element,
+                    expr_id: ExprID(-6),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 1,
                 kind: TypeVarKind::Element,
+                expr_id: ExprID(-6),
             }],
             type_def: None,
         },
@@ -171,17 +175,20 @@ pub fn builtins() -> Vec<Builtin> {
                     Ty::TypeVar(TypeVarID {
                         id: 2,
                         kind: TypeVarKind::Element,
+                        expr_id: ExprID(-8),
                     }),
                 ],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: 2,
                     kind: TypeVarKind::Element,
+                    expr_id: ExprID(-8),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 2,
                 kind: TypeVarKind::Element,
+                expr_id: ExprID(-8),
             }],
             type_def: None,
         },
@@ -199,16 +206,19 @@ pub fn builtins() -> Vec<Builtin> {
                 Ty::TypeVar(TypeVarID {
                     id: 3,
                     kind: TypeVarKind::Element,
+                    expr_id: ExprID(-9),
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: 3,
                     kind: TypeVarKind::Element,
+                    expr_id: ExprID(-9),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 3,
                 kind: TypeVarKind::Element,
+                expr_id: ExprID(-9),
             }],
             type_def: None,
         },
@@ -226,16 +236,19 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty::TypeVar(TypeVarID {
                     id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
+                    expr_id: ExprID(-11),
                 })],
                 Ty::Void.into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
+                    expr_id: ExprID(-11),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 4,
                 kind: TypeVarKind::FuncParam("printable".into()),
+                expr_id: ExprID(-11),
             }],
             type_def: None,
         },
@@ -252,17 +265,20 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty::string()],
                 Ty::TypeVar(TypeVarID {
                     id: 5,
-                    kind: TypeVarKind::CallReturn(ExprID(-12)),
+                    kind: TypeVarKind::CallReturn,
+                    expr_id: ExprID(-12),
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: 5,
-                    kind: TypeVarKind::CallReturn(ExprID(-12)),
+                    kind: TypeVarKind::CallReturn,
+                    expr_id: ExprID(-12),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 5,
-                kind: TypeVarKind::CallReturn(ExprID(-12)),
+                kind: TypeVarKind::CallReturn,
+                expr_id: ExprID(-12),
             }],
             type_def: None,
         },
@@ -296,7 +312,7 @@ pub fn builtin_type_def(symbol_id: &SymbolID) -> Option<TypeDef> {
     for builtin in builtins() {
         if symbol_id == &SymbolID(builtin.id) {
             #[allow(clippy::expect_used)]
-            return builtin.type_def
+            return builtin.type_def;
         }
     }
 

@@ -7,11 +7,8 @@ use std::{
 use crate::{
     ExprMetaStorage, NameResolved, SourceFile, SymbolID, SymbolTable,
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
-    constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     environment::Environment,
-    expr::ExprMeta,
-    expr_id::ExprID,
     lexer::{Lexer, LexerError},
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
@@ -225,28 +222,28 @@ impl CompilationUnit<Resolved> {
                 TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
                     .infer_without_prelude(&mut self.env, &mut file)
             };
-            let mut solver = ConstraintSolver::new(&mut self.env, &meta);
-            let mut solution = solver.solve();
 
-            TypedExpr::apply_mult(
-                typed.roots_mut(),
-                &mut solution.substitutions,
-                &mut self.env,
-            );
+            if let Ok(mut solution) = self.env.flush_constraints(&meta) {
+                TypedExpr::apply_mult(
+                    typed.roots_mut(),
+                    &mut solution.substitutions,
+                    &mut self.env,
+                );
 
-            for (expr_id, err) in solution.errors {
-                if let Ok(session) = &mut self.session.lock() {
-                    let span = typed
-                        .meta
-                        .borrow()
-                        .get(&expr_id)
-                        .map(|m| m.span())
-                        .unwrap_or_default();
-                    session.add_diagnostic(Diagnostic::typing(path.clone(), span, err));
+                for (expr_id, err) in solution.errors {
+                    if let Ok(session) = &mut self.session.lock() {
+                        let span = typed
+                            .meta
+                            .borrow()
+                            .get(&expr_id)
+                            .map(|m| m.span())
+                            .unwrap_or_default();
+                        session.add_diagnostic(Diagnostic::typing(path.clone(), span, err));
+                    }
                 }
-            }
 
-            files.push(typed);
+                files.push(typed);
+            }
         }
 
         CompilationUnit {
@@ -315,7 +312,7 @@ impl CompilationUnit<Lowered> {
         self.stage.module.clone()
     }
 
-    pub fn meta_for(&self, path: &PathBuf) -> Option<Ref<ExprMetaStorage>> {
+    pub fn meta_for(&self, path: &PathBuf) -> Option<Ref<'_, ExprMetaStorage>> {
         for file in &self.stage.files {
             if &file.path == path {
                 return Some(file.meta.borrow());

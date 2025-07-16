@@ -24,14 +24,16 @@ pub struct ConstraintSolver<'a> {
     env: &'a mut Environment,
     meta: &'a ExprMetaStorage,
     constraints: Vec<Constraint>,
+    generation: u32,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(env: &'a mut Environment, meta: &'a ExprMetaStorage) -> Self {
+    pub fn new(env: &'a mut Environment, meta: &'a ExprMetaStorage, generation: u32) -> Self {
         Self {
             constraints: env.constraints().clone(),
             env,
             meta,
+            generation,
         }
     }
 
@@ -188,6 +190,7 @@ impl<'a> ConstraintSolver<'a> {
                                 &Ty::TypeVar(type_var.clone()),
                                 candidate_ty,
                                 &mut self.env.context,
+                                self.generation,
                             )?;
 
                             for (prov, req) in conformance
@@ -195,11 +198,21 @@ impl<'a> ConstraintSolver<'a> {
                                 .iter()
                                 .zip(type_def_conf.associated_types.iter())
                             {
-                                substitutions.unify(prov, req, &mut self.env.context)?;
+                                substitutions.unify(
+                                    prov,
+                                    req,
+                                    &mut self.env.context,
+                                    self.generation,
+                                )?;
                             }
 
                             for (lhs, rhs) in candidate_unifs {
-                                substitutions.unify(lhs, rhs, &mut self.env.context)?;
+                                substitutions.unify(
+                                    lhs,
+                                    rhs,
+                                    &mut self.env.context,
+                                    self.generation,
+                                )?;
                             }
 
                             return Ok(());
@@ -215,7 +228,7 @@ impl<'a> ConstraintSolver<'a> {
                 let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
                 let unifications = conformance_checker.check()?;
                 for (lhs, rhs) in unifications {
-                    substitutions.unify(&lhs, &rhs, &mut self.env.context)?;
+                    substitutions.unify(&lhs, &rhs, &mut self.env.context, self.generation)?;
                 }
             }
             Constraint::Equality(expr_id, lhs, rhs) => {
@@ -223,7 +236,7 @@ impl<'a> ConstraintSolver<'a> {
                 let rhs = substitutions.apply(rhs, 0, &mut self.env.context);
 
                 substitutions
-                    .unify(&lhs, &rhs, &mut self.env.context)
+                    .unify(&lhs, &rhs, &mut self.env.context, self.generation)
                     .map_err(|err| {
                         let meta = self.meta.get(expr_id);
 
@@ -236,12 +249,20 @@ impl<'a> ConstraintSolver<'a> {
                 for unbound_var in &scheme.unbound_vars() {
                     mapping.insert(
                         unbound_var.clone(),
-                        Ty::TypeVar(self.env.new_type_variable(TypeVarKind::Unbound)),
+                        Ty::TypeVar(
+                            self.env
+                                .new_type_variable(TypeVarKind::Unbound, unbound_var.expr_id),
+                        ),
                     );
                 }
                 let instantiated_ty = Self::substitute_ty_with_map(ty, &mapping);
 
-                substitutions.unify(ty, &instantiated_ty, &mut self.env.context)?;
+                substitutions.unify(
+                    ty,
+                    &instantiated_ty,
+                    &mut self.env.context,
+                    self.generation,
+                )?;
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
@@ -258,7 +279,12 @@ impl<'a> ConstraintSolver<'a> {
                             .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
-                            substitutions.unify(&result_ty, &variant.ty, &mut self.env.context)?;
+                            substitutions.unify(
+                                &result_ty,
+                                &variant.ty,
+                                &mut self.env.context,
+                                self.generation,
+                            )?;
                         }
                     }
                     // A variant with values
@@ -283,7 +309,12 @@ impl<'a> ConstraintSolver<'a> {
                             .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
 
                         if let Some(variant) = variant {
-                            substitutions.unify(&result_ty, &variant.ty, &mut self.env.context)?;
+                            substitutions.unify(
+                                &result_ty,
+                                &variant.ty,
+                                &mut self.env.context,
+                                self.generation,
+                            )?;
                         }
                     }
                     _ => (),
@@ -516,7 +547,12 @@ impl<'a> ConstraintSolver<'a> {
 
                 let specialized_ty =
                     member_substitutions.apply(&member_ty, 0, &mut self.env.context);
-                substitutions.unify(&result_ty, &specialized_ty, &mut self.env.context)?;
+                substitutions.unify(
+                    &result_ty,
+                    &specialized_ty,
+                    &mut self.env.context,
+                    self.generation,
+                )?;
             }
             Constraint::InitializerCall {
                 initializes_id,
@@ -550,10 +586,15 @@ impl<'a> ConstraintSolver<'a> {
                     let param = &substitutions.apply(param, 0, &mut self.env.context);
                     let arg = &substitutions.apply(arg, 0, &mut self.env.context);
 
-                    substitutions.unify(param, arg, &mut self.env.context)?;
+                    substitutions.unify(param, arg, &mut self.env.context, self.generation)?;
                 }
 
-                substitutions.unify(&initializer.ty, func_ty, &mut self.env.context)?;
+                substitutions.unify(
+                    &initializer.ty,
+                    func_ty,
+                    &mut self.env.context,
+                    self.generation,
+                )?;
 
                 let struct_with_generics = Ty::Struct(*initializes_id, type_args.clone());
 
@@ -563,7 +604,12 @@ impl<'a> ConstraintSolver<'a> {
                     vec![],
                 ));
 
-                substitutions.unify(result_ty, &specialized_struct, &mut self.env.context)?;
+                substitutions.unify(
+                    result_ty,
+                    &specialized_struct,
+                    &mut self.env.context,
+                    self.generation,
+                )?;
 
                 // TODO: Make sure we're chill with our conformances
             }
@@ -619,7 +665,12 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
-                    substitutions.unify(specialized_ty, pattern_ty, &mut self.env.context)?;
+                    substitutions.unify(
+                        specialized_ty,
+                        pattern_ty,
+                        &mut self.env.context,
+                        self.generation,
+                    )?;
                 }
             }
         };

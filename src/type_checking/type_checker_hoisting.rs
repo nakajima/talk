@@ -74,10 +74,10 @@ impl<'a> TypeChecker<'a> {
         to_generalize.extend(self.infer_funcs(&func_results, env)?);
 
         // Solve what we can
-        let mut substitutions = env.flush_constraints(self.meta)?;
+        let mut solution = env.flush_constraints(self.meta)?;
 
         // Update typed exprs
-        env.replace_typed_exprs_values(&mut substitutions);
+        env.replace_typed_exprs_values(&mut solution.substitutions);
 
         // Generalize what we can
         for (symbol_id, _) in to_generalize {
@@ -126,8 +126,10 @@ impl<'a> TypeChecker<'a> {
                     ));
                 };
 
-                let type_param = env
-                    .new_type_variable(TypeVarKind::CanonicalTypeParameter(name_str.to_string()));
+                let type_param = env.new_type_variable(
+                    TypeVarKind::CanonicalTypeParameter(name_str.to_string()),
+                    generic.id,
+                );
 
                 env.declare(
                     *symbol_id,
@@ -340,7 +342,9 @@ impl<'a> TypeChecker<'a> {
                             initializers: Default::default(),
                             method_requirements: Default::default(),
                         }),
-                        PredeclarationKind::Builtin(symbol_id) => {
+                        PredeclarationKind::Builtin(symbol_id) =>
+                        {
+                            #[allow(clippy::expect_used)]
                             builtin_type_def(&symbol_id).expect("didn't get builtin")
                         }
                     });

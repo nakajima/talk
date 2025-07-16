@@ -3,6 +3,7 @@ mod tests {
     use crate::{
         SymbolID, any_typed, assert_eq_diff, check,
         diagnostic::{Diagnostic, DiagnosticKind},
+        expr_id::ExprID,
         name::ResolvedName,
         ty::Ty,
         type_checker::TypeError,
@@ -632,6 +633,7 @@ mod tests {
             &TypeVarID {
                 id: id.id,
                 kind: TypeVarKind::Placeholder("T".into()),
+                expr_id: ExprID::ANY
             }
         );
     }
@@ -1440,7 +1442,7 @@ mod tests {
         assert!(
             matches!(
                 checked.diagnostics()[0].kind,
-                DiagnosticKind::Typing(TypeError::Mismatch(_, _, _))
+                DiagnosticKind::Typing(TypeError::Mismatch(_, _))
             ),
             "{:?}",
             checked.diagnostics()
@@ -1465,7 +1467,7 @@ mod tests {
             checked.diagnostics().contains(&Diagnostic::typing(
                 checked.source_file.path.clone(),
                 (0, 14),
-                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string(), vec![])
+                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string())
             )),
             "{:?}",
             checked.diagnostics()
@@ -1836,7 +1838,7 @@ mod protocol_tests {
             matches!(
                 checked.diagnostics()[0],
                 Diagnostic {
-                    kind: DiagnosticKind::Typing(TypeError::Mismatch(_, _, _)),
+                    kind: DiagnosticKind::Typing(TypeError::Mismatch(_, _)),
                     ..
                 }
             ),

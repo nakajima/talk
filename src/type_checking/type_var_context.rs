@@ -2,6 +2,7 @@ use ena::unify::{InPlace, InPlaceUnificationTable, NoError, Snapshot, UnifyKey, 
 
 use crate::{
     builtins,
+    expr_id::ExprID,
     ty::Ty,
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -41,10 +42,26 @@ impl UnifyValue for Ty {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum UnificationEntry {
+    Create {
+        expr_id: ExprID,
+        ty: Ty,
+        generation: u32,
+    },
+    Unify {
+        expr_id: ExprID,
+        before: Ty,
+        after: Ty,
+        generation: u32,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
-    kinds: Vec<TypeVarKind>, // indexed by VarKey.0
+    kinds: Vec<(TypeVarKind, ExprID)>, // indexed by VarKey.0
+    pub history: Vec<UnificationEntry>,
 }
 
 impl TypeVarContext {
@@ -55,6 +72,7 @@ impl TypeVarContext {
                 let key = self.table.new_key(Ty::TypeVar(TypeVarID {
                     id: self.kinds.len() as u32,
                     kind: kind.clone(),
+                    expr_id: var.expr_id,
                 }));
 
                 assert!(
@@ -62,20 +80,29 @@ impl TypeVarContext {
                     "Builtin type vars are not in sync: {var:?} <> {key:?}"
                 );
 
-                self.kinds.push(kind.clone());
+                self.kinds.push((kind.clone(), var.expr_id));
             }
         }
     }
 
-    pub fn new_var(&mut self, kind: TypeVarKind) -> TypeVarID {
-        let key = self.table.new_key(Ty::TypeVar(TypeVarID {
+    pub fn new_var(&mut self, kind: TypeVarKind, expr_id: ExprID, generation: u32) -> TypeVarID {
+        let type_var = Ty::TypeVar(TypeVarID {
             id: self.kinds.len() as u32,
             kind: kind.clone(),
-        }));
+            expr_id,
+        });
 
-        self.kinds.push(kind.clone());
+        self.history.push(UnificationEntry::Create {
+            expr_id,
+            ty: type_var.clone(),
+            generation,
+        });
 
-        TypeVarID::new(key.0, kind)
+        let key = self.table.new_key(type_var);
+
+        self.kinds.push((kind.clone(), expr_id));
+
+        TypeVarID::new(key.0, kind, expr_id)
     }
 
     pub fn next_id(&self) -> usize {
@@ -91,9 +118,9 @@ impl TypeVarContext {
     }
 
     pub fn iter(&mut self) -> impl Iterator<Item = (TypeVarID, Ty)> {
-        self.kinds.iter().enumerate().map(|(id, kind)| {
+        self.kinds.iter().enumerate().map(|(id, (kind, expr_id))| {
             (
-                TypeVarID::new(id as u32, kind.clone()),
+                TypeVarID::new(id as u32, kind.clone(), *expr_id),
                 self.table.probe_value(VarKey(id as u32)),
             )
         })
@@ -122,44 +149,74 @@ impl TypeVarContext {
         }
 
         let id = self.table.find(VarKey(var.id));
-        let kind = self.kinds[id.0 as usize].clone();
-        TypeVarID::new(id.0, kind)
+        let (kind, expr_id) = self.kinds[id.0 as usize].clone();
+        TypeVarID::new(id.0, kind, expr_id)
     }
 
     pub fn probe(&mut self, var: &TypeVarID) -> Ty {
         self.table.probe_value(VarKey(var.id))
     }
 
-    pub fn unify_value(&mut self, a: TypeVarID, b: Ty) {
-        if a.is_canonical() {
-            return;
-        }
-
-        self.table.union_value(VarKey(a.id), b);
-    }
-
-    pub fn unify(&mut self, a: TypeVarID, b: TypeVarID) {
+    pub fn unify(&mut self, a: TypeVarID, b: TypeVarID, generation: u32) {
         if a == b {
             return;
         }
 
         let canonical_kind = if a.is_canonical() {
-            Some(a.kind.clone())
+            Some((a.kind.clone(), a.expr_id))
         } else if b.is_canonical() {
-            Some(b.kind.clone())
+            Some((b.kind.clone(), b.expr_id))
         } else {
             None
         };
 
         self.table.union(VarKey(a.id), VarKey(b.id));
 
-        if let Some(kind) = canonical_kind {
+        let found = self.table.find(VarKey(a.id));
+        if found == VarKey(a.id) {
+            self.history.push(UnificationEntry::Unify {
+                expr_id: a.expr_id,
+                before: Ty::TypeVar(a.clone()),
+                after: Ty::TypeVar(b.clone()),
+                generation,
+            })
+        } else {
+            self.history.push(UnificationEntry::Unify {
+                expr_id: b.expr_id,
+                before: Ty::TypeVar(b.clone()),
+                after: Ty::TypeVar(a.clone()),
+                generation,
+            })
+        }
+
+        if let Some((kind, expr_id)) = canonical_kind {
             let root = self.table.find(VarKey(a.id));
-            self.kinds[root.0 as usize] = kind;
+            self.kinds[root.0 as usize] = (kind, expr_id);
         }
     }
 
     pub fn kind(&self, var: TypeVarID) -> TypeVarKind {
-        self.kinds[var.id as usize].clone()
+        self.kinds[var.id as usize].clone().0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_history() {
+        let checked = crate::check_without_prelude(
+            "
+        func x(a) { a }
+        func y(a) { a }
+        func z(a) { a }
+        x(y(z(123)))
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
+        println!("{:#?}", checked.type_var_context.history);
     }
 }

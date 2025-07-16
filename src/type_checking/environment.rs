@@ -5,7 +5,7 @@ use tracing::debug_span;
 use crate::{
     ExprMetaStorage, SymbolID,
     constraint::Constraint,
-    constraint_solver::ConstraintSolver,
+    constraint_solver::{ConstraintSolver, ConstraintSolverSolution},
     parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
@@ -43,6 +43,7 @@ pub struct Environment {
     pub selfs: Vec<Ty>,
     pub context: TypeVarContext,
     next_id: i32,
+    generation: u32,
 }
 
 impl Default for Environment {
@@ -58,6 +59,7 @@ impl Default for Environment {
             next_id: 0,
             selfs: vec![],
             context,
+            generation: 0,
         }
     }
 }
@@ -84,7 +86,7 @@ impl Environment {
         symbol_id: &SymbolID,
         constraints: Vec<Constraint>,
     ) -> Ty {
-        let type_var = self.new_type_variable(TypeVarKind::Placeholder(name.clone()));
+        let type_var = self.new_type_variable(TypeVarKind::Placeholder(name.clone()), *expr_id);
         let usage_placeholder = Ty::TypeVar(type_var);
 
         self.constrain(Constraint::InstanceOf {
@@ -137,15 +139,17 @@ impl Environment {
     pub fn flush_constraints(
         &mut self,
         meta: &ExprMetaStorage,
-    ) -> Result<Substitutions, TypeError> {
-        let mut solver = ConstraintSolver::new(self, meta);
+    ) -> Result<ConstraintSolverSolution, TypeError> {
+        self.generation += 1;
+
+        let mut solver = ConstraintSolver::new(self, meta, self.generation);
         let solution = solver.solve();
 
-        for constraint in solution.unsolved_constraints {
-            self.constrain(constraint);
+        for constraint in &solution.unsolved_constraints {
+            self.constrain(constraint.clone());
         }
 
-        Ok(solution.substitutions)
+        Ok(solution)
     }
 
     pub fn replace_typed_exprs_values(&mut self, substitutions: &mut Substitutions) {
@@ -244,7 +248,7 @@ impl Environment {
             if let Some(arg_ty) = args.get(old) {
                 var_map.insert(old.clone(), arg_ty.clone());
             } else {
-                let fresh = self.new_type_variable(TypeVarKind::Instantiated(old.id));
+                let fresh = self.new_type_variable(TypeVarKind::Instantiated(old.id), old.expr_id);
                 var_map.insert(old.clone(), Ty::TypeVar(fresh));
             }
         }
@@ -285,8 +289,8 @@ impl Environment {
         ret
     }
 
-    pub fn new_type_variable(&mut self, kind: TypeVarKind) -> TypeVarID {
-        let type_var_id = self.context.new_var(kind);
+    pub fn new_type_variable(&mut self, kind: TypeVarKind, expr_id: ExprID) -> TypeVarID {
+        let type_var_id = self.context.new_var(kind, expr_id, self.generation);
 
         tracing::trace!("+ {:?}", Ty::TypeVar(type_var_id.clone()),);
 
@@ -575,6 +579,7 @@ mod generalize_tests {
     use crate::{
         SymbolID,
         environment::{Environment, Scope},
+        expr_id::ExprID,
         ty::Ty,
         type_checker::Scheme,
         type_var_id::{TypeVarID, TypeVarKind},
@@ -583,7 +588,7 @@ mod generalize_tests {
 
     // Helper to create a blank type variable.
     fn new_tv(id: u32) -> TypeVarID {
-        TypeVarID::new(id, TypeVarKind::Blank)
+        TypeVarID::new(id, TypeVarKind::Blank, ExprID::ANY)
     }
 
     // Helper to create a Ty::TypeVar.

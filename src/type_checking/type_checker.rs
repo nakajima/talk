@@ -38,7 +38,7 @@ pub enum TypeError {
     UnknownVariant(Name),
     Unknown(String),
     UnexpectedType(String, String),
-    Mismatch(String, String, Vec<ExprID>),
+    Mismatch(String, String),
     ArgumentError(String),
     Defer(ConformanceError),
     Handled, // If we've already reported it
@@ -62,7 +62,7 @@ impl TypeError {
             Self::UnexpectedType(actual, expected) => {
                 format!("Unexpected type: {expected}, expected: {actual}")
             }
-            Self::Mismatch(expected, actual, _) => {
+            Self::Mismatch(expected, actual) => {
                 format!("Type mismatch: {expected}, expected: {actual}")
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
@@ -659,7 +659,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         let ty = param_ty.as_ref().map(|t| t.ty.clone()).unwrap_or_else(|| {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str())))
+            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), id))
         });
 
         // Parameters are monomorphic inside the function body
@@ -852,7 +852,7 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .last()
             .map(|t| t.ty.clone())
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element)));
+            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element, id)));
 
         Ok(TypedExpr {
             id,
@@ -957,7 +957,7 @@ impl<'a> TypeChecker<'a> {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn(id));
+            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn, id);
             Ty::TypeVar(call_return_var)
         };
 
@@ -973,7 +973,6 @@ impl<'a> TypeChecker<'a> {
         }
 
         let callee = self.infer_node(callee, env, expected)?;
-        println!("callee = {callee:?}\nexpected: {expected:?}");
 
         match &callee.expr {
             // Handle struct initialization
@@ -1185,7 +1184,7 @@ impl<'a> TypeChecker<'a> {
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
-                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id)))
+                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), id))
             } else {
                 env.ty_for_symbol(&id, name.name_str(), &symbol_id, &[])
             };
@@ -1407,7 +1406,10 @@ impl<'a> TypeChecker<'a> {
         } else if let Some(expected) = expected {
             (None, expected.clone())
         } else {
-            (None, Ty::TypeVar(env.new_type_variable(TypeVarKind::Let)))
+            (
+                None,
+                Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, id)),
+            )
         };
 
         let scheme = Scheme::new(ty.clone(), vec![], vec![]);
@@ -1431,7 +1433,7 @@ impl<'a> TypeChecker<'a> {
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     if let Ty::Protocol(symbol_id, _) = self_ {
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id)))
+                        Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id))
                     } else {
                         tracing::error!("Name::_Self -> {self_:?}");
                         self_.clone()
@@ -1538,7 +1540,7 @@ impl<'a> TypeChecker<'a> {
         let ret_ty = match op {
             Plus => {
                 let ret_ty = expected.clone().unwrap_or_else(|| {
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone())))
+                    Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), id))
                 });
                 env.constrain(Constraint::ConformsTo {
                     expr_id: id,
@@ -1728,7 +1730,7 @@ impl<'a> TypeChecker<'a> {
                     expected.clone()
                 } else {
                     let member_var =
-                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()));
+                        env.new_type_variable(TypeVarKind::Member(member_name.to_string()), id);
                     Ty::TypeVar(member_var.clone())
                 };
 
@@ -1744,9 +1746,10 @@ impl<'a> TypeChecker<'a> {
                 // Qualified: Option.some
                 let typed_receiver = self.infer_node(receiver_id, env, &None)?;
 
-                let member_var = Ty::TypeVar(
-                    env.new_type_variable(TypeVarKind::Member(member_name.to_string())),
-                );
+                let member_var = Ty::TypeVar(env.new_type_variable(
+                    TypeVarKind::Member(member_name.to_string()),
+                    typed_receiver.id,
+                ));
 
                 // Add a constraint that links the receiver type to the member
                 env.constrain(Constraint::MemberAccess(
@@ -1907,6 +1910,7 @@ impl<'a> TypeChecker<'a> {
                         for field_pattern in fields {
                             let field_ty = Ty::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
+                                id,
                             ));
 
                             typed_fields.push(self.infer_node(

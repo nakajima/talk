@@ -2,7 +2,7 @@
 use crate::{
     SourceFile, SymbolTable, Typed, compiling::compilation_session::SharedCompilationSession,
     diagnostic::Diagnostic, environment::Environment, parsing::expr_id::ExprID, ty::Ty,
-    type_checker::TypeError, typed_expr::TypedExpr,
+    type_checker::TypeError, type_var_context::TypeVarContext, typed_expr::TypedExpr,
 };
 
 pub mod conformance_checker;
@@ -32,6 +32,7 @@ pub struct CheckResult {
     pub source_file: SourceFile<Typed>,
     pub env: Environment,
     pub symbols: SymbolTable,
+    pub type_var_context: TypeVarContext,
 }
 
 #[cfg(test)]
@@ -107,11 +108,39 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     Ok(CheckResult {
         session: driver.session,
         source_file,
+        type_var_context: typed_compilation_unit.env.context.clone(),
         env: typed_compilation_unit.env,
         symbols: driver.symbol_table,
     })
 }
 
+#[cfg(test)]
+pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
+    use crate::compiling::driver::{Driver, DriverConfig};
+    use std::path::PathBuf;
+
+    let path = &PathBuf::from("-");
+    let mut driver = Driver::new(DriverConfig {
+        executable: false,
+        include_prelude: false,
+        include_comments: false,
+    });
+    driver.update_file(path, input.into());
+    let typed_compilation_unit = driver.check().into_iter().next().unwrap();
+    let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+
+    for diagnostic in driver.session.lock().unwrap().diagnostics_for(path) {
+        tracing::error!("{diagnostic:?}");
+    }
+
+    Ok(CheckResult {
+        session: driver.session,
+        source_file,
+        type_var_context: typed_compilation_unit.env.context.clone(),
+        env: typed_compilation_unit.env,
+        symbols: driver.symbol_table,
+    })
+}
 // pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable), TypeError> {
 //     use crate::{
 //         constraint_solver::ConstraintSolver, environment::Environment, name_resolver::NameResolver,

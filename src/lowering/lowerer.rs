@@ -1065,7 +1065,7 @@ impl<'a> Lowerer<'a> {
             unreachable!()
         };
 
-        let type_var = Ty::TypeVar(TypeVarID::new(0, TypeVarKind::SelfVar(name.0)));
+        let type_var = Ty::TypeVar(TypeVarID::new(0, TypeVarKind::SelfVar(name.0), ExprID(0)));
 
         // Insert the self env param
         params.insert(0, type_var.clone());

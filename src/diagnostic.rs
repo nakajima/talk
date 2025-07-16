@@ -1,6 +1,6 @@
 use std::{hash::Hash, path::PathBuf};
 
-use miette::{NamedSource, SourceOffset, SourceSpan};
+use miette::{NamedSource, SourceSpan};
 
 use crate::{
     ExprMetaStorage, lexer::LexerError, lowering::ir_error::IRError,
@@ -24,18 +24,6 @@ pub struct ExpandedDiagnostic {
 
     #[related]
     others: Vec<ExpandedDiagnostic>,
-    // // You can add as many labels as you want.
-    // // They'll be rendered sequentially.
-    // #[label("This is bad")]
-    // snip2: (usize, usize), // `(usize, usize)` is `Into<SourceSpan>`!
-
-    // // Snippets can be optional, by using Option:
-    // #[label("some text")]
-    // snip3: Option<SourceSpan>,
-
-    // // with or without label text
-    // #[label]
-    // snip4: Option<SourceSpan>,
 }
 
 impl std::fmt::Display for ExpandedDiagnostic {
@@ -57,7 +45,7 @@ impl std::error::Error for ExpandedDiagnostic {
         self.source()
     }
 
-    fn provide<'a>(&'a self, request: &mut std::error::Request<'a>) {}
+    fn provide<'a>(&'a self, _request: &mut std::error::Request<'a>) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -151,99 +139,12 @@ impl Diagnostic {
     }
 
     pub fn expand(&self, meta: &ExprMetaStorage, source: &str) -> ExpandedDiagnostic {
-        let others = if let DiagnosticKind::Typing(TypeError::Mismatch(_, _, related)) = &self.kind
-        {
-            related
-                .iter()
-                .map(|id| {
-                    Diagnostic::typing(
-                        self.path.clone(),
-                        meta.get(id).map(|m| m.span()).unwrap_or_default(),
-                        TypeError::Unknown("Related".into()),
-                    )
-                    .expand(meta, source)
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-
         ExpandedDiagnostic {
             kind: self.kind.clone(),
             message: self.message(),
             src: NamedSource::new(self.path.to_str().unwrap_or("-"), source.to_string()),
             err_span: self.span.into(),
-            others,
+            others: vec![],
         }
     }
-
-    // pub fn range<S: crate::source_file::Phase>(
-    //     &self,
-    //     source_file: &SourceFile<S>,
-    // ) -> (Position, Position) {
-    //     match &self.kind {
-    //         DiagnosticKind::Lexer(_lexer_error) => (position.clone(), position.clone()),
-    //         DiagnosticKind::Parse(_parser_error) => (
-    //             Position {
-    //                 line: token.line,
-    //                 col: token.col,
-    //             },
-    //             Position {
-    //                 line: token.line,
-    //                 col: token.col,
-    //             },
-    //         ),
-    //         DiagnosticKind::Resolve(expr_id, _name_resolver_error) => {
-    //             let meta = source_file.meta.borrow();
-    //             let Some(expr) = meta.get(expr_id) else {
-    //                 return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
-    //             };
-
-    //             (
-    //                 Position {
-    //                     line: expr.start.line,
-    //                     col: expr.start.col,
-    //                 },
-    //                 Position {
-    //                     line: expr.end.line,
-    //                     col: expr.end.col,
-    //                 },
-    //             )
-    //         }
-    //         DiagnosticKind::Typing(expr_id, _type_error) => {
-    //             let meta = source_file.meta.borrow();
-    //             let Some(expr) = meta.get(expr_id) else {
-    //                 return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
-    //             };
-
-    //             (
-    //                 Position {
-    //                     line: expr.start.line,
-    //                     col: expr.start.col,
-    //                 },
-    //                 Position {
-    //                     line: expr.end.line,
-    //                     col: expr.end.col,
-    //                 },
-    //             )
-    //         }
-    //         DiagnosticKind::Lowering(expr_id, _type_error) => {
-    //             let meta = source_file.meta.borrow();
-    //             let Some(expr) = meta.get(expr_id) else {
-    //                 return (Position { line: 0, col: 0 }, Position { line: 0, col: 0 });
-    //             };
-
-    //             (
-    //                 Position {
-    //                     line: expr.start.line,
-    //                     col: expr.start.col,
-    //                 },
-    //                 Position {
-    //                     line: expr.end.line,
-    //                     col: expr.end.col,
-    //                 },
-    //             )
-    //         }
-    //     }
-    // }
 }

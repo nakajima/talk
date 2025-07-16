@@ -4,6 +4,7 @@ use crate::{SymbolID, expr_id::ExprID, name::Name, token_kind::TokenKind};
 pub struct TypeVarID {
     pub id: u32,
     pub kind: TypeVarKind,
+    pub expr_id: ExprID,
 }
 
 #[cfg(test)]
@@ -37,10 +38,11 @@ impl TypeVarID {
     pub const ANY: TypeVarID = TypeVarID {
         id: u32::MAX,
         kind: TypeVarKind::Blank,
+        expr_id: ExprID::ANY,
     };
 
-    pub fn new(id: u32, kind: TypeVarKind) -> Self {
-        Self { id, kind }
+    pub fn new(id: u32, kind: TypeVarKind, expr_id: ExprID) -> Self {
+        Self { id, kind, expr_id }
     }
 
     pub fn is_canonical(&self) -> bool {
@@ -52,6 +54,7 @@ impl TypeVarID {
             return Some(TypeVarID {
                 id: parent_id,
                 kind: TypeVarKind::Unbound,
+                expr_id: self.expr_id,
             });
         }
 
@@ -67,7 +70,7 @@ impl std::fmt::Debug for TypeVarID {
             }
             TypeVarKind::Blank => write!(f, "T{}[blank]", self.id),
             TypeVarKind::CallArg => write!(f, "T{}[arg]", self.id),
-            TypeVarKind::CallReturn(expr_id) => write!(f, "T{}[ret#{}]", self.id, expr_id.0),
+            TypeVarKind::CallReturn => write!(f, "T{}[ret]", self.id),
             TypeVarKind::FuncParam(name) => {
                 write!(f, "T{}[param({})]", self.id, name)
             }
@@ -112,7 +115,7 @@ pub enum TypeVarKind {
     SelfVar(SymbolID),
     Blank,
     CallArg,
-    CallReturn(ExprID),
+    CallReturn,
     FuncParam(String),
     FuncType,
     FuncNameVar(SymbolID),

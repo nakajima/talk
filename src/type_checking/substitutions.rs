@@ -6,7 +6,7 @@ use crate::{
     constraint_solver::ConstraintSolver,
     ty::Ty,
     type_checker::TypeError,
-    type_var_context::TypeVarContext,
+    type_var_context::{TypeVarContext, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -49,8 +49,9 @@ impl Substitutions {
         lhs: TypeVarID,
         rhs: TypeVarID,
         context: &mut TypeVarContext,
+        generation: u32,
     ) {
-        context.unify(lhs, rhs);
+        context.unify(lhs, rhs, generation);
     }
 
     pub fn apply(&mut self, ty: &Ty, depth: u32, context: &mut TypeVarContext) -> Ty {
@@ -169,6 +170,7 @@ impl Substitutions {
         lhs: &Ty,
         rhs: &Ty,
         context: &mut TypeVarContext,
+        generation: u32,
     ) -> Result<(), TypeError> {
         let lhs = self.apply(lhs, 0, context);
         let rhs = self.apply(rhs, 0, context);
@@ -184,7 +186,7 @@ impl Substitutions {
             (a, b) if a == b => Ok(()),
 
             (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
-                self.merge_type_vars(v1, v2, context);
+                self.merge_type_vars(v1, v2, context, generation);
 
                 Ok(())
             }
@@ -205,19 +207,21 @@ impl Substitutions {
 
                     // Otherwise, we cannot unify a canonical parameter with a concrete type – that
                     // would violate its universally quantified nature.
-                    let mut locations = vec![];
-                    locations.extend(lhs.locations());
-                    locations.extend(rhs.locations());
                     return Err(TypeError::Mismatch(
                         self.apply(&lhs, 0, context).to_string(),
                         self.apply(&rhs, 0, context).to_string(),
-                        locations,
                     ));
                 }
 
                 if self.occurs_check(&v, &ty, context) {
                     Err(TypeError::OccursConflict)
                 } else {
+                    context.history.push(UnificationEntry::Unify {
+                        expr_id: v.expr_id,
+                        before: Ty::TypeVar(v.clone()),
+                        after: ty.clone(),
+                        generation,
+                    });
                     self.insert(v.clone(), ty.clone());
                     Ok(())
                 }
@@ -227,19 +231,19 @@ impl Substitutions {
                 Ty::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    self.unify(lhs, &rhs, context)?;
+                    self.unify(lhs, &rhs, context, generation)?;
                 }
 
                 for (lhs, rhs) in lhs_gen.iter().zip(rhs_gen) {
-                    self.unify(lhs, &rhs, context)?;
+                    self.unify(lhs, &rhs, context, generation)?;
                 }
 
-                self.unify(&lhs_returning, &rhs_returning, context)?;
+                self.unify(&lhs_returning, &rhs_returning, context, generation)?;
 
                 Ok(())
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
-                self.unify(&lhs_func, &rhs_func, context)?;
+                self.unify(&lhs_func, &rhs_func, context, generation)?;
 
                 Ok(())
             }
@@ -247,7 +251,7 @@ impl Substitutions {
             | (Ty::Closure { func: closure, .. }, func)
                 if matches!(func, Ty::Func(_, _, _)) =>
             {
-                self.unify(&func, &closure, context)?;
+                self.unify(&func, &closure, context, generation)?;
 
                 Ok(())
             }
@@ -255,7 +259,7 @@ impl Substitutions {
                 if lhs_types.len() == rhs_types.len() =>
             {
                 for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    self.unify(lhs, &rhs, context)?;
+                    self.unify(lhs, &rhs, context, generation)?;
                 }
 
                 Ok(())
@@ -263,14 +267,14 @@ impl Substitutions {
             (Ty::Enum(_, enum_types), Ty::EnumVariant(_, variant_types))
             | (Ty::EnumVariant(_, variant_types), Ty::Enum(_, enum_types)) => {
                 for (e_ty, v_ty) in enum_types.iter().zip(variant_types) {
-                    self.unify(e_ty, &v_ty, context)?;
+                    self.unify(e_ty, &v_ty, context, generation)?;
                 }
 
                 Ok(())
             }
             (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
                 for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    self.unify(lhs, &rhs, context)?;
+                    self.unify(lhs, &rhs, context, generation)?;
                 }
 
                 Ok(())
@@ -291,21 +295,14 @@ impl Substitutions {
                     self,
                 );
 
-                self.unify(&ret, &specialized_ty, context)?;
+                self.unify(&ret, &specialized_ty, context, generation)?;
 
                 Ok(())
             }
-            _ => {
-                let mut locations = vec![];
-                locations.extend(lhs.locations());
-                locations.extend(rhs.locations());
-
-                Err(TypeError::Mismatch(
-                    self.apply(&lhs, 0, context).to_string(),
-                    self.apply(&rhs, 0, context).to_string(),
-                    locations,
-                ))
-            }
+            _ => Err(TypeError::Mismatch(
+                self.apply(&lhs, 0, context).to_string(),
+                self.apply(&rhs, 0, context).to_string(),
+            )),
         };
 
         tracing::debug!(
