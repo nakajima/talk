@@ -1,13 +1,14 @@
 use std::fmt::Display;
 
-use derive_visitor::Drive;
+use derive_visitor::{Drive, Visitor};
 
 use crate::{
     SymbolID,
     environment::Environment,
+    expr_id::ExprID,
     type_checker::{FuncParams, FuncReturning},
     type_defs::TypeDef,
-    type_var_id::TypeVarID,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 #[derive(Clone, PartialEq, Debug, Drive)]
@@ -113,6 +114,12 @@ impl Ty {
 
     pub fn is_concrete(&self) -> bool {
         !matches!(self, Ty::TypeVar(_))
+    }
+
+    pub fn locations(&self) -> Vec<ExprID> {
+        let mut visitor = TyExprVisitor { ids: vec![] };
+        visitor.enter_ty(self);
+        visitor.ids.to_vec()
     }
 
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
@@ -255,6 +262,42 @@ impl Ty {
                     self.clone()
                 }
             }
+        }
+    }
+}
+
+#[derive(Visitor)]
+#[visitor(Ty(enter))]
+struct TyExprVisitor {
+    ids: Vec<ExprID>,
+}
+
+impl TyExprVisitor {
+    fn enter_ty(&mut self, ty: &Ty) {
+        let Ty::TypeVar(type_var) = ty else { return };
+
+        match &type_var.kind {
+            TypeVarKind::SelfVar(_) => (),
+            TypeVarKind::Blank => (),
+            TypeVarKind::CallArg => (),
+            TypeVarKind::CallReturn(expr_id) => self.ids.push(*expr_id),
+            TypeVarKind::FuncParam(_) => (),
+            TypeVarKind::FuncType => (),
+            TypeVarKind::FuncNameVar(_symbol_id) => (),
+            TypeVarKind::FuncBody => (),
+            TypeVarKind::Let => (),
+            TypeVarKind::TypeRepr(_name) => (),
+            TypeVarKind::Member(_) => (),
+            TypeVarKind::Element => (),
+            TypeVarKind::VariantValue => (),
+            TypeVarKind::PatternBind(_name) => (),
+            TypeVarKind::CanonicalTypeParameter(_) => (),
+            TypeVarKind::Placeholder(_) => (),
+            TypeVarKind::Instantiated(_) => (),
+            TypeVarKind::Canonicalized(_) => (),
+            TypeVarKind::BinaryOperand(_token_kind) => (),
+            TypeVarKind::Combined(_, _) => (),
+            TypeVarKind::Unbound => (),
         }
     }
 }

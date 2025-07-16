@@ -205,9 +205,13 @@ impl Substitutions {
 
                     // Otherwise, we cannot unify a canonical parameter with a concrete type – that
                     // would violate its universally quantified nature.
+                    let mut locations = vec![];
+                    locations.extend(lhs.locations());
+                    locations.extend(rhs.locations());
                     return Err(TypeError::Mismatch(
                         self.apply(&lhs, 0, context).to_string(),
                         self.apply(&rhs, 0, context).to_string(),
+                        locations,
                     ));
                 }
 
@@ -291,10 +295,17 @@ impl Substitutions {
 
                 Ok(())
             }
-            _ => Err(TypeError::Mismatch(
-                self.apply(&lhs, 0, context).to_string(),
-                self.apply(&rhs, 0, context).to_string(),
-            )),
+            _ => {
+                let mut locations = vec![];
+                locations.extend(lhs.locations());
+                locations.extend(rhs.locations());
+
+                Err(TypeError::Mismatch(
+                    self.apply(&lhs, 0, context).to_string(),
+                    self.apply(&rhs, 0, context).to_string(),
+                    locations,
+                ))
+            }
         };
 
         tracing::debug!(

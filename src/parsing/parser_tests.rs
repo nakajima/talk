@@ -1388,11 +1388,14 @@ mod tests {
         let session = session.lock().unwrap();
         let diagnostics = session.diagnostics_for(&PathBuf::from("-"));
         assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics.contains(&Diagnostic::parser(
-            PathBuf::from("-"),
-            (0, 0),
-            crate::parser::ParserError::UnexpectedEndOfInput(None)
-        )))
+        assert!(
+            diagnostics.contains(&Diagnostic::parser(
+                PathBuf::from("-"),
+                (0, 1),
+                crate::parser::ParserError::UnexpectedEndOfInput(None)
+            )),
+            "{diagnostics:?}"
+        )
     }
 
     #[test]
@@ -1404,7 +1407,7 @@ mod tests {
         assert!(
             diagnostics.contains(&Diagnostic::parser(
                 PathBuf::from("-"),
-                (0, 0),
+                (12, 12),
                 crate::parser::ParserError::UnexpectedEndOfInput(None)
             )),
             "{:?}",
@@ -1418,11 +1421,14 @@ mod tests {
         let session = session.lock().unwrap();
         let diagnostics = session.diagnostics_for(&PathBuf::from("-"));
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(diagnostics.contains(&Diagnostic::parser(
-            PathBuf::from("-"),
-            (0, 0),
-            crate::parser::ParserError::UnexpectedEndOfInput(None)
-        )));
+        assert!(
+            diagnostics.contains(&Diagnostic::parser(
+                PathBuf::from("-"),
+                (28, 28),
+                crate::parser::ParserError::UnexpectedEndOfInput(None)
+            )),
+            "{diagnostics:?}"
+        );
 
         assert_eq!(
             parsed.roots()[0],

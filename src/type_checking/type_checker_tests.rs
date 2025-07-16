@@ -1440,7 +1440,7 @@ mod tests {
         assert!(
             matches!(
                 checked.diagnostics()[0].kind,
-                DiagnosticKind::Typing(TypeError::Mismatch(_, _))
+                DiagnosticKind::Typing(TypeError::Mismatch(_, _, _))
             ),
             "{:?}",
             checked.diagnostics()
@@ -1464,8 +1464,8 @@ mod tests {
         assert!(
             checked.diagnostics().contains(&Diagnostic::typing(
                 checked.source_file.path.clone(),
-                (0, 0),
-                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string())
+                (0, 14),
+                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string(), vec![])
             )),
             "{:?}",
             checked.diagnostics()
@@ -1836,7 +1836,7 @@ mod protocol_tests {
             matches!(
                 checked.diagnostics()[0],
                 Diagnostic {
-                    kind: DiagnosticKind::Typing(TypeError::Mismatch(_, _)),
+                    kind: DiagnosticKind::Typing(TypeError::Mismatch(_, _, _)),
                     ..
                 }
             ),

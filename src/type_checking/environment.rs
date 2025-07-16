@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
+use tracing::debug_span;
+
 use crate::{
     ExprMetaStorage, SymbolID,
     constraint::Constraint,
@@ -102,11 +104,12 @@ impl Environment {
     }
 
     #[cfg_attr(test, track_caller)]
-    #[tracing::instrument(skip(self))]
     pub fn constrain(&mut self, constraint: Constraint) {
         if !constraint.needs_solving() {
             return;
         }
+
+        let _s = debug_span!("constrain", constraint = format!("{constraint:?}")).entered();
 
         if constraint.is_impossible() {
             tracing::error!("Impossible constraint: {constraint:?}");
@@ -119,9 +122,9 @@ impl Environment {
         }
 
         // #[allow(clippy::panic)]
-        // if constraint.contains_canonical_type_parameter() {
-        //     panic!("Constraints must not contain canonical type params: {constraint:?}")
-        // }
+        if constraint.contains_canonical_type_parameter() {
+            tracing::error!("Constraints must not contain canonical type params: {constraint:?}")
+        }
 
         self.constraints.push(constraint)
     }
@@ -248,7 +251,9 @@ impl Environment {
 
         for constraint in scheme.constraints() {
             let new_constraint = constraint.replacing(&mut var_map, &mut self.context);
-            self.constrain(new_constraint);
+            if new_constraint != constraint {
+                self.constrain(new_constraint);
+            }
         }
 
         walk(&scheme.ty(), &var_map)

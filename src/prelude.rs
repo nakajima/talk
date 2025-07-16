@@ -86,10 +86,12 @@ pub fn _compile_prelude() -> Prelude {
     {
         for diagnostic in session.diagnostics.iter() {
             let source = driver.contents(&diagnostic.path);
-            tracing::error!("{:?}", Report::new(diagnostic.expand(&source)));
+            if let Some(meta) = unit.meta_for(&diagnostic.path) {
+                tracing::error!("{:?}", Report::new(diagnostic.expand(&meta, &source)));
+            }
         }
 
-        panic!(
+        tracing::error!(
             "Prelude did not compile cleanly: {:#?}",
             session.diagnostics
         )

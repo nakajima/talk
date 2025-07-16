@@ -1,14 +1,17 @@
 use std::{
+    cell::Ref,
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    NameResolved, SourceFile, SymbolID, SymbolTable,
+    ExprMetaStorage, NameResolved, SourceFile, SymbolID, SymbolTable,
     compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     environment::Environment,
+    expr::ExprMeta,
+    expr_id::ExprID,
     lexer::{Lexer, LexerError},
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::NameResolver,
@@ -310,5 +313,15 @@ impl StageTrait for Lowered {
 impl CompilationUnit<Lowered> {
     pub fn module(&self) -> IRModule {
         self.stage.module.clone()
+    }
+
+    pub fn meta_for(&self, path: &PathBuf) -> Option<Ref<ExprMetaStorage>> {
+        for file in &self.stage.files {
+            if &file.path == path {
+                return Some(file.meta.borrow());
+            }
+        }
+
+        None
     }
 }

@@ -11,6 +11,7 @@ use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
 use crate::diagnostic::Diagnostic;
 use crate::expr_id::ExprID;
+use crate::formatter::Formatter;
 use crate::name::Name;
 use crate::parsed_expr::Expr;
 use crate::parsed_expr::IncompleteExpr;
@@ -152,7 +153,7 @@ impl NameResolver {
         let mut result = vec![];
 
         for expr in exprs {
-            tracing::trace!("Resolving: {expr:?}");
+            tracing::trace!("Resolving: {}", Formatter::format_single_expr(meta, expr));
             result.push(self.resolve_node(expr, meta, symbol_table)?);
         }
 
@@ -549,7 +550,7 @@ impl NameResolver {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip(self, meta, symbol_table))]
+    #[tracing::instrument(skip(self, meta, symbol_table, expr))]
     fn resolve_func(
         &mut self,
         expr: &mut Expr,

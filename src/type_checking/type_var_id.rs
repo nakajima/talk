@@ -1,4 +1,4 @@
-use crate::{SymbolID, name::Name, token_kind::TokenKind};
+use crate::{SymbolID, expr_id::ExprID, name::Name, token_kind::TokenKind};
 
 #[derive(Clone)]
 pub struct TypeVarID {
@@ -67,7 +67,7 @@ impl std::fmt::Debug for TypeVarID {
             }
             TypeVarKind::Blank => write!(f, "T{}[blank]", self.id),
             TypeVarKind::CallArg => write!(f, "T{}[arg]", self.id),
-            TypeVarKind::CallReturn => write!(f, "T{}[ret]", self.id),
+            TypeVarKind::CallReturn(expr_id) => write!(f, "T{}[ret#{}]", self.id, expr_id.0),
             TypeVarKind::FuncParam(name) => {
                 write!(f, "T{}[param({})]", self.id, name)
             }
@@ -112,7 +112,7 @@ pub enum TypeVarKind {
     SelfVar(SymbolID),
     Blank,
     CallArg,
-    CallReturn,
+    CallReturn(ExprID),
     FuncParam(String),
     FuncType,
     FuncNameVar(SymbolID),

@@ -32,6 +32,8 @@ struct String {
     self.length = newCapacity
     self.capacity = newCapacity
     self.storage = newStorage
+
+    // Why is whatever we return here trying to get unified with something? Where is it getting used?
   }
 }
 

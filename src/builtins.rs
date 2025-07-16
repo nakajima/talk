@@ -252,17 +252,17 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty::string()],
                 Ty::TypeVar(TypeVarID {
                     id: 5,
-                    kind: TypeVarKind::CallReturn,
+                    kind: TypeVarKind::CallReturn(ExprID(-12)),
                 })
                 .into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: 5,
-                    kind: TypeVarKind::CallReturn,
+                    kind: TypeVarKind::CallReturn(ExprID(-12)),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 5,
-                kind: TypeVarKind::CallReturn,
+                kind: TypeVarKind::CallReturn(ExprID(-12)),
             }],
             type_def: None,
         },

@@ -1,10 +1,10 @@
 use std::{hash::Hash, path::PathBuf};
 
-use miette::{SourceOffset, SourceSpan};
+use miette::{NamedSource, SourceOffset, SourceSpan};
 
 use crate::{
-    lexer::LexerError, lowering::ir_error::IRError, name_resolver::NameResolverError,
-    parser::ParserError, type_checker::TypeError,
+    ExprMetaStorage, lexer::LexerError, lowering::ir_error::IRError,
+    name_resolver::NameResolverError, parser::ParserError, type_checker::TypeError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, miette::Diagnostic)]
@@ -15,12 +15,15 @@ pub struct ExpandedDiagnostic {
 
     // The `Source` that miette will use.
     #[source_code]
-    src: String,
+    src: NamedSource<String>,
 
     // This will underline/mark the specific code inside the larger
     // snippet context.
-    #[label = "This is the highlight"]
+    #[label = "Error here"]
     err_span: SourceSpan,
+
+    #[related]
+    others: Vec<ExpandedDiagnostic>,
     // // You can add as many labels as you want.
     // // They'll be rendered sequentially.
     // #[label("This is bad")]
@@ -147,12 +150,30 @@ impl Diagnostic {
         }
     }
 
-    pub fn expand(&self, source: &str) -> ExpandedDiagnostic {
+    pub fn expand(&self, meta: &ExprMetaStorage, source: &str) -> ExpandedDiagnostic {
+        let others = if let DiagnosticKind::Typing(TypeError::Mismatch(_, _, related)) = &self.kind
+        {
+            related
+                .iter()
+                .map(|id| {
+                    Diagnostic::typing(
+                        self.path.clone(),
+                        meta.get(id).map(|m| m.span()).unwrap_or_default(),
+                        TypeError::Unknown("Related".into()),
+                    )
+                    .expand(meta, source)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         ExpandedDiagnostic {
             kind: self.kind.clone(),
             message: self.message(),
-            src: source.to_string(),
+            src: NamedSource::new(self.path.to_str().unwrap_or("-"), source.to_string()),
             err_span: self.span.into(),
+            others,
         }
     }
 

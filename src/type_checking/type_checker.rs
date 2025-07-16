@@ -38,7 +38,7 @@ pub enum TypeError {
     UnknownVariant(Name),
     Unknown(String),
     UnexpectedType(String, String),
-    Mismatch(String, String),
+    Mismatch(String, String, Vec<ExprID>),
     ArgumentError(String),
     Defer(ConformanceError),
     Handled, // If we've already reported it
@@ -62,7 +62,7 @@ impl TypeError {
             Self::UnexpectedType(actual, expected) => {
                 format!("Unexpected type: {expected}, expected: {actual}")
             }
-            Self::Mismatch(expected, actual) => {
+            Self::Mismatch(expected, actual, _) => {
                 format!("Type mismatch: {expected}, expected: {actual}")
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
@@ -957,7 +957,7 @@ impl<'a> TypeChecker<'a> {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
-            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn);
+            let call_return_var = env.new_type_variable(TypeVarKind::CallReturn(id));
             Ty::TypeVar(call_return_var)
         };
 
@@ -1280,7 +1280,7 @@ impl<'a> TypeChecker<'a> {
         })
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env))]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, generics, params, body, ret))]
     #[allow(clippy::too_many_arguments)]
     fn infer_func(
         &mut self,
@@ -1577,7 +1577,7 @@ impl<'a> TypeChecker<'a> {
         })
     }
 
-    #[tracing::instrument(level = "DEBUG", skip(self, env, expected))]
+    #[tracing::instrument(level = "DEBUG", skip(self, env, items, expected))]
     fn infer_block(
         &mut self,
         id: ExprID,
