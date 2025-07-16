@@ -210,6 +210,7 @@ impl Substitutions {
                     return Err(TypeError::Mismatch(
                         self.apply(&lhs, 0, context).to_string(),
                         self.apply(&rhs, 0, context).to_string(),
+                        context.explain_mismatch(&lhs, &rhs),
                     ));
                 }
 
@@ -302,6 +303,7 @@ impl Substitutions {
             _ => Err(TypeError::Mismatch(
                 self.apply(&lhs, 0, context).to_string(),
                 self.apply(&rhs, 0, context).to_string(),
+                context.explain_mismatch(&lhs, &rhs),
             )),
         };
 

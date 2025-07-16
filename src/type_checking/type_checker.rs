@@ -38,7 +38,7 @@ pub enum TypeError {
     UnknownVariant(Name),
     Unknown(String),
     UnexpectedType(String, String),
-    Mismatch(String, String),
+    Mismatch(String, String, String),
     ArgumentError(String),
     Defer(ConformanceError),
     Handled, // If we've already reported it
@@ -62,8 +62,14 @@ impl TypeError {
             Self::UnexpectedType(actual, expected) => {
                 format!("Unexpected type: {expected}, expected: {actual}")
             }
-            Self::Mismatch(expected, actual) => {
-                format!("Type mismatch: {expected}, expected: {actual}")
+            Self::Mismatch(expected, actual, details) => {
+                if details.is_empty() {
+                    format!("Type mismatch: {expected}, expected: {actual}")
+                } else {
+                    format!(
+                        "Type mismatch: {expected}, expected: {actual}\n{details}"
+                    )
+                }
             }
             Self::Handled => unreachable!("Handled errors should not be displayed"),
             Self::OccursConflict => "Recursive types are not supported".to_string(),

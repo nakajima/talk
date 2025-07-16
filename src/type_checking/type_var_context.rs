@@ -198,6 +198,52 @@ impl TypeVarContext {
     pub fn kind(&self, var: TypeVarID) -> TypeVarKind {
         self.kinds[var.id as usize].clone().0
     }
+
+    pub fn explain(&self, ty: &Ty) -> String {
+        match ty {
+            Ty::TypeVar(tv) => {
+                let mut parts = Vec::new();
+                for entry in &self.history {
+                    match entry {
+                        UnificationEntry::Create { expr_id, ty: Ty::TypeVar(created), generation } if created == tv => {
+                            parts.push(format!(
+                                "created for expr {:?} (gen {})",
+                                expr_id, generation
+                            ));
+                        }
+                        UnificationEntry::Unify { expr_id, before, after, generation } => {
+                            let before_matches = matches!(before, Ty::TypeVar(v) if v == tv);
+                            let after_matches = matches!(after, Ty::TypeVar(v) if v == tv);
+                            if before_matches || after_matches {
+                                parts.push(format!(
+                                    "expr {:?}: {} -> {} (gen {})",
+                                    expr_id,
+                                    before,
+                                    after,
+                                    generation
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                parts.join("; ")
+            }
+            _ => String::new(),
+        }
+    }
+
+    pub fn explain_mismatch(&self, lhs: &Ty, rhs: &Ty) -> String {
+        let lhs_hist = self.explain(lhs);
+        let rhs_hist = self.explain(rhs);
+
+        if lhs_hist.is_empty() && rhs_hist.is_empty() {
+            String::new()
+        } else {
+            format!("lhs history: {}\nrhs history: {}", lhs_hist, rhs_hist)
+        }
+    }
 }
 
 #[cfg(test)]
