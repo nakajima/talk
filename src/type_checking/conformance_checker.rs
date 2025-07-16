@@ -65,9 +65,16 @@ impl<'a> ConformanceChecker<'a> {
             substitutions.insert(canonical, conforming.clone());
         }
 
-        self.check_conformance_of_ty(&protocol);
+        let Some(type_def_conformance) = self.check_conformance_of_ty(&protocol).cloned() else {
+            return Err(TypeError::ConformanceError(self.errors));
+        };
 
-        let mut unifications = vec![];
+        let mut unifications: Vec<(Ty, Ty)> = type_def_conformance
+            .associated_types
+            .iter()
+            .cloned()
+            .zip(self.conformance.associated_types.iter().cloned())
+            .collect();
 
         for method in protocol.methods.iter() {
             let ty_method = match self.find_method(&protocol, &method.name) {
@@ -77,6 +84,8 @@ impl<'a> ConformanceChecker<'a> {
                     continue;
                 }
             };
+
+            tracing::trace!("Found method {:?}", ty_method.to_string());
 
             // Find self references in the protocol's type and replace them with
             // our concrete type
@@ -101,6 +110,12 @@ impl<'a> ConformanceChecker<'a> {
                 }
             };
 
+            tracing::trace!(
+                "Found method {:?}\nConformance: {:?}",
+                ty_method.to_string(),
+                type_def_conformance
+            );
+
             // Find self references in the protocol's type and replace them with
             // our concrete type
             for type_var in free_type_vars(&ty_method) {
@@ -110,9 +125,14 @@ impl<'a> ConformanceChecker<'a> {
             }
 
             unifications.push((
-                ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
-                ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
-            ));
+                substitutions.apply(&method.ty, 0, &mut self.env.context),
+                substitutions.apply(&ty_method, 0, &mut self.env.context),
+            ))
+
+            //unifications.push((
+            //    ConstraintSolver::substitute_ty_with_map(&method.ty, &substitutions),
+            //    ConstraintSolver::substitute_ty_with_map(&ty_method, &substitutions),
+            //));
         }
 
         for property in protocol.properties.iter() {
@@ -213,21 +233,24 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
-    fn check_conformance_of_ty(&mut self, protocol_def: &ProtocolDef) {
+    fn check_conformance_of_ty(&mut self, protocol_def: &ProtocolDef) -> Option<&Conformance> {
         let Some(type_def) = self.ty.type_def(self.env) else {
-            return;
+            return None;
         };
 
-        if !type_def
+        let conformance = type_def
             .conformances()
             .iter()
-            .any(|c| c.protocol_id == protocol_def.symbol_id)
-        {
+            .find(|c| c.protocol_id == protocol_def.symbol_id);
+
+        if conformance.is_none() {
             self.errors.push(ConformanceError::TypeDoesNotConform(
                 type_def.name().to_string(),
                 protocol_def.name_str.to_string(),
             ));
         }
+
+        conformance
     }
 }
 

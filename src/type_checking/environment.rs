@@ -11,7 +11,7 @@ use crate::{
     ty::Ty,
     type_checker::TypeError,
     type_defs::{TypeDef, enum_def::EnumDef, protocol_def::ProtocolDef, struct_def::StructDef},
-    type_var_context::TypeVarContext,
+    type_var_context::{TypeVarContext, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -249,6 +249,12 @@ impl Environment {
                 var_map.insert(old.clone(), arg_ty.clone());
             } else {
                 let fresh = self.new_type_variable(TypeVarKind::Instantiated(old.id), old.expr_id);
+                self.context.history.push(UnificationEntry::Instantiated {
+                    expr_id: old.expr_id,
+                    canonical: old.clone(),
+                    instantiated: Ty::TypeVar(fresh.clone()),
+                    generation: self.generation,
+                });
                 var_map.insert(old.clone(), Ty::TypeVar(fresh));
             }
         }

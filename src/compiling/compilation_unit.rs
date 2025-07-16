@@ -193,7 +193,7 @@ impl CompilationUnit<Parsed> {
 
 #[derive(Debug)]
 pub struct Resolved {
-    files: Vec<SourceFile<NameResolved>>,
+    pub files: Vec<SourceFile<NameResolved>>,
     pub global_scope: BTreeMap<String, SymbolID>,
 }
 impl StageTrait for Resolved {

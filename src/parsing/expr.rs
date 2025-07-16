@@ -18,6 +18,14 @@ impl ExprMeta {
         }
     }
 
+    pub fn excerpt(&self, _label: String, in_source: &str) -> String {
+        in_source
+            .chars()
+            .skip(self.start.start as usize)
+            .take((self.end.end - self.start.start.saturating_sub(1)) as usize)
+            .collect()
+    }
+
     pub fn span(&self) -> (usize, usize) {
         (
             self.start.start as usize,

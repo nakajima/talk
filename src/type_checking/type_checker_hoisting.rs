@@ -19,7 +19,7 @@ use crate::{
         },
     },
     type_var_id::{TypeVarID, TypeVarKind},
-    typed_expr::Expr,
+    typed_expr::{Expr, TypedExpr},
 };
 
 #[derive(Default, Debug)]
@@ -420,6 +420,7 @@ impl<'a> TypeChecker<'a> {
                     expr_id: method.expr.id,
                     ty: typed_expr.ty.clone(),
                 });
+
                 substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
             }
             def.add_methods(methods.clone());

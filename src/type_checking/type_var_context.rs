@@ -49,6 +49,12 @@ pub enum UnificationEntry {
         ty: Ty,
         generation: u32,
     },
+    Instantiated {
+        expr_id: ExprID,
+        canonical: TypeVarID,
+        instantiated: Ty,
+        generation: u32,
+    },
     Unify {
         expr_id: ExprID,
         before: Ty,
@@ -208,18 +214,21 @@ mod tests {
 
     #[test]
     fn tracks_history() {
-        let checked = crate::check_without_prelude(
-            "
+        let source = "
         func x(a) { a }
         func y(a) { a }
         func z(a) { a }
         x(y(z(123)))
-        ",
-        )
-        .unwrap();
+        ";
+        let checked = crate::check(source).unwrap();
 
         assert_eq!(checked.nth(3).unwrap(), Ty::Int);
-        dump_unification_dot(&checked.type_var_context.history, "unification.dot").unwrap();
-        println!("{:#?}", checked.type_var_context.history);
+        dump_unification_dot(
+            &checked.type_var_context.history,
+            "unification.dot",
+            &checked.meta,
+            &source.to_string(),
+        )
+        .unwrap();
     }
 }

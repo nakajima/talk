@@ -1,24 +1,25 @@
-//! dumb_dot.rs
-//! ---------------------------------------
-//! Requirements on the surrounding crate:
+//! dumb_dot.rs – v3  (Create · Instantiated · Unify)
+//! -------------------------------------------------
+//! Works with the user’s latest `UnificationEntry` enum.
+//
+//!  · Create        → just makes the node exist
+//!  · Instantiated  → blue dashed edge  canonical ──▶ instantiated
+//!  · Unify         → solid edge         before    ──▶ after
 //!
-//! Usage (inside a test or debug build):
-//!
-//!     dump_unification_dot(&log, "unification.dot").unwrap();
-//!     // then: dot -Tpng unification.dot -o unification.png
-//!
+//!  Render:  dot -Tpng unification.dot -o unification.png
+//! -----------------------------------------------------------------
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use crate::ExprMetaStorage;
 use crate::ty::Ty;
 use crate::type_var_context::UnificationEntry;
 
-/// ------------------------------------------------------------
-///  Tiny union–find – *only* for visualising final representatives
-/// ------------------------------------------------------------
+/* ───────────────────────── Union–Find (unchanged) ────────────────────────── */
+
 #[derive(Default)]
 struct UF {
     parent: Vec<usize>,
@@ -41,7 +42,6 @@ impl UF {
         let ra = self.find(a);
         let rb = self.find(b);
         if ra != rb {
-            // deterministic parent: smaller handle wins
             if ra < rb {
                 self.parent[rb] = ra;
             } else {
@@ -51,103 +51,159 @@ impl UF {
     }
 }
 
-/// ------------------------------------------------------------
-///  Public API – call from your failing test
-/// ------------------------------------------------------------
-pub fn dump_unification_dot<P>(log: &[UnificationEntry], out_path: P) -> std::io::Result<()>
+/* ───────────────────────────── DOT dumper ────────────────────────────────── */
+
+/// Call this from a test or a failing compilation path.
+pub fn dump_unification_dot<P>(
+    log: &[UnificationEntry],
+    out: P,
+    meta: &ExprMetaStorage,
+    source: &String,
+) -> std::io::Result<()>
 where
     P: AsRef<Path>,
 {
-    // 1.  Map every distinct Ty to a numeric handle.
-    let mut handles = HashMap::<Ty, usize>::new();
+    /* 1. Assign a numeric handle to every distinct Ty. */
+    let mut handles = HashMap::<Ty, (usize, String)>::new();
     let mut uf = UF::default();
 
-    let mut handle_of = |ty: &Ty, handles: &mut HashMap<Ty, usize>, uf: &mut UF| -> usize {
-        if let Some(&h) = handles.get(ty) {
-            h
+    let h_of = |ty: &Ty,
+                label: String,
+                handles: &mut HashMap<Ty, (usize, String)>,
+                uf: &mut UF|
+     -> usize {
+        if let Some((h, label)) = handles.get(ty) {
+            *h
         } else {
             let h = uf.make();
-            handles.insert(ty.clone(), h);
+            handles.insert(ty.clone(), (h, label));
             h
         }
     };
 
-    // 2.  Collect DOT edges.
+    /* 2. Collect edges with per‑edge attributes */
     struct Edge {
         from: usize,
         to: usize,
         label: String,
+        extra_attrs: String, // e.g. "style=dashed,color=blue"
     }
     let mut edges = Vec::<Edge>::new();
 
-    for (step, event) in log.iter().enumerate() {
-        match event {
+    for (step, ev) in log.iter().enumerate() {
+        match ev {
+            /* 2.a  Create – node already registered by h_of side‑effect */
             UnificationEntry::Create {
-                ty, // just ensure node exists
-                ..
+                ty,
+                expr_id,
+                generation,
             } => {
-                handle_of(ty, &mut handles, &mut uf);
+                let label = if let Some(meta) = meta.get(expr_id) {
+                    meta.excerpt(format!("Instantiated\n{ty:?}\n",), source)
+                } else {
+                    format!("Instantiated {generation:?}")
+                };
+
+                h_of(ty, label, &mut handles, &mut uf);
             }
+
+            /* 2.b  Instantiated – dashed blue arrow, *no* union */
+            UnificationEntry::Instantiated {
+                expr_id,
+                canonical,
+                instantiated,
+                generation,
+            } => {
+                let label = if let Some(meta) = meta.get(expr_id) {
+                    meta.excerpt(format!("Instantiated\n{instantiated:?}",), source)
+                } else {
+                    format!("Instantiated {generation:?}")
+                };
+
+                let canonical_ty = Ty::TypeVar(canonical.clone());
+                let h_canon = h_of(&canonical_ty, label.clone(), &mut handles, &mut uf);
+                let h_inst = h_of(instantiated, label.clone(), &mut handles, &mut uf);
+
+                edges.push(Edge {
+                    from: h_canon,
+                    to: h_inst,
+                    label: dot_escape(&label),
+                    extra_attrs: "style=dashed,color=blue".into(),
+                });
+                //  ⸺ no uf.union() – instantiation is *not* equality
+            }
+
+            /* 2.c  Unify – solid arrow + union‑find merge */
             UnificationEntry::Unify {
                 expr_id,
                 before,
                 after,
                 generation,
             } => {
-                let h_before = handle_of(before, &mut handles, &mut uf);
-                let h_after = handle_of(after, &mut handles, &mut uf);
+                let label = if let Some(meta) = meta.get(expr_id) {
+                    meta.excerpt(format!("Unified {before:?}",), source)
+                } else {
+                    format!("Unified {generation:?}")
+                };
+
+                let h_before = h_of(before, label.clone(), &mut handles, &mut uf);
+                let h_after = h_of(after, label.clone(), &mut handles, &mut uf);
 
                 edges.push(Edge {
                     from: h_before,
                     to: h_after,
-                    label: format!("e{}·g{}·s{}", expr_id.0, generation, step),
+                    label: dot_escape(&label),
+                    extra_attrs: String::new(),
                 });
-
                 uf.union(h_before, h_after);
             }
         }
     }
 
-    // 3.  Representative lookup
-    let mut root_of = HashMap::<usize, usize>::new();
-    for &h in handles.values() {
-        root_of.insert(h, uf.find(h));
+    /* 3.  What is the final representative for each handle? */
+    let mut root_of = HashMap::<usize, (usize, String)>::new();
+    for (h, label) in handles.values() {
+        root_of.insert(*h, (uf.find(*h), label.clone()));
     }
 
-    // 4.  Emit DOT
-    let mut w = BufWriter::new(File::create(out_path)?);
-
+    /* 4.  Emit DOT */
+    let mut w = BufWriter::new(File::create(out)?);
     writeln!(w, "digraph Unification {{")?;
-    writeln!(w, "    rankdir = LR;")?;
-    writeln!(w, "    node [fontname = \"Fira Code\", fontsize = 10];")?;
+    writeln!(
+        w,
+        "    rankdir=LR; node[fontname=\"Fira Code\",fontsize=10];"
+    )?;
 
-    // 4.a  Nodes
-    for (ty, &h) in &handles {
+    /* 4.a  Nodes (double border for roots) */
+    for (ty, (h, label)) in &handles {
         let shape = if matches!(ty, Ty::TypeVar(_)) {
             "ellipse"
         } else {
             "box"
         };
-        let mut attrs = format!("shape = {}", shape);
-
-        if root_of[&h] == h {
-            attrs.push_str(", peripheries = 2"); // double border
-        }
-
+        let periph = if root_of.get(h).map(|h| h.0) == Some(*h) {
+            "peripheries=2,"
+        } else {
+            ""
+        };
         writeln!(
             w,
-            "    n{} [label = \"{}\", {}];",
-            h,
-            dot_escape(&format!("{:?}", ty)),
-            attrs
+            "    n{h} [label=\"{}\", {}shape={shape}];",
+            dot_escape(&format!("{label:?}\n{ty:?}")),
+            periph
         )?;
     }
 
-    // 4.b  Edges
+    /* 4.b  Edges */
     for e in edges {
+        let extras = if e.extra_attrs.is_empty() {
+            String::new()
+        } else {
+            format!(",{}", e.extra_attrs)
+        };
         writeln!(
             w,
-            "    n{} -> n{} [label = \"{}\", arrowsize = 0.8];",
+            "    n{} -> n{} [label=\"{}\"{extras}];",
             e.from,
             e.to,
             dot_escape(&e.label)
@@ -158,7 +214,7 @@ where
     Ok(())
 }
 
-/// Escape quotes/backslashes for DOT labels.
+/* 5.  Helper – escape quotes/backslashes so DOT stays valid */
 fn dot_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\").replace('\"', "\\\"")
 }

@@ -1,8 +1,9 @@
 #[cfg(test)]
 use crate::{
-    SourceFile, SymbolTable, Typed, compiling::compilation_session::SharedCompilationSession,
-    diagnostic::Diagnostic, environment::Environment, parsing::expr_id::ExprID, ty::Ty,
-    type_checker::TypeError, type_var_context::TypeVarContext, typed_expr::TypedExpr,
+    ExprMetaStorage, SourceFile, SymbolTable, Typed,
+    compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
+    environment::Environment, parsing::expr_id::ExprID, ty::Ty, type_checker::TypeError,
+    type_var_context::TypeVarContext, typed_expr::TypedExpr,
 };
 
 pub mod conformance_checker;
@@ -23,6 +24,8 @@ pub mod type_var_id;
 pub mod typed_expr;
 
 #[cfg(test)]
+pub mod ascii_dump;
+#[cfg(test)]
 pub mod dumb_dot;
 #[cfg(test)]
 pub mod type_checker_tests;
@@ -35,6 +38,7 @@ pub struct CheckResult {
     pub env: Environment,
     pub symbols: SymbolTable,
     pub type_var_context: TypeVarContext,
+    pub meta: ExprMetaStorage,
 }
 
 #[cfg(test)]
@@ -94,14 +98,23 @@ impl CheckResult {
 
 #[cfg(test)]
 pub fn check(input: &str) -> Result<CheckResult, TypeError> {
-    use crate::compiling::driver::Driver;
+    use crate::{ExprMetaStorage, compiling::driver::Driver};
     use std::path::PathBuf;
 
     let path = &PathBuf::from("-");
     let mut driver = Driver::new(Default::default());
     driver.update_file(path, input.into());
-    let typed_compilation_unit = driver.check().into_iter().next().unwrap();
+    let units = driver.check();
+    let typed_compilation_unit = units.clone().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+
+    let mut merged = ExprMetaStorage::default();
+
+    for unit in units {
+        for file in unit.stage.files {
+            merged.merge(&file.meta.borrow());
+        }
+    }
 
     for diagnostic in driver.session.lock().unwrap().diagnostics_for(path) {
         tracing::error!("{diagnostic:?}");
@@ -113,6 +126,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
         type_var_context: typed_compilation_unit.env.context.clone(),
         env: typed_compilation_unit.env,
         symbols: driver.symbol_table,
+        meta: merged,
     })
 }
 
@@ -129,7 +143,14 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
     });
     driver.update_file(path, input.into());
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
+
+    let mut merged = ExprMetaStorage::default();
+
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+
+    for file in &typed_compilation_unit.stage.files {
+        merged.merge(&file.meta.borrow());
+    }
 
     for diagnostic in driver.session.lock().unwrap().diagnostics_for(path) {
         tracing::error!("{diagnostic:?}");
@@ -141,6 +162,7 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
         type_var_context: typed_compilation_unit.env.context.clone(),
         env: typed_compilation_unit.env,
         symbols: driver.symbol_table,
+        meta: merged,
     })
 }
 // pub fn check_with_symbols(input: &str) -> Result<(SourceFile<Typed>, SymbolTable), TypeError> {

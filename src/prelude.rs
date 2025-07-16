@@ -91,7 +91,7 @@ pub fn _compile_prelude() -> Prelude {
             }
         }
 
-        tracing::error!(
+        panic!(
             "Prelude did not compile cleanly: {:#?}",
             session.diagnostics
         )

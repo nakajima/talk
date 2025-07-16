@@ -631,15 +631,18 @@ impl<'a> TypeChecker<'a> {
         expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let Some(Ty::Enum(enum_id, _)) = expected else {
-            unreachable!("should always be called with expected = Enum, got: {expected:?}",);
+        let Some(Ty::Enum(enum_id, _)) = env.selfs.last().cloned() else {
+            unreachable!(
+                "should always be called with expected = Enum, got: {expected:?}, self: {:?}",
+                env.selfs.last()
+            );
         };
         let values = self.infer_nodes(values, env)?;
-        let ty = Ty::EnumVariant(*enum_id, values.iter().map(|v| v.ty.clone()).collect());
+        let ty = Ty::EnumVariant(enum_id, values.iter().map(|v| v.ty.clone()).collect());
 
         Ok(TypedExpr {
             id,
-            expr: typed_expr::Expr::EnumVariant(ResolvedName(*enum_id, name.name_str()), values),
+            expr: typed_expr::Expr::EnumVariant(ResolvedName(enum_id, name.name_str()), values),
             ty,
         })
     }
@@ -819,7 +822,7 @@ impl<'a> TypeChecker<'a> {
         );
 
         env.selfs.push(ty.clone());
-        let body = Box::new(self.infer_node(body, env, &None)?);
+        let body = self.infer_node(body, env, &None)?;
         env.selfs.pop();
 
         Ok(TypedExpr {
@@ -828,7 +831,7 @@ impl<'a> TypeChecker<'a> {
                 name: ResolvedName(*symbol_id, name_str.to_string()),
                 generics: inferred_generics,
                 conformances: self.infer_nodes(conformances, env)?,
-                body,
+                body: Box::new(body),
             },
             ty,
         })
@@ -1045,6 +1048,21 @@ impl<'a> TypeChecker<'a> {
                     Box::new(ret_var.clone()),
                     inferred_type_args.iter().map(|a| a.ty.clone()).collect(),
                 );
+
+                // if let Ty::TypeVar(type_var) = &callee.ty
+                //     && type_var.id == 216
+                //     && let Ty::Struct(sym, _) = &expected_callee_ty
+                //     && sym == &SymbolID::STRING
+                // {
+                //     panic!("It's all wrong");
+                // }
+                if callee.id == ExprID(458) {
+                    // panic!(
+                    //     "it's all wrong:\ncallee_ty: {:?}\nexpected_callee_ty: {expected_callee_ty:?}\nexpected: {expected:?}",
+                    //     callee.ty
+                    // );
+                }
+
                 env.constrain(Constraint::Equality(
                     callee.id,
                     callee.ty.clone(),
@@ -1331,8 +1349,9 @@ impl<'a> TypeChecker<'a> {
             param_vars.push(param_ty);
         }
 
+        tracing::info!("Annotated ret ty: {annotated_ret_ty:?}");
         let ret_ty =
-            self.infer_node(body, env, &annotated_ret_ty.as_ref().map(|t| t.ty.clone()))?;
+            self.infer_node(body, env, &None)?;
 
         if let Some(annotated_ret_ty) = &annotated_ret_ty
             && let Some(ret_id) = ret
@@ -1435,7 +1454,6 @@ impl<'a> TypeChecker<'a> {
                     if let Ty::Protocol(symbol_id, _) = self_ {
                         Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id))
                     } else {
-                        tracing::error!("Name::_Self -> {self_:?}");
                         self_.clone()
                     }
                 } else {
@@ -1596,7 +1614,7 @@ impl<'a> TypeChecker<'a> {
         let mut typed_items = vec![];
 
         for (i, item) in items.iter().enumerate() {
-            let typed_item = self.infer_node(item, env, expected)?;
+            let typed_item = self.infer_node(item, env, &None)?;
             let ty = typed_item.ty.clone();
             typed_items.push(typed_item);
 

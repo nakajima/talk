@@ -3,6 +3,7 @@ mod tests {
     use crate::{
         SymbolID, any_typed, assert_eq_diff, check,
         diagnostic::{Diagnostic, DiagnosticKind},
+        dumb_dot::dump_unification_dot,
         expr_id::ExprID,
         name::ResolvedName,
         ty::Ty,
@@ -1511,7 +1512,15 @@ mod tests {
 
     #[test]
     fn checks_binary_expression() {
-        assert_eq!(check("1 + 2").unwrap().first_root().ty, Ty::Int);
+        let checked = check("1 + 2").unwrap();
+        dump_unification_dot(
+            &checked.type_var_context.history,
+            "unification.dot",
+            &checked.meta,
+            &"1 + 2".to_string(),
+        )
+        .unwrap();
+        assert_eq!(checked.first_root().ty, Ty::Int);
         assert_eq!(check("1.1 + 2.1").unwrap().first_root().ty, Ty::Float);
     }
 

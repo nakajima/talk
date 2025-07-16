@@ -38,6 +38,10 @@ impl ExprMetaStorage {
         self.storage.get(id)
     }
 
+    pub fn merge(&mut self, other: &ExprMetaStorage) {
+        self.storage.extend(other.storage.clone());
+    }
+
     pub fn insert(&mut self, id: ExprID, meta: ExprMeta) {
         self.storage.insert(id, meta);
     }
