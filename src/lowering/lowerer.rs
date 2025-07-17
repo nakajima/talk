@@ -1644,13 +1644,8 @@ impl<'a> Lowerer<'a> {
 
                 if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
-                    let symbol_id = self
-                        .symbol_table
-                        .symbol_for_expr(&method.expr_id)
-                        .unwrap_or(*struct_id);
-                    let name =
-                        ResolvedName(symbol_id, format!("{}_{name}", struct_def.name_str))
-                            .mangled(&method.ty);
+                    let name = ResolvedName(*struct_id, format!("{}_{name}", struct_def.name_str))
+                        .mangled(&method.ty);
                     self.push_instr(Instr::Ref(
                         func,
                         typed_expr.ty.to_ir(self),
@@ -2301,26 +2296,15 @@ impl<'a> Lowerer<'a> {
             Ty::Struct(struct_id, _) => {
                 let struct_def = self.env.lookup_struct(struct_id)?;
                 let method = struct_def.methods.iter().find(|m| m.name == name)?;
-                let symbol_id = self
-                    .symbol_table
-                    .symbol_for_expr(&method.expr_id)
-                    .unwrap_or(*struct_id);
                 Some(format!(
                     "@_{}_{}_{}",
-                    symbol_id.0, struct_def.name_str, method.name
+                    struct_id.0, struct_def.name_str, method.name
                 ))
             }
             Ty::Enum(enum_id, _) => {
                 let def = self.env.lookup_enum(enum_id)?;
                 let method = def.methods.iter().find(|m| m.name == name)?;
-                let symbol_id = self
-                    .symbol_table
-                    .symbol_for_expr(&method.expr_id)
-                    .unwrap_or(*enum_id);
-                Some(format!(
-                    "@_{}_{}_{}",
-                    symbol_id.0, def.name_str, method.name
-                ))
+                Some(format!("@_{}_{}_{}", enum_id.0, def.name_str, method.name))
             }
             Ty::TypeVar(_type_var)
                 if let conformances = self
@@ -2341,13 +2325,9 @@ impl<'a> Lowerer<'a> {
                 for conformance in &conformances {
                     let protocol_def = self.env.lookup_protocol(&conformance.protocol_id)?;
                     if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
-                        let symbol_id = self
-                            .symbol_table
-                            .symbol_for_expr(&method.expr_id)
-                            .unwrap_or(protocol_def.symbol_id);
                         result = Some(format!(
                             "@_{}_{}_{}",
-                            symbol_id.0, protocol_def.name_str, method.name
+                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
                         ));
 
                         break;
@@ -2356,13 +2336,9 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .find(|m| m.name == name)
                     {
-                        let symbol_id = self
-                            .symbol_table
-                            .symbol_for_expr(&method.expr_id)
-                            .unwrap_or(protocol_def.symbol_id);
                         result = Some(format!(
                             "@_{}_{}_{}",
-                            symbol_id.0, protocol_def.name_str, method.name
+                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
                         ));
 
                         break;

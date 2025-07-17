@@ -266,10 +266,4 @@ impl SymbolTable {
     pub fn get_mut(&mut self, symbol_id: &SymbolID) -> Option<&mut SymbolInfo> {
         self.symbols.get_mut(symbol_id)
     }
-
-    pub fn symbol_for_expr(&self, expr_id: &ExprID) -> Option<SymbolID> {
-        self.symbols
-            .iter()
-            .find_map(|(id, info)| if info.expr_id == *expr_id { Some(*id) } else { None })
-    }
 }
