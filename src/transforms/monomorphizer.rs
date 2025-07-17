@@ -587,42 +587,42 @@ mod tests {
 
         assert_lowered_function!(
             monomorphed,
-            "@_48_Array_get<ptr int>",
+            format!("@_{}_Array_get<ptr int>", SymbolID::ARRAY.0),
             IRFunction {
                 debug_info: Default::default(),
-                name: "@_48_Array_get<ptr int>".into(),
+                name: format!("@_{}_Array_get<ptr int>", SymbolID::ARRAY.0),
                 ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
                 blocks: vec![BasicBlock {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::GetElementPointer {
-                            dest: Register(2),
+                            dest: Register(3),
                             base: Register(0),
                             ty: IRType::array(IRType::Int),
                             index: IRValue::ImmediateInt(2)
                         },
                         Instr::Load {
-                            dest: Register(3),
+                            dest: Register(4),
                             ty: IRType::POINTER,
-                            addr: Register(2)
+                            addr: Register(3)
                         },
                         Instr::GetElementPointer {
                             dest: Register(5),
-                            base: Register(3),
+                            base: Register(4),
                             ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: IRValue::Register(Register(1))
                         },
                         Instr::Load {
-                            dest: Register(4),
+                            dest: Register(2),
                             ty: IRType::Int,
                             addr: Register(5)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(4).into()))
+                        Instr::Ret(IRType::Int, Some(Register(2).into()))
                     ]
                 }],
-                env_ty: Some(IRType::array(IRType::TypeVar("T77".into()))),
+                env_ty: Some(IRType::array(IRType::Int)),
                 env_reg: Some(Register(0)),
                 size: 6,
             }
