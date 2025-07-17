@@ -1017,7 +1017,7 @@ impl<'a> Lowerer<'a> {
 
         let func = current_function.export(
             init_func_ty.to_ir(self),
-            ResolvedName(*symbol_id, format!("{name_str}_init")).mangled(&init_func_ty),
+            ResolvedName(*symbol_id, name_str.to_string()).init_fn_name(),
             Some(type_def.ty().to_ir(self)),
             Some(env),
             &self.source_file,
@@ -1032,7 +1032,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         type_id: &SymbolID,
         func_id: &TypedExpr,
-        name: &ResolvedName,
+        method_name: &ResolvedName,
     ) -> Option<Register> {
         let (_ty, type_def, typed_func, env, ret) = self.setup_self_context(type_id, func_id)?;
 
@@ -1054,7 +1054,7 @@ impl<'a> Lowerer<'a> {
         let current_function = self.current_functions.pop()?;
         let func = current_function.export(
             typed_func.ty.to_ir(self),
-            ResolvedName(name.0, format!("{}_{}", type_def.name(), name.1)).mangled(&typed_func.ty),
+            ResolvedName(method_name.0, type_def.name().to_string()).method_fn_name(&method_name.1),
             Some(type_def.ty().to_ir(self)),
             Some(env),
             &self.source_file,

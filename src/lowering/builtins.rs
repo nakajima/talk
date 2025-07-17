@@ -6,7 +6,6 @@ use crate::{
         instr::Instr,
         ir_error::IRError,
         ir_type::IRType,
-        ir_value::IRValue,
         lowerer::{Lowerer, TypedRegister},
         register::Register,
     },
@@ -48,7 +47,7 @@ fn lower_alloc(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
     args: &[TypedRegister],
-    arg_exprs: &[TypedExpr],
+    _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
@@ -171,7 +170,7 @@ fn lower_load(
 fn lower_ir_instr(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[TypedRegister],
+    _args: &[TypedRegister],
     arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let Ty::Func(_, _, _) = &typed_callee.ty else {
