@@ -1082,7 +1082,7 @@ impl<'a> Lowerer<'a> {
 
         let stub_function = IRFunction {
             ty: Ty::Func(params, ret, generics).to_ir(self),
-            name: format!("@_{}_{}_{}", protocol_name.0.0, protocol_name.1, name.1),
+            name: protocol_name.method_fn_name(&name.1), // format!("@_{}_{}_{}", protocol_name.0.0, protocol_name.1, name.1),
             blocks: vec![],
             env_ty: Some(type_var.to_ir(self)),
             env_reg: None,
@@ -1644,8 +1644,8 @@ impl<'a> Lowerer<'a> {
 
                 if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
-                    let name = ResolvedName(*struct_id, format!("{}_{name}", struct_def.name_str))
-                        .mangled(&method.ty);
+                    let name = ResolvedName(struct_def.symbol_id, struct_def.name_str.to_string())
+                        .method_fn_name(&method.name);
                     self.push_instr(Instr::Ref(
                         func,
                         typed_expr.ty.to_ir(self),
@@ -2245,8 +2245,8 @@ impl<'a> Lowerer<'a> {
             Box::new(ty.clone()),
             vec![], // No generics on init
         );
-        let init_func_name = ResolvedName(*struct_id, format!("{}_init", struct_def.name_str))
-            .mangled(&init_func_ty);
+
+        let init_func_name = ResolvedName(*struct_id, struct_def.name_str).init_fn_name();
 
         // 3. Call the initializer function
         let initialized_struct_reg = self.allocate_register();
