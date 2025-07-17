@@ -17,6 +17,10 @@ pub enum Ty {
     Bool,
     Float,
     Init(#[drive(skip)] SymbolID, Vec<Ty> /* params */),
+    Method {
+        self_ty: Box<Ty>,
+        func: Box<Ty>,
+    },
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
@@ -60,6 +64,18 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
+            Ty::Method {
+                func: box Ty::Func(params, _, _),
+                ..
+            } => write!(
+                f,
+                "method({})",
+                params
+                    .iter()
+                    .map(|p| format!("{p}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
             Ty::Func(params, ty, _) => write!(
                 f,
                 "func({}) -> {ty}",
@@ -96,6 +112,7 @@ impl Display for Ty {
             }),
             Ty::Pointer => write!(f, "pointer"),
             Ty::Protocol(sym, _) => write!(f, "{sym:?} (protocol)"),
+            _ => write!(f, "unknown"),
         }
     }
 }

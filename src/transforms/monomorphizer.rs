@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use tracing::info_span;
+
 use crate::{
     environment::Environment,
     lowering::{
@@ -191,7 +193,7 @@ impl<'a> Monomorphizer<'a> {
         self.currently_monomorphizing_stack
             .push(function.name.clone());
 
-        tracing::info!("monomorphizing: {mangled_name} -> {expected_ret:?} {substitutions:?}");
+        let _s = info_span!("monomorphizing", name = format!("{mangled_name}")).entered();
 
         let IRType::Func(params, ret) = &function.ty else {
             unreachable!()
@@ -215,7 +217,11 @@ impl<'a> Monomorphizer<'a> {
         tracing::info!(
             "monomorphized {} ({}): {:?}, {:#?}",
             mangled_name,
-            Self::is_generic(&monomorphized_function),
+            if Self::is_generic(&monomorphized_function) {
+                "still generic"
+            } else {
+                "done"
+            },
             Self::apply_type(monomorphized_function.ret(), substitutions),
             substitutions
         );
@@ -596,30 +602,30 @@ mod tests {
                     id: BasicBlockID(0),
                     instructions: vec![
                         Instr::GetElementPointer {
-                            dest: Register(3),
+                            dest: Register(2),
                             base: Register(0),
                             ty: IRType::array(IRType::Int),
                             index: IRValue::ImmediateInt(2)
                         },
                         Instr::Load {
-                            dest: Register(4),
+                            dest: Register(3),
                             ty: IRType::POINTER,
-                            addr: Register(3)
+                            addr: Register(2)
                         },
                         Instr::GetElementPointer {
                             dest: Register(5),
-                            base: Register(4),
+                            base: Register(3),
                             ty: IRType::TypedBuffer {
                                 element: IRType::Int.into()
                             },
                             index: IRValue::Register(Register(1))
                         },
                         Instr::Load {
-                            dest: Register(2),
+                            dest: Register(4),
                             ty: IRType::Int,
                             addr: Register(5)
                         },
-                        Instr::Ret(IRType::Int, Some(Register(2).into()))
+                        Instr::Ret(IRType::Int, Some(Register(4).into()))
                     ]
                 }],
                 env_ty: Some(IRType::array(IRType::Int)),

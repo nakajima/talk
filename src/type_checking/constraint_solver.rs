@@ -697,6 +697,10 @@ impl<'a> ConstraintSolver<'a> {
 
                 Ty::Init(*struct_id, applied_params)
             }
+            Ty::Method { self_ty, func } => Ty::Method {
+                self_ty: Self::substitute_ty_with_map(self_ty, substitutions).into(),
+                func: Self::substitute_ty_with_map(func, substitutions).into(),
+            },
             Ty::Func(params, returning, generics) => {
                 let applied_params = params
                     .iter()

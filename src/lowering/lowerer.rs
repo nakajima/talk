@@ -86,6 +86,7 @@ impl Ty {
                 items.iter().map(|t| t.to_ir(lowerer)).collect(),
                 Box::new(ty.to_ir(lowerer)),
             ),
+            Ty::Method { func, .. } => func.to_ir(lowerer),
             Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.id)),
             Ty::Enum(symbol_id, generics) => IRType::Enum(
                 *symbol_id,
@@ -959,9 +960,19 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        self.current_functions.push(CurrentFunction::new(Some(
-            type_def.ty().to_ir(self).clone(),
-        )));
+        let self_ty = if let Ty::Method { self_ty, .. } = &typed_func.ty {
+            *self_ty.clone()
+        } else {
+            type_def.ty()
+        };
+
+        println!(
+            "\n\nsetup_self_context\ntype_def.ty: {:?}\nenv_ty: {self_ty:?}\n\n",
+            type_def.ty()
+        );
+
+        self.current_functions
+            .push(CurrentFunction::new(Some(self_ty.to_ir(self).clone())));
         let block_id = self.new_basic_block();
         self.set_current_block(block_id);
 

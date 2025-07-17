@@ -460,6 +460,10 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
             let new_params = params.iter().map(|p| walk(p, map)).collect();
             Ty::Init(*struct_id, new_params)
         }
+        Ty::Method { self_ty, func } => Ty::Method {
+            self_ty: walk(self_ty, map).into(),
+            func: walk(func, map).into(),
+        },
         Ty::Closure { func, captures } => {
             let func = Box::new(walk(func, map));
             Ty::Closure {
@@ -502,6 +506,10 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
             for param in params {
                 s.extend(free_type_vars(param));
             }
+        }
+        Ty::Method { self_ty, func } => {
+            s.extend(free_type_vars(self_ty));
+            s.extend(free_type_vars(func));
         }
         Ty::Func(params, ret, generics) => {
             for param in params {

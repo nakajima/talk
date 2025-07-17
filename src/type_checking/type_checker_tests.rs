@@ -1307,7 +1307,10 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+            Ty::Method {
+                self_ty: Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+            }
         );
     }
 
@@ -1363,7 +1366,10 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+            Ty::Method {
+                self_ty: Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+            }
         );
     }
 

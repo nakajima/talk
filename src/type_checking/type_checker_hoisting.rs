@@ -413,7 +413,7 @@ impl<'a> TypeChecker<'a> {
             let mut methods = vec![];
             for method in &placeholders.methods {
                 let typed_expr = self
-                    .infer_node(method.expr, env, &None)
+                    .infer_method(method.expr.id, method.expr, env)
                     .map_err(|e| (method.expr.id, e))?;
                 methods.push(Method {
                     name: method.name.clone(),

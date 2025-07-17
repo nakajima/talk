@@ -134,6 +134,10 @@ impl Substitutions {
             Ty::Init(struct_id, params) => {
                 Ty::Init(*struct_id, self.apply_multiple(params, depth + 1, context))
             }
+            Ty::Method { self_ty, func } => Ty::Method {
+                self_ty: self.apply(self_ty, depth + 1, context).into(),
+                func: self.apply(func, depth + 1, context).into(),
+            },
             Ty::Void => ty.clone(),
         }
     }
@@ -244,6 +248,27 @@ impl Substitutions {
             }
             (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
                 self.unify(&lhs_func, &rhs_func, context, generation)?;
+
+                Ok(())
+            }
+            (
+                Ty::Method {
+                    func: lhs_func,
+                    self_ty: lhs_self_ty,
+                },
+                Ty::Method {
+                    func: rhs_func,
+                    self_ty: rhs_self_ty,
+                },
+            ) => {
+                self.unify(&lhs_func, &rhs_func, context, generation)?;
+                self.unify(&lhs_self_ty, &rhs_self_ty, context, generation)?;
+
+                Ok(())
+            }
+            (func @ Ty::Func { .. }, Ty::Method { func: method, .. })
+            | (Ty::Method { func: method, .. }, func @ Ty::Func { .. }) => {
+                self.unify(&func, &method, context, generation)?;
 
                 Ok(())
             }

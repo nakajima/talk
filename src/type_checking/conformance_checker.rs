@@ -193,7 +193,7 @@ impl<'a> ConformanceChecker<'a> {
             .type_def()
             .cloned()
             .map(|t| t.member_ty_with_conformances(method_name, self.env))
-            && let Some(ty @ Ty::Func(_, _, _)) = ty
+            && let Some(ty @ Ty::Method { .. }) = ty
         {
             Ok(ty)
         } else if let Ty::TypeVar(_var) = &self.ty {

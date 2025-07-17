@@ -753,6 +753,55 @@ impl<'a> TypeChecker<'a> {
         })
     }
 
+    #[tracing::instrument(level = "DEBUG", skip(self, env,))]
+    pub(super) fn infer_method(
+        &mut self,
+        id: ExprID,
+        func_expr: &ParsedExpr,
+        env: &mut Environment,
+    ) -> Result<TypedExpr, TypeError> {
+        let ParsedExpr {
+            id: func_id,
+            expr:
+                parsed_expr::Expr::Func {
+                    // Initializers share their struct's symbol ID for convenience during
+                    // name resolution. However, using that ID when inferring the function
+                    // would overwrite the struct's own type scheme. The initializer does not
+                    // need a named symbol during inference, so we explicitly ignore its
+                    // resolved name here.
+                    name: _,
+                    generics,
+                    params,
+                    body,
+                    ret,
+                    captures,
+                },
+        } = func_expr
+        else {
+            return Err(TypeError::Unknown(format!(
+                "Did not get func for init: {func_expr:?}"
+            )));
+        };
+
+        // TODO: Add a test to make sure ret isn't set (it should never be for inits)
+
+        let func = self.infer_func(
+            *func_id, &None, generics, params, captures, body, ret, env, None,
+        )?;
+
+        #[allow(clippy::expect_used)]
+        let self_ty = env.selfs.last().expect("No self found for method");
+
+        Ok(TypedExpr {
+            id,
+            expr: func.expr,
+            ty: Ty::Method {
+                self_ty: Box::new(self_ty.clone()),
+                func: Box::new(func.ty),
+            },
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(level = "DEBUG", skip(self, env, expected))]
     fn infer_extension(
