@@ -2282,7 +2282,8 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        let type_var_id = if let IRType::TypeVar(type_var) = &receiver_ty.ty.to_ir(self) {
+        let receiver_ir_ty = receiver_ty.ty.to_ir(self);
+        let _type_var_id = if let IRType::TypeVar(type_var) = &receiver_ir_ty {
             Some(type_var.clone())
         } else {
             None
@@ -2291,7 +2292,7 @@ impl<'a> Lowerer<'a> {
         arg_registers.insert(
             0,
             TypedRegister {
-                ty: IRType::Pointer { hint: type_var_id },
+                ty: receiver_ir_ty,
                 register: receiver,
             },
         );

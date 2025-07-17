@@ -184,7 +184,7 @@ impl<'a> Monomorphizer<'a> {
         substitutions: &mut HashMap<IRType, IRType>,
         module: &IRModule,
     ) -> String {
-        let mangled_name = self.mangle_name(&function.name, &args);
+        let mangled_name = self.mangle_name(&function.name, &args, function.env_ty.is_some());
 
         if self.cache.contains(&mangled_name) {
             return mangled_name;
@@ -206,6 +206,20 @@ impl<'a> Monomorphizer<'a> {
         for (param, concrete_arg) in params.iter().zip(&args) {
             if contains_type_var(param) && !contains_type_var(concrete_arg) {
                 substitutions.insert(param.clone(), concrete_arg.clone());
+            }
+        }
+
+        if let (Some(env_ty), Some(first_arg)) = (&function.env_ty, args.first()) {
+            if let (
+                IRType::Struct(_, _, env_generics),
+                IRType::Struct(_, _, concrete_generics),
+            ) = (env_ty, first_arg)
+            {
+                for (env_gen, concrete_gen) in env_generics.iter().zip(concrete_generics) {
+                    if contains_type_var(env_gen) && !contains_type_var(concrete_gen) {
+                        substitutions.insert(env_gen.clone(), concrete_gen.clone());
+                    }
+                }
             }
         }
 
@@ -423,14 +437,21 @@ impl<'a> Monomorphizer<'a> {
         None
     }
 
-    fn mangle_name(&self, callee_name: &str, args: &[IRType]) -> String {
+    fn mangle_name(&self, callee_name: &str, args: &[IRType], has_env: bool) -> String {
         let mut mangled = String::new();
         mangled.push_str(callee_name);
         mangled.push('<');
         mangled.push_str(
             &args
                 .iter()
-                .map(|t| format!("{t}"))
+                .enumerate()
+                .map(|(i, t)| {
+                    if i == 0 && has_env {
+                        "ptr".to_string()
+                    } else {
+                        format!("{t}")
+                    }
+                })
                 .collect::<Vec<String>>()
                 .join(" "),
         );
