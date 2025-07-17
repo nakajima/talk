@@ -63,7 +63,7 @@ pub mod lowering_tests {
         prelude::compile_prelude,
     };
 
-    fn lower(input: &'static str) -> Result<IRModule, IRError> {
+    pub fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let mut driver = Driver::new(DriverConfig {
             executable: true,
             include_prelude: true,

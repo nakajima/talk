@@ -226,6 +226,8 @@ pub enum Expr {
         generics: Vec<ParsedExpr>,
         ret: Box<ParsedExpr>,
     },
+
+    Import(#[drive(skip)] Name),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut)]

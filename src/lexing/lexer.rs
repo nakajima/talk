@@ -294,6 +294,7 @@ impl<'a> Lexer<'a> {
             "break" => Break,
             "init" => Init,
             "protocol" => Protocol,
+            "import" => Import,
             _ => Identifier(string),
         }
     }

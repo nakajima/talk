@@ -4,6 +4,8 @@ use std::fmt::Display;
 pub enum TokenKind {
     LineComment(String),
 
+    Import,
+
     // Control flow
     If,
     Else,
@@ -145,6 +147,7 @@ impl TokenKind {
             TokenKind::Semicolon => ";",
             TokenKind::StringLiteral(string) => &format!("\"{string}\""),
             TokenKind::Extend => "extend",
+            TokenKind::Import => "import",
         };
 
         text.to_string()

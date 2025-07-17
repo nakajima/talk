@@ -369,11 +369,7 @@ impl NameResolver {
                                 "No type found for self".to_string(),
                             ));
                         }
-                    } else {
-                        let Some((symbol_id, depth)) = self.lookup(name_str) else {
-                            return Err(NameResolverError::UnresolvedName(name_str.to_string()));
-                        };
-
+                    } else if let Some((symbol_id, depth)) = self.lookup(name_str) {
                         tracing::info!("Replacing variable {name_str} with {symbol_id:?}");
 
                         symbol_table.add_map(
@@ -399,9 +395,11 @@ impl NameResolver {
                         }
 
                         Name::Resolved(symbol_id, name_str.to_string())
+                    } else {
+                        return Err(NameResolverError::UnresolvedName(name_str.to_string()));
                     };
                 }
-                Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => (),
+                Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType | Name::Imported(_, _) => (),
             },
             Expr::TypeRepr {
                 name,
@@ -442,7 +440,10 @@ impl NameResolver {
                             }
                         }
                     }
-                    Name::Resolved(_, _) | Name::_Self(_) | Name::SelfType => name.clone(), // Already resolved, no change needed to the name itself.
+                    Name::Resolved(_, _)
+                    | Name::_Self(_)
+                    | Name::SelfType
+                    | Name::Imported(_, _) => name.clone(), // Already resolved, no change needed to the name itself.
                 };
 
                 // Update the existing TypeRepr node with the resolved name.
@@ -1074,12 +1075,29 @@ impl NameResolver {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::{
-        any_expr, compiling::driver::Driver, diagnostic::DiagnosticKind, parsed_expr::Expr,
+        any_expr,
+        compiling::{
+            driver::Driver,
+            imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
+        },
+        diagnostic::DiagnosticKind,
+        parsed_expr::Expr,
+        ty::Ty,
     };
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
+        let mut driver = Driver::with_str(code);
+        driver.resolved_source_file(&PathBuf::from("-")).unwrap()
+    }
+
+    fn resolve_with_imports(
+        imports: &[ImportedModule],
+        code: &'static str,
+    ) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
         driver.resolved_source_file(&PathBuf::from("-")).unwrap()
     }
@@ -1836,6 +1854,43 @@ mod tests {
                 diagnostics.iter().find(|_| true).unwrap()
             );
         };
+    }
+
+    #[test]
+    fn imports_fn() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "importedFunc".to_string(),
+            ImportedSymbol {
+                module: "Imported".to_string(),
+                name: "importedFunc".to_string(),
+                symbol: SymbolID(123123123),
+            },
+        );
+
+        let resolved = resolve_with_imports(
+            &[ImportedModule {
+                module_name: "Imported".to_string(),
+                symbols,
+            }],
+            "
+        import Imported
+
+        importedFunc
+        ",
+        );
+
+        assert_eq!(
+            resolved.roots()[0],
+            any_expr!(Expr::Variable(Name::Imported(
+                SymbolID::resolved(1),
+                ImportedSymbol {
+                    module: "Imported".to_string(),
+                    name: "importedFunc".to_string(),
+                    symbol: SymbolID(123123123),
+                }
+            )))
+        )
     }
 }
 

@@ -1,4 +1,6 @@
-use crate::{SymbolID, ty::Ty, type_checker::TypeError};
+use crate::{
+    SymbolID, compiling::imported_module::ImportedSymbol, ty::Ty, type_checker::TypeError,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Name {
@@ -6,6 +8,7 @@ pub enum Name {
     Resolved(SymbolID, String),
     _Self(SymbolID),
     SelfType,
+    Imported(SymbolID, ImportedSymbol),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -35,6 +38,7 @@ impl Name {
             Name::Raw(_) => Err(TypeError::Unresolved(format!("{self:?} is unresolved"))),
             Name::Resolved(symbol_id, name_str) => Ok(ResolvedName(*symbol_id, name_str.clone())),
             Name::_Self(symbol_id) => Ok(ResolvedName(*symbol_id, "self".to_string())),
+            Name::Imported(symbol_id, _) => Ok(ResolvedName(*symbol_id, self.name_str())),
             Name::SelfType => Err(TypeError::Unresolved(format!(
                 "Name::SelfType {self:?} is unresolved"
             ))),
@@ -47,6 +51,7 @@ impl Name {
             Name::Resolved(_symbol_id, name_str) => name_str.into(),
             Name::_Self(_) => "self".into(),
             Name::SelfType => "Self".to_string(),
+            Name::Imported(_, imported) => imported.name.to_string(),
         }
     }
 
@@ -60,6 +65,7 @@ impl Name {
             Name::SelfType => Err(TypeError::Unknown(
                 "Cannot get symbol ID from unresolved Self".to_string(),
             )),
+            Name::Imported(symbol_id, _) => Ok(*symbol_id),
         }
     }
 }

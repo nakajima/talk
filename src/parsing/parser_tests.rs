@@ -1693,4 +1693,22 @@ mod tests {
             }))
         )
     }
+
+    #[test]
+    fn parses_import() {
+        let parsed = parse(
+            "
+            import Foo
+            import Bar
+            ",
+        );
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Import(Name::Raw("Foo".to_string())))
+        );
+        assert_eq!(
+            parsed.roots()[1],
+            any_expr!(Expr::Import(Name::Raw("Bar".to_string())))
+        );
+    }
 }

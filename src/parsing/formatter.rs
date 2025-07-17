@@ -138,6 +138,7 @@ impl<'a> Formatter<'a> {
             Expr::Tuple(items) => self.format_tuple(items),
             Expr::Block(stmts) => self.format_block(stmts),
             Expr::Break => text("break"),
+            Expr::Import(name) => join(vec![text("import"), text(name.name_str())], text(" ")),
             Expr::Call {
                 callee,
                 type_args,
@@ -909,6 +910,7 @@ impl<'a> Formatter<'a> {
             Name::Resolved(_, s) => text(s),
             Name::_Self(_) => text("self"),
             Name::SelfType => text("Self"),
+            Name::Imported(_, name) => text(&name.name),
         }
     }
 

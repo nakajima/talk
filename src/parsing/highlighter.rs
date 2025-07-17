@@ -97,6 +97,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Enum => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Case => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Import => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral(_) => self.make_string(tok, Kind::STRING, &mut tokens),
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => (),
@@ -195,6 +196,7 @@ impl<'a> Higlighter<'a> {
                 result.push(HighlightToken::new(Kind::KEYWORD, start, end));
                 result.extend(self.tokens_from_exprs(items));
             }
+            Expr::Import(_) => (), // Handled by keyword
             Expr::Break => result.push(HighlightToken::new(Kind::KEYWORD, start, end)),
             Expr::Block(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::Call {

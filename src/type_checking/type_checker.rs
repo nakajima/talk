@@ -1483,6 +1483,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let ty = match name {
+            Name::Imported(_, _) => todo!(),
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     if let Ty::Protocol(symbol_id, _) = self_ {
