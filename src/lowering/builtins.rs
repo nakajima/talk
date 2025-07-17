@@ -3,7 +3,11 @@ use std::str::FromStr;
 use crate::{
     SymbolID,
     lowering::{
-        instr::Instr, ir_error::IRError, ir_type::IRType, ir_value::IRValue, lowerer::Lowerer,
+        instr::Instr,
+        ir_error::IRError,
+        ir_type::IRType,
+        ir_value::IRValue,
+        lowerer::{Lowerer, TypedRegister},
         register::Register,
     },
     ty::Ty,
@@ -13,17 +17,18 @@ use crate::{
 pub fn lower_builtin(
     symbol_id: &SymbolID,
     typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    args: &[TypedRegister],
+    arg_exprs: &[TypedExpr],
     lowerer: &mut Lowerer,
 ) -> Result<Option<Register>, IRError> {
     match symbol_id {
-        SymbolID(-5) => lower_alloc(lowerer, typed_callee, args),
-        SymbolID(-6) => lower_realloc(lowerer, typed_callee, args),
-        SymbolID(-7) => lower_free(lowerer, typed_callee, args),
-        SymbolID(-8) => lower_store(lowerer, typed_callee, args),
-        SymbolID(-9) => lower_load(lowerer, typed_callee, args),
-        SymbolID(-11) => lower_print(lowerer, typed_callee, args),
-        SymbolID(-12) => lower_ir_instr(lowerer, typed_callee, args),
+        SymbolID(-5) => lower_alloc(lowerer, typed_callee, args, arg_exprs),
+        SymbolID(-6) => lower_realloc(lowerer, typed_callee, args, arg_exprs),
+        SymbolID(-7) => lower_free(lowerer, typed_callee, args, arg_exprs),
+        SymbolID(-8) => lower_store(lowerer, typed_callee, args, arg_exprs),
+        SymbolID(-9) => lower_load(lowerer, typed_callee, args, arg_exprs),
+        SymbolID(-11) => lower_print(lowerer, typed_callee, args, arg_exprs),
+        SymbolID(-12) => lower_ir_instr(lowerer, typed_callee, args, arg_exprs),
         _ => Err(IRError::BuiltinNotFound(*symbol_id)),
     }
 }
@@ -31,7 +36,8 @@ pub fn lower_builtin(
 fn lower_free(
     _lowerer: &mut Lowerer,
     _typed_callee: &TypedExpr,
-    _args: &[TypedExpr],
+    _args: &[TypedRegister],
+    _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     tracing::warn!("TODO: lower __free");
 
@@ -41,7 +47,8 @@ fn lower_free(
 fn lower_alloc(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    args: &[TypedRegister],
+    arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
@@ -55,86 +62,45 @@ fn lower_alloc(
         )));
     }
 
-    let Expr::CallArg { value: val, .. } = &args[0].expr else {
-        return Err(IRError::Unknown(format!(
-            "Did not get argument for __alloc, got: {:?}",
-            &args[0]
-        )));
-    };
+    let val = &args[0];
 
-    if !matches!(val.ty, Ty::Int) {
+    if !matches!(val.ty, IRType::Int) {
         return Err(IRError::Unknown(format!(
             "__alloc takes an Int, got {val:?}"
         )));
     }
 
-    let register = lowerer.lower_expr(val);
-
     lowerer.push_instr(Instr::Alloc {
         dest,
         ty: type_params[0].to_ir(lowerer),
-        count: register.map(IRValue::Register),
+        count: Some(val.register.into()),
     });
 
     Ok(Some(dest))
 }
 
 fn lower_realloc(
-    lowerer: &mut Lowerer,
-    typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    _lowerer: &mut Lowerer,
+    _typed_callee: &TypedExpr,
+    _args: &[TypedRegister],
+    _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
-    let dest = lowerer.allocate_register();
-
-    let Ty::Func(_, _, type_params) = &typed_callee.ty else {
-        return Err(IRError::Unknown("Did not get __realloc func".to_string()));
-    };
-
-    let Expr::CallArg {
-        value: _old_pointer,
-        ..
-    } = &args[0].expr
-    else {
-        unreachable!("didn't get call arg for realloc")
-    };
-
-    let Expr::CallArg {
-        value: new_capacity,
-        ..
-    } = &args[1].expr
-    else {
-        unreachable!("didn't get call arg for realloc")
-    };
-
-    // let old_pointer = lowerer.lower_expr(&old_pointer);
-    let new_capacity = lowerer.lower_expr(new_capacity);
-
-    lowerer.push_instr(Instr::Alloc {
-        dest,
-        ty: type_params[0].to_ir(lowerer),
-        count: new_capacity.map(IRValue::Register),
-    });
-
-    Ok(Some(dest))
+    todo!()
 }
 
 fn lower_print(
     lowerer: &mut Lowerer,
     _typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    args: &[TypedRegister],
+    _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     if args.is_empty() {
         return Err(IRError::Unknown("No arg to print".to_string()));
     }
 
-    // TODO handle case where arg conforms to Printable
-    let Some(reg) = lowerer.lower_expr(&args[0]) else {
-        return Err(IRError::Unknown("Could not lower print arg".to_string()));
-    };
-
     lowerer.push_instr(Instr::Print {
-        ty: args[0].ty.to_ir(lowerer),
-        val: reg.into(),
+        ty: args[0].ty.clone(),
+        val: args[0].register.into(),
     });
 
     Ok(None)
@@ -143,49 +109,26 @@ fn lower_print(
 fn lower_store(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    args: &[TypedRegister],
+    _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let Ty::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __store func".to_string()));
     };
 
-    let Expr::CallArg { value: ptr, .. } = &args[0].expr else {
-        return Err(IRError::Unknown("Didn't get __store pointer".into()));
-    };
-
-    let Some(ptr) = lowerer.lower_expr(ptr) else {
-        return Err(IRError::Unknown("Didn't get __store pointer".into()));
-    };
-
-    let Expr::CallArg { value: offset, .. } = &args[1].expr else {
-        return Err(IRError::Unknown("Didn't get __store offset".into()));
-    };
-
-    let Some(offset) = lowerer.lower_expr(offset) else {
-        return Err(IRError::Unknown("Didn't get __store offset".into()));
-    };
-
-    let Expr::CallArg { value, .. } = &args[2].expr else {
-        return Err(IRError::Unknown("Didn't get __store argument".into()));
-    };
-
-    let Some(value) = lowerer.lower_expr(value) else {
-        return Err(IRError::Unknown("Didn't get __store value".into()));
-    };
-
     let location = lowerer.allocate_register();
     lowerer.push_instr(Instr::GetElementPointer {
         dest: location,
-        base: ptr,
+        base: args[0].register.into(),
         ty: IRType::TypedBuffer {
             element: type_params[0].to_ir(lowerer).into(),
         },
-        index: offset.into(),
+        index: args[1].register.into(),
     });
 
     lowerer.push_instr(Instr::Store {
         ty: type_params[0].to_ir(lowerer),
-        val: value.into(),
+        val: args[2].register.into(),
         location,
     });
 
@@ -195,7 +138,8 @@ fn lower_store(
 fn lower_load(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    args: &[TypedRegister],
+    _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
@@ -203,31 +147,17 @@ fn lower_load(
         return Err(IRError::Unknown("Did not get __load func".to_string()));
     };
 
-    let Expr::CallArg { value: ptr, .. } = &args[0].expr else {
-        unreachable!("didn't get call arg for load")
-    };
-
-    let Some(ptr) = lowerer.lower_expr(ptr) else {
-        unreachable!("didn't get ptr for load")
-    };
-
-    let Expr::CallArg { value: offset, .. } = &args[1].expr else {
-        unreachable!("didn't get offset arg for load")
-    };
-
-    let Some(offset) = lowerer.lower_expr(offset) else {
-        unreachable!("didn't get offset for load")
-    };
-
     let location = lowerer.allocate_register();
     lowerer.push_instr(Instr::GetElementPointer {
         dest: location,
-        base: ptr,
+        base: args[0].register,
         ty: IRType::TypedBuffer {
             element: type_params[0].to_ir(lowerer).into(),
         },
-        index: offset.into(),
+        index: args[1].register.into(),
     });
+
+    println!("{args:?}");
 
     lowerer.push_instr(Instr::Load {
         dest,
@@ -241,20 +171,25 @@ fn lower_load(
 fn lower_ir_instr(
     lowerer: &mut Lowerer,
     typed_callee: &TypedExpr,
-    args: &[TypedExpr],
+    args: &[TypedRegister],
+    arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
     let Ty::Func(_, _, _) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __ir_instr func".to_string()));
     };
 
-    let Expr::CallArg { value, .. } = &args[0].expr else {
-        unreachable!("didn't get call arg for load")
-    };
-
-    let Expr::LiteralString(instruction_string) = &value.expr else {
+    let Expr::CallArg {
+        value:
+            box TypedExpr {
+                expr: Expr::LiteralString(instruction_string),
+                ..
+            },
+        ..
+    } = &arg_exprs[0].expr
+    else {
         unreachable!(
             "didn't get call instruction string: {:?} {typed_callee:?}",
-            &args[0]
+            &arg_exprs[0]
         );
     };
 

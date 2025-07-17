@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 
+use tracing::trace_span;
+
 use crate::{
     Lowered, SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable, Typed,
     analysis::{
@@ -12,6 +14,7 @@ use crate::{
     environment::Environment,
     expr::ExprMeta,
     expr_id::ExprID,
+    formatter::Formatter,
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -487,6 +490,13 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower_expr(&mut self, typed_expr: &TypedExpr) -> Option<Register> {
+        let _s = trace_span!(
+            "lower_expr",
+            id = typed_expr.id.0,
+            expr = format!("{:?}", typed_expr.expr)
+        )
+        .entered();
+
         self.current_expr_ids.push(typed_expr.id);
 
         let res = match &typed_expr.expr {
@@ -1963,20 +1973,26 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Register> {
         let mut arg_registers = vec![];
         let mut arg_tys = vec![];
-        for (i, arg) in args.iter().enumerate() {
-            if let Some(arg_reg) = self.lower_expr(arg) {
-                arg_tys.push(args[i].ty.clone());
-                arg_registers.push(TypedRegister {
-                    ty: args[i].ty.to_ir(self),
-                    register: arg_reg,
-                });
-            } else {
-                self.push_err(
-                    format!("Argument expression did not produce a value for call: {arg:?}",)
-                        .as_str(),
-                    arg,
-                );
-                continue;
+
+        if !matches!(
+            callee_typed_expr.expr, // Hack to avoid lowering args unnecessarily for __ir_instr
+            Expr::Variable(ResolvedName(SymbolID(-12), _))
+        ) {
+            for (i, arg) in args.iter().enumerate() {
+                if let Some(arg_reg) = self.lower_expr(arg) {
+                    arg_tys.push(args[i].ty.clone());
+                    arg_registers.push(TypedRegister {
+                        ty: args[i].ty.to_ir(self),
+                        register: arg_reg,
+                    });
+                } else {
+                    self.push_err(
+                        format!("Argument expression did not produce a value for call: {arg:?}",)
+                            .as_str(),
+                        arg,
+                    );
+                    continue;
+                }
             }
         }
 
@@ -2000,7 +2016,13 @@ impl<'a> Lowerer<'a> {
         if let Expr::Variable(ResolvedName(symbol, _)) = &callee_typed_expr.expr
             && crate::builtins::is_builtin_func(symbol)
         {
-            return match super::builtins::lower_builtin(symbol, callee_typed_expr, args, self) {
+            return match super::builtins::lower_builtin(
+                symbol,
+                callee_typed_expr,
+                &arg_registers,
+                args,
+                self,
+            ) {
                 Ok(res) => return res,
                 Err(e) => {
                     self.push_err(e.message().as_str(), callee_typed_expr);
@@ -2429,6 +2451,7 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(super) fn push_instr(&mut self, instr: Instr) {
+        tracing::trace!("pushing instr: {instr:?}");
         let expr_id = self.current_expr_ids.last().copied();
         #[allow(clippy::unwrap_used)]
         self.current_block_mut()
