@@ -966,11 +966,6 @@ impl<'a> Lowerer<'a> {
             type_def.ty()
         };
 
-        println!(
-            "\n\nsetup_self_context\ntype_def.ty: {:?}\nenv_ty: {self_ty:?}\n\n",
-            type_def.ty()
-        );
-
         self.current_functions
             .push(CurrentFunction::new(Some(self_ty.to_ir(self).clone())));
         let block_id = self.new_basic_block();
