@@ -1049,20 +1049,6 @@ impl<'a> TypeChecker<'a> {
                     inferred_type_args.iter().map(|a| a.ty.clone()).collect(),
                 );
 
-                // if let Ty::TypeVar(type_var) = &callee.ty
-                //     && type_var.id == 216
-                //     && let Ty::Struct(sym, _) = &expected_callee_ty
-                //     && sym == &SymbolID::STRING
-                // {
-                //     panic!("It's all wrong");
-                // }
-                if callee.id == ExprID(458) {
-                    // panic!(
-                    //     "it's all wrong:\ncallee_ty: {:?}\nexpected_callee_ty: {expected_callee_ty:?}\nexpected: {expected:?}",
-                    //     callee.ty
-                    // );
-                }
-
                 env.constrain(Constraint::Equality(
                     callee.id,
                     callee.ty.clone(),
@@ -1350,8 +1336,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         tracing::info!("Annotated ret ty: {annotated_ret_ty:?}");
-        let ret_ty =
-            self.infer_node(body, env, &None)?;
+        let ret_ty = self.infer_node(body, env, &None)?;
 
         if let Some(annotated_ret_ty) = &annotated_ret_ty
             && let Some(ret_id) = ret
