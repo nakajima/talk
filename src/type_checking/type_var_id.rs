@@ -1,6 +1,7 @@
 use crate::{SymbolID, expr_id::ExprID, name::Name, token_kind::TokenKind};
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TypeVarID {
     pub id: u32,
     pub kind: TypeVarKind,
@@ -110,7 +111,7 @@ impl std::fmt::Debug for TypeVarID {
     }
 }
 
-#[derive(Clone, PartialEq, Debug, Eq, Hash)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeVarKind {
     SelfVar(SymbolID),
     Blank,

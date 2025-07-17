@@ -6,8 +6,9 @@ use crate::{
     type_defs::{TypeParams, protocol_def::Conformance},
     type_var_id::TypeVarID,
 };
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Property {
     pub name: String,
     pub expr_id: ExprID,
@@ -43,14 +44,14 @@ pub struct RawInitializer<'a> {
     pub placeholder: TypeVarID,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Initializer {
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Method {
     pub name: String,
     pub expr_id: ExprID,
@@ -80,7 +81,7 @@ impl<'a> RawMethod<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructDef {
     pub symbol_id: SymbolID,
     pub name_str: String,

@@ -1,8 +1,9 @@
 use std::{fmt::Display, str::FromStr};
+use serde::{Serialize, Deserialize};
 
 use crate::lowering::{ir_error::IRError, register::Register};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IRValue {
     Register(Register),
     ImmediateInt(i64),

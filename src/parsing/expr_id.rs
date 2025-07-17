@@ -1,5 +1,7 @@
 #[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Default, Clone, Copy, Hash, Eq)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Default, Clone, Copy, Hash, Eq, Serialize, Deserialize)]
 pub struct ExprID(pub i32);
 
 impl ExprID {

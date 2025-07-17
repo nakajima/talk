@@ -48,7 +48,9 @@ impl std::error::Error for ExpandedDiagnostic {
     fn provide<'a>(&'a self, _request: &mut std::error::Request<'a>) {}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Position {
     pub line: u32,
     pub col: u32,

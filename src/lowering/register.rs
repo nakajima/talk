@@ -1,8 +1,9 @@
 use std::str::FromStr;
 
 use crate::lowering::ir_error::IRError;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct Register(pub i32);
 impl FromStr for Register {
     type Err = IRError;

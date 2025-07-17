@@ -7,8 +7,9 @@ use crate::{
     },
     type_var_id::TypeVarID,
 };
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Conformance {
     pub protocol_id: SymbolID,
     pub associated_types: Vec<Ty>,
@@ -23,7 +24,7 @@ impl Conformance {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtocolDef {
     pub symbol_id: SymbolID,
     pub name_str: String,

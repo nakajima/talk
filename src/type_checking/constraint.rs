@@ -1,4 +1,5 @@
 use derive_visitor::{Drive, Visitor};
+use serde::{Serialize, Deserialize};
 
 use crate::{
     SymbolID,
@@ -27,7 +28,7 @@ impl TypeVarVisitor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Constraint {
     Equality(ExprID, Ty, Ty),
     MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use crate::diagnostic::Position;
+use serde::{Serialize, Deserialize};
 
-#[derive(Default, Debug, Eq, PartialEq, Hash, Clone, PartialOrd, Ord)]
+#[derive(Default, Debug, Eq, PartialEq, Hash, Clone, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,
     pub end: u32,

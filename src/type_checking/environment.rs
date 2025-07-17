@@ -19,14 +19,16 @@ use super::{type_checker::Scheme, typed_expr::TypedExpr};
 
 pub type Scope = BTreeMap<SymbolID, Scheme>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RawTypeParameter {
     pub symbol_id: SymbolID,
     pub expr_id: ExprID,
     pub placeholder: TypeVarID,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TypeParameter {
     pub id: SymbolID,
     pub type_var: TypeVarID,
@@ -42,7 +44,7 @@ pub struct Environment {
     pub types: BTreeMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
     pub context: TypeVarContext,
-    next_id: i32,
+    pub next_id: i32,
     generation: u32,
 }
 

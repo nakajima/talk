@@ -13,6 +13,7 @@
 #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
 pub mod prelude;
+pub mod precompiled;
 
 pub mod builtins;
 pub use builtins::*;

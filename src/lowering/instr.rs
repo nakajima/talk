@@ -1,4 +1,5 @@
 use std::{fmt::Display, str::FromStr};
+use serde::{Serialize, Deserialize};
 
 use crate::lowering::{
     ir_error::IRError,
@@ -10,10 +11,10 @@ use crate::lowering::{
 };
 
 // Newtypes for complex arguments to make formatting unambiguous
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FuncName(pub String);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Callee {
     Register(Register),
     Name(String),
@@ -61,7 +62,7 @@ impl Callee {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Instr {
     #[doc = "$0 = int $1;"]
     ConstantInt(Register, i64),

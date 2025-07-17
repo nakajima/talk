@@ -1,8 +1,9 @@
 use std::str::FromStr;
 
 use crate::{SymbolID, lowering::parsing::parser::ParserError};
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IRType {
     Void,
     Int,

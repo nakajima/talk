@@ -12,6 +12,7 @@ use crate::{
         struct_def::{Initializer, Method, Property, StructDef},
     },
 };
+use serde::{Serialize, Deserialize};
 
 pub mod builtin_def;
 pub mod enum_def;
@@ -20,7 +21,7 @@ pub mod struct_def;
 
 pub type TypeParams = Vec<TypeParameter>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeDef {
     Enum(EnumDef),
     Struct(StructDef),

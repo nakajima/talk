@@ -1,8 +1,9 @@
 use std::str::FromStr;
 
 use crate::lowering::{ir_error::IRError, lowerer::BasicBlockID, register::Register};
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhiPredecessors(pub Vec<(Register, BasicBlockID)>);
 
 impl std::fmt::Display for PhiPredecessors {

@@ -5,6 +5,7 @@ use crate::{
     type_defs::{TypeParams, protocol_def::Conformance, struct_def::Method},
     type_var_id::TypeVarID,
 };
+use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawEnumVariant<'a> {
@@ -13,13 +14,13 @@ pub struct RawEnumVariant<'a> {
     pub values: &'a [ParsedExpr],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnumVariant {
     pub name: String,
     pub ty: Ty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnumDef {
     pub symbol_id: SymbolID,
     pub name_str: String,

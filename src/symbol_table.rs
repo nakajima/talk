@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
+use serde::{Serialize, Deserialize};
 
 use crate::{parsed_expr::ParsedExpr, parsing::expr_id::ExprID, span::Span};
 
-#[derive(Default, Copy, Clone, Eq, PartialOrd, Ord)]
+#[derive(Default, Copy, Clone, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SymbolID(pub i32);
 
 impl std::fmt::Debug for SymbolID {
@@ -65,7 +66,7 @@ impl SymbolID {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
     Self_,
     FuncDef,
@@ -85,7 +86,7 @@ pub enum SymbolKind {
     Protocol,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Definition {
     pub path: PathBuf,
     pub line: u32,
@@ -93,14 +94,16 @@ pub struct Definition {
     pub sym: Option<SymbolID>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PropertyInfo {
     pub name: String,
+    #[serde(skip)]
     pub type_id: Option<ParsedExpr>,
+    #[serde(skip)]
     pub default_value_id: Option<ParsedExpr>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
@@ -109,13 +112,13 @@ pub struct SymbolInfo {
     pub definition: Option<Definition>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeTable {
     pub properties: Vec<PropertyInfo>,
     pub initializers: Vec<ExprID>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolTable {
     symbols: BTreeMap<SymbolID, SymbolInfo>,
     next_id: i32,

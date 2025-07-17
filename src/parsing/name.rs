@@ -1,6 +1,7 @@
 use crate::{SymbolID, ty::Ty, type_checker::TypeError};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Name {
     Raw(String),
     Resolved(SymbolID, String),
@@ -8,7 +9,7 @@ pub enum Name {
     SelfType,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResolvedName(pub SymbolID, pub String);
 
 impl ResolvedName {

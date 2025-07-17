@@ -3,8 +3,9 @@ use crate::lowering::{
     lowerer::{BasicBlock, DebugInfo},
     register::Register,
 };
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IRFunction {
     pub ty: IRType,
     pub name: String,
@@ -12,6 +13,7 @@ pub struct IRFunction {
     pub env_ty: Option<IRType>,
     pub env_reg: Option<Register>,
     pub size: i32,
+    #[serde(skip)]
     pub debug_info: DebugInfo,
 }
 

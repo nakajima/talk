@@ -36,8 +36,9 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{Expr, Pattern, TypedExpr},
 };
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RefKind {
     Func(String),
 }
@@ -135,7 +136,7 @@ pub enum IRPattern {
     LiteralBool(bool),
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub struct BasicBlockID(pub u32);
 
 impl BasicBlockID {
@@ -173,7 +174,7 @@ pub struct CurrentBasicBlock {
     pub instructions: Vec<InstructionWithExpr>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BasicBlock {
     pub id: BasicBlockID,
     pub instructions: Vec<Instr>,
@@ -185,7 +186,7 @@ impl BasicBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedRegister {
     pub ty: IRType,
     pub register: Register,
@@ -197,7 +198,7 @@ impl TypedRegister {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RegisterList(pub Vec<TypedRegister>);
 
 impl RegisterList {

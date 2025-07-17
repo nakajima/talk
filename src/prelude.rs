@@ -1,6 +1,9 @@
 use lazy_static::lazy_static;
 use miette::Report;
 use std::{collections::BTreeMap, path::PathBuf, process::exit};
+use std::path::Path;
+
+use crate::precompiled::{CachedModule, load_module, save_module};
 
 use crate::{
     SymbolID, SymbolTable,
@@ -16,8 +19,19 @@ pub struct Prelude {
     pub global_scope: BTreeMap<String, SymbolID>,
 }
 
+fn load_or_compile_prelude() -> Prelude {
+    let path = Path::new("./prelude.bin");
+    if let Ok(cache) = load_module(path) {
+        return Prelude::from(cache);
+    }
+
+    let prel = _compile_prelude();
+    let _ = save_module(&CachedModule::from(&prel), path);
+    prel
+}
+
 lazy_static! {
-    static ref PRELUDE_TYPED: Prelude = _compile_prelude();
+    static ref PRELUDE_TYPED: Prelude = load_or_compile_prelude();
 }
 
 pub fn compile_prelude() -> &'static Prelude {

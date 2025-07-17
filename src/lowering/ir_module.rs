@@ -1,11 +1,12 @@
 use crate::lowering::ir_function::IRFunction;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IRConstantData {
     RawBuffer(Vec<u8>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IRModule {
     pub functions: Vec<IRFunction>,
     pub constants: Vec<IRConstantData>,

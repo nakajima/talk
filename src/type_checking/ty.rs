@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use derive_visitor::Drive;
+use serde::{Serialize, Deserialize};
 
 use crate::{
     SymbolID, builtin_type_def,
@@ -10,7 +11,7 @@ use crate::{
     type_var_id::TypeVarID,
 };
 
-#[derive(Clone, PartialEq, Debug, Drive)]
+#[derive(Clone, PartialEq, Debug, Drive, Serialize, Deserialize)]
 pub enum Ty {
     Void,
     Int,
