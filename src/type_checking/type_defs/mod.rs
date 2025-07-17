@@ -45,6 +45,14 @@ impl TypeDef {
         }
     }
 
+    pub fn init_fn_name(&self) -> String {
+        format!("@_{}_{}_init", self.symbol_id().0, self.name())
+    }
+
+    pub fn method_fn_name(&self, name: &str) -> String {
+        format!("@_{}_{}_{name}", self.symbol_id().0, self.name())
+    }
+
     pub fn instantiate(&self, env: &mut Environment) -> Ty {
         let scheme = Scheme::new(
             self.ty(),
@@ -171,6 +179,15 @@ impl TypeDef {
         }
     }
 
+    pub fn properties(&self) -> &[Property] {
+        match self {
+            Self::Enum(_) => &[],
+            Self::Struct(def) => &def.properties,
+            Self::Protocol(def) => &def.properties,
+            Self::Builtin(_) => &[],
+        }
+    }
+
     pub fn add_methods(&mut self, methods: Vec<Method>) {
         if methods.is_empty() {
             return;
@@ -181,6 +198,15 @@ impl TypeDef {
             Self::Struct(def) => def.methods.extend(methods),
             Self::Protocol(def) => def.methods.extend(methods),
             Self::Builtin(def) => def.methods.extend(methods),
+        }
+    }
+
+    pub fn methods(&self) -> &[Method] {
+        match self {
+            Self::Enum(def) => &def.methods,
+            Self::Struct(def) => &def.methods,
+            Self::Protocol(def) => &def.methods,
+            Self::Builtin(def) => &def.methods,
         }
     }
 

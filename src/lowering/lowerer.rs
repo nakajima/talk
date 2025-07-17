@@ -14,7 +14,6 @@ use crate::{
     environment::Environment,
     expr::ExprMeta,
     expr_id::ExprID,
-    formatter::Formatter,
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
@@ -1011,13 +1010,11 @@ impl<'a> Lowerer<'a> {
 
         // Override func type for init to always return the struct
         let init_func_ty = Ty::Func(params, Ty::Pointer.into(), generics);
-
-        let name_str = type_def.name();
         let current_function = self.current_functions.pop()?;
 
         let func = current_function.export(
             init_func_ty.to_ir(self),
-            ResolvedName(*symbol_id, name_str.to_string()).init_fn_name(),
+            type_def.init_fn_name(),
             Some(type_def.ty().to_ir(self)),
             Some(env),
             &self.source_file,
@@ -1054,7 +1051,7 @@ impl<'a> Lowerer<'a> {
         let current_function = self.current_functions.pop()?;
         let func = current_function.export(
             typed_func.ty.to_ir(self),
-            ResolvedName(method_name.0, type_def.name().to_string()).method_fn_name(&method_name.1),
+            type_def.method_fn_name(&method_name.1),
             Some(type_def.ty().to_ir(self)),
             Some(env),
             &self.source_file,
@@ -1080,9 +1077,15 @@ impl<'a> Lowerer<'a> {
         // Insert the self env param
         params.insert(0, type_var.clone());
 
+        #[allow(clippy::panic)]
+        let protocol_def = self
+            .env
+            .lookup_type(&protocol_name.0)
+            .unwrap_or_else(|| panic!("Did not get protocol {protocol_name:?}"));
+
         let stub_function = IRFunction {
             ty: Ty::Func(params, ret, generics).to_ir(self),
-            name: protocol_name.method_fn_name(&name.1), // format!("@_{}_{}_{}", protocol_name.0.0, protocol_name.1, name.1),
+            name: protocol_def.method_fn_name(&name.1),
             blocks: vec![],
             env_ty: Some(type_var.to_ir(self)),
             env_reg: None,
@@ -1613,12 +1616,11 @@ impl<'a> Lowerer<'a> {
 
         match &receiver.ty {
             Ty::Struct(struct_id, _) => {
-                let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned()
-                else {
+                let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
                     unreachable!("didn't get struct def");
                 };
 
-                if let Some(index) = struct_def.properties.iter().position(|p| p.name == name) {
+                if let Some(index) = type_def.properties().iter().position(|p| p.name == name) {
                     let member_reg = self.allocate_register();
 
                     self.push_instr(Instr::GetElementPointer {
@@ -1642,10 +1644,9 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
+                if let Some(method) = type_def.methods().iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
-                    let name = ResolvedName(struct_def.symbol_id, struct_def.name_str.to_string())
-                        .method_fn_name(&method.name);
+                    let name = type_def.method_fn_name(&method.name);
                     self.push_instr(Instr::Ref(
                         func,
                         typed_expr.ty.to_ir(self),
@@ -2216,9 +2217,9 @@ impl<'a> Lowerer<'a> {
         struct_id: &SymbolID,
         ty: &Ty,
         mut arg_registers: Vec<TypedRegister>,
-        arg_tys: &[Ty],
+        _arg_tys: &[Ty],
     ) -> Option<Register> {
-        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(struct_id).cloned() else {
+        let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
             unreachable!()
         };
 
@@ -2240,20 +2241,12 @@ impl<'a> Lowerer<'a> {
             },
         );
 
-        let init_func_ty = Ty::Func(
-            arg_tys.to_vec(),
-            Box::new(ty.clone()),
-            vec![], // No generics on init
-        );
-
-        let init_func_name = ResolvedName(*struct_id, struct_def.name_str).init_fn_name();
-
         // 3. Call the initializer function
         let initialized_struct_reg = self.allocate_register();
         self.push_instr(Instr::Call {
             dest_reg: initialized_struct_reg,
             ty: struct_ty,
-            callee: Callee::Name(init_func_name),
+            callee: Callee::Name(type_def.init_fn_name()),
             args: RegisterList(arg_registers),
         });
 
@@ -2293,18 +2286,10 @@ impl<'a> Lowerer<'a> {
         );
 
         let callee_name = match &receiver_ty.ty {
-            Ty::Struct(struct_id, _) => {
-                let struct_def = self.env.lookup_struct(struct_id)?;
-                let method = struct_def.methods.iter().find(|m| m.name == name)?;
-                Some(format!(
-                    "@_{}_{}_{}",
-                    struct_id.0, struct_def.name_str, method.name
-                ))
-            }
-            Ty::Enum(enum_id, _) => {
-                let def = self.env.lookup_enum(enum_id)?;
-                let method = def.methods.iter().find(|m| m.name == name)?;
-                Some(format!("@_{}_{}_{}", enum_id.0, def.name_str, method.name))
+            Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) => {
+                let type_def = self.env.lookup_type(symbol_id)?;
+                let method = type_def.methods().iter().find(|m| m.name == name)?;
+                Some(type_def.method_fn_name(&method.name))
             }
             Ty::TypeVar(_type_var)
                 if let conformances = self
@@ -2323,24 +2308,18 @@ impl<'a> Lowerer<'a> {
             {
                 let mut result = None;
                 for conformance in &conformances {
-                    let protocol_def = self.env.lookup_protocol(&conformance.protocol_id)?;
-                    if let Some(method) = protocol_def.methods.iter().find(|m| m.name == name) {
-                        result = Some(format!(
-                            "@_{}_{}_{}",
-                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
-                        ));
+                    let type_def = self.env.lookup_type(&conformance.protocol_id)?;
+                    if let Some(method) = type_def.methods().iter().find(|m| m.name == name) {
+                        result = Some(type_def.method_fn_name(&method.name));
 
                         break;
-                    } else if let Some(method) = protocol_def
-                        .method_requirements
-                        .iter()
-                        .find(|m| m.name == name)
+                    } else if let TypeDef::Protocol(protocol_def) = &type_def
+                        && let Some(method) = protocol_def
+                            .method_requirements
+                            .iter()
+                            .find(|m| m.name == name)
                     {
-                        result = Some(format!(
-                            "@_{}_{}_{}",
-                            protocol_def.symbol_id.0, protocol_def.name_str, method.name
-                        ));
-
+                        result = Some(type_def.method_fn_name(&method.name));
                         break;
                     }
                 }

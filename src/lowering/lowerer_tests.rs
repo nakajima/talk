@@ -1632,7 +1632,7 @@ pub mod lowering_tests {
                             ty: IRType::Int,
                             callee: Callee::Name(format!(
                                 "@_{}_Person_getAge",
-                                SymbolID::resolved(4).0
+                                SymbolID::resolved(1).0
                             )),
                             args: RegisterList(vec![TypedRegister::new(
                                 IRType::POINTER,

@@ -78,6 +78,7 @@ fn lower_alloc(
     Ok(Some(dest))
 }
 
+#[allow(clippy::todo)]
 fn lower_realloc(
     _lowerer: &mut Lowerer,
     _typed_callee: &TypedExpr,
@@ -118,7 +119,7 @@ fn lower_store(
     let location = lowerer.allocate_register();
     lowerer.push_instr(Instr::GetElementPointer {
         dest: location,
-        base: args[0].register.into(),
+        base: args[0].register,
         ty: IRType::TypedBuffer {
             element: type_params[0].to_ir(lowerer).into(),
         },

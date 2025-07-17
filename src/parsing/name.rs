@@ -20,14 +20,6 @@ impl ResolvedName {
         }
     }
 
-    pub fn init_fn_name(&self) -> String {
-        format!("@_{}_{}_init", self.0.0, self.1)
-    }
-
-    pub fn method_fn_name(&self, name: &str) -> String {
-        format!("@_{}_{}_{name}", self.0.0, self.1)
-    }
-
     pub fn name_str(&self) -> String {
         self.1.to_string()
     }
