@@ -9,6 +9,8 @@ use crate::SymbolInfo;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
+use crate::compiling::driver::ModuleEnvironment;
+use crate::compiling::imported_module::ImportedSymbol;
 use crate::diagnostic::Diagnostic;
 use crate::expr_id::ExprID;
 use crate::formatter::Formatter;
@@ -29,7 +31,7 @@ pub enum NameResolverError {
     MissingMethodName,
     Unknown(String),
     UnresolvedName(String),
-    Redeclaration(String, SymbolInfo),
+    Redeclaration(String, Box<SymbolInfo>),
 }
 
 struct CurrentFunction {
@@ -54,8 +56,39 @@ impl NameResolverError {
     }
 }
 
-pub struct NameResolver {
-    pub scopes: Vec<BTreeMap<String, SymbolID>>,
+#[derive(Default, Debug, Clone)]
+pub struct Scope {
+    pub defined: BTreeMap<String, SymbolID>,
+    pub imported: BTreeMap<String, (SymbolID, ImportedSymbol)>,
+}
+
+impl Scope {
+    pub fn new(defined: BTreeMap<String, SymbolID>) -> Self {
+        Self {
+            defined,
+            imported: Default::default(),
+        }
+    }
+
+    pub fn get_defined(&self, name: &str) -> Option<SymbolID> {
+        self.defined.get(name).cloned()
+    }
+
+    pub fn get_imported(&self, name: &str) -> Option<(SymbolID, ImportedSymbol)> {
+        self.imported.get(name).cloned()
+    }
+
+    pub fn define(&mut self, name: String, symbol: SymbolID) {
+        self.defined.insert(name, symbol);
+    }
+
+    pub fn import(&mut self, name: String, symbol: SymbolID, imported_symbol: ImportedSymbol) {
+        self.imported.insert(name, (symbol, imported_symbol));
+    }
+}
+
+pub struct NameResolver<'a> {
+    pub scopes: Vec<Scope>,
 
     // For resolving `self` references
     type_symbol_stack: Vec<SymbolID>,
@@ -68,13 +101,15 @@ pub struct NameResolver {
 
     session: SharedCompilationSession,
     path: PathBuf,
+    imported_modules: &'a ModuleEnvironment,
 }
 
-impl NameResolver {
+impl<'a> NameResolver<'a> {
     pub fn new(
-        initial_scope: BTreeMap<String, SymbolID>,
+        initial_scope: Scope,
         session: SharedCompilationSession,
         path: PathBuf,
+        imported_modules: &'a ModuleEnvironment,
     ) -> Self {
         NameResolver {
             scopes: vec![initial_scope],
@@ -84,6 +119,7 @@ impl NameResolver {
             scope_tree: Default::default(),
             session,
             path,
+            imported_modules,
         }
     }
 
@@ -144,6 +180,7 @@ impl NameResolver {
         hoist: bool,
     ) -> Result<Vec<ParsedExpr>, NameResolverError> {
         if hoist {
+            self.hoist_imports(exprs, meta, symbol_table)?;
             self.hoist_protocols(exprs, meta, symbol_table)?;
             self.hoist_enums(exprs, meta, symbol_table)?;
             self.hoist_funcs(exprs, meta, symbol_table)?;
@@ -395,6 +432,9 @@ impl NameResolver {
                         }
 
                         Name::Resolved(symbol_id, name_str.to_string())
+                    } else if let Some((symbol_id, imported_symbol)) = self.lookup_import(name_str)
+                    {
+                        Name::Imported(symbol_id, imported_symbol)
                     } else {
                         return Err(NameResolverError::UnresolvedName(name_str.to_string()));
                     };
@@ -707,7 +747,7 @@ impl NameResolver {
             {
                 return Err(NameResolverError::Redeclaration(
                     name_str.clone(),
-                    info.clone(),
+                    info.clone().into(),
                 ));
             }
 
@@ -909,6 +949,29 @@ impl NameResolver {
     }
 
     #[tracing::instrument(skip(self, meta, symbol_table, items))]
+    fn hoist_imports(
+        &mut self,
+        items: &mut [ParsedExpr],
+        meta: &ExprMetaStorage,
+        symbol_table: &mut SymbolTable,
+    ) -> Result<(), NameResolverError> {
+        for parsed_expr in items {
+            if let Expr::Import(name) = &parsed_expr.expr {
+                let Some(imported_module) = self.imported_modules.get(name) else {
+                    return Err(NameResolverError::Unknown(format!(
+                        "No module named {name} to import"
+                    )));
+                };
+
+                for sym in imported_module.symbols.values() {
+                    self.import(sym, parsed_expr.id, meta, symbol_table);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self, meta, symbol_table, items))]
     fn hoist_protocols(
         &mut self,
         items: &mut [ParsedExpr],
@@ -1034,7 +1097,42 @@ impl NameResolver {
         let Some(scope) = self.scopes.last_mut() else {
             return SymbolID(0);
         };
-        scope.insert(name.clone(), symbol_id);
+        scope.define(name.clone(), symbol_id);
+        if let Some(span) = meta.span(&expr_id) {
+            symbol_table.add_map(span, &symbol_id);
+        } else {
+            tracing::error!("No span for {name}");
+        }
+
+        symbol_id
+    }
+
+    #[tracing::instrument(skip(self, symbol_table, meta))]
+    fn import(
+        &mut self,
+        symbol: &ImportedSymbol,
+        expr_id: ExprID,
+        meta: &ExprMetaStorage,
+        symbol_table: &mut SymbolTable,
+    ) -> SymbolID {
+        let name = symbol.name.to_string();
+
+        if self.lookup(&name).is_some() {
+            tracing::warn!("Already declared name: {name}");
+        }
+
+        let symbol_id = symbol_table.add(&name, SymbolKind::Import(symbol.clone()), expr_id, None);
+
+        tracing::info!("Importing {name:?}");
+
+        if let Some(scope_id) = self.scope_tree_ids.last() {
+            self.scope_tree.add_symbol_to_scope(*scope_id, symbol_id);
+        }
+
+        let Some(scope) = self.scopes.last_mut() else {
+            return SymbolID(0);
+        };
+        scope.import(name.clone(), symbol_id, symbol.clone());
         if let Some(span) = meta.span(&expr_id) {
             symbol_table.add_map(span, &symbol_id);
         } else {
@@ -1046,10 +1144,20 @@ impl NameResolver {
 
     fn lookup(&self, name: &str) -> Option<(SymbolID, usize /* depth */)> {
         for (i, scope) in self.scopes.iter().rev().enumerate() {
-            if let Some(symbol_id) = scope.get(name) {
+            if let Some(symbol_id) = scope.get_defined(name) {
                 // The depth of the scope where the variable was found
                 let found_depth = self.scopes.len() - 1 - i;
-                return Some((*symbol_id, found_depth));
+                return Some((symbol_id, found_depth));
+            }
+        }
+
+        None
+    }
+
+    fn lookup_import(&self, name: &str) -> Option<(SymbolID, ImportedSymbol)> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(imported) = scope.get_imported(name) {
+                return Some(imported);
             }
         }
 
@@ -1082,11 +1190,10 @@ mod tests {
         any_expr,
         compiling::{
             driver::Driver,
-            imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
+            imported_module::{ImportedModule, ImportedSymbol},
         },
         diagnostic::DiagnosticKind,
         parsed_expr::Expr,
-        ty::Ty,
     };
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
@@ -1095,10 +1202,11 @@ mod tests {
     }
 
     fn resolve_with_imports(
-        imports: &[ImportedModule],
+        imports: Vec<ImportedModule>,
         code: &'static str,
     ) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
+        driver.import_modules(imports);
         driver.resolved_source_file(&PathBuf::from("-")).unwrap()
     }
 
@@ -1117,7 +1225,11 @@ mod tests {
         let file = driver.units[0]
             .clone()
             .parse(false)
-            .resolved(&mut driver.symbol_table, &driver.config)
+            .resolved(
+                &mut driver.symbol_table,
+                &driver.config,
+                &Default::default(),
+            )
             .source_file(&PathBuf::from("-"))
             .unwrap()
             .clone();
@@ -1838,7 +1950,7 @@ mod tests {
             kind:
                 DiagnosticKind::Resolve(NameResolverError::Redeclaration(
                     _,
-                    SymbolInfo {
+                    box SymbolInfo {
                         name: _,
                         kind: SymbolKind::Struct,
                         expr_id: _,
@@ -1869,9 +1981,10 @@ mod tests {
         );
 
         let resolved = resolve_with_imports(
-            &[ImportedModule {
+            vec![ImportedModule {
                 module_name: "Imported".to_string(),
                 symbols,
+                types: Default::default(),
             }],
             "
         import Imported
@@ -1881,7 +1994,7 @@ mod tests {
         );
 
         assert_eq!(
-            resolved.roots()[0],
+            resolved.roots()[1],
             any_expr!(Expr::Variable(Name::Imported(
                 SymbolID::resolved(1),
                 ImportedSymbol {

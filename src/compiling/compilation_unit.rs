@@ -6,12 +6,15 @@ use std::{
 
 use crate::{
     ExprMetaStorage, NameResolved, SourceFile, SymbolID, SymbolTable,
-    compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
+    compiling::{
+        compilation_session::SharedCompilationSession,
+        driver::{DriverConfig, ModuleEnvironment},
+    },
     diagnostic::Diagnostic,
     environment::Environment,
     lexer::{Lexer, LexerError},
     lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
-    name_resolver::NameResolver,
+    name_resolver::{NameResolver, Scope},
     parser::{Parser, ParserError},
     source_file,
     type_checker::{TypeChecker, TypeError},
@@ -131,10 +134,11 @@ impl CompilationUnit<Raw> {
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
         module: IRModule,
+        module_env: &ModuleEnvironment,
     ) -> CompilationUnit<Lowered> {
         let parsed = self.parse(driver_config.include_comments);
-        let resolved = parsed.resolved(symbol_table, driver_config);
-        let typed = resolved.typed(symbol_table, driver_config);
+        let resolved = parsed.resolved(symbol_table, driver_config, module_env);
+        let typed = resolved.typed(symbol_table, driver_config, module_env);
         typed.lower(symbol_table, driver_config, module)
     }
 }
@@ -156,6 +160,7 @@ impl CompilationUnit<Parsed> {
         self,
         symbol_table: &mut SymbolTable,
         config: &DriverConfig,
+        imported_modules: &ModuleEnvironment,
     ) -> CompilationUnit<Resolved> {
         let mut files = vec![];
         let mut global_scope = if config.include_prelude {
@@ -165,13 +170,14 @@ impl CompilationUnit<Parsed> {
         };
         for file in self.stage.files {
             let mut resolver = NameResolver::new(
-                global_scope.clone(),
+                Scope::new(global_scope.clone()),
                 self.session.clone(),
                 file.path.clone(),
+                imported_modules,
             );
             let resolved = resolver.resolve(file, symbol_table);
 
-            for (name, symbol) in resolver.scopes[0].clone().into_iter() {
+            for (name, symbol) in resolver.scopes[0].clone().defined.into_iter() {
                 global_scope.insert(name, symbol);
             }
 
@@ -208,6 +214,7 @@ impl CompilationUnit<Resolved> {
         mut self,
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
+        module_env: &ModuleEnvironment,
     ) -> CompilationUnit<Typed> {
         let mut files: Vec<SourceFile<source_file::Typed>> = vec![];
 
@@ -216,11 +223,23 @@ impl CompilationUnit<Resolved> {
             let meta = file.meta.borrow().clone();
 
             let mut typed = if driver_config.include_prelude {
-                TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
-                    .infer(&mut file, &mut self.env)
+                TypeChecker::new(
+                    self.session.clone(),
+                    symbol_table,
+                    file.path.clone(),
+                    &meta,
+                    module_env,
+                )
+                .infer(&mut file, &mut self.env)
             } else {
-                TypeChecker::new(self.session.clone(), symbol_table, file.path.clone(), &meta)
-                    .infer_without_prelude(&mut self.env, &mut file)
+                TypeChecker::new(
+                    self.session.clone(),
+                    symbol_table,
+                    file.path.clone(),
+                    &meta,
+                    module_env,
+                )
+                .infer_without_prelude(&mut self.env, &mut file)
             };
 
             if let Ok(mut solution) = self.env.flush_constraints(&meta) {

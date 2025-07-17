@@ -35,6 +35,7 @@ pub enum Expr {
     LiteralFloat(#[drive(skip)] String),
     LiteralTrue,
     LiteralFalse,
+    Import(#[drive(skip)] String),
     LiteralString(#[drive(skip)] String),
     Unary(#[drive(skip)] TokenKind, Box<TypedExpr>),
     Binary(Box<TypedExpr>, #[drive(skip)] TokenKind, Box<TypedExpr>),
@@ -183,6 +184,7 @@ impl TypedExpr {
             Expr::LiteralArray(items) => {
                 Self::apply_mult(items, substitutions, env);
             }
+            Expr::Import(_) => (),
             Expr::LiteralInt(_) => (),
             Expr::LiteralFloat(_) => (),
             Expr::LiteralTrue => (),
@@ -367,6 +369,7 @@ impl TypedExpr {
         match &self.expr {
             Expr::LiteralArray(items) => Self::find_in_err_res(items, id),
             Expr::LiteralInt(_) => Ok(()),
+            Expr::Import(_) => Ok(()),
             Expr::LiteralFloat(_) => Ok(()),
             Expr::LiteralTrue => Ok(()),
             Expr::LiteralFalse => Ok(()),

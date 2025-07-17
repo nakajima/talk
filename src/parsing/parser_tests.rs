@@ -1704,11 +1704,11 @@ mod tests {
         );
         assert_eq!(
             parsed.roots()[0],
-            any_expr!(Expr::Import(Name::Raw("Foo".to_string())))
+            any_expr!(Expr::Import("Foo".to_string()))
         );
         assert_eq!(
             parsed.roots()[1],
-            any_expr!(Expr::Import(Name::Raw("Bar".to_string())))
+            any_expr!(Expr::Import("Bar".to_string()))
         );
     }
 }

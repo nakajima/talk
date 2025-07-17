@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use talk::{
     analysis::module_pass_manager::ModulePassManager, compiling::driver::Driver,
@@ -21,7 +21,11 @@ fn bench_resolve(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                black_box(unit.resolved(&mut driver.symbol_table, &driver.config));
+                black_box(unit.resolved(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                ));
             }
         })
     });
@@ -32,8 +36,16 @@ fn bench_typecheck(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                let resolved = unit.resolved(&mut driver.symbol_table, &driver.config);
-                black_box(resolved.typed(&mut driver.symbol_table, &driver.config));
+                let resolved = unit.resolved(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                );
+                black_box(resolved.typed(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                ));
             }
         })
     });
@@ -44,8 +56,16 @@ fn bench_lower(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                let resolved = unit.resolved(&mut driver.symbol_table, &driver.config);
-                let typed = resolved.typed(&mut driver.symbol_table, &driver.config);
+                let resolved = unit.resolved(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                );
+                let typed = resolved.typed(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                );
                 let module = if driver.config.include_prelude {
                     prelude::compile_prelude().module.clone()
                 } else {
@@ -62,8 +82,16 @@ fn bench_passes(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                let resolved = unit.resolved(&mut driver.symbol_table, &driver.config);
-                let typed = resolved.typed(&mut driver.symbol_table, &driver.config);
+                let resolved = unit.resolved(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                );
+                let typed = resolved.typed(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    &Default::default(),
+                );
                 let module = if driver.config.include_prelude {
                     prelude::compile_prelude().module.clone()
                 } else {

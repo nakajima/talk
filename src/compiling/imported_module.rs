@@ -19,4 +19,5 @@ pub struct ImportedSymbol {
 pub struct ImportedModule {
     pub module_name: String,
     pub symbols: HashMap<String, ImportedSymbol>,
+    pub types: HashMap<SymbolID, Ty>,
 }

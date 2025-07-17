@@ -4,7 +4,10 @@ use tracing::trace_span;
 
 use crate::{
     ExprMetaStorage, NameResolved, SymbolID, SymbolTable, Typed,
-    compiling::compilation_session::SharedCompilationSession,
+    compiling::{
+        compilation_session::SharedCompilationSession,
+        imported_module::{ImportedModule, ImportedSymbol},
+    },
     conformance_checker::ConformanceError,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
@@ -116,6 +119,7 @@ pub struct TypeChecker<'a> {
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
     pub(super) meta: &'a ExprMetaStorage,
+    module_env: &'a HashMap<String, ImportedModule>,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -142,12 +146,14 @@ impl<'a> TypeChecker<'a> {
         symbol_table: &'a mut SymbolTable,
         path: PathBuf,
         meta: &'a ExprMetaStorage,
+        module_env: &'a HashMap<String, ImportedModule>,
     ) -> Self {
         Self {
             session,
             symbol_table,
             path,
             meta,
+            module_env,
         }
     }
 
@@ -231,6 +237,11 @@ impl<'a> TypeChecker<'a> {
 
         let mut ty = match &parsed_expr.expr {
             crate::parsed_expr::Expr::Incomplete(expr_id) => self.handle_incomplete(expr_id),
+            crate::parsed_expr::Expr::Import(name) => Ok(TypedExpr {
+                id: parsed_expr.id,
+                expr: typed_expr::Expr::Import(name.to_string()),
+                ty: Ty::Void,
+            }),
             crate::parsed_expr::Expr::LiteralTrue => {
                 checked_expected(expected, Ty::Bool)?;
                 Ok(TypedExpr {
@@ -1483,7 +1494,16 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let ty = match name {
-            Name::Imported(_, _) => todo!(),
+            Name::Imported(_, imported_symbol) => {
+                if let Some(ty) = self.import_ty(imported_symbol) {
+                    ty
+                } else {
+                    return Err(TypeError::Unknown(format!(
+                        "No type found for imported symbol: {imported_symbol:?}\nEnv:{:?}",
+                        self.module_env
+                    )));
+                }
+            }
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     if let Ty::Protocol(symbol_id, _) = self_ {
@@ -1993,5 +2013,13 @@ impl<'a> TypeChecker<'a> {
         };
 
         Ok(typed_pattern)
+    }
+
+    pub fn import_ty(&self, imported_symbol: &ImportedSymbol) -> Option<Ty> {
+        if let Some(module) = self.module_env.get(&imported_symbol.module) {
+            return module.types.get(&imported_symbol.symbol).cloned();
+        }
+
+        None
     }
 }

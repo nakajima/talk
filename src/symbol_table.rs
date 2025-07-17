@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use crate::{parsed_expr::ParsedExpr, parsing::expr_id::ExprID, span::Span};
+use crate::{
+    compiling::imported_module::ImportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
+    span::Span,
+};
 
 #[derive(Default, Copy, Clone, Eq, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
@@ -83,6 +86,7 @@ pub enum SymbolKind {
     SyntheticConstructor,
     Property,
     Protocol,
+    Import(ImportedSymbol),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -227,7 +227,7 @@ pub enum Expr {
         ret: Box<ParsedExpr>,
     },
 
-    Import(#[drive(skip)] Name),
+    Import(#[drive(skip)] String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut)]

@@ -66,15 +66,18 @@ pub fn _compile_prelude() -> Prelude {
     load_files(&mut driver);
 
     #[allow(clippy::unwrap_used)]
-    let resolved = driver
-        .parse()
-        .into_iter()
-        .next()
-        .unwrap()
-        .resolved(&mut driver.symbol_table, &driver.config);
+    let resolved = driver.parse().into_iter().next().unwrap().resolved(
+        &mut driver.symbol_table,
+        &driver.config,
+        &Default::default(),
+    );
     let global_scope = resolved.stage.global_scope.clone();
     let unit = resolved
-        .typed(&mut driver.symbol_table, &driver.config)
+        .typed(
+            &mut driver.symbol_table,
+            &driver.config,
+            &Default::default(),
+        )
         .lower(&mut driver.symbol_table, &driver.config, IRModule::new());
     let mut environment = unit.env.clone();
     let module = unit.module();

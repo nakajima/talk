@@ -162,12 +162,11 @@ mod tests {
         code: &'static str,
     ) -> (SourceFile<NameResolved>, SymbolTable, Environment) {
         let mut driver = Driver::with_str(code);
-        let resolved = driver
-            .parse()
-            .into_iter()
-            .next()
-            .unwrap()
-            .resolved(&mut driver.symbol_table, &driver.config);
+        let resolved = driver.parse().into_iter().next().unwrap().resolved(
+            &mut driver.symbol_table,
+            &driver.config,
+            &Default::default(),
+        );
         let source_file = resolved.source_file(&PathBuf::from("-")).unwrap().clone();
 
         (source_file, driver.symbol_table, resolved.env)

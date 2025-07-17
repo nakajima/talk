@@ -1,9 +1,14 @@
 #[cfg(test)]
 use crate::{
     ExprMetaStorage, SourceFile, SymbolTable, Typed,
-    compiling::compilation_session::SharedCompilationSession, diagnostic::Diagnostic,
-    environment::Environment, parsing::expr_id::ExprID, ty::Ty, type_checker::TypeError,
-    type_var_context::TypeVarContext, typed_expr::TypedExpr,
+    compiling::{compilation_session::SharedCompilationSession, imported_module::ImportedModule},
+    diagnostic::Diagnostic,
+    environment::Environment,
+    parsing::expr_id::ExprID,
+    ty::Ty,
+    type_checker::TypeError,
+    type_var_context::TypeVarContext,
+    typed_expr::TypedExpr,
 };
 
 pub mod conformance_checker;
@@ -102,6 +107,44 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     let path = &PathBuf::from("-");
     let mut driver = Driver::new(Default::default());
     driver.update_file(path, input.into());
+    let units = driver.check();
+    let typed_compilation_unit = units.clone().into_iter().next().unwrap();
+    let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
+
+    let mut merged = ExprMetaStorage::default();
+
+    for unit in units {
+        for file in unit.stage.files {
+            merged.merge(&file.meta.borrow());
+        }
+    }
+
+    for diagnostic in driver.session.lock().unwrap().diagnostics_for(path) {
+        tracing::error!("{diagnostic:?}");
+    }
+
+    Ok(CheckResult {
+        session: driver.session,
+        source_file,
+        type_var_context: typed_compilation_unit.env.context.clone(),
+        env: typed_compilation_unit.env,
+        symbols: driver.symbol_table,
+        meta: merged,
+    })
+}
+
+#[cfg(test)]
+pub fn check_with_imports(
+    imports: &[ImportedModule],
+    input: &str,
+) -> Result<CheckResult, TypeError> {
+    use crate::{ExprMetaStorage, compiling::driver::Driver};
+    use std::path::PathBuf;
+
+    let path = &PathBuf::from("-");
+    let mut driver = Driver::new(Default::default());
+    driver.update_file(path, input.into());
+    driver.import_modules(imports.to_vec());
     let units = driver.check();
     let typed_compilation_unit = units.clone().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();

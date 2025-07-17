@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -8,6 +8,7 @@ use crate::{
     compiling::{
         compilation_session::{CompilationSession, SharedCompilationSession},
         compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
+        imported_module::ImportedModule,
     },
     diagnostic::{Diagnostic, Position},
     environment::Environment,
@@ -21,6 +22,8 @@ pub struct DriverConfig {
     pub include_prelude: bool,
     pub include_comments: bool,
 }
+
+pub type ModuleEnvironment = HashMap<String, ImportedModule>;
 
 impl DriverConfig {
     pub fn new_environment(&self) -> Environment {
@@ -48,6 +51,7 @@ pub struct Driver {
     pub symbol_table: SymbolTable,
     pub config: DriverConfig,
     pub session: SharedCompilationSession,
+    module_env: HashMap<String, ImportedModule>,
 }
 
 impl Default for Driver {
@@ -70,6 +74,7 @@ impl Driver {
             },
             config,
             session,
+            module_env: Default::default(),
         }
     }
 
@@ -122,8 +127,8 @@ impl Driver {
 
         for unit in self.units.clone() {
             let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table, &self.config);
-            let typed = resolved.typed(&mut self.symbol_table, &self.config);
+            let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
+            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
 
             let module = if self.config.include_prelude {
                 crate::prelude::compile_prelude().module.clone()
@@ -139,10 +144,11 @@ impl Driver {
 
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
+
         for unit in self.units.clone() {
             let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table, &self.config);
-            let typed = resolved.typed(&mut self.symbol_table, &self.config);
+            let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
+            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
             result.push(typed);
         }
 
@@ -218,8 +224,8 @@ impl Driver {
         for unit in self.units.clone() {
             let typed = unit
                 .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table, &self.config)
-                .typed(&mut self.symbol_table, &self.config);
+                .resolved(&mut self.symbol_table, &self.config, &self.module_env)
+                .typed(&mut self.symbol_table, &self.config, &self.module_env);
             for file in typed.stage.files {
                 if *path == file.path {
                     return Some(file);
@@ -230,14 +236,23 @@ impl Driver {
         None
     }
 
+    pub fn import_modules(&mut self, modules: Vec<ImportedModule>) {
+        for module in modules.into_iter() {
+            self.module_env
+                .insert(module.module_name.to_string(), module);
+        }
+    }
+
     pub fn resolved_source_file(
         &mut self,
         path: &Path,
     ) -> Option<SourceFile<source_file::NameResolved>> {
         for unit in self.units.clone() {
-            let typed = unit
-                .parse(self.config.include_comments)
-                .resolved(&mut self.symbol_table, &self.config);
+            let typed = unit.parse(self.config.include_comments).resolved(
+                &mut self.symbol_table,
+                &self.config,
+                &self.module_env,
+            );
             if let Some(file) = typed.source_file(&PathBuf::from(path)) {
                 return Some(file.clone());
             }

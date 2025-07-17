@@ -1932,8 +1932,11 @@ mod protocol_tests {
 
 #[cfg(test)]
 mod operator_tests {
+    use std::collections::HashMap;
+
     use crate::{
-        SymbolID, any_typed, check,
+        SymbolID, any_typed, check, check_with_imports,
+        compiling::imported_module::{ImportedModule, ImportedSymbol},
         name::ResolvedName,
         token_kind::TokenKind,
         ty::Ty,
@@ -2032,5 +2035,43 @@ mod operator_tests {
         .unwrap();
 
         assert_eq!(checked.first_root().ty, Ty::string());
+    }
+
+    #[test]
+    fn imports_simple_func() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "importedFunc".to_string(),
+            ImportedSymbol {
+                name: "importedFunc".to_string(),
+                module: "Imported".to_string(),
+                symbol: SymbolID(123123123),
+            },
+        );
+
+        let mut types = HashMap::new();
+        types.insert(
+            SymbolID(123123123),
+            Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
+        );
+
+        let checked = check_with_imports(
+            &[ImportedModule {
+                module_name: "Imported".to_string(),
+                symbols,
+                types,
+            }],
+            r#"
+            import Imported
+
+            importedFunc
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.nth(1).unwrap(),
+            Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
+        );
     }
 }

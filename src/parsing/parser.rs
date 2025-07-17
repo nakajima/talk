@@ -369,7 +369,7 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Import)?;
         let name = self.identifier()?;
-        self.add_expr(Import(Name::Raw(name)), tok)
+        self.add_expr(Import(name.to_string()), tok)
     }
 
     pub(crate) fn extend_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
