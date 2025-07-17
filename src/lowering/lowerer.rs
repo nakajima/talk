@@ -1644,8 +1644,16 @@ impl<'a> Lowerer<'a> {
 
                 if let Some(method) = struct_def.methods.iter().find(|m| m.name == name) {
                     let func = self.allocate_register();
-                    let name = ResolvedName(*struct_id, format!("{}_{name}", struct_def.name_str))
-                        .mangled(&method.ty);
+                    let symbol_id = if *struct_id == SymbolID::ARRAY {
+                        self.symbol_table
+                            .symbol_for_expr(&method.expr_id)
+                            .unwrap_or(*struct_id)
+                    } else {
+                        *struct_id
+                    };
+                    let name =
+                        ResolvedName(symbol_id, format!("{}_{name}", struct_def.name_str))
+                            .mangled(&method.ty);
                     self.push_instr(Instr::Ref(
                         func,
                         typed_expr.ty.to_ir(self),
@@ -2296,10 +2304,15 @@ impl<'a> Lowerer<'a> {
             Ty::Struct(struct_id, _) => {
                 let struct_def = self.env.lookup_struct(struct_id)?;
                 let method = struct_def.methods.iter().find(|m| m.name == name)?;
-                Some(format!(
-                    "@_{}_{}_{}",
-                    struct_id.0, struct_def.name_str, method.name
-                ))
+                let symbol_id = if *struct_id == SymbolID::ARRAY {
+                    self
+                        .symbol_table
+                        .symbol_for_expr(&method.expr_id)
+                        .unwrap_or(*struct_id)
+                } else {
+                    *struct_id
+                };
+                Some(format!("@_{}_{}_{}", symbol_id.0, struct_def.name_str, method.name))
             }
             Ty::Enum(enum_id, _) => {
                 let def = self.env.lookup_enum(enum_id)?;
