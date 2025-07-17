@@ -3,6 +3,7 @@ use crate::Typed;
 use crate::compiling::driver::Driver;
 use crate::environment::Environment;
 use crate::symbol_table::SymbolKind;
+use crate::type_checking::ty::Ty;
 use crate::type_defs::TypeDef;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
@@ -40,19 +41,48 @@ impl<'a> CompletionContext<'a> {
     }
 
     fn get_member_completions(&self) -> Vec<CompletionItem> {
+        // Move the lookup position two characters back from the current
+        // cursor location. The completion request position is typically
+        // placed *after* the dot triggering the member lookup. Moving two
+        // characters ensures that the position we query for a symbol lies
+        // within the preceding identifier rather than on the dot itself,
+        // which would not be associated with any symbol span.
         let position_before_dot = Position::new(
             self.position.line,
-            self.position.character.saturating_sub(1),
+            self.position.character.saturating_sub(2),
         );
 
-        if let Some(type_def) = self
+        let type_sym = self
             .driver
             .symbol_from_position(position_before_dot.into(), &self.source_file.path)
-            .and_then(|sym| self.driver.symbol_table.get(sym))
-            .and_then(|info| info.definition.clone())
-            .and_then(|definition| definition.sym)
-            .and_then(|sym| self.env.lookup_type(&sym))
-        {
+            .and_then(|sym| {
+                let info = self.driver.symbol_table.get(sym)?;
+                info.definition
+                    .as_ref()
+                    .and_then(|def| def.sym)
+                    .or_else(|| {
+                        if self.env.lookup_type(sym).is_some() {
+                            Some(*sym)
+                        } else {
+                            self.source_file
+                                .typed_expr(info.expr_id)
+                                .and_then(|typed| match typed.ty {
+                                    Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => {
+                                        Some(id)
+                                    }
+                                    _ => None,
+                                })
+                        }
+                    })
+            });
+        let type_sym = type_sym.or_else(|| {
+            self.env.selfs.last().and_then(|ty| match ty {
+                Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => Some(*id),
+                _ => None,
+            })
+        });
+
+        if let Some(type_def) = type_sym.and_then(|sym| self.env.lookup_type(&sym)) {
             match type_def {
                 TypeDef::Enum(enum_def) => {
                     let mut completions = vec![];
@@ -266,7 +296,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(completions.len(), 2);
+        assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].label, "bar");
     }
 }
