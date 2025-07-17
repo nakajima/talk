@@ -209,6 +209,23 @@ impl<'a> Monomorphizer<'a> {
             }
         }
 
+        if let Some(IRType::Struct(_, _, generics)) = &function.env_ty {
+            let replacement = substitutions
+                .iter()
+                .find_map(|(k, v)| match k {
+                    IRType::TypeVar(_) => Some(v.clone()),
+                    _ => None,
+                });
+
+            if let Some(concrete) = replacement {
+                for g in generics {
+                    if !substitutions.contains_key(g) {
+                        substitutions.insert(g.clone(), concrete.clone());
+                    }
+                }
+            }
+        }
+
         let mut monomorphized_function =
             self.apply_function(&mangled_name, params, ret, function, substitutions, module);
 
