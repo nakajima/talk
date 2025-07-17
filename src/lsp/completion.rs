@@ -57,23 +57,32 @@ impl<'a> CompletionContext<'a> {
             .symbol_from_position(position_before_dot.into(), &self.source_file.path)
             .and_then(|sym| {
                 let info = self.driver.symbol_table.get(sym)?;
+
+                // Attempt to find type symbol in order of precedence:
+                // 1. From the symbol's definition (e.g., a variable's type).
                 info.definition
                     .as_ref()
                     .and_then(|def| def.sym)
+                    // 2. If the symbol itself is a type.
+                    .or_else(|| self.env.lookup_type(sym).map(|_| *sym))
+                    // 3. From the type of the expression the symbol is part of.
                     .or_else(|| {
-                        if self.env.lookup_type(sym).is_some() {
-                            Some(*sym)
-                        } else {
-                            self.source_file
-                                .typed_expr(info.expr_id)
-                                .and_then(|typed| match typed.ty {
-                                    Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => {
-                                        Some(id)
-                                    }
-                                    _ => None,
-                                })
-                        }
+                        self.source_file.typed_expr(info.expr_id).and_then(|typed| {
+                            match &typed.ty {
+                                Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => {
+                                    Some(*id)
+                                }
+                                _ => None,
+                            }
+                        })
                     })
+            })
+            // 4. Fallback for `self` keyword completion.
+            .or_else(|| {
+                self.env.selfs.last().and_then(|ty| match ty {
+                    Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => Some(*id),
+                    _ => None,
+                })
             });
         let type_sym = type_sym.or_else(|| {
             self.env.selfs.last().and_then(|ty| match ty {

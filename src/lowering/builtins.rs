@@ -157,8 +157,6 @@ fn lower_load(
         index: args[1].register.into(),
     });
 
-    println!("{args:?}");
-
     lowerer.push_instr(Instr::Load {
         dest,
         ty: type_params[0].to_ir(lowerer),
