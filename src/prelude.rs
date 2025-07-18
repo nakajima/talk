@@ -69,20 +69,16 @@ pub fn _compile_prelude() -> Prelude {
     let resolved = driver.parse().into_iter().next().unwrap().resolved(
         &mut driver.symbol_table,
         &driver.config,
-        &Default::default(),
+        &driver.module_env,
     );
     let global_scope = resolved.stage.global_scope.clone();
     let unit = resolved
-        .typed(
-            &mut driver.symbol_table,
-            &driver.config,
-            &Default::default(),
-        )
+        .typed(&mut driver.symbol_table, &driver.config, &driver.module_env)
         .lower(
             &mut driver.symbol_table,
             &driver.config,
             IRModule::new(),
-            &Default::default(),
+            &driver.module_env,
         );
     let mut environment = unit.env.clone();
     let module = unit.module();
