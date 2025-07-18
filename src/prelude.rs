@@ -34,6 +34,7 @@ fn load_files(driver: &mut Driver) {
         ("./core/Optional.tlk", include_str!("../core/Optional.tlk")),
         ("./core/Array.tlk", include_str!("../core/Array.tlk")),
         ("./core/String.tlk", include_str!("../core/String.tlk")),
+        ("./core/Iterable.tlk", include_str!("../core/Iterable.tlk")),
     ] {
         driver.update_file(&PathBuf::from(path), contents.to_string());
     }
@@ -46,6 +47,7 @@ fn load_files(driver: &mut Driver) {
         PathBuf::from("./core/Optional.tlk"),
         PathBuf::from("./core/Array.tlk"),
         PathBuf::from("./core/String.tlk"),
+        PathBuf::from("./core/Iterable.tlk"),
     ] {
         #[allow(clippy::unwrap_used)]
         driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
