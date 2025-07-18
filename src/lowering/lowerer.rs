@@ -16,8 +16,8 @@ use crate::{
     constraint::Constraint,
     diagnostic::Diagnostic,
     environment::Environment,
-    expr::ExprMeta,
     expr_id::ExprID,
+    expr_meta::ExprMeta,
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,

@@ -123,6 +123,7 @@ impl<'a> Lexer<'a> {
             '[' => self.make(LeftBracket),
             ']' => self.make(RightBracket),
             ';' => self.make(Semicolon),
+            '@' => self.make(At),
             '"' => self.string(),
             '\n' => self.newline(),
             '_' => {

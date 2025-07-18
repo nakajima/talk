@@ -22,7 +22,7 @@ export function activate(context: ExtensionContext) {
   // Otherwise the run options are used
   console.info(homedir());
   const serverOptions: ServerOptions = {
-    command: homedir() + "/apps/talk-rs/target/debug/talk",
+    command: homedir() + "/apps/talk/target/debug/talk",
     transport: TransportKind.stdio,
     args: ["lsp"],
     options: {

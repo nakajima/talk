@@ -1,6 +1,6 @@
 use crate::{
     ExprMetaStorage,
-    expr::ExprMeta,
+    expr_meta::ExprMeta,
     name::Name,
     parsed_expr::{Expr, ParsedExpr, Pattern},
     source_file::SourceFile,
@@ -126,6 +126,7 @@ impl<'a> Formatter<'a> {
 
     pub(crate) fn format_expr(&self, expr: &ParsedExpr) -> Doc {
         match &expr.expr {
+            Expr::Attribute(name) => join(vec![text("@"), text(name.name_str())], text("")),
             Expr::Incomplete(_) => Doc::Empty,
             Expr::LiteralArray(items) => self.format_array_literal(items),
             Expr::LiteralString(string) => self.format_string_literal(string),

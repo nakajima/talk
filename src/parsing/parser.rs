@@ -7,13 +7,14 @@ use crate::{
     diagnostic::Diagnostic,
     environment::Environment,
     expr_id::ExprID,
+    expr_meta::ExprMeta,
     lexer::Lexer,
     parsed_expr::{self, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
     token::Token,
     token_kind::TokenKind,
 };
 
-use super::{expr::ExprMeta, name::Name, precedence::Precedence};
+use super::{name::Name, precedence::Precedence};
 
 // for tracking begin/end tokens
 pub struct SourceLocationStart {
@@ -496,6 +497,7 @@ impl<'a> Parser<'a> {
                             body,
                             ret: Some(ret.clone()),
                             captures: vec![],
+                            attributes: vec![],
                         };
 
                         members.push(self.add_expr(func, tok)?);
@@ -516,7 +518,7 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn init(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
-        let func_id = Box::new(self.func()?);
+        let func_id = Box::new(self.func(vec![])?);
         self.add_expr(Init(None, func_id), tok)
     }
 
@@ -586,6 +588,43 @@ impl<'a> Parser<'a> {
 
         let rhs = Box::new(self.parse_with_precedence(Precedence::None)?);
         self.add_expr(Return(Some(rhs)), tok)
+    }
+
+    pub(crate) fn attribute(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
+        self.attributed_expr(vec![])
+    }
+
+    pub(crate) fn attributed_expr(
+        &mut self,
+        mut attributes: Vec<ParsedExpr>,
+    ) -> Result<ParsedExpr, ParserError> {
+        let attribute = self.parse_attribute()?;
+        attributes.push(attribute);
+
+        self.skip_newlines();
+
+        let Some(current) = &self.current else {
+            return Err(ParserError::UnexpectedEndOfInput(None));
+        };
+
+        match current.kind {
+            TokenKind::At => self.attributed_expr(attributes),
+            TokenKind::Func => {
+                self.consume(TokenKind::Func)?;
+                self.func(attributes)
+            }
+            _ => Err(ParserError::UnknownError(format!(
+                "Expr does not support attributes: {}",
+                current.as_str()
+            ))),
+        }
+    }
+
+    fn parse_attribute(&mut self) -> Result<ParsedExpr, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::At)?;
+        let name = self.identifier()?;
+        self.add_expr(Attribute(Name::Raw(name)), tok)
     }
 
     pub(crate) fn match_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
@@ -862,7 +901,7 @@ impl<'a> Parser<'a> {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::StringLiteral(val) => self.add_expr(LiteralString(val.to_string()), tok),
-            TokenKind::Func => self.func(),
+            TokenKind::Func => self.func(vec![]),
             _ => return Err(ParserError::UnknownError("did not get literal".into())),
         }?;
 
@@ -912,7 +951,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(crate) fn func(&mut self) -> Result<ParsedExpr, ParserError> {
+    pub(crate) fn func(&mut self, attributes: Vec<ParsedExpr>) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         let current = self.current.clone();
@@ -1006,6 +1045,7 @@ impl<'a> Parser<'a> {
                 body,
                 ret,
                 captures: vec![],
+                attributes,
             },
             tok,
         )?;

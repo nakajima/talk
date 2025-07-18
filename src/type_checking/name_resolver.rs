@@ -606,6 +606,7 @@ impl<'a> NameResolver<'a> {
             body,
             ret,
             captures,
+            ..
         } = expr
         {
             if !self.type_symbol_stack.is_empty() && name.is_none() {
@@ -817,6 +818,7 @@ impl<'a> NameResolver<'a> {
                                 body,
                                 ret,
                                 captures,
+                                ..
                             },
                     } = self.resolve_node(func, meta, symbol_table)?
                     else {
@@ -834,6 +836,7 @@ impl<'a> NameResolver<'a> {
                             body,
                             ret,
                             captures,
+                            attributes: vec![],
                         },
                     });
                 }
@@ -1301,7 +1304,8 @@ mod tests {
                 ))]))
                 .into(),
                 ret: None,
-                captures: vec![]
+                captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -1339,13 +1343,15 @@ mod tests {
                         ]))
                         .into(),
                         ret: None,
-                        captures: vec![SymbolID::resolved(2)]
+                        captures: vec![SymbolID::resolved(2)],
+                        attributes: vec![],
                     }),
                     any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "x".into()))),
                 ]))
                 .into(),
                 ret: None,
-                captures: vec![]
+                captures: vec![],
+                attributes: vec![],
             }),
         );
     }
@@ -1616,7 +1622,8 @@ mod tests {
                     )))]))
                     .into(),
                     ret: None,
-                    captures: vec![]
+                    captures: vec![],
+                    attributes: vec![],
                 })]))
                 .into(),
                 generics: vec![],
@@ -1688,7 +1695,8 @@ mod tests {
                 ]))
                 .into(),
                 ret: None,
-                captures: vec![SymbolID::ANY]
+                captures: vec![SymbolID::ANY],
+                attributes: vec![],
             })
         );
 
@@ -1736,7 +1744,8 @@ mod tests {
                 })]))
                 .into(),
                 ret: None,
-                captures: vec![]
+                captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -1766,7 +1775,8 @@ mod tests {
                     })
                     .into()
                 ),
-                captures: vec![]
+                captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -1886,6 +1896,7 @@ mod tests {
                             .into(),
                             ret: None,
                             captures: vec![],
+                            attributes: vec![],
                         })
                         .into()
                     ))

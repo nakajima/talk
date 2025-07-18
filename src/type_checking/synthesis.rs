@@ -87,6 +87,7 @@ pub fn synthesize_inits(
                     body: Box::new(body),
                     ret: None,
                     captures: vec![],
+                    attributes: vec![],
                 },
             );
 
@@ -207,6 +208,7 @@ mod tests {
             body,
             ret,
             captures,
+            ..
         } = &func_expr.expr
         else {
             panic!("didn't get init func")

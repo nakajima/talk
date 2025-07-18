@@ -1,5 +1,5 @@
-pub mod expr;
 pub mod expr_id;
+pub mod expr_meta;
 pub mod formatter;
 pub mod highlighter;
 pub mod name;

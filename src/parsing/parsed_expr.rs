@@ -52,6 +52,9 @@ pub enum Expr {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
 
+    // A lot of things can have attributes
+    Attribute(#[drive(skip)] Name),
+
     // Start of the real expressions
     LiteralArray(Vec<ParsedExpr>),
     #[drive(skip)]
@@ -138,6 +141,7 @@ pub enum Expr {
         ret: Option<Box<ParsedExpr>>, /* return type */
         #[drive(skip)]
         captures: Vec<SymbolID>,
+        attributes: Vec<ParsedExpr>,
     },
 
     Parameter(

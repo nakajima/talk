@@ -281,4 +281,26 @@ impl Driver {
 
         None
     }
+
+    pub fn compile_module(
+        &self,
+        _name: impl Into<String>,
+    ) -> Result<CompiledModule, CompilationError> {
+        Err(CompilationError::UnknownError("wip"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::compiling::driver::Driver;
+
+    #[test]
+    fn compiles_a_module() {
+        let driver = Driver::with_str(
+            "
+        ",
+        );
+
+        let _mod = driver.compile_module("SomeModule");
+    }
 }

@@ -10,6 +10,7 @@ use crate::{
 #[derive(Debug, Copy, Clone)]
 #[allow(non_camel_case_types)]
 pub enum Kind {
+    DECORATOR,
     NAMESPACE,
     TYPE,
     CLASS,
@@ -86,6 +87,7 @@ impl<'a> Higlighter<'a> {
 
         while let Ok(tok) = &lexer.next() {
             match tok.kind {
+                TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment(_) => self.make(tok, Kind::COMMENT, &mut tokens),
                 TokenKind::Extend => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::If => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -180,6 +182,9 @@ impl<'a> Higlighter<'a> {
                 }
                 IncompleteExpr::Func { .. } => (),
             },
+            Expr::Attribute(_) => {
+                result.push(HighlightToken::new(Kind::DECORATOR, start, end));
+            }
             Expr::LiteralString(_) => (), // already handled by lexed
             Expr::LiteralArray(items) => result.extend(self.tokens_from_exprs(items)),
             Expr::LiteralInt(_) | Expr::LiteralFloat(_) => {

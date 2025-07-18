@@ -66,7 +66,8 @@ mod tests {
                 params: vec![],
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
-                captures: vec![]
+                captures: vec![],
+                attributes: vec![],
             })
         );
         assert_eq!(parsed.roots()[1], any_expr!(Expr::Tuple(vec![])));
@@ -400,6 +401,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -431,6 +433,7 @@ mod tests {
                 body: any_expr!(Block(vec![any_expr!(Variable("a".into()))])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -448,6 +451,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -482,6 +486,7 @@ mod tests {
                     .into()
                 ),
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -517,6 +522,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
 
@@ -529,6 +535,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -549,6 +556,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -576,6 +584,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -690,6 +699,7 @@ mod tests {
                     .into()
                 ),
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -1044,6 +1054,7 @@ mod tests {
                 body: any_expr!(Block(vec![])).into(),
                 ret: None,
                 captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -1086,6 +1097,7 @@ mod tests {
                         body: any_expr!(Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
                         ret: None,
                         captures: vec![],
+                        attributes: vec![],
                     })
                 ]))
                 .into()
@@ -1229,7 +1241,8 @@ mod tests {
                     params: vec![],
                     body: any_expr!(Block(vec![])).into(),
                     ret: None,
-                    captures: vec![]
+                    captures: vec![],
+                    attributes: vec![],
                 })]))
                 .into()
             })
@@ -1373,6 +1386,7 @@ mod tests {
                             .into(),
                             ret: None,
                             captures: vec![],
+                            attributes: vec![],
                         })
                         .into()
                     ))
@@ -1559,7 +1573,8 @@ mod tests {
                     })
                     .into()
                 ),
-                captures: vec![]
+                captures: vec![],
+                attributes: vec![],
             })
         );
     }
@@ -1709,6 +1724,41 @@ mod tests {
         assert_eq!(
             parsed.roots()[1],
             any_expr!(Expr::Import("Bar".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_func_attributes() {
+        let (parsed, session) = parse_with_session(
+            "
+            @foo
+            @bar func fizz() {}
+            ",
+            "-".into(),
+        );
+
+        let session = session.lock().unwrap();
+
+        assert!(
+            session._diagnostics().is_empty(),
+            "{:?}",
+            session._diagnostics()
+        );
+
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Func {
+                name: Some(Name::Raw("fizz".into())),
+                generics: vec![],
+                params: vec![],
+                body: any_expr!(Block(vec![])).into(),
+                ret: None,
+                captures: vec![],
+                attributes: vec![
+                    any_expr!(Expr::Attribute(Name::Raw("foo".into()))),
+                    any_expr!(Expr::Attribute(Name::Raw("bar".into())))
+                ],
+            })
         );
     }
 }

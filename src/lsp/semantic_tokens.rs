@@ -3,12 +3,14 @@ use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::COMMENT,
+    SemanticTokenType::DECORATOR,
     SemanticTokenType::ENUM_MEMBER,
     SemanticTokenType::ENUM,
     SemanticTokenType::FUNCTION,
     SemanticTokenType::INTERFACE,
     SemanticTokenType::KEYWORD,
     SemanticTokenType::METHOD,
+    SemanticTokenType::MODIFIER,
     SemanticTokenType::NUMBER,
     SemanticTokenType::OPERATOR,
     SemanticTokenType::PARAMETER,
@@ -45,6 +47,7 @@ impl highlighter::Kind {
             highlighter::Kind::NUMBER => SemanticTokenType::NUMBER,
             highlighter::Kind::REGEXP => SemanticTokenType::REGEXP,
             highlighter::Kind::OPERATOR => SemanticTokenType::OPERATOR,
+            highlighter::Kind::DECORATOR => SemanticTokenType::DECORATOR,
         }
     }
 }
@@ -148,8 +151,6 @@ impl<'a> SemanticTokenCollector<'a> {
                 .iter()
                 .position(|tt| tt == &token_type)
                 .unwrap_or(0) as u32;
-
-            tracing::error!("{range:?} {length:?} {token_type:?}");
 
             encoded_tokens.push(SemanticToken {
                 delta_line,

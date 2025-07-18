@@ -43,6 +43,7 @@ ena = "0.14.3"
 tracing-tree = "0.4.0"
 derive-visitor = "0.4.0"
 miette = { version = "7.6.0", features = ["fancy"] }
+bincode = "2.0.1"
 
 [features]
 default = ["cli"]

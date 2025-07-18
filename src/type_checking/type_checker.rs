@@ -74,7 +74,7 @@ impl TypeError {
             Self::Nonconformance(protocol, structname) => {
                 format!("{structname} does not conform to the {protocol} protocol")
             }
-            Self::MemberNotFound(name, receiver) => {
+            Self::MemberNotFound(receiver, name) => {
                 format!("Cannot find member named {name} for {receiver}")
             }
             Self::ConformanceError(err) => {
@@ -722,6 +722,7 @@ impl<'a> TypeChecker<'a> {
                     body,
                     ret,
                     captures,
+                    ..
                 },
         } = func_expr
         else {
@@ -786,6 +787,7 @@ impl<'a> TypeChecker<'a> {
                     body,
                     ret,
                     captures,
+                    ..
                 },
         } = func_expr
         else {

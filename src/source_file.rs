@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use crate::{parsed_expr::ParsedExpr, scope_tree::ScopeTree, span::Span, typed_expr::TypedExpr};
 
-use super::{expr::ExprMeta, parsing::expr_id::ExprID};
+use super::{expr_meta::ExprMeta, parsing::expr_id::ExprID};
 
 pub trait Phase: Eq {}
 

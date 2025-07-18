@@ -9,6 +9,7 @@ struct Array<Element> {
 		self.storage = __alloc<Element>(capacity)
 	}
 
+	@export
 	func push(element: Element) {
 		self.resizeIfNeeded()
 		__store<Element>(self.storage, self.count, element)
