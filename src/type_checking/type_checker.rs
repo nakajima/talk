@@ -796,8 +796,6 @@ impl<'a> TypeChecker<'a> {
             )));
         };
 
-        // TODO: Add a test to make sure ret isn't set (it should never be for inits)
-
         let func = self.infer_func(
             *func_id, &None, generics, params, captures, body, ret, env, None,
         )?;

@@ -112,7 +112,7 @@ impl Display for Ty {
             }),
             Ty::Pointer => write!(f, "pointer"),
             Ty::Protocol(sym, _) => write!(f, "{sym:?} (protocol)"),
-            _ => write!(f, "unknown"),
+            _ => write!(f, "{self:?}"),
         }
     }
 }

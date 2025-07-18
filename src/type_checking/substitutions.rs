@@ -56,7 +56,7 @@ impl Substitutions {
 
     pub fn apply(&mut self, ty: &Ty, depth: u32, context: &mut TypeVarContext) -> Ty {
         if depth > 20 {
-            tracing::error!("Hit 20 recursive applications for {ty:#?}, bailing.");
+            tracing::warn!("Hit 20 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
         }
 
@@ -330,7 +330,7 @@ impl Substitutions {
             )),
         };
 
-        tracing::debug!(
+        tracing::trace!(
             "∪ {:?} <> {:?} = {:?} <> {:?}",
             lhs,
             rhs,

@@ -3,7 +3,7 @@ protocol Iterator<Element> {
 }
 
 protocol Iterable<Element> {
-	func iter() -> Iterator<Element>
+	func iter<T: Iterator<Element>>() -> T
 }
 
 struct ArrayIterator<Element>: Iterator<Element> {

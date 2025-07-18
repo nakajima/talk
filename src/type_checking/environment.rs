@@ -125,7 +125,7 @@ impl Environment {
 
         // #[allow(clippy::panic)]
         if constraint.contains_canonical_type_parameter() {
-            tracing::error!("Constraints must not contain canonical type params: {constraint:?}")
+            tracing::warn!("Constraints must not contain canonical type params: {constraint:?}")
         }
 
         self.constraints.push(constraint)

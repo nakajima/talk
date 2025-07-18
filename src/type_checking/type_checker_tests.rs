@@ -1,14 +1,19 @@
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::{
-        SymbolID, any_typed, assert_eq_diff, check,
+        SymbolID, any_typed, assert_eq_diff, check, check_with_imports,
+        compiling::compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
         diagnostic::{Diagnostic, DiagnosticKind},
-        dumb_dot::dump_unification_dot,
+        dumb_dot::{self, dump_unification_dot},
         expr_id::ExprID,
+        lowering::ir_module::IRModule,
         name::ResolvedName,
+        token_kind::TokenKind,
         ty::Ty,
         type_checker::TypeError,
-        type_defs::TypeDef,
+        type_defs::{TypeDef, protocol_def::Conformance},
         type_var_id::{TypeVarID, TypeVarKind},
         typed_expr::{Expr, TypedExpr},
     };
@@ -1644,17 +1649,6 @@ mod tests {
         // Make sure extensions don't blow away what was there before
         assert!(person_struct.member_ty("sup").is_some())
     }
-}
-
-#[cfg(test)]
-mod protocol_tests {
-    use crate::{
-        SymbolID, check,
-        diagnostic::{Diagnostic, DiagnosticKind},
-        ty::Ty,
-        type_checker::TypeError,
-        type_defs::{TypeDef, protocol_def::Conformance},
-    };
 
     #[test]
     fn infers_protocol_conformance() {
@@ -1928,21 +1922,6 @@ mod protocol_tests {
 
         assert_eq!(checked.nth(2).unwrap(), Ty::Int);
     }
-}
-
-#[cfg(test)]
-mod operator_tests {
-    use std::collections::HashMap;
-
-    use crate::{
-        SymbolID, any_typed, check, check_with_imports,
-        compiling::compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
-        lowering::ir_module::IRModule,
-        name::ResolvedName,
-        token_kind::TokenKind,
-        ty::Ty,
-        typed_expr::{Expr, TypedExpr},
-    };
 
     #[test]
     fn infers_basic() {
@@ -2078,6 +2057,54 @@ mod operator_tests {
         assert_eq!(
             checked.nth(1).unwrap(),
             Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
+        );
+    }
+
+    #[test]
+    fn works_with_iterable() {
+        let src = "
+            protocol Iterator<Element> {
+                func next() -> Element?
+            }
+
+            protocol Iterable<Element> {
+                func iter<T: Iterator<Element>>() -> T
+            }
+
+            struct ArrayIterator<Element>: Iterator<Element> {
+                let array: Array<Element>
+                let cur: Int
+
+                func next() -> Element? {
+                    if self.cur < self.array.count {
+                        Optional.some(self.array.get(self.cur))
+                    } else {
+                        Optional.none
+                    }
+                }
+            }
+
+            extend Array<Element>: Iterable<Element> {
+                func iter() -> ArrayIterator<Element> {
+                        ArrayIterator<Element>(array: self, cur: 0)
+                }
+            }
+        ";
+
+        let checked = check(src.clone()).unwrap();
+
+        dumb_dot::dump_unification_dot(
+            &checked.env.context.history,
+            "iterable.dot",
+            &checked.meta,
+            src,
+        )
+        .unwrap();
+
+        assert!(
+            checked.diagnostics().is_empty(),
+            "{:#?}",
+            checked.diagnostics().is_empty()
         );
     }
 }

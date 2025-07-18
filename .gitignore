@@ -3,6 +3,6 @@ editors/vscode/node_modules
 log.txt
 *.vsix
 talk-ex/index.wit
-unification.dot
-unification.png
+*.dot
+*.png
 
