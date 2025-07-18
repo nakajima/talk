@@ -75,12 +75,6 @@ impl<'a> TypeChecker<'a> {
 
         // Solve what we can
         let mut solution = env.flush_constraints(self.meta)?;
-        // Put what we can't back into the list
-        for unsolved in solution.unsolved_constraints {
-            env.constrain(unsolved);
-        }
-
-        env.replace_constraint_values(&mut solution.substitutions);
         env.replace_typed_exprs_values(&mut solution.substitutions);
 
         // Generalize what we can
