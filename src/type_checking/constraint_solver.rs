@@ -37,53 +37,95 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
+    /// Check if a constraint should be deferred based on its dependencies
+    fn should_defer_constraint(
+        &mut self,
+        constraint: &Constraint,
+        substitutions: &mut Substitutions,
+    ) -> bool {
+        match constraint {
+            Constraint::MemberAccess(_, receiver_ty, _, _) => {
+                let resolved_receiver = substitutions.apply(receiver_ty, 0, &mut self.env.context);
+                // Defer if receiver is still an unresolved TypeVar that's not a placeholder/instance
+                if let Ty::TypeVar(tv) = &resolved_receiver {
+                    match &tv.kind {
+                        TypeVarKind::Member(_) | TypeVarKind::CallReturn | TypeVarKind::Let => {
+                            // These are intermediate TypeVars that should be resolved first
+                            tracing::trace!(
+                                "Deferring MemberAccess on intermediate TypeVar: {:?}",
+                                tv
+                            );
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     pub fn solve(&mut self) -> ConstraintSolverSolution {
         let mut substitutions = Substitutions::new();
         let mut errors = vec![];
         let mut unsolved_constraints = vec![];
+        let mut deferred_constraints = Vec::new();
+        let mut made_progress = true;
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 10;
 
-        while let Some(constraint) = self.constraints.pop() {
-            match self.solve_constraint(&constraint, &mut substitutions) {
-                Ok(_) => (),
-                Err(err) => {
-                    // if let Constraint::Retry(constraint, retries) = constraint {
-                    //     if retries > 0 {
-                    //         let constraint =
-                    //             constraint.replacing(&mut substitutions, &mut self.env.context);
-                    //         self.constraints.insert(
-                    //             0,
-                    //             Constraint::Retry(
-                    //                 constraint
-                    //                     .replacing(&mut substitutions, &mut self.env.context)
-                    //                     .into(),
-                    //                 retries - 1,
-                    //             ),
-                    //         );
-                    //     } else {
-                    unsolved_constraints.push(constraint.clone());
-                    // If the last retry produced a Defer(TypeCannotConform) we want a
-                    // deterministic, user-facing ConformanceError instead of an opaque
-                    // deferred error – this mirrors the behaviour that tests expect.
-                    let processed_err = match err {
-                        TypeError::Defer(e) => TypeError::ConformanceError(vec![e]),
-                        other => other,
-                    };
+        // Process constraints with dependency awareness
+        while made_progress && iterations < MAX_ITERATIONS {
+            made_progress = false;
+            iterations += 1;
 
-                    errors.push((*constraint.expr_id(), processed_err))
-                    //     }
-                    // } else {
-                    //     self.constraints.insert(
-                    //         0,
-                    //         Constraint::Retry(
-                    //             constraint
-                    //                 .replacing(&mut substitutions, &mut self.env.context)
-                    //                 .into(),
-                    //             3,
-                    //         ),
-                    //     );
-                    // }
+            // Process main constraints
+            while let Some(constraint) = self.constraints.pop() {
+                if self.should_defer_constraint(&constraint, &mut substitutions) {
+                    deferred_constraints.push(constraint);
+                    continue;
                 }
+                match self.solve_constraint(&constraint, &mut substitutions) {
+                    Ok(_) => (),
+                    Err(err) => {
+                        // Try deferring on first error
+                        if iterations == 1 {
+                            deferred_constraints.push(constraint.clone());
+                        } else {
+                            unsolved_constraints.push(constraint.clone());
+                            let processed_err = match err {
+                                TypeError::Defer(e) => TypeError::ConformanceError(vec![e]),
+                                other => other,
+                            };
+                            errors.push((*constraint.expr_id(), processed_err))
+                        }
+                    }
+                }
+
+                made_progress = true;
             }
+
+            // Process deferred constraints if we have any
+            if !deferred_constraints.is_empty() && made_progress {
+                tracing::trace!(
+                    "Processing {} deferred constraints in iteration {}",
+                    deferred_constraints.len(),
+                    iterations
+                );
+                self.constraints
+                    .extend(deferred_constraints.drain(..).rev());
+                made_progress = true;
+            }
+        }
+
+        // Any remaining deferred constraints are unsolved
+        for constraint in deferred_constraints {
+            unsolved_constraints.push(constraint.clone());
+            errors.push((
+                *constraint.expr_id(),
+                TypeError::Unknown("Could not solve deferred constraint".to_string()),
+            ));
         }
 
         let mut remaining_type_vars = vec![];
