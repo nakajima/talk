@@ -24,7 +24,7 @@ fn bench_resolve(c: &mut Criterion) {
                 black_box(unit.resolved(
                     &mut driver.symbol_table,
                     &driver.config,
-                    &Default::default(),
+                    &driver.module_env,
                 ));
             }
         })
@@ -36,15 +36,12 @@ fn bench_typecheck(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                let resolved = unit.resolved(
-                    &mut driver.symbol_table,
-                    &driver.config,
-                    &Default::default(),
-                );
+                let resolved =
+                    unit.resolved(&mut driver.symbol_table, &driver.config, &driver.module_env);
                 black_box(resolved.typed(
                     &mut driver.symbol_table,
                     &driver.config,
-                    &Default::default(),
+                    &driver.module_env,
                 ));
             }
         })
@@ -56,16 +53,10 @@ fn bench_lower(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                let resolved = unit.resolved(
-                    &mut driver.symbol_table,
-                    &driver.config,
-                    &Default::default(),
-                );
-                let typed = resolved.typed(
-                    &mut driver.symbol_table,
-                    &driver.config,
-                    &Default::default(),
-                );
+                let resolved =
+                    unit.resolved(&mut driver.symbol_table, &driver.config, &driver.module_env);
+                let typed =
+                    resolved.typed(&mut driver.symbol_table, &driver.config, &driver.module_env);
                 let module = if driver.config.include_prelude {
                     prelude::compile_prelude().module.clone()
                 } else {
@@ -87,16 +78,10 @@ fn bench_passes(c: &mut Criterion) {
         b.iter(|| {
             let mut driver = Driver::with_str(CODE);
             for unit in driver.parse() {
-                let resolved = unit.resolved(
-                    &mut driver.symbol_table,
-                    &driver.config,
-                    &Default::default(),
-                );
-                let typed = resolved.typed(
-                    &mut driver.symbol_table,
-                    &driver.config,
-                    &Default::default(),
-                );
+                let resolved =
+                    unit.resolved(&mut driver.symbol_table, &driver.config, &driver.module_env);
+                let typed =
+                    resolved.typed(&mut driver.symbol_table, &driver.config, &driver.module_env);
                 let module = if driver.config.include_prelude {
                     prelude::compile_prelude().module.clone()
                 } else {
