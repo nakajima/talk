@@ -139,7 +139,7 @@ impl CompilationUnit<Raw> {
         let parsed = self.parse(driver_config.include_comments);
         let resolved = parsed.resolved(symbol_table, driver_config, module_env);
         let typed = resolved.typed(symbol_table, driver_config, module_env);
-        typed.lower(symbol_table, driver_config, module)
+        typed.lower(symbol_table, driver_config, module, module_env)
     }
 }
 
@@ -292,10 +292,11 @@ impl CompilationUnit<Typed> {
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
         mut module: IRModule,
+        module_env: &ModuleEnvironment
     ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table, &mut self.env, self.session.clone())
+            let lowered = Lowerer::new(file, symbol_table, &mut self.env, self.session.clone(), module_env)
                 .lower(&mut module, driver_config);
             files.push(lowered);
         }

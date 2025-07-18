@@ -43,11 +43,14 @@ pub mod helpers {
 
 #[cfg(test)]
 pub mod lowering_tests {
-    use std::path::PathBuf;
+    use std::{collections::HashMap, path::PathBuf};
 
     use crate::{
         SymbolID, assert_lowered_function,
-        compiling::driver::{Driver, DriverConfig},
+        compiling::{
+            driver::{Driver, DriverConfig},
+            imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
+        },
         lowering::{
             instr::{Callee, Instr},
             ir_error::IRError,
@@ -61,7 +64,27 @@ pub mod lowering_tests {
             register::Register,
         },
         prelude::compile_prelude,
+        ty::Ty,
     };
+
+    pub fn lower_with_imports(
+        imports: Vec<ImportedModule>,
+        input: &'static str,
+    ) -> Result<IRModule, IRError> {
+        let mut driver = Driver::new(DriverConfig {
+            executable: true,
+            include_prelude: true,
+            include_comments: false,
+        });
+        driver.update_file(&PathBuf::from("-"), input.into());
+        driver.import_modules(imports);
+        let lowered = driver.lower().into_iter().next().unwrap();
+        let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
+        let module = lowered.module().clone();
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        Ok(module)
+    }
 
     pub fn lower(input: &'static str) -> Result<IRModule, IRError> {
         let mut driver = Driver::new(DriverConfig {
@@ -1789,6 +1812,95 @@ pub mod lowering_tests {
         };
 
         assert_lowered_function!(lowered, "@main", expected);
+    }
+
+    #[test]
+    fn lowers_imported_func() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "importedFunc".to_string(),
+            ImportedSymbol {
+                name: "importedFunc".to_string(),
+                module: "Imported".to_string(),
+                symbol: SymbolID(123123123),
+                kind: ImportedSymbolKind::Function { index: 0 },
+            },
+        );
+
+        let mut types = HashMap::new();
+        types.insert(
+            SymbolID(123123123),
+            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]),
+        );
+
+        let imported_func = IRFunction {
+            ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
+            name: "@_123123123_importedFunc".to_string(),
+            blocks: vec![BasicBlock {
+                id: BasicBlockID::ENTRY,
+                instructions: vec![Instr::Ret(IRType::Int, Some(IRValue::ImmediateInt(123)))],
+            }],
+            env_ty: None,
+            env_reg: None,
+            size: 1,
+            debug_info: Default::default(),
+        };
+
+        let lowered = lower_with_imports(
+            vec![ImportedModule {
+                module_name: "Imported".to_string(),
+                symbols,
+                types,
+                functions: vec![imported_func.clone()],
+            }],
+            "
+        import Imported
+
+        importedFunc(123)
+        ",
+        )
+        .unwrap();
+
+        let foo_name = format!("@_{}_importedFunc", SymbolID::resolved(1).0,);
+
+        let imported_renamed_fn = IRFunction {
+            debug_info: Default::default(),
+            ty: imported_func.ty.clone(),
+            name: foo_name.clone(),
+            blocks: imported_func.blocks.clone(),
+            env_ty: None,
+            env_reg: None,
+            size: 1,
+        };
+
+        assert_lowered_function!(lowered, foo_name, imported_renamed_fn);
+        assert_lowered_function!(
+            lowered,
+            "@main",
+            IRFunction {
+                debug_info: Default::default(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![BasicBlock {
+                    id: BasicBlockID(0),
+                    instructions: vec![
+                        // Get the arg
+                        Instr::ConstantInt(Register(0), 123),
+                        Instr::Call {
+                            dest_reg: Register(1),
+                            ty: IRType::Int,
+                            callee: Callee::Name(foo_name),
+                            args: RegisterList(vec![TypedRegister::new(IRType::Int, Register(0))]),
+                        },
+                        // 4. Return the result of the call.
+                        Instr::Ret(IRType::Int, Some(Register(1).into()))
+                    ],
+                }],
+                env_ty: None,
+                env_reg: None,
+                size: 2
+            },
+        );
     }
 }
 

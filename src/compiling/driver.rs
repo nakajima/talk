@@ -136,7 +136,12 @@ impl Driver {
                 IRModule::new()
             };
 
-            result.push(typed.lower(&mut self.symbol_table, &self.config, module));
+            result.push(typed.lower(
+                &mut self.symbol_table,
+                &self.config,
+                module,
+                &self.module_env,
+            ));
         }
 
         result

@@ -8,7 +8,11 @@ use crate::{
         cfg::ControlFlowGraph, function_analysis::definite_initialization::DefiniteInitizationPass,
         function_analysis_pass::FunctionAnalysisPass,
     },
-    compiling::{compilation_session::SharedCompilationSession, driver::DriverConfig},
+    compiling::{
+        compilation_session::SharedCompilationSession,
+        driver::{DriverConfig, ModuleEnvironment},
+        imported_module::{ImportedSymbol, ImportedSymbolKind},
+    },
     constraint::Constraint,
     diagnostic::Diagnostic,
     environment::Environment,
@@ -414,6 +418,7 @@ pub struct Lowerer<'a> {
     pub env: &'a mut Environment,
     session: SharedCompilationSession,
     constants: Vec<IRConstantData>,
+    module_env: &'a ModuleEnvironment,
 }
 
 impl<'a> Lowerer<'a> {
@@ -422,6 +427,7 @@ impl<'a> Lowerer<'a> {
         symbol_table: &'a mut SymbolTable,
         env: &'a mut Environment,
         session: SharedCompilationSession,
+        module_env: &'a ModuleEnvironment,
     ) -> Self {
         Self {
             source_file,
@@ -434,6 +440,7 @@ impl<'a> Lowerer<'a> {
             env,
             session,
             constants: Default::default(),
+            module_env,
         }
     }
 
@@ -512,6 +519,7 @@ impl<'a> Lowerer<'a> {
             Expr::Call { callee, args, .. } => self.lower_call(callee, &typed_expr.ty, args),
             Expr::Func { .. } => self.lower_function(typed_expr),
             Expr::Return(rhs) => self.lower_return(typed_expr, rhs),
+            Expr::Import(_) => None,
             Expr::EnumDecl { .. } => None,
             Expr::Member(Some(box receiver), name) => {
                 self.lower_member(&Some(receiver), typed_expr, name, false)
@@ -2081,12 +2089,46 @@ impl<'a> Lowerer<'a> {
             );
         }
 
+        // If it's an imported function, make sure we have our own version of it
+        #[allow(clippy::expect_used)]
+        if let Expr::Variable(name) = &callee_typed_expr.expr
+            && let Some(name_info) = self.symbol_table.get(&name.symbol_id())
+            && let SymbolKind::Import(
+                imported_symbol @ ImportedSymbol {
+                    kind: ImportedSymbolKind::Function { index },
+                    ..
+                },
+            ) = &name_info.kind
+        {
+            let module = self
+                .module_env
+                .get(&imported_symbol.module)
+                .expect("Did not find module");
+
+            let func_ty = module
+                .types
+                .get(&imported_symbol.symbol)
+                .expect("did not find type for imported function");
+
+            // Yuck.
+            let regexp = regex::Regex::new(r#"^@_\d+"#).expect("unable to compile regex");
+            let imported_name = ResolvedName(imported_symbol.symbol, imported_symbol.name.clone());
+            let imported_mangled = &imported_name.mangled(func_ty);
+            let our_name = regexp.replace(imported_mangled, &format!("@_{}", name.symbol_id().0));
+            if !self.lowered_functions.iter().any(|f| f.name == our_name) {
+                let mut func = module.functions[*index].clone();
+                func.name = our_name.to_string();
+                self.lowered_functions.push(func);
+            }
+        }
+
         // Check to see if we can call this function directly (because its SymbolKind is FuncDef). If it is,
         // we can just call by name. Otherwise if it's something like SymbolKind::Local, we'll have to load
         // the callee from the register.
         if let Expr::Variable(name) = &callee_typed_expr.expr
             && let Some(name_info) = self.symbol_table.get(&name.symbol_id())
-            && name_info.kind == SymbolKind::FuncDef
+            && (name_info.kind == SymbolKind::FuncDef
+                || matches!(name_info.kind, SymbolKind::Import(_)))
         {
             // Determine the underlying function type, whether it's a direct function or a closure.
             let (func_ty, is_closure) = match &callee_typed_expr.ty {

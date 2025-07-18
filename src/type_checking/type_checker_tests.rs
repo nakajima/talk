@@ -1936,7 +1936,7 @@ mod operator_tests {
 
     use crate::{
         SymbolID, any_typed, check, check_with_imports,
-        compiling::imported_module::{ImportedModule, ImportedSymbol},
+        compiling::imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
         name::ResolvedName,
         token_kind::TokenKind,
         ty::Ty,
@@ -2046,6 +2046,7 @@ mod operator_tests {
                 name: "importedFunc".to_string(),
                 module: "Imported".to_string(),
                 symbol: SymbolID(123123123),
+                kind: ImportedSymbolKind::Function { index: 0 },
             },
         );
 
@@ -2060,6 +2061,7 @@ mod operator_tests {
                 module_name: "Imported".to_string(),
                 symbols,
                 types,
+                functions: vec![],
             }],
             r#"
             import Imported

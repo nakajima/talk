@@ -78,7 +78,12 @@ pub fn _compile_prelude() -> Prelude {
             &driver.config,
             &Default::default(),
         )
-        .lower(&mut driver.symbol_table, &driver.config, IRModule::new());
+        .lower(
+            &mut driver.symbol_table,
+            &driver.config,
+            IRModule::new(),
+            &Default::default(),
+        );
     let mut environment = unit.env.clone();
     let module = unit.module();
     let symbols = &driver.symbol_table;

@@ -26,7 +26,7 @@ pub enum ConformanceError {
     TypeCannotConform(String),
     TypeDoesNotConform(String, String),
     MemberNotImplemented {
-        ty: Ty,
+        ty: Box<Ty>,
         protocol: SymbolID,
         member: String,
     },
@@ -176,7 +176,7 @@ impl<'a> ConformanceChecker<'a> {
             Ok(property)
         } else {
             Err(ConformanceError::MemberNotImplemented {
-                ty: self.ty.clone(),
+                ty: self.ty.clone().into(),
                 protocol: protocol.symbol_id,
                 member: name.to_string(),
             })
@@ -201,13 +201,13 @@ impl<'a> ConformanceChecker<'a> {
                 .member_ty(method_name)
                 .cloned()
                 .ok_or(ConformanceError::MemberNotImplemented {
-                    ty: self.ty.clone(),
+                    ty: self.ty.clone().into(),
                     protocol: protocol.symbol_id,
                     member: method_name.to_string(),
                 })
         } else {
             Err(ConformanceError::MemberNotImplemented {
-                ty: self.ty.clone(),
+                ty: self.ty.clone().into(),
                 protocol: protocol.symbol_id,
                 member: method_name.to_string(),
             })

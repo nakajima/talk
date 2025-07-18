@@ -1190,7 +1190,7 @@ mod tests {
         any_expr,
         compiling::{
             driver::Driver,
-            imported_module::{ImportedModule, ImportedSymbol},
+            imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
         },
         diagnostic::DiagnosticKind,
         parsed_expr::Expr,
@@ -1977,6 +1977,7 @@ mod tests {
                 module: "Imported".to_string(),
                 name: "importedFunc".to_string(),
                 symbol: SymbolID(123123123),
+                kind: ImportedSymbolKind::Function { index: 0 },
             },
         );
 
@@ -1985,6 +1986,7 @@ mod tests {
                 module_name: "Imported".to_string(),
                 symbols,
                 types: Default::default(),
+                functions: vec![],
             }],
             "
         import Imported
@@ -2001,6 +2003,7 @@ mod tests {
                     module: "Imported".to_string(),
                     name: "importedFunc".to_string(),
                     symbol: SymbolID(123123123),
+                    kind: ImportedSymbolKind::Function { index: 0 }
                 }
             )))
         )
