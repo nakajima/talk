@@ -386,11 +386,14 @@ impl ServerState {
         let mut router = Router::from_language_server(Self {
             client,
             counter: 0,
-            driver: Driver::new(DriverConfig {
-                executable: false,
-                include_prelude: true,
-                include_comments: true,
-            }),
+            driver: Driver::new(
+                "TalkLSP",
+                DriverConfig {
+                    executable: false,
+                    include_prelude: true,
+                    include_comments: true,
+                },
+            ),
         });
         router.event(Self::on_tick);
         router

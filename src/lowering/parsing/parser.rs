@@ -470,11 +470,14 @@ mod tests {
     use indoc::formatdoc;
 
     fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::new(DriverConfig {
-            executable: true,
-            include_prelude: false,
-            include_comments: false,
-        });
+        let mut driver = Driver::new(
+            "LoweringTests",
+            DriverConfig {
+                executable: true,
+                include_prelude: false,
+                include_comments: false,
+            },
+        );
         driver.update_file(&"-".into(), input.to_string());
         let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)

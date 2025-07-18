@@ -55,11 +55,14 @@ fn load_files(driver: &mut Driver) {
 pub fn _compile_prelude() -> Prelude {
     let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
 
-    let mut driver = Driver::new(DriverConfig {
-        executable: false,
-        include_prelude: false,
-        include_comments: false,
-    });
+    let mut driver = Driver::new(
+        "Prelude",
+        DriverConfig {
+            executable: false,
+            include_prelude: false,
+            include_comments: false,
+        },
+    );
 
     crate::builtins::import_symbols(&mut driver.symbol_table);
 

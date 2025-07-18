@@ -9,11 +9,14 @@ pub mod helpers {
     };
 
     pub fn lower_without_prelude(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::new(DriverConfig {
-            executable: true,
-            include_prelude: false,
-            include_comments: false,
-        });
+        let mut driver = Driver::new(
+            "LoweringTestHelpers",
+            DriverConfig {
+                executable: true,
+                include_prelude: false,
+                include_comments: false,
+            },
+        );
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
@@ -26,11 +29,14 @@ pub mod helpers {
     pub fn lower_without_prelude_with_env(
         input: &'static str,
     ) -> Result<(IRModule, Environment), IRError> {
-        let mut driver = Driver::new(DriverConfig {
-            executable: true,
-            include_prelude: false,
-            include_comments: false,
-        });
+        let mut driver = Driver::new(
+            "LoweringTestHelpers",
+            DriverConfig {
+                executable: true,
+                include_prelude: false,
+                include_comments: false,
+            },
+        );
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
@@ -71,11 +77,14 @@ pub mod lowering_tests {
         imports: Vec<CompiledModule>,
         input: &'static str,
     ) -> Result<IRModule, IRError> {
-        let mut driver = Driver::new(DriverConfig {
-            executable: true,
-            include_prelude: true,
-            include_comments: false,
-        });
+        let mut driver = Driver::new(
+            "LoweringTestHelpers",
+            DriverConfig {
+                executable: true,
+                include_prelude: true,
+                include_comments: false,
+            },
+        );
         driver.update_file(&PathBuf::from("-"), input.into());
         driver.import_modules(imports);
         let lowered = driver.lower().into_iter().next().unwrap();
@@ -87,11 +96,14 @@ pub mod lowering_tests {
     }
 
     pub fn lower(input: &'static str) -> Result<IRModule, IRError> {
-        let mut driver = Driver::new(DriverConfig {
-            executable: true,
-            include_prelude: true,
-            include_comments: false,
-        });
+        let mut driver = Driver::new(
+            "LoweringTestHelpers",
+            DriverConfig {
+                executable: true,
+                include_prelude: true,
+                include_comments: false,
+            },
+        );
         driver.update_file(&PathBuf::from("-"), input.into());
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();

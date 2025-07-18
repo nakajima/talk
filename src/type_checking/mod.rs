@@ -105,7 +105,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
     use std::path::PathBuf;
 
     let path = &PathBuf::from("-");
-    let mut driver = Driver::new(Default::default());
+    let mut driver = Driver::new("TypeTests", Default::default());
     driver.update_file(path, input.into());
     let units = driver.check();
     let typed_compilation_unit = units.clone().into_iter().next().unwrap();
@@ -142,7 +142,7 @@ pub fn check_with_imports(
     use std::path::PathBuf;
 
     let path = &PathBuf::from("-");
-    let mut driver = Driver::new(Default::default());
+    let mut driver = Driver::new("-", Default::default());
     driver.update_file(path, input.into());
     driver.import_modules(imports.to_vec());
     let units = driver.check();
@@ -177,11 +177,14 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
     use std::path::PathBuf;
 
     let path = &PathBuf::from("-");
-    let mut driver = Driver::new(DriverConfig {
-        executable: false,
-        include_prelude: false,
-        include_comments: false,
-    });
+    let mut driver = Driver::new(
+        "TypeTests",
+        DriverConfig {
+            executable: false,
+            include_prelude: false,
+            include_comments: false,
+        },
+    );
     driver.update_file(path, input.into());
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
 

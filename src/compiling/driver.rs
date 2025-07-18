@@ -4,16 +4,19 @@ use std::{
 };
 
 use crate::{
-    SourceFile, SymbolID, SymbolTable,
+    SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable,
     compiling::{
         compilation_session::{CompilationSession, SharedCompilationSession},
         compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
-        compiled_module::CompiledModule,
+        compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
     },
     diagnostic::{Diagnostic, Position},
     environment::Environment,
     lowering::ir_module::IRModule,
+    name::ResolvedName,
     source_file,
+    ty::Ty,
+    typed_expr::TypedExpr,
 };
 
 #[derive(Debug)]
@@ -56,17 +59,22 @@ pub struct Driver {
 
 impl Default for Driver {
     fn default() -> Self {
-        Self::new(Default::default())
+        Self::new("default", Default::default())
     }
 }
 
 impl Driver {
-    pub fn new(config: DriverConfig) -> Self {
+    pub fn new(name: impl Into<String>, config: DriverConfig) -> Self {
         let session = SharedCompilationSession::new(CompilationSession::new().into());
         let environment = config.new_environment();
 
         Self {
-            units: vec![CompilationUnit::new(session.clone(), vec![], environment)],
+            units: vec![CompilationUnit::new(
+                name.into(),
+                session.clone(),
+                vec![],
+                environment,
+            )],
             symbol_table: if config.include_prelude {
                 crate::prelude::compile_prelude().symbols.clone()
             } else {
@@ -282,25 +290,149 @@ impl Driver {
         None
     }
 
-    pub fn compile_module(
-        &self,
-        _name: impl Into<String>,
-    ) -> Result<CompiledModule, CompilationError> {
-        Err(CompilationError::UnknownError("wip"))
+    #[allow(clippy::expect_used)]
+    #[allow(clippy::panic)]
+    pub fn compile_modules(&mut self) -> Result<Vec<CompiledModule>, CompilationError> {
+        let prelude_scope = crate::prelude::compile_prelude().global_scope.clone();
+        let mut modules = vec![];
+
+        for unit in self.units.iter() {
+            let resolved = unit
+                .clone()
+                .parse(false /* don't include comments */)
+                .resolved(&mut self.symbol_table, &self.config, &self.module_env);
+
+            let mut symbols = HashMap::<String, ImportedSymbol>::new();
+            for (name, symbol_id) in &resolved.stage.global_scope {
+                if prelude_scope.contains_key(name) {
+                    continue;
+                }
+
+                let kind = match self.symbol_table.get(symbol_id) {
+                    Some(SymbolInfo {
+                        kind: SymbolKind::FuncDef,
+                        ..
+                    }) => ImportedSymbolKind::Function { index: 0 },
+                    Some(_) => ImportedSymbolKind::Constant { index: 0 },
+                    _ => continue,
+                };
+                symbols.insert(
+                    name.clone(),
+                    ImportedSymbol {
+                        module: unit.name.clone(),
+                        name: name.clone(),
+                        symbol: *symbol_id,
+                        kind,
+                    },
+                );
+            }
+
+            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
+
+            let mut types = HashMap::<SymbolID, Ty>::new();
+            for (_, imported) in symbols.iter() {
+                let info = self
+                    .symbol_table
+                    .get(&imported.symbol)
+                    .expect("didn't get symbol for exported ty");
+                // TODO: This is gonna be slow.
+                for file in &typed.stage.files {
+                    let typed_expr =
+                        TypedExpr::find_in(file.roots(), info.expr_id).unwrap_or_else(|| {
+                            panic!("did not find type for compiled module export: {info:?}")
+                        });
+                    types.insert(imported.symbol, typed_expr.ty.clone());
+                }
+            }
+
+            let lowered = typed
+                .lower(
+                    &mut self.symbol_table,
+                    &self.config,
+                    IRModule::new(),
+                    &self.module_env,
+                )
+                .module();
+
+            // Go back and fill in indexes
+            // TODO: This too, will be slow
+            for (i, function) in lowered.functions.iter().enumerate() {
+                for symbol in symbols.values_mut() {
+                    if ResolvedName(symbol.symbol, symbol.name.clone())
+                        .mangled(types.get(&symbol.symbol).expect("how tho"))
+                        == function.name
+                        && let ImportedSymbolKind::Function { index } = &mut symbol.kind
+                    {
+                        *index = i;
+                    }
+                }
+            }
+
+            let module = CompiledModule {
+                module_name: unit.name.clone(),
+                symbols,
+                types,
+                ir_module: lowered,
+            };
+
+            modules.push(module);
+        }
+
+        Ok(modules)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::compiling::driver::Driver;
+    use crate::{
+        SymbolID,
+        compiling::{
+            compiled_module::{ImportedSymbol, ImportedSymbolKind},
+            driver::Driver,
+        },
+        ty::Ty,
+    };
 
     #[test]
     fn compiles_a_module() {
-        let driver = Driver::with_str(
+        let mut driver = Driver::with_str(
             "
-        ",
+            func foo(x: Int) { x }
+            func bar(x: Float) { x }
+            ",
         );
 
-        let _mod = driver.compile_module("SomeModule");
+        let modules = driver.compile_modules().unwrap();
+        assert_eq!(modules.len(), 1);
+        let module = &modules[0];
+        assert_eq!("default", module.module_name);
+        assert_eq!(
+            module.symbols.get("foo").unwrap(),
+            &ImportedSymbol {
+                module: "default".into(),
+                name: "foo".into(),
+                symbol: SymbolID::resolved(1),
+                kind: ImportedSymbolKind::Function { index: 0 }
+            }
+        );
+        assert_eq!(
+            module.symbols.get("bar").unwrap(),
+            &ImportedSymbol {
+                module: "default".into(),
+                name: "bar".into(),
+                symbol: SymbolID::resolved(2),
+                kind: ImportedSymbolKind::Function { index: 1 }
+            }
+        );
+
+        assert_eq!(
+            module.types.get(&SymbolID::resolved(1)).unwrap(),
+            &Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+        );
+
+        assert_eq!(
+            module.types.get(&SymbolID::resolved(2)).unwrap(),
+            &Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
+        );
     }
 }

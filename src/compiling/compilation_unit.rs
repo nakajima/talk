@@ -69,6 +69,7 @@ pub struct CompilationUnit<Stage = Raw>
 where
     Stage: StageTrait,
 {
+    pub name: String,
     pub src_cache: HashMap<PathBuf, String>,
     pub input: Vec<PathBuf>,
     pub stage: Stage,
@@ -83,8 +84,14 @@ impl<S: StageTrait> CompilationUnit<S> {
 }
 
 impl CompilationUnit<Raw> {
-    pub fn new(session: SharedCompilationSession, input: Vec<PathBuf>, env: Environment) -> Self {
+    pub fn new(
+        name: String,
+        session: SharedCompilationSession,
+        input: Vec<PathBuf>,
+        env: Environment,
+    ) -> Self {
         Self {
+            name,
             src_cache: Default::default(),
             input,
             stage: Raw {},
@@ -121,6 +128,7 @@ impl CompilationUnit<Raw> {
         }
 
         CompilationUnit {
+            name: self.name,
             src_cache: self.src_cache,
             input: self.input,
             stage: Parsed { files },
@@ -185,6 +193,7 @@ impl CompilationUnit<Parsed> {
         }
 
         CompilationUnit {
+            name: self.name,
             src_cache: self.src_cache,
             input: self.input,
             stage: Resolved {
@@ -266,6 +275,7 @@ impl CompilationUnit<Resolved> {
         }
 
         CompilationUnit {
+            name: self.name,
             src_cache: self.src_cache,
             input: self.input,
             stage: Typed { files },
@@ -292,16 +302,23 @@ impl CompilationUnit<Typed> {
         symbol_table: &mut SymbolTable,
         driver_config: &DriverConfig,
         mut module: IRModule,
-        module_env: &ModuleEnvironment
+        module_env: &ModuleEnvironment,
     ) -> CompilationUnit<Lowered> {
         let mut files = vec![];
         for file in self.stage.files {
-            let lowered = Lowerer::new(file, symbol_table, &mut self.env, self.session.clone(), module_env)
-                .lower(&mut module, driver_config);
+            let lowered = Lowerer::new(
+                file,
+                symbol_table,
+                &mut self.env,
+                self.session.clone(),
+                module_env,
+            )
+            .lower(&mut module, driver_config);
             files.push(lowered);
         }
 
         CompilationUnit {
+            name: self.name,
             src_cache: self.src_cache,
             input: self.input,
             stage: Lowered {
