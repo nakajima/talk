@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{
-    compiling::imported_module::ImportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
+    compiling::compiled_module::ImportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
     span::Span,
 };
 

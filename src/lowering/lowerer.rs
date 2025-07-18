@@ -10,8 +10,8 @@ use crate::{
     },
     compiling::{
         compilation_session::SharedCompilationSession,
+        compiled_module::{ImportedSymbol, ImportedSymbolKind},
         driver::{DriverConfig, ModuleEnvironment},
-        imported_module::{ImportedSymbol, ImportedSymbolKind},
     },
     constraint::Constraint,
     diagnostic::Diagnostic,
@@ -2116,7 +2116,7 @@ impl<'a> Lowerer<'a> {
             let imported_mangled = &imported_name.mangled(func_ty);
             let our_name = regexp.replace(imported_mangled, &format!("@_{}", name.symbol_id().0));
             if !self.lowered_functions.iter().any(|f| f.name == our_name) {
-                let mut func = module.functions[*index].clone();
+                let mut func = module.ir_module.functions[*index].clone();
                 func.name = our_name.to_string();
                 self.lowered_functions.push(func);
             }

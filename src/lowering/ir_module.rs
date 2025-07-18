@@ -5,7 +5,7 @@ pub enum IRConstantData {
     RawBuffer(Vec<u8>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IRModule {
     pub functions: Vec<IRFunction>,
     pub constants: Vec<IRConstantData>,

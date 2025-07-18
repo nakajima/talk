@@ -9,8 +9,8 @@ use crate::SymbolInfo;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
+use crate::compiling::compiled_module::ImportedSymbol;
 use crate::compiling::driver::ModuleEnvironment;
-use crate::compiling::imported_module::ImportedSymbol;
 use crate::diagnostic::Diagnostic;
 use crate::expr_id::ExprID;
 use crate::formatter::Formatter;
@@ -1189,10 +1189,11 @@ mod tests {
     use crate::{
         any_expr,
         compiling::{
+            compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
             driver::Driver,
-            imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
         },
         diagnostic::DiagnosticKind,
+        lowering::ir_module::IRModule,
         parsed_expr::Expr,
     };
 
@@ -1202,7 +1203,7 @@ mod tests {
     }
 
     fn resolve_with_imports(
-        imports: Vec<ImportedModule>,
+        imports: Vec<CompiledModule>,
         code: &'static str,
     ) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
@@ -1982,11 +1983,14 @@ mod tests {
         );
 
         let resolved = resolve_with_imports(
-            vec![ImportedModule {
+            vec![CompiledModule {
                 module_name: "Imported".to_string(),
                 symbols,
                 types: Default::default(),
-                functions: vec![],
+                ir_module: IRModule {
+                    functions: vec![],
+                    constants: vec![],
+                },
             }],
             "
         import Imported

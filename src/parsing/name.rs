@@ -1,5 +1,5 @@
 use crate::{
-    SymbolID, compiling::imported_module::ImportedSymbol, ty::Ty, type_checker::TypeError,
+    SymbolID, compiling::compiled_module::ImportedSymbol, ty::Ty, type_checker::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

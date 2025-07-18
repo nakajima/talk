@@ -71,7 +71,12 @@ fn bench_lower(c: &mut Criterion) {
                 } else {
                     IRModule::new()
                 };
-                black_box(typed.lower(&mut driver.symbol_table, &driver.config, module));
+                black_box(typed.lower(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    module,
+                    &driver.module_env,
+                ));
             }
         })
     });
@@ -97,7 +102,12 @@ fn bench_passes(c: &mut Criterion) {
                 } else {
                     IRModule::new()
                 };
-                let lowered = typed.lower(&mut driver.symbol_table, &driver.config, module);
+                let lowered = typed.lower(
+                    &mut driver.symbol_table,
+                    &driver.config,
+                    module,
+                    &driver.module_env,
+                );
                 black_box(ModulePassManager::run(&lowered.env, lowered.module()));
             }
         })

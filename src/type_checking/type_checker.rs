@@ -6,7 +6,7 @@ use crate::{
     ExprMetaStorage, NameResolved, SymbolID, SymbolTable, Typed,
     compiling::{
         compilation_session::SharedCompilationSession,
-        imported_module::{ImportedModule, ImportedSymbol},
+        compiled_module::{CompiledModule, ImportedSymbol},
     },
     conformance_checker::ConformanceError,
     constraint::Constraint,
@@ -119,7 +119,7 @@ pub struct TypeChecker<'a> {
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
     pub(super) meta: &'a ExprMetaStorage,
-    module_env: &'a HashMap<String, ImportedModule>,
+    module_env: &'a HashMap<String, CompiledModule>,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -146,7 +146,7 @@ impl<'a> TypeChecker<'a> {
         symbol_table: &'a mut SymbolTable,
         path: PathBuf,
         meta: &'a ExprMetaStorage,
-        module_env: &'a HashMap<String, ImportedModule>,
+        module_env: &'a HashMap<String, CompiledModule>,
     ) -> Self {
         Self {
             session,

@@ -48,8 +48,8 @@ pub mod lowering_tests {
     use crate::{
         SymbolID, assert_lowered_function,
         compiling::{
+            compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
             driver::{Driver, DriverConfig},
-            imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
         },
         lowering::{
             instr::{Callee, Instr},
@@ -68,7 +68,7 @@ pub mod lowering_tests {
     };
 
     pub fn lower_with_imports(
-        imports: Vec<ImportedModule>,
+        imports: Vec<CompiledModule>,
         input: &'static str,
     ) -> Result<IRModule, IRError> {
         let mut driver = Driver::new(DriverConfig {
@@ -1847,11 +1847,14 @@ pub mod lowering_tests {
         };
 
         let lowered = lower_with_imports(
-            vec![ImportedModule {
+            vec![CompiledModule {
                 module_name: "Imported".to_string(),
                 symbols,
                 types,
-                functions: vec![imported_func.clone()],
+                ir_module: IRModule {
+                    constants: vec![],
+                    functions: vec![imported_func.clone()],
+                },
             }],
             "
         import Imported

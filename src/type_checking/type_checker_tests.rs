@@ -1936,7 +1936,8 @@ mod operator_tests {
 
     use crate::{
         SymbolID, any_typed, check, check_with_imports,
-        compiling::imported_module::{ImportedModule, ImportedSymbol, ImportedSymbolKind},
+        compiling::compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
+        lowering::ir_module::IRModule,
         name::ResolvedName,
         token_kind::TokenKind,
         ty::Ty,
@@ -2057,11 +2058,14 @@ mod operator_tests {
         );
 
         let checked = check_with_imports(
-            &[ImportedModule {
+            &[CompiledModule {
                 module_name: "Imported".to_string(),
                 symbols,
                 types,
-                functions: vec![],
+                ir_module: IRModule {
+                    functions: vec![],
+                    constants: vec![],
+                },
             }],
             r#"
             import Imported

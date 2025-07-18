@@ -8,7 +8,7 @@ use crate::{
     compiling::{
         compilation_session::{CompilationSession, SharedCompilationSession},
         compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
-        imported_module::ImportedModule,
+        compiled_module::CompiledModule,
     },
     diagnostic::{Diagnostic, Position},
     environment::Environment,
@@ -23,7 +23,7 @@ pub struct DriverConfig {
     pub include_comments: bool,
 }
 
-pub type ModuleEnvironment = HashMap<String, ImportedModule>;
+pub type ModuleEnvironment = HashMap<String, CompiledModule>;
 
 impl DriverConfig {
     pub fn new_environment(&self) -> Environment {
@@ -51,7 +51,7 @@ pub struct Driver {
     pub symbol_table: SymbolTable,
     pub config: DriverConfig,
     pub session: SharedCompilationSession,
-    module_env: HashMap<String, ImportedModule>,
+    pub module_env: HashMap<String, CompiledModule>,
 }
 
 impl Default for Driver {
@@ -241,7 +241,7 @@ impl Driver {
         None
     }
 
-    pub fn import_modules(&mut self, modules: Vec<ImportedModule>) {
+    pub fn import_modules(&mut self, modules: Vec<CompiledModule>) {
         for module in modules.into_iter() {
             self.module_env
                 .insert(module.module_name.to_string(), module);

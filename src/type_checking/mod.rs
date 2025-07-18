@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::{
     ExprMetaStorage, SourceFile, SymbolTable, Typed,
-    compiling::{compilation_session::SharedCompilationSession, imported_module::ImportedModule},
+    compiling::{compilation_session::SharedCompilationSession, compiled_module::CompiledModule},
     diagnostic::Diagnostic,
     environment::Environment,
     parsing::expr_id::ExprID,
@@ -135,7 +135,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
 
 #[cfg(test)]
 pub fn check_with_imports(
-    imports: &[ImportedModule],
+    imports: &[CompiledModule],
     input: &str,
 ) -> Result<CheckResult, TypeError> {
     use crate::{ExprMetaStorage, compiling::driver::Driver};
