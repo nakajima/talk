@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 
+use once_cell::sync::Lazy;
+use regex::Regex;
 use tracing::trace_span;
 
 use crate::{
@@ -39,6 +41,8 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{Expr, Pattern, TypedExpr},
 };
+
+static MANGLED_NAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^@_\d+").unwrap());
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RefKind {
@@ -2111,7 +2115,7 @@ impl<'a> Lowerer<'a> {
                 .expect("did not find type for imported function");
 
             // Yuck.
-            let regexp = regex::Regex::new(r#"^@_\d+"#).expect("unable to compile regex");
+            let regexp = &MANGLED_NAME_REGEX;
             let imported_name = ResolvedName(imported_symbol.symbol, imported_symbol.name.clone());
             let imported_mangled = &imported_name.mangled(func_ty);
             let our_name = regexp.replace(imported_mangled, &format!("@_{}", name.symbol_id().0));
