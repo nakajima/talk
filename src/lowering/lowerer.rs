@@ -42,6 +42,7 @@ use crate::{
     typed_expr::{Expr, Pattern, TypedExpr},
 };
 
+#[allow(clippy::unwrap_used)]
 static MANGLED_NAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^@_\d+").unwrap());
 
 #[derive(Debug, Clone, PartialEq)]
