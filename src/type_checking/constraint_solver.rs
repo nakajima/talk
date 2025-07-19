@@ -315,7 +315,7 @@ impl<'a> ConstraintSolver<'a> {
                             .env
                             .lookup_enum(enum_id)
                             .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve enum with id: {enum_id:?}"
+                                "Unable to resolve unqualified enum with id: {enum_id:?}, got {result_ty:?}"
                             )))
                             .map(|a| a.find_variant(member_name).cloned())?;
 
@@ -345,7 +345,7 @@ impl<'a> ConstraintSolver<'a> {
                             .env
                             .lookup_enum(&enum_id)
                             .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve enum with id: {enum_id:?}"
+                                "Unable to resolve unqualified func enum with id: {enum_id:?}, got {result_ty:?}"
                             )))
                             .map(|a| a.find_variant(member_name).cloned())?;
 
@@ -396,7 +396,7 @@ impl<'a> ConstraintSolver<'a> {
                             .env
                             .lookup_type(type_id)
                             .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve enum with id: {type_id:?}"
+                                "Unable to resolve member receiver type with id: {type_id:?}, {receiver_ty:?}"
                             )))?
                             .clone();
                         let Some(member_ty) =
@@ -415,12 +415,11 @@ impl<'a> ConstraintSolver<'a> {
                         )
                     }
                     Ty::Enum(enum_id, generics) => {
-                        let enum_def =
-                            self.env
-                                .lookup_enum(enum_id)
-                                .ok_or(TypeError::Unknown(format!(
-                                    "Unable to resolve enum with id: {enum_id:?}"
-                                )))?;
+                        let enum_def = self.env.lookup_enum(enum_id).ok_or(TypeError::Unknown(
+                            format!(
+                                "Unable to resolve enum with id: {enum_id:?}, got {receiver_ty:?}"
+                            ),
+                        ))?;
 
                         let Some(member_ty) = enum_def.member_ty(member_name) else {
                             return Err(TypeError::Unknown(format!(

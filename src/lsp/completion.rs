@@ -107,18 +107,13 @@ impl<'a> CompletionContext<'a> {
                         detail: Some(format!("{:?}", member.ty())),
                         ..Default::default()
                     },
-                    TypeMember::Initializer(_) => CompletionItem {
-                        label: name.clone(),
-                        kind: Some(CompletionItemKind::CONSTRUCTOR),
-                        detail: Some(format!("{:?}", member.ty())),
-                        ..Default::default()
-                    },
                     TypeMember::Variant(_) => CompletionItem {
                         label: name.clone(),
                         kind: Some(CompletionItemKind::ENUM_MEMBER),
                         detail: Some(format!("{:?}", member.ty())),
                         ..Default::default()
                     },
+                    _ => continue,
                 };
 
                 completions.push(item)
@@ -260,7 +255,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(completions.len(), 1);
+        assert_eq!(completions.len(), 1, "{completions:?}");
         assert_eq!(completions[0].label, "bar");
     }
 

@@ -9,6 +9,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Property {
+    pub index: usize,
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
@@ -16,8 +17,9 @@ pub struct Property {
 }
 
 impl Property {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty, has_default: bool) -> Self {
+    pub fn new(index: usize, name: String, expr_id: ExprID, ty: Ty, has_default: bool) -> Self {
         Self {
+            index,
             name,
             expr_id,
             ty,
@@ -28,6 +30,7 @@ impl Property {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawProperty<'a> {
+    pub index: usize,
     pub name: String,
     pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,

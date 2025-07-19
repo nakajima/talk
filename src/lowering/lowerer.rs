@@ -1,5 +1,6 @@
 use std::{collections::HashMap, ops::AddAssign, str::FromStr};
 
+use itertools::Itertools;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::trace_span;
@@ -125,6 +126,7 @@ impl Ty {
                     struct_def
                         .properties()
                         .iter()
+                        .sorted_by(|a, b| a.index.cmp(&b.index))
                         .map(|p| p.ty.to_ir(lowerer))
                         .collect(),
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
@@ -1633,14 +1635,14 @@ impl<'a> Lowerer<'a> {
                     unreachable!("didn't get struct def");
                 };
 
-                if let Some(index) = type_def.properties().iter().position(|p| p.name == name) {
+                if let Some(property) = type_def.find_property(name) {
                     let member_reg = self.allocate_register();
 
                     self.push_instr(Instr::GetElementPointer {
                         dest: member_reg,
                         base: receiver_reg,
                         ty: receiver.ty.to_ir(self).clone(),
-                        index: IRValue::ImmediateInt(index as i64),
+                        index: IRValue::ImmediateInt(property.index as i64),
                     });
 
                     if is_lvalue {
@@ -1693,17 +1695,7 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        let mut tag: Option<u16> = None;
-
-        for (i, var) in type_def.variants().iter().enumerate() {
-            if var.name != variant_name {
-                continue;
-            }
-
-            tag = Some(i as u16);
-        }
-
-        let Some(tag) = tag else {
+        let Some(variant) = type_def.find_variant(variant_name) else {
             self.push_err("did not find variant for tag", typed_expr);
             return None;
         };
@@ -1712,7 +1704,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::TagVariant(
             dest,
             ty.to_ir(self),
-            tag,
+            variant.tag as u16,
             RegisterList(args.to_vec()),
         ));
 
@@ -2577,7 +2569,7 @@ impl<'a> Lowerer<'a> {
             unreachable!("didn't get typedef for {:?}", irtype)
         };
 
-        struct_def.properties().iter().position(|k| k.name == name)
+        struct_def.find_property(name).map(|p| p.index)
     }
 }
 

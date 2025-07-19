@@ -8,6 +8,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawEnumVariant<'a> {
+    pub tag: usize,
     pub name: String,
     pub expr: &'a ParsedExpr,
     pub values: &'a [ParsedExpr],

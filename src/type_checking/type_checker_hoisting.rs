@@ -179,6 +179,9 @@ impl<'a> TypeChecker<'a> {
                 ..Default::default()
             };
 
+            let mut last_variant_index = 0;
+            let mut last_property_index = 0;
+
             for body_expr in body_exprs {
                 match &body_expr.expr {
                     crate::parsed_expr::Expr::Property {
@@ -199,11 +202,14 @@ impl<'a> TypeChecker<'a> {
                             .map_err(|e| (body_expr.id, e))?;
 
                         ty_placeholders.properties.push(RawProperty {
+                            index: last_property_index,
                             name: name_str.clone(),
                             expr: body_expr,
                             placeholder: type_var.clone(),
                             default_value,
                         });
+
+                        last_property_index += 1;
                     }
                     crate::parsed_expr::Expr::Init(_, func_expr)
                         if expr_ids.kind != PredeclarationKind::Enum =>
@@ -239,10 +245,13 @@ impl<'a> TypeChecker<'a> {
                     }
                     crate::parsed_expr::Expr::EnumVariant(name, values) => {
                         ty_placeholders.variants.push(RawEnumVariant {
+                            tag: last_variant_index,
                             name: name.name_str(),
                             expr: body_expr,
                             values,
-                        })
+                        });
+
+                        last_variant_index += 1;
                     }
                     crate::parsed_expr::Expr::Func {
                         name: Some(Name::Resolved(func_id, name_str)),
@@ -375,6 +384,7 @@ impl<'a> TypeChecker<'a> {
                         .infer_node(property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
                     properties.push(Property {
+                        index: property.index,
                         name: property.name.clone(),
                         expr_id: property.expr.id,
                         ty: typed_expr.ty.clone(),
@@ -466,12 +476,12 @@ impl<'a> TypeChecker<'a> {
 
             if def.kind == TypeDefKind::Enum {
                 let mut variants = vec![];
-                for (i, variant) in placeholders.variants.iter().enumerate() {
+                for variant in placeholders.variants.iter() {
                     let typed_expr = self
                         .infer_node(variant.expr, env, &Some(Ty::Enum(def.symbol_id(), vec![])))
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
-                        tag: i,
+                        tag: variant.tag,
                         name: variant.name.clone(),
                         ty: typed_expr.ty.clone(),
                     });

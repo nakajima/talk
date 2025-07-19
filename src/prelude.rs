@@ -100,10 +100,17 @@ pub fn _compile_prelude() -> Prelude {
             }
         }
 
-        panic!(
-            "Prelude did not compile cleanly: {:#?}",
-            session.diagnostics
-        )
+        if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
+            tracing::error!(
+                "Prelude did not compile cleanly: {:#?}",
+                session.diagnostics
+            );
+        } else {
+            panic!(
+                "Prelude did not compile cleanly: {:#?}",
+                session.diagnostics
+            )
+        }
     }
 
     #[allow(clippy::unwrap_used)]

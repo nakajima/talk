@@ -306,14 +306,7 @@ impl Environment {
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
-            Scheme::new(
-                Ty::Enum(def.symbol_id, def.canonical_type_parameters()),
-                def.type_parameters()
-                    .iter()
-                    .map(|t| t.type_var.clone())
-                    .collect(),
-                vec![],
-            ),
+            Scheme::new(def.ty(), def.canonical_type_variables(), vec![]),
         )?;
 
         self.types.insert(def.symbol_id(), def.clone());
