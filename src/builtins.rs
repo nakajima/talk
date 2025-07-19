@@ -6,7 +6,7 @@ use crate::{
     parsing::expr_id::ExprID,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{TypeDef, builtin_def::BuiltinDef},
+    type_defs::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -31,13 +31,14 @@ pub fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Int,
             unbound_vars: vec![],
-            type_def: Some(TypeDef::Builtin(BuiltinDef {
+            type_def: Some(TypeDef {
                 symbol_id: SymbolID(-1),
                 name_str: "Int".to_string(),
-                methods: vec![],
+                members: Default::default(),
                 conformances: vec![],
-                ty: Ty::Int,
-            })),
+                kind: TypeDefKind::Builtin(Ty::Int),
+                type_parameters: vec![],
+            }),
         },
         Builtin {
             id: -2,
@@ -50,13 +51,14 @@ pub fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Float,
             unbound_vars: vec![],
-            type_def: Some(TypeDef::Builtin(BuiltinDef {
+            type_def: Some(TypeDef {
                 symbol_id: SymbolID(-2),
                 name_str: "Float".to_string(),
-                methods: vec![],
+                members: Default::default(),
                 conformances: vec![],
-                ty: Ty::Float,
-            })),
+                kind: TypeDefKind::Builtin(Ty::Float),
+                type_parameters: vec![],
+            }),
         },
         Builtin {
             id: -3,
@@ -69,13 +71,14 @@ pub fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Bool,
             unbound_vars: vec![],
-            type_def: Some(TypeDef::Builtin(BuiltinDef {
+            type_def: Some(TypeDef {
                 symbol_id: SymbolID(-3),
                 name_str: "Bool".to_string(),
-                methods: vec![],
+                members: Default::default(),
                 conformances: vec![],
-                ty: Ty::Bool,
-            })),
+                kind: TypeDefKind::Builtin(Ty::Bool),
+                type_parameters: vec![],
+            }),
         },
         Builtin {
             id: -4,
@@ -88,13 +91,14 @@ pub fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Pointer,
             unbound_vars: vec![],
-            type_def: Some(TypeDef::Builtin(BuiltinDef {
+            type_def: Some(TypeDef {
                 symbol_id: SymbolID(-4),
                 name_str: "Pointer".to_string(),
-                methods: vec![],
+                members: Default::default(),
                 conformances: vec![],
-                ty: Ty::Pointer,
-            })),
+                kind: TypeDefKind::Builtin(Ty::Pointer),
+                type_parameters: vec![],
+            }),
         },
         Builtin {
             id: -5,
@@ -293,7 +297,14 @@ pub fn builtins() -> Vec<Builtin> {
             },
             ty: Ty::Byte,
             unbound_vars: vec![],
-            type_def: None,
+            type_def: Some(TypeDef {
+                symbol_id: SymbolID(-13),
+                name_str: "Byte".to_string(),
+                members: Default::default(),
+                conformances: vec![],
+                kind: TypeDefKind::Builtin(Ty::Byte),
+                type_parameters: vec![],
+            }),
         },
     ]
 }

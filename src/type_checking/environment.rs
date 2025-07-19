@@ -10,7 +10,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::{TypeDef, enum_def::EnumDef, protocol_def::ProtocolDef, struct_def::StructDef},
+    type_defs::{TypeDef, TypeDefKind},
     type_var_context::{TypeVarContext, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -304,60 +304,19 @@ impl Environment {
     }
 
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
-        match def {
-            TypeDef::Enum(def) => self.register_enum(def),
-            TypeDef::Struct(def) => self.register_struct(def),
-            TypeDef::Protocol(def) => self.register_protocol(def),
-            TypeDef::Builtin(def) => {
-                self.types
-                    .insert(def.symbol_id, TypeDef::Builtin(def.clone()));
-                Ok(())
-            }
-        }
-    }
-
-    // Helper methods for enum definitions
-    pub fn register_enum(&mut self, def: &EnumDef) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
             Scheme::new(
                 Ty::Enum(def.symbol_id, def.canonical_type_parameters()),
-                def.canonical_type_vars(),
+                def.type_parameters()
+                    .iter()
+                    .map(|t| t.type_var.clone())
+                    .collect(),
                 vec![],
             ),
         )?;
-        self.types
-            .insert(def.clone().symbol_id, TypeDef::Enum(def.clone()));
-        Ok(())
-    }
 
-    pub fn register_struct(&mut self, def: &StructDef) -> Result<(), TypeError> {
-        self.declare(
-            def.symbol_id,
-            Scheme::new(
-                Ty::Struct(def.symbol_id, def.canonical_type_parameters()),
-                def.canonical_type_vars(),
-                vec![],
-            ),
-        )?;
-        self.types
-            .insert(def.symbol_id, TypeDef::Struct(def.clone()));
-
-        Ok(())
-    }
-
-    pub fn register_protocol(&mut self, def: &ProtocolDef) -> Result<(), TypeError> {
-        self.declare(
-            def.symbol_id,
-            Scheme::new(
-                Ty::Protocol(def.symbol_id, def.canonical_associated_types()),
-                def.canonical_associated_type_vars(),
-                vec![],
-            ),
-        )?;
-        self.types
-            .insert(def.symbol_id, TypeDef::Protocol(def.clone()));
-
+        self.types.insert(def.symbol_id(), def.clone());
         Ok(())
     }
 
@@ -405,35 +364,49 @@ impl Environment {
     }
 
     pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {
-        matches!(self.lookup_type(symbol_id), Some(TypeDef::Struct(_)))
+        matches!(
+            self.lookup_type(symbol_id),
+            Some(TypeDef {
+                kind: TypeDefKind::Struct,
+                ..
+            })
+        )
     }
 
-    pub fn lookup_enum(&self, name: &SymbolID) -> Option<&EnumDef> {
-        if let Some(TypeDef::Enum(def)) = self.types.get(name) {
+    pub fn lookup_enum(&self, name: &SymbolID) -> Option<&TypeDef> {
+        if let Some(def) = self.types.get(name)
+            && def.kind == TypeDefKind::Enum
+        {
             Some(def)
         } else {
             None
         }
     }
 
-    pub fn lookup_enum_mut(&mut self, name: &SymbolID) -> Option<&mut EnumDef> {
-        if let Some(TypeDef::Enum(def)) = self.types.get_mut(name) {
+    pub fn lookup_enum_mut(&mut self, name: &SymbolID) -> Option<&mut TypeDef> {
+        if let Some(def) = self.types.get_mut(name)
+            && def.kind == TypeDefKind::Enum
+        {
             Some(def)
         } else {
             None
         }
     }
 
-    pub fn lookup_struct(&self, name: &SymbolID) -> Option<&StructDef> {
-        if let Some(TypeDef::Struct(def)) = self.types.get(name) {
+    pub fn lookup_struct(&self, name: &SymbolID) -> Option<&TypeDef> {
+        if let Some(def) = self.types.get(name)
+            && def.kind == TypeDefKind::Struct
+        {
             Some(def)
         } else {
             None
         }
     }
 
-    pub fn lookup_protocol(&self, name: &SymbolID) -> Option<&ProtocolDef> {
-        if let Some(TypeDef::Protocol(def)) = self.types.get(name) {
+    pub fn lookup_protocol(&self, name: &SymbolID) -> Option<&TypeDef> {
+        if let Some(def) = self.types.get(name)
+            && def.kind == TypeDefKind::Protocol
+        {
             Some(def)
         } else {
             None

@@ -1,7 +1,7 @@
 use tracing::info_span;
 
 use crate::{
-    SymbolID, builtin_type, builtin_type_def,
+    SymbolID, builtin_type,
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter},
     name::Name,
@@ -11,12 +11,10 @@ use crate::{
     ty::Ty,
     type_checker::{Scheme, TypeChecker, TypeError},
     type_defs::{
-        TypeDef,
-        enum_def::{EnumDef, EnumVariant, RawEnumVariant},
-        protocol_def::{Conformance, ProtocolDef},
-        struct_def::{
-            Initializer, Method, Property, RawInitializer, RawMethod, RawProperty, StructDef,
-        },
+        TypeDef, TypeDefKind,
+        enum_def::{EnumVariant, RawEnumVariant},
+        protocol_def::Conformance,
+        struct_def::{Initializer, Method, Property, RawInitializer, RawMethod, RawProperty},
     },
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::Expr,
@@ -313,39 +311,27 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect();
 
-            let type_def =
-                env.lookup_type(symbol_id)
-                    .cloned()
-                    .unwrap_or_else(|| match expr_ids.kind {
-                        PredeclarationKind::Enum => TypeDef::Enum(EnumDef {
-                            symbol_id: *symbol_id,
-                            name_str: name_str.clone(),
-                            type_parameters: type_params,
-                            variants: Default::default(),
-                            methods: Default::default(),
-                            conformances: Default::default(),
-                        }),
-                        PredeclarationKind::Struct => TypeDef::Struct(StructDef::new(
-                            *symbol_id,
-                            name_str.clone(),
-                            type_params,
-                        )),
-                        PredeclarationKind::Protocol => TypeDef::Protocol(ProtocolDef {
-                            symbol_id: *symbol_id,
-                            name_str: name_str.clone(),
-                            associated_types: type_params,
-                            conformances: vec![],
-                            properties: Default::default(),
-                            methods: Default::default(),
-                            initializers: Default::default(),
-                            method_requirements: Default::default(),
-                        }),
-                        PredeclarationKind::Builtin(symbol_id) =>
-                        {
-                            #[allow(clippy::expect_used)]
-                            builtin_type_def(&symbol_id).expect("didn't get builtin")
-                        }
-                    });
+            let type_def = env.lookup_type(symbol_id).cloned().unwrap_or_else(|| {
+                let kind = match expr_ids.kind {
+                    PredeclarationKind::Enum => TypeDefKind::Enum,
+                    PredeclarationKind::Struct => TypeDefKind::Struct,
+                    PredeclarationKind::Protocol => TypeDefKind::Protocol,
+                    PredeclarationKind::Builtin(symbol_id) =>
+                    {
+                        #[allow(clippy::unwrap_used)]
+                        TypeDefKind::Builtin(builtin_type(&symbol_id).unwrap())
+                    }
+                };
+
+                TypeDef {
+                    symbol_id: *symbol_id,
+                    name_str: name_str.clone(),
+                    kind,
+                    type_parameters: type_params,
+                    members: Default::default(),
+                    conformances: Default::default(),
+                }
+            });
 
             env.register(&type_def).map_err(|e| (root.id, e))?;
 
@@ -368,8 +354,9 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let ty = if let TypeDef::Builtin(ref def) = def {
-                def.ty.clone()
+            // TODO: Should this be happening in typedef ty instead of here?
+            let ty = if let TypeDefKind::Builtin(ref ty) = def.kind {
+                ty.clone()
             } else {
                 let Ok(scheme) = env.lookup_symbol(&sym).cloned() else {
                     tracing::warn!("Did not find symbol for inference: {sym:?}");
@@ -381,7 +368,7 @@ impl<'a> TypeChecker<'a> {
 
             env.selfs.push(ty);
 
-            if !matches!(def, TypeDef::Enum(_)) {
+            if def.kind != TypeDefKind::Enum {
                 let mut properties = vec![];
                 for property in placeholders.properties.iter() {
                     let typed_expr = self
@@ -425,7 +412,7 @@ impl<'a> TypeChecker<'a> {
             env.register(&def)
                 .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
 
-            if matches!(def, TypeDef::Protocol(_)) {
+            if def.kind == TypeDefKind::Protocol {
                 let mut method_requirements = vec![];
                 for method in placeholders.method_requirements.iter() {
                     let typed_expr = self
@@ -451,7 +438,7 @@ impl<'a> TypeChecker<'a> {
                 })?;
             }
 
-            if !matches!(def, TypeDef::Enum(_)) {
+            if def.kind != TypeDefKind::Enum {
                 let mut initializers = vec![];
 
                 for initializer in placeholders.initializers.iter() {
@@ -477,13 +464,14 @@ impl<'a> TypeChecker<'a> {
                 })?;
             }
 
-            if matches!(def, TypeDef::Enum(_)) {
+            if def.kind == TypeDefKind::Enum {
                 let mut variants = vec![];
-                for variant in placeholders.variants.iter() {
+                for (i, variant) in placeholders.variants.iter().enumerate() {
                     let typed_expr = self
                         .infer_node(variant.expr, env, &Some(Ty::Enum(def.symbol_id(), vec![])))
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
+                        tag: i,
                         name: variant.name.clone(),
                         ty: typed_expr.ty.clone(),
                     });

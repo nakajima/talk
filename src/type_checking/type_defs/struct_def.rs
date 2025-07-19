@@ -116,16 +116,6 @@ impl StructDef {
         None
     }
 
-    pub fn conforms_to(&self, protocol_id: &SymbolID) -> bool {
-        for conformance in self.conformances.iter() {
-            if &conformance.protocol_id == protocol_id {
-                return true;
-            }
-        }
-
-        false
-    }
-
     pub fn canonical_type_parameters(&self) -> Vec<Ty> {
         self.type_parameters
             .iter()

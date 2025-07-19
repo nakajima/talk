@@ -15,6 +15,7 @@ pub struct RawEnumVariant<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumVariant {
+    pub tag: usize,
     pub name: String,
     pub ty: Ty,
 }
@@ -52,16 +53,6 @@ impl EnumDef {
         for variant in self.variants.iter() {
             if variant.name == member_name {
                 return Some(&variant.ty);
-            }
-        }
-
-        None
-    }
-
-    pub(crate) fn tag_with_variant_for(&self, name: &str) -> Option<(u16, &EnumVariant)> {
-        for (i, variant) in self.variants.iter().enumerate() {
-            if variant.name == name {
-                return Some((i as u16, variant));
             }
         }
 

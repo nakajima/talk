@@ -4,7 +4,7 @@ use crate::compiling::driver::Driver;
 use crate::environment::Environment;
 use crate::symbol_table::SymbolKind;
 use crate::type_checking::ty::Ty;
-use crate::type_defs::TypeDef;
+use crate::type_defs::TypeMember;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
 use async_lsp::lsp_types::Position;
@@ -92,62 +92,39 @@ impl<'a> CompletionContext<'a> {
         });
 
         if let Some(type_def) = type_sym.and_then(|sym| self.env.lookup_type(&sym)) {
-            match type_def {
-                TypeDef::Enum(enum_def) => {
-                    let mut completions = vec![];
-                    completions.extend(enum_def.methods.iter().map(|m| CompletionItem {
-                        label: m.name.clone(),
+            let mut completions = vec![];
+            for (name, member) in type_def.members.iter() {
+                let item = match member {
+                    TypeMember::Method(_) | TypeMember::MethodRequirement(_) => CompletionItem {
+                        label: name.clone(),
                         kind: Some(CompletionItemKind::METHOD),
+                        detail: Some(format!("{:?}", member.ty())),
                         ..Default::default()
-                    }));
-
-                    completions.extend(enum_def.variants.iter().map(|variant| CompletionItem {
-                        label: variant.name.clone(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        ..Default::default()
-                    }));
-
-                    completions
-                }
-                TypeDef::Struct(struct_def) => {
-                    let mut completions = vec![];
-                    completions.extend(struct_def.properties.iter().map(|prop| CompletionItem {
-                        label: prop.name.clone(),
+                    },
+                    TypeMember::Property(_) => CompletionItem {
+                        label: name.clone(),
                         kind: Some(CompletionItemKind::PROPERTY),
+                        detail: Some(format!("{:?}", member.ty())),
                         ..Default::default()
-                    }));
-                    completions.extend(struct_def.methods.iter().map(|m| CompletionItem {
-                        label: m.name.clone(),
-                        kind: Some(CompletionItemKind::METHOD),
+                    },
+                    TypeMember::Initializer(_) => CompletionItem {
+                        label: name.clone(),
+                        kind: Some(CompletionItemKind::CONSTRUCTOR),
+                        detail: Some(format!("{:?}", member.ty())),
                         ..Default::default()
-                    }));
+                    },
+                    TypeMember::Variant(_) => CompletionItem {
+                        label: name.clone(),
+                        kind: Some(CompletionItemKind::ENUM_MEMBER),
+                        detail: Some(format!("{:?}", member.ty())),
+                        ..Default::default()
+                    },
+                };
 
-                    completions
-                }
-                TypeDef::Protocol(def) => {
-                    let mut completions = vec![];
-                    completions.extend(def.methods.iter().map(|m| CompletionItem {
-                        label: m.name.clone(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        ..Default::default()
-                    }));
-                    completions.extend(def.properties.iter().map(|prop| CompletionItem {
-                        label: prop.name.clone(),
-                        kind: Some(CompletionItemKind::PROPERTY),
-                        ..Default::default()
-                    }));
-                    completions
-                }
-                TypeDef::Builtin(def) => def
-                    .methods
-                    .iter()
-                    .map(|m| CompletionItem {
-                        label: m.name.clone(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        ..Default::default()
-                    })
-                    .collect(),
+                completions.push(item)
             }
+
+            completions
         } else {
             tracing::error!("did not get type: {:?}", self.env.types);
             vec![]

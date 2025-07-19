@@ -10,7 +10,6 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
-    type_defs::TypeDef,
     type_var_id::TypeVarKind,
 };
 
@@ -318,7 +317,7 @@ impl<'a> ConstraintSolver<'a> {
                             .ok_or(TypeError::Unknown(format!(
                                 "Unable to resolve enum with id: {enum_id:?}"
                             )))
-                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
+                            .map(|a| a.find_variant(member_name).cloned())?;
 
                         if let Some(variant) = variant {
                             substitutions.unify(
@@ -348,7 +347,7 @@ impl<'a> ConstraintSolver<'a> {
                             .ok_or(TypeError::Unknown(format!(
                                 "Unable to resolve enum with id: {enum_id:?}"
                             )))
-                            .map(|a| a.tag_with_variant_for(member_name).map(|v| v.1).cloned())?;
+                            .map(|a| a.find_variant(member_name).cloned())?;
 
                         if let Some(variant) = variant {
                             substitutions.unify(
@@ -454,8 +453,8 @@ impl<'a> ConstraintSolver<'a> {
                         for constraint in matching_constraints {
                             match constraint {
                                 Constraint::ConformsTo { conformance, .. } => {
-                                    let Some(TypeDef::Protocol(protocol_def)) =
-                                        self.env.lookup_type(&conformance.protocol_id).cloned()
+                                    let Some(protocol_def) =
+                                        self.env.lookup_protocol(&conformance.protocol_id).cloned()
                                     else {
                                         tracing::error!(
                                             "Did not find protocol {:?}",
@@ -470,7 +469,7 @@ impl<'a> ConstraintSolver<'a> {
                                     if let Some(ty) = protocol_def.member_ty(member_name) {
                                         result = Some((
                                             ty.clone(),
-                                            protocol_def.associated_types,
+                                            protocol_def.type_parameters(),
                                             conformance.associated_types.clone(),
                                         ));
 
@@ -611,7 +610,7 @@ impl<'a> ConstraintSolver<'a> {
                 };
 
                 // TODO: Support multiple initializers
-                let initializer = &struct_def.initializers[0];
+                let initializer = &struct_def.initializers()[0];
                 let Ty::Init(_, params) = &initializer.ty else {
                     unreachable!();
                 };
@@ -642,7 +641,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 let specialized_struct = self.env.instantiate(&Scheme::new(
                     struct_with_generics,
-                    struct_def.canonical_type_vars(),
+                    struct_def.canonical_type_variables(),
                     vec![],
                 ));
 
@@ -673,8 +672,7 @@ impl<'a> ConstraintSolver<'a> {
                     unreachable!("Enum definition not found for a typed enum.");
                 };
 
-                let Some(variant_def) = enum_def.variants.iter().find(|v| v.name == *variant_name)
-                else {
+                let Some(variant_def) = enum_def.find_variant(variant_name) else {
                     return Err(TypeError::UnknownVariant(Name::Raw(variant_name.clone())));
                 };
 

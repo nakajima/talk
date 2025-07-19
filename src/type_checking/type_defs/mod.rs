@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     SymbolID,
     constraint_solver::ConstraintSolver,
@@ -6,11 +8,11 @@ use crate::{
     ty::Ty,
     type_checker::Scheme,
     type_defs::{
-        builtin_def::BuiltinDef,
-        enum_def::{EnumDef, EnumVariant},
-        protocol_def::{Conformance, ProtocolDef},
-        struct_def::{Initializer, Method, Property, StructDef},
+        enum_def::EnumVariant,
+        protocol_def::Conformance,
+        struct_def::{Initializer, Method, Property},
     },
+    type_var_id::TypeVarID,
 };
 
 pub mod builtin_def;
@@ -21,28 +23,78 @@ pub mod struct_def;
 pub type TypeParams = Vec<TypeParameter>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeDef {
-    Enum(EnumDef),
-    Struct(StructDef),
-    Protocol(ProtocolDef),
-    Builtin(BuiltinDef),
+pub enum TypeMember {
+    Method(Method),
+    MethodRequirement(Method),
+    Property(Property),
+    Initializer(Initializer),
+    Variant(EnumVariant),
+}
+
+impl TypeMember {
+    pub fn ty(&self) -> &Ty {
+        match self {
+            TypeMember::Method(method) => &method.ty,
+            TypeMember::MethodRequirement(method) => &method.ty,
+            TypeMember::Property(property) => &property.ty,
+            TypeMember::Initializer(initializer) => &initializer.ty,
+            TypeMember::Variant(variant) => &variant.ty,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeDefKind {
+    Struct,
+    Protocol,
+    Enum,
+    // Builtins can actually be structs/protocols/enums but we want to keep
+    // them handled separately since their actual definitions are builtin.
+    Builtin(Ty),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDef {
+    pub symbol_id: SymbolID,
+    pub name_str: String,
+    pub kind: TypeDefKind,
+    pub type_parameters: TypeParams,
+    pub members: HashMap<String, TypeMember>,
+    pub conformances: Vec<Conformance>,
 }
 
 impl TypeDef {
     pub fn ty(&self) -> Ty {
-        match self {
-            TypeDef::Enum(enum_def) => {
-                Ty::Enum(enum_def.symbol_id, enum_def.canonical_type_parameters())
-            }
-            TypeDef::Struct(struct_def) => {
-                Ty::Struct(struct_def.symbol_id, struct_def.canonical_type_parameters())
-            }
-            TypeDef::Protocol(protocol_def) => Ty::Protocol(
-                protocol_def.symbol_id,
-                protocol_def.canonical_associated_types(),
-            ),
-            TypeDef::Builtin(builtin_def) => builtin_def.ty.clone(),
+        match &self.kind {
+            TypeDefKind::Enum => Ty::Enum(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Struct => Ty::Struct(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Protocol => Ty::Protocol(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Builtin(ty) => ty.clone(),
         }
+    }
+
+    pub fn conforms_to(&self, protocol_id: &SymbolID) -> bool {
+        for conformance in self.conformances.iter() {
+            if &conformance.protocol_id == protocol_id {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn canonical_type_variables(&self) -> Vec<TypeVarID> {
+        self.type_parameters
+            .iter()
+            .map(|p| p.type_var.clone())
+            .collect()
+    }
+
+    pub fn canonical_type_parameters(&self) -> Vec<Ty> {
+        self.type_parameters
+            .iter()
+            .map(|p| Ty::TypeVar(p.type_var.clone()))
+            .collect()
     }
 
     pub fn init_fn_name(&self) -> String {
@@ -67,167 +119,157 @@ impl TypeDef {
     }
 
     pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
-        if let Some(member) = self.member_ty(name).cloned() {
-            return Some(
-                member, // env.instantiate(&Scheme {
-                       //     ty: member,
-                       //     unbound_vars: self
-                       //         .type_parameters()
-                       //         .iter()
-                       //         .map(|v| v.type_var.clone())
-                       //         .collect(),
-                       // }),
-            );
+        if let Some(member) = self.members.get(name) {
+            return Some(member.ty().clone());
         }
 
         for conformance in self.conformances() {
-            if let Some(TypeDef::Protocol(protocol_def)) =
-                env.lookup_type(&conformance.protocol_id).cloned()
-                && let Some(ty) = protocol_def.member_ty(name).cloned()
+            let Some(protocol_def) = env.lookup_protocol(&conformance.protocol_id) else {
+                continue;
+            };
+
+            let Some(ty) = protocol_def.member_ty(name) else {
+                continue;
+            };
+
+            let mut substitutions = Substitutions::new();
+            for (param, arg) in protocol_def
+                .type_parameters
+                .iter()
+                .zip(&conformance.associated_types)
             {
-                let mut subst = Substitutions::new();
-                for (param, arg) in protocol_def
-                    .associated_types
-                    .iter()
-                    .zip(&conformance.associated_types)
-                {
-                    subst.insert(param.type_var.clone(), arg.clone());
-                }
-
-                //let new_ty = ty.replace(self.ty(), &|ty| {
-                //    matches!(
-                //        ty,
-                //        Ty::TypeVar(TypeVarID {
-                //            kind: TypeVarKind::SelfVar(_),
-                //            ..
-                //        })
-                //    ) || matches!(ty, Ty::SelfType)
-                //});
-
-                //let res = env.instantiate(&Scheme {
-                //    ty: new_ty,
-                //    unbound_vars: protocol_def.canonical_associated_type_vars(),
-                //});
-
-                return Some(ConstraintSolver::substitute_ty_with_map(&ty, &subst));
+                substitutions.insert(param.type_var.clone(), arg.clone());
             }
+
+            return Some(ConstraintSolver::substitute_ty_with_map(ty, &substitutions));
         }
 
         None
     }
 
     pub fn member_ty(&self, name: &str) -> Option<&Ty> {
-        match self {
-            TypeDef::Enum(enum_def) => enum_def.member_ty(name),
-            TypeDef::Struct(struct_def) => struct_def.member_ty(name),
-            TypeDef::Protocol(protocol_def) => protocol_def.member_ty(name),
-            TypeDef::Builtin(builtin_def) => builtin_def.member_ty(name),
-        }
+        self.members.get(name).map(|t| t.ty())
     }
 
     pub fn symbol_id(&self) -> SymbolID {
-        match self {
-            Self::Enum(def) => def.symbol_id,
-            Self::Struct(def) => def.symbol_id,
-            Self::Protocol(def) => def.symbol_id,
-            Self::Builtin(def) => def.symbol_id,
-        }
+        self.symbol_id
     }
 
     pub fn name(&self) -> &str {
-        match self {
-            Self::Enum(def) => &def.name_str,
-            Self::Struct(def) => &def.name_str,
-            Self::Protocol(def) => &def.name_str,
-            Self::Builtin(def) => &def.name_str,
-        }
+        &self.name_str
     }
 
-    pub fn conformances(&self) -> &Vec<Conformance> {
-        match self {
-            Self::Enum(def) => &def.conformances,
-            Self::Struct(def) => &def.conformances,
-            Self::Protocol(def) => &def.conformances,
-            Self::Builtin(def) => &def.conformances,
-        }
+    pub fn conformances(&self) -> &[Conformance] {
+        &self.conformances
     }
 
     pub fn type_parameters(&self) -> TypeParams {
-        match self {
-            Self::Enum(def) => def.type_parameters.clone(),
-            Self::Struct(def) => def.type_parameters.clone(),
-            Self::Protocol(def) => def.associated_types.clone(),
-            Self::Builtin(_) => vec![],
+        self.type_parameters.clone()
+    }
+
+    pub fn initializers(&self) -> Vec<Initializer> {
+        self.members
+            .values()
+            .filter_map(|member| {
+                if let TypeMember::Initializer(initializer) = member {
+                    Some(initializer.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn find_method_requirement(&self, name: &str) -> Option<&Method> {
+        if let Some(TypeMember::MethodRequirement(method)) = self.members.get(name) {
+            return Some(method);
         }
+
+        None
+    }
+
+    pub fn find_variant(&self, name: &str) -> Option<&EnumVariant> {
+        if let Some(TypeMember::Variant(variant)) = self.members.get(name) {
+            return Some(variant);
+        }
+
+        None
     }
 
     pub fn find_method(&self, method_name: &str) -> Option<&Method> {
-        match self {
-            Self::Enum(def) => def.methods.iter().find(|m| m.name == method_name),
-            Self::Struct(def) => def.methods.iter().find(|m| m.name == method_name),
-            Self::Protocol(def) => def.methods.iter().find(|m| m.name == method_name),
-            Self::Builtin(def) => def.methods.iter().find(|m| m.name == method_name),
+        if let Some(TypeMember::Method(method)) = self.members.get(method_name) {
+            return Some(method);
         }
+
+        None
     }
 
     pub fn find_property(&self, name: &str) -> Option<&Property> {
-        match self {
-            Self::Enum(_) => None,
-            Self::Struct(def) => def.properties.iter().find(|p| p.name == name),
-            Self::Protocol(def) => def.properties.iter().find(|p| p.name == name),
-            Self::Builtin(_) => None,
+        if let Some(TypeMember::Property(property)) = self.members.get(name) {
+            return Some(property);
         }
+
+        None
     }
 
-    pub fn properties(&self) -> &[Property] {
-        match self {
-            Self::Enum(_) => &[],
-            Self::Struct(def) => &def.properties,
-            Self::Protocol(def) => &def.properties,
-            Self::Builtin(_) => &[],
-        }
+    pub fn properties(&self) -> Vec<Property> {
+        self.members
+            .values()
+            .filter_map(|member| {
+                if let TypeMember::Property(property) = member {
+                    Some(property.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn add_methods(&mut self, methods: Vec<Method>) {
-        if methods.is_empty() {
-            return;
-        }
-
-        match self {
-            Self::Enum(def) => def.methods.extend(methods),
-            Self::Struct(def) => def.methods.extend(methods),
-            Self::Protocol(def) => def.methods.extend(methods),
-            Self::Builtin(def) => def.methods.extend(methods),
+        for method in methods {
+            self.members
+                .insert(method.name.clone(), TypeMember::Method(method));
         }
     }
 
-    pub fn methods(&self) -> &[Method] {
-        match self {
-            Self::Enum(def) => &def.methods,
-            Self::Struct(def) => &def.methods,
-            Self::Protocol(def) => &def.methods,
-            Self::Builtin(def) => &def.methods,
-        }
+    pub fn methods(&self) -> Vec<Method> {
+        self.members
+            .values()
+            .filter_map(|member| {
+                if let TypeMember::Method(method) = member {
+                    Some(method.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn method_requirements(&self) -> Vec<Method> {
+        self.members
+            .values()
+            .filter_map(|member| {
+                if let TypeMember::MethodRequirement(method) = member {
+                    Some(method.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn add_type_parameters(&mut self, params: Vec<TypeParameter>) {
-        match self {
-            Self::Enum(def) => def.type_parameters.extend(params),
-            Self::Struct(def) => def.type_parameters.extend(params),
-            Self::Protocol(def) => def.associated_types.extend(params),
-            Self::Builtin(_) => (),
-        }
+        self.type_parameters.extend(params);
     }
 
     pub fn add_method_requirements(&mut self, methods: Vec<Method>) {
         if methods.is_empty() {
             return;
         }
-        match self {
-            Self::Enum(_) => (),
-            Self::Struct(_) => (),
-            Self::Protocol(def) => def.method_requirements.extend(methods),
-            Self::Builtin(_) => (),
+
+        for method in methods {
+            self.members
+                .insert(method.name.clone(), TypeMember::MethodRequirement(method));
         }
     }
 
@@ -236,11 +278,11 @@ impl TypeDef {
             return;
         }
 
-        match self {
-            Self::Enum(_) => tracing::error!("Enums can't have initializers"),
-            Self::Struct(def) => def.initializers.extend(initializers),
-            Self::Protocol(def) => def.initializers.extend(initializers),
-            Self::Builtin(_) => (),
+        for initializer in initializers {
+            self.members.insert(
+                initializer.name.clone(),
+                TypeMember::Initializer(initializer),
+            );
         }
     }
 
@@ -248,11 +290,10 @@ impl TypeDef {
         if properties.is_empty() {
             return;
         }
-        match self {
-            Self::Enum(_) => tracing::error!("Enums can't have properties"),
-            Self::Struct(def) => def.properties.extend(properties),
-            Self::Protocol(def) => def.properties.extend(properties),
-            Self::Builtin(_) => (),
+
+        for property in properties {
+            self.members
+                .insert(property.name.clone(), TypeMember::Property(property));
         }
     }
 
@@ -260,20 +301,27 @@ impl TypeDef {
         if variants.is_empty() {
             return;
         }
-        match self {
-            Self::Enum(def) => def.variants.extend(variants),
-            Self::Struct(_) => (),
-            Self::Protocol(_) => (),
-            Self::Builtin(_) => (),
+
+        for variants in variants {
+            self.members
+                .insert(variants.name.clone(), TypeMember::Variant(variants));
         }
     }
 
+    pub fn variants(&self) -> Vec<EnumVariant> {
+        self.members
+            .values()
+            .filter_map(|member| {
+                if let TypeMember::Variant(variant) = member {
+                    Some(variant.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn add_conformances(&mut self, conformances: Vec<Conformance>) {
-        match self {
-            Self::Enum(def) => def.conformances.extend(conformances),
-            Self::Struct(def) => def.conformances.extend(conformances),
-            Self::Protocol(def) => def.conformances.extend(conformances),
-            Self::Builtin(def) => def.conformances.extend(conformances),
-        }
+        self.conformances.extend(conformances);
     }
 }

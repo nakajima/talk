@@ -6,11 +6,11 @@ use crate::{
         instr::Instr, ir_error::IRError, ir_function::IRFunction, ir_value::IRValue,
         lowerer::BasicBlockID, register::Register,
     },
-    type_defs::struct_def::{Property, StructDef},
+    type_defs::{TypeDef, struct_def::Property},
 };
 
 pub struct DefiniteInitizationPass {
-    struct_def: StructDef,
+    struct_def: TypeDef,
 }
 
 impl FunctionAnalysisPass for DefiniteInitizationPass {
@@ -18,7 +18,7 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
     type Error = IRError;
 
     fn run(&self, func: &IRFunction, cfg: &ControlFlowGraph) -> Result<(), IRError> {
-        if self.struct_def.properties.is_empty() {
+        if self.struct_def.properties().is_empty() {
             return Ok(());
         }
 
@@ -71,7 +71,7 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
 
         let all_properties: HashSet<Property> = HashSet::from_iter(
             self.struct_def
-                .properties
+                .properties()
                 .iter()
                 .filter(|p| !p.has_default)
                 .cloned(),
@@ -106,7 +106,7 @@ impl FunctionAnalysisPass for DefiniteInitizationPass {
 }
 
 impl DefiniteInitizationPass {
-    pub fn new(struct_def: StructDef) -> Self {
+    pub fn new(struct_def: TypeDef) -> Self {
         Self { struct_def }
     }
 
@@ -139,7 +139,7 @@ impl DefiniteInitizationPass {
                         }
                     };
 
-                    if let Some(property) = self.struct_def.properties.get(*index as usize) {
+                    if let Some(property) = self.struct_def.properties().get(*index as usize) {
                         property_pointers.insert(*dest, property.clone());
                     }
                 }
@@ -162,7 +162,7 @@ mod tests {
 
     use crate::{
         SourceFile, SymbolID, compiling::driver::Driver, environment::Environment,
-        lowering::ir_module::IRModule, source_file, ty::Ty, type_defs::TypeDef,
+        lowering::ir_module::IRModule, source_file, ty::Ty,
     };
 
     fn lower(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>, Environment) {
@@ -196,7 +196,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
+        let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -228,7 +228,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
+        let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -269,7 +269,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
+        let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -312,7 +312,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
+        let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 
@@ -343,7 +343,7 @@ mod tests {
             .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
             .unwrap();
 
-        let Some(TypeDef::Struct(struct_def)) = env.lookup_type(&person_id) else {
+        let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
         };
 

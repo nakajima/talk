@@ -6,11 +6,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::{
-        TypeDef,
-        protocol_def::{Conformance, ProtocolDef},
-        struct_def::Property,
-    },
+    type_defs::{TypeDef, protocol_def::Conformance, struct_def::Property},
     type_var_id::TypeVarKind,
 };
 
@@ -57,7 +53,7 @@ impl<'a> ConformanceChecker<'a> {
         // Replace the protocol's associated types with the conformance's
         let mut substitutions = Substitutions::new();
         for (canonical, conforming) in protocol
-            .canonical_associated_type_vars()
+            .canonical_type_variables()
             .into_iter()
             .zip(self.conformance.associated_types.iter())
         {
@@ -75,7 +71,7 @@ impl<'a> ConformanceChecker<'a> {
             .zip(self.conformance.associated_types.iter().cloned())
             .collect();
 
-        for method in protocol.methods.iter() {
+        for method in protocol.methods().iter() {
             let ty_method = match self.find_method(&protocol, &method.name) {
                 Ok(m) => m.clone(),
                 Err(e) => {
@@ -100,7 +96,7 @@ impl<'a> ConformanceChecker<'a> {
             ));
         }
 
-        for method in protocol.method_requirements.iter() {
+        for method in protocol.method_requirements().iter() {
             let ty_method = match self.find_method(&protocol, &method.name) {
                 Ok(m) => m.clone(),
                 Err(e) => {
@@ -129,7 +125,7 @@ impl<'a> ConformanceChecker<'a> {
             ))
         }
 
-        for property in protocol.properties.iter() {
+        for property in protocol.properties().iter() {
             let ty_property = match self.find_property(&protocol, &property.name) {
                 Ok(p) => p.clone(),
                 Err(e) => {
@@ -152,8 +148,6 @@ impl<'a> ConformanceChecker<'a> {
             ));
         }
 
-        for _initializer in protocol.initializers.iter() {}
-
         if self.errors.is_empty() {
             Ok(unifications)
         } else {
@@ -167,11 +161,7 @@ impl<'a> ConformanceChecker<'a> {
     }
 
     #[tracing::instrument(level = Level::TRACE, skip(self, protocol), fields(result))]
-    fn find_property(
-        &self,
-        protocol: &ProtocolDef,
-        name: &str,
-    ) -> Result<&Property, ConformanceError> {
+    fn find_property(&self, protocol: &TypeDef, name: &str) -> Result<&Property, ConformanceError> {
         if let Some(Some(property)) = self.type_def().map(|t| t.find_property(name)) {
             Ok(property)
         } else {
@@ -186,7 +176,7 @@ impl<'a> ConformanceChecker<'a> {
     #[tracing::instrument(level = Level::TRACE, skip(self, protocol), fields(result))]
     fn find_method(
         &mut self,
-        protocol: &ProtocolDef,
+        protocol: &TypeDef,
         method_name: &str,
     ) -> Result<Ty, ConformanceError> {
         if let Some(ty) = self
@@ -227,7 +217,7 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
-    fn check_conformance_of_ty(&mut self, protocol_def: &ProtocolDef) -> Option<&Conformance> {
+    fn check_conformance_of_ty(&mut self, protocol_def: &TypeDef) -> Option<&Conformance> {
         let type_def = self.ty.type_def(self.env)?;
 
         let conformance = type_def

@@ -1088,7 +1088,7 @@ impl<'a> TypeChecker<'a> {
 
                 ret_var = env.instantiate(&Scheme::new(
                     Ty::Struct(*symbol_id, type_args.clone()),
-                    struct_def.canonical_type_vars(),
+                    struct_def.canonical_type_variables(),
                     constraints,
                 ));
 
@@ -1912,10 +1912,7 @@ impl<'a> TypeChecker<'a> {
                             )));
                         };
                         // Find the variant by name
-                        let Some(variant) = enum_def.variants.iter().find(|v| {
-                            // Match variant name (comparing the raw string)
-                            v.name == *variant_name
-                        }) else {
+                        let Some(variant) = enum_def.find_variant(variant_name) else {
                             return Err(TypeError::UnknownVariant(Name::Raw(
                                 variant_name.to_string(),
                             )));

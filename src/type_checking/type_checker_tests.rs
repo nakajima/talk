@@ -13,7 +13,7 @@ mod tests {
         token_kind::TokenKind,
         ty::Ty,
         type_checker::TypeError,
-        type_defs::{TypeDef, protocol_def::Conformance},
+        type_defs::protocol_def::Conformance,
         type_var_id::{TypeVarID, TypeVarKind},
         typed_expr::{Expr, TypedExpr},
     };
@@ -1232,18 +1232,13 @@ mod tests {
             checked.type_for(checked.root_ids()[0]),
             Some(Ty::Enum(SymbolID::typed(1), vec![]))
         );
-        let Some(TypeDef::Enum(enum_def)) = checked.env.lookup_type(&SymbolID::typed(1)) else {
+        let Some(enum_def) = checked.env.lookup_enum(&SymbolID::typed(1)) else {
             panic!();
         };
-        assert_eq!(enum_def.methods.len(), 2);
+        assert_eq!(enum_def.methods().len(), 2);
         assert_eq!(
             checked
-                .type_for(
-                    TypeDef::Enum(enum_def.clone())
-                        .find_method("buzz")
-                        .unwrap()
-                        .expr_id
-                )
+                .type_for(enum_def.find_method("buzz").unwrap().expr_id)
                 .unwrap(),
             Ty::Func(
                 vec![],
@@ -1253,12 +1248,7 @@ mod tests {
         );
         assert_eq!(
             checked
-                .type_for(
-                    TypeDef::Enum(enum_def.clone())
-                        .find_method("foo")
-                        .unwrap()
-                        .expr_id
-                )
+                .type_for(enum_def.find_method("foo").unwrap().expr_id)
                 .unwrap(),
             Ty::Func(vec![], Box::new(Ty::Int), vec![])
         );
@@ -1666,12 +1656,11 @@ mod tests {
         )
         .unwrap();
 
-        let Some(TypeDef::Struct(person_def)) = checked.env.lookup_type(&SymbolID::typed(4)) else {
+        let Some(person_def) = checked.env.lookup_struct(&SymbolID::typed(4)) else {
             panic!("didn't get person: {:?}", checked.env.types);
         };
 
-        let Some(TypeDef::Protocol(_aged_def)) = checked.env.lookup_type(&SymbolID::typed(1))
-        else {
+        let Some(_aged_def) = checked.env.lookup_protocol(&SymbolID::typed(1)) else {
             panic!("didn't get aged protocol: {:#?}", checked.env.types);
         };
 

@@ -37,7 +37,7 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{TypeDef, protocol_def::Conformance, struct_def::StructDef},
+    type_defs::{TypeDef, TypeDefKind, protocol_def::Conformance},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{Expr, Pattern, TypedExpr},
 };
@@ -115,7 +115,7 @@ impl Ty {
                 element: el.to_ir(lowerer).into(),
             },
             Ty::Struct(symbol_id, generics) => {
-                let Some(TypeDef::Struct(struct_def)) = lowerer.env.lookup_type(symbol_id) else {
+                let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
                     tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
                 };
@@ -123,7 +123,7 @@ impl Ty {
                 IRType::Struct(
                     *symbol_id,
                     struct_def
-                        .properties
+                        .properties()
                         .iter()
                         .map(|p| p.ty.to_ir(lowerer))
                         .collect(),
@@ -275,7 +275,7 @@ impl FromStr for RegisterList {
 pub enum SymbolValue {
     Register(Register),
     Capture(usize, IRType),
-    Struct(StructDef),
+    Struct(TypeDef),
     FuncRef(String),
 }
 
@@ -847,7 +847,7 @@ impl<'a> Lowerer<'a> {
         struct_id: SymbolID,
         body: &TypedExpr,
     ) -> Option<Register> {
-        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&struct_id).cloned() else {
+        let Some(struct_def) = self.env.lookup_struct(&struct_id).cloned() else {
             self.add_diagnostic(Diagnostic::lowering(
                 self.source_file.path.clone(),
                 typed_expr.span(&self.source_file.meta),
@@ -858,7 +858,7 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        for initializer in &struct_def.initializers {
+        for initializer in &struct_def.initializers() {
             let Some(typed_initializer) = self.source_file.typed_expr(initializer.expr_id).cloned()
             else {
                 tracing::error!("didn't get initializer");
@@ -1409,13 +1409,13 @@ impl<'a> Lowerer<'a> {
                     return None;
                 };
 
-                let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(enum_id).cloned() else {
+                let Some(type_def) = self.env.lookup_enum(enum_id).cloned() else {
                     self.push_err("Could not determine enum", pattern_typed_expr);
                     return None;
                 };
 
                 /* ... find variant by name in type_def ... */
-                let Some((tag, variant_def)) = type_def.tag_with_variant_for(variant_name) else {
+                let Some(variant_def) = type_def.find_variant(variant_name) else {
                     self.push_err("message", pattern_typed_expr);
                     return None;
                 };
@@ -1425,7 +1425,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instr::GetEnumTag(tag_reg, *scrutinee_reg));
 
                 let expected_tag_reg = self.allocate_register();
-                self.push_instr(Instr::ConstantInt(expected_tag_reg, tag as i64));
+                self.push_instr(Instr::ConstantInt(expected_tag_reg, variant_def.tag as i64));
                 let tags_match_reg = self.allocate_register();
                 self.push_instr(Instr::Eq(
                     tags_match_reg,
@@ -1478,7 +1478,7 @@ impl<'a> Lowerer<'a> {
                             value_reg,
                             ty.to_ir(self),
                             *scrutinee_reg,
-                            tag,
+                            variant_def.tag as u16,
                             i as u16,
                         ));
                         self.current_func_mut()?
@@ -1558,7 +1558,7 @@ impl<'a> Lowerer<'a> {
                     );
                     return None;
                 };
-                let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
+                let Some(type_def) = self.env.lookup_enum(&enum_id).cloned() else {
                     self.push_err(
                         format!("didn't get type def for {enum_id:?}").as_str(),
                         pattern_typed_expr,
@@ -1566,13 +1566,7 @@ impl<'a> Lowerer<'a> {
                     return None;
                 };
 
-                let (tag, variant) = type_def.variants.iter().enumerate().find_map(|(i, v)| {
-                    if &v.name == variant_name {
-                        Some((i, v))
-                    } else {
-                        None
-                    }
-                })?;
+                let variant = type_def.find_variant(variant_name)?;
 
                 let dest = self.allocate_register();
                 let Ty::EnumVariant(_, values) = &variant.ty else {
@@ -1594,7 +1588,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instr::TagVariant(
                     dest,
                     pattern_typed_expr.ty.to_ir(self),
-                    tag as u16,
+                    variant.tag as u16,
                     args,
                 ));
 
@@ -1691,7 +1685,7 @@ impl<'a> Lowerer<'a> {
         ty: &Ty,
         args: &[TypedRegister],
     ) -> Option<Register> {
-        let Some(TypeDef::Enum(type_def)) = self.env.lookup_type(&enum_id).cloned() else {
+        let Some(type_def) = self.env.lookup_enum(&enum_id).cloned() else {
             self.push_err(
                 format!("didn't get type def for {enum_id:?}").as_str(),
                 typed_expr,
@@ -1701,7 +1695,7 @@ impl<'a> Lowerer<'a> {
 
         let mut tag: Option<u16> = None;
 
-        for (i, var) in type_def.variants.iter().enumerate() {
+        for (i, var) in type_def.variants().iter().enumerate() {
             if var.name != variant_name {
                 continue;
             }
@@ -2341,7 +2335,7 @@ impl<'a> Lowerer<'a> {
         let callee_name = match &receiver_ty.ty {
             Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) => {
                 let type_def = self.env.lookup_type(symbol_id)?;
-                let method = type_def.methods().iter().find(|m| m.name == name)?;
+                let method = type_def.find_method(name)?;
                 Some(type_def.method_fn_name(&method.name))
             }
             Ty::TypeVar(_type_var)
@@ -2366,11 +2360,8 @@ impl<'a> Lowerer<'a> {
                         result = Some(type_def.method_fn_name(&method.name));
 
                         break;
-                    } else if let TypeDef::Protocol(protocol_def) = &type_def
-                        && let Some(method) = protocol_def
-                            .method_requirements
-                            .iter()
-                            .find(|m| m.name == name)
+                    } else if type_def.kind == TypeDefKind::Protocol
+                        && let Some(method) = type_def.find_method_requirement(name)
                     {
                         result = Some(type_def.method_fn_name(&method.name));
                         break;
@@ -2582,11 +2573,11 @@ impl<'a> Lowerer<'a> {
             unreachable!("didn't get property index for {:?}", irtype)
         };
 
-        let Some(TypeDef::Struct(struct_def)) = self.env.lookup_type(&symbol_id) else {
+        let Some(struct_def) = self.env.lookup_struct(&symbol_id) else {
             unreachable!("didn't get typedef for {:?}", irtype)
         };
 
-        struct_def.properties.iter().position(|k| k.name == name)
+        struct_def.properties().iter().position(|k| k.name == name)
     }
 }
 
