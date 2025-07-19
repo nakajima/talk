@@ -514,64 +514,6 @@ impl<'a> ConstraintSolver<'a> {
                         }
                     }
 
-                    // Ty::TypeVar(type_var) if !type_var.constraints.is_empty() => {
-                    //     let mut result: Option<(Ty, Vec<TypeParameter>, &Vec<Ty>)> = None;
-
-                    //     for constraint in type_var.constraints.iter() {
-                    //         match constraint {
-                    //             TypeConstraint::InstanceOf {
-                    //                 symbol_id,
-                    //                 associated_types,
-                    //             } => {
-                    //                 let Some(type_def) = self.env.lookup_type(symbol_id) else {
-                    //                     continue;
-                    //                 };
-                    //                 let Some(ty) = type_def.member_ty(member_name) else {
-                    //                     return Err(TypeError::MemberNotFound(
-                    //                         member_name.to_string(),
-                    //                         type_def.name().to_string(),
-                    //                     ));
-                    //                 };
-                    //                 result = Some((
-                    //                     ty.clone(),
-                    //                     type_def.type_parameters().clone(),
-                    //                     associated_types,
-                    //                 ));
-                    //             }
-                    //             TypeConstraint::Conforms {
-                    //                 protocol_id,
-                    //                 associated_types,
-                    //             } => {
-                    //                 let Some(TypeDef::Protocol(protocol_def)) =
-                    //                     self.env.lookup_type(protocol_id).cloned()
-                    //                 else {
-                    //                     return Err(TypeError::Unknown(format!(
-                    //                         "did not find protocol with ID: {protocol_id:?}",
-                    //                     )));
-                    //                 };
-
-                    //                 if let Some(ty) = protocol_def.member_ty(member_name) {
-                    //                     result = Some((
-                    //                         ty.clone(),
-                    //                         protocol_def.associated_types,
-                    //                         associated_types,
-                    //                     ));
-
-                    //                     break;
-                    //                 }
-                    //             }
-                    //             TypeConstraint::Equals { .. } => (),
-                    //         }
-                    //     }
-
-                    //     if let Some(result) = result {
-                    //         result
-                    //     } else {
-                    //         return Err(TypeError::Unknown(format!(
-                    //             "Did not find member {member_name} for {receiver_ty:?}"
-                    //         )));
-                    //     }
-                    // }
                     _ => {
                         return Err(TypeError::MemberNotFound(
                             receiver_ty.to_string(),
