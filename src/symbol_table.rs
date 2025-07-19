@@ -62,12 +62,12 @@ impl SymbolID {
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
-        SymbolID(index + crate::prelude::compile_prelude().symbols.max_id())
+        SymbolID(index)
     }
 
     // Remove the prelude's symbol offset
     pub fn typed(index: i32) -> SymbolID {
-        SymbolID(index + crate::prelude::compile_prelude().symbols.max_id())
+        SymbolID(index)
     }
 }
 
@@ -90,6 +90,12 @@ pub enum SymbolKind {
     Property,
     Protocol,
     Import(ImportedSymbol),
+}
+
+impl SymbolKind {
+    pub fn is_builtin(&self) -> bool {
+        self == &Self::BuiltinFunc || self == &Self::BuiltinType
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -141,7 +147,7 @@ impl SymbolTable {
             import_symbol_map: Default::default(),
         };
 
-        crate::builtins::import_symbols(&mut table);
+        crate::builtins::import_symbols_into(&mut table);
 
         table
     }

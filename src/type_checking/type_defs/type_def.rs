@@ -77,6 +77,7 @@ pub struct TypeDef {
     pub type_parameters: TypeParams,
     pub members: HashMap<String, TypeMember>,
     pub conformances: Vec<Conformance>,
+    pub exported: bool,
 }
 
 impl TypeDef {

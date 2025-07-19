@@ -57,11 +57,7 @@ fn bench_lower(c: &mut Criterion) {
                     unit.resolved(&mut driver.symbol_table, &driver.config, &driver.module_env);
                 let typed =
                     resolved.typed(&mut driver.symbol_table, &driver.config, &driver.module_env);
-                let module = if driver.config.include_prelude {
-                    prelude::compile_prelude().module.clone()
-                } else {
-                    IRModule::new()
-                };
+                let module = IRModule::new();
                 black_box(typed.lower(
                     &mut driver.symbol_table,
                     &driver.config,
@@ -82,11 +78,7 @@ fn bench_passes(c: &mut Criterion) {
                     unit.resolved(&mut driver.symbol_table, &driver.config, &driver.module_env);
                 let typed =
                     resolved.typed(&mut driver.symbol_table, &driver.config, &driver.module_env);
-                let module = if driver.config.include_prelude {
-                    prelude::compile_prelude().module.clone()
-                } else {
-                    IRModule::new()
-                };
+                let module = IRModule::new();
                 let lowered = typed.lower(
                     &mut driver.symbol_table,
                     &driver.config,

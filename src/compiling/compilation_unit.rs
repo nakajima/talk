@@ -171,11 +171,8 @@ impl CompilationUnit<Parsed> {
         imported_modules: &ModuleEnvironment,
     ) -> CompilationUnit<Resolved> {
         let mut files = vec![];
-        let mut global_scope = if config.include_prelude {
-            crate::prelude::compile_prelude().global_scope.clone()
-        } else {
-            crate::builtins::default_name_scope() // Builtins like Int, Float
-        };
+        let mut global_scope = crate::builtins::default_name_scope(); // Builtins like Int, Float
+
         for file in self.stage.files {
             let mut resolver = NameResolver::new(
                 Scope::new(global_scope.clone()),

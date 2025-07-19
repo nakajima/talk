@@ -4,7 +4,10 @@ use std::{collections::BTreeMap, path::PathBuf, process::exit};
 
 use crate::{
     SymbolID, SymbolTable,
-    compiling::driver::{Driver, DriverConfig},
+    compiling::{
+        compiled_module::CompiledModule,
+        driver::{Driver, DriverConfig},
+    },
     environment::Environment,
     lowering::ir_module::IRModule,
 };
@@ -17,10 +20,10 @@ pub struct Prelude {
 }
 
 lazy_static! {
-    static ref PRELUDE_TYPED: Prelude = _compile_prelude();
+    static ref PRELUDE_TYPED: CompiledModule = _compile_prelude();
 }
 
-pub fn compile_prelude() -> &'static Prelude {
+pub fn compile_prelude() -> &'static CompiledModule {
     &PRELUDE_TYPED
 }
 
@@ -54,7 +57,7 @@ fn load_files(driver: &mut Driver) {
     }
 }
 
-pub fn _compile_prelude() -> Prelude {
+pub fn _compile_prelude() -> CompiledModule {
     let _span = tracing::trace_span!("compile_prelude", prelude = true).entered();
 
     let mut driver = Driver::new(
@@ -66,55 +69,30 @@ pub fn _compile_prelude() -> Prelude {
         },
     );
 
-    crate::builtins::import_symbols(&mut driver.symbol_table);
+    crate::builtins::import_symbols_into(&mut driver.symbol_table);
 
     load_files(&mut driver);
 
     #[allow(clippy::unwrap_used)]
-    let resolved = driver.parse().into_iter().next().unwrap().resolved(
-        &mut driver.symbol_table,
-        &driver.config,
-        &driver.module_env,
-    );
-    let global_scope = resolved.stage.global_scope.clone();
-    let unit = resolved
-        .typed(&mut driver.symbol_table, &driver.config, &driver.module_env)
-        .lower(
+    if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
+        let resolved = driver.parse().into_iter().next().unwrap().resolved(
             &mut driver.symbol_table,
             &driver.config,
-            IRModule::new(),
             &driver.module_env,
         );
-    let mut environment = unit.env.clone();
-    let module = unit.module();
-    let symbols = &driver.symbol_table;
-
-    #[allow(clippy::panic)]
-    if let Ok(session) = &driver.session.lock()
-        && !session.diagnostics.is_empty()
-    {
-        for diagnostic in session.diagnostics.iter() {
-            let source = driver.contents(&diagnostic.path);
-            if let Some(meta) = unit.meta_for(&diagnostic.path) {
-                tracing::error!("{:?}", Report::new(diagnostic.expand(&meta, &source)));
-            }
-        }
-
-        if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
-            tracing::error!(
-                "Prelude did not compile cleanly: {:#?}",
-                session.diagnostics
+        let global_scope = resolved.stage.global_scope.clone();
+        let unit = resolved
+            .typed(&mut driver.symbol_table, &driver.config, &driver.module_env)
+            .lower(
+                &mut driver.symbol_table,
+                &driver.config,
+                IRModule::new(),
+                &driver.module_env,
             );
-        } else {
-            panic!(
-                "Prelude did not compile cleanly: {:#?}",
-                session.diagnostics
-            )
-        }
-    }
+        let mut environment = unit.env.clone();
+        let module = unit.module();
+        let symbols = &driver.symbol_table;
 
-    #[allow(clippy::unwrap_used)]
-    if std::env::var("SHOW_BUILTIN_SYMBOLS").is_ok() {
         println!(
             "pub const ARRAY: SymbolID = SymbolID({});",
             symbols.lookup("Array").unwrap().0
@@ -147,14 +125,13 @@ pub fn _compile_prelude() -> Prelude {
         exit(0)
     }
 
-    environment.clear_constraints();
-
-    Prelude {
-        symbols: symbols.clone(),
-        environment,
-        global_scope,
-        module,
-    }
+    #[allow(clippy::expect_used)]
+    driver
+        .compile_modules()
+        .expect("Unable to compile prelude.")
+        .first()
+        .expect("Did not get prelude module")
+        .clone()
 }
 
 #[cfg(test)]

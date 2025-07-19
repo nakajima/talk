@@ -14,6 +14,7 @@ use crate::{
     environment::Environment,
     lowering::ir_module::IRModule,
     name::ResolvedName,
+    prelude::compile_prelude,
     source_file,
     ty::Ty,
     typed_expr::TypedExpr,
@@ -30,11 +31,7 @@ pub type ModuleEnvironment = HashMap<String, CompiledModule>;
 
 impl DriverConfig {
     pub fn new_environment(&self) -> Environment {
-        if self.include_prelude {
-            crate::prelude::compile_prelude().environment.clone()
-        } else {
-            Environment::new()
-        }
+        Environment::new()
     }
 }
 
@@ -68,22 +65,24 @@ impl Driver {
         let session = SharedCompilationSession::new(CompilationSession::new().into());
         let environment = config.new_environment();
 
-        Self {
+        let mut driver = Self {
             units: vec![CompilationUnit::new(
                 name.into(),
                 session.clone(),
                 vec![],
                 environment,
             )],
-            symbol_table: if config.include_prelude {
-                crate::prelude::compile_prelude().symbols.clone()
-            } else {
-                SymbolTable::base()
-            },
+            symbol_table: SymbolTable::base(),
             config,
             session,
             module_env: Default::default(),
+        };
+
+        if driver.config.include_prelude {
+            driver.import_modules(vec![compile_prelude().clone()]);
         }
+
+        driver
     }
 
     pub fn with_str(string: &str) -> Self {
@@ -139,11 +138,7 @@ impl Driver {
             let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
             let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
 
-            let module = if self.config.include_prelude {
-                crate::prelude::compile_prelude().module.clone()
-            } else {
-                IRModule::new()
-            };
+            let module = IRModule::new();
 
             result.push(typed.lower(
                 &mut self.symbol_table,
@@ -294,7 +289,6 @@ impl Driver {
     #[allow(clippy::expect_used)]
     #[allow(clippy::panic)]
     pub fn compile_modules(&mut self) -> Result<Vec<CompiledModule>, CompilationError> {
-        let prelude_scope = crate::prelude::compile_prelude().global_scope.clone();
         let mut modules = vec![];
 
         for unit in self.units.iter() {
@@ -305,16 +299,19 @@ impl Driver {
 
             let mut symbols = HashMap::<String, ImportedSymbol>::new();
             for (name, symbol_id) in &resolved.stage.global_scope {
-                if prelude_scope.contains_key(name) {
+                let Some(info) = self.symbol_table.get(symbol_id) else {
+                    continue;
+                };
+
+                if info.kind.is_builtin() {
                     continue;
                 }
 
-                let kind = match self.symbol_table.get(symbol_id) {
-                    Some(SymbolInfo {
+                let imported_kind = match info {
+                    SymbolInfo {
                         kind: SymbolKind::FuncDef,
                         ..
-                    }) => ImportedSymbolKind::Function { index: 0 },
-                    Some(_) => ImportedSymbolKind::Constant { index: 0 },
+                    } => ImportedSymbolKind::Function { index: 0 },
                     _ => continue,
                 };
                 symbols.insert(
@@ -323,7 +320,7 @@ impl Driver {
                         module: unit.name.clone(),
                         name: name.clone(),
                         symbol: *symbol_id,
-                        kind,
+                        kind: imported_kind,
                     },
                 );
             }
@@ -336,12 +333,18 @@ impl Driver {
                     .symbol_table
                     .get(&imported.symbol)
                     .expect("didn't get symbol for exported ty");
+
+                if info.kind.is_builtin() {
+                    continue;
+                }
+
                 // TODO: This is gonna be slow.
                 for file in &typed.stage.files {
-                    let typed_expr =
-                        TypedExpr::find_in(file.roots(), info.expr_id).unwrap_or_else(|| {
-                            panic!("did not find type for compiled module export: {info:?}")
-                        });
+                    let Some(typed_expr) = TypedExpr::find_in(file.roots(), info.expr_id) else {
+                        tracing::warn!("did not find type for compiled module export: {info:?}");
+                        continue;
+                    };
+
                     typed_symbols.insert(imported.symbol, typed_expr.ty.clone());
                 }
             }
@@ -361,9 +364,11 @@ impl Driver {
             // TODO: This too, will be slow
             for (i, function) in lowered.functions.iter().enumerate() {
                 for symbol in symbols.values_mut() {
-                    if ResolvedName(symbol.symbol, symbol.name.clone())
-                        .mangled(typed_symbols.get(&symbol.symbol).expect("how tho"))
-                        == function.name
+                    if ResolvedName(symbol.symbol, symbol.name.clone()).mangled(
+                        typed_symbols
+                            .get(&symbol.symbol)
+                            .unwrap_or_else(|| panic!("how tho: {symbol:?}")),
+                    ) == function.name
                         && let ImportedSymbolKind::Function { index } = &mut symbol.kind
                     {
                         *index = i;
