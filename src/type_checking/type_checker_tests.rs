@@ -2091,7 +2091,7 @@ mod tests {
             }
         ";
 
-        let checked = check(src.clone()).unwrap();
+        let checked = check(src).unwrap();
 
         dumb_dot::dump_unification_dot(
             &checked.env.context.history,
