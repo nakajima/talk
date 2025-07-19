@@ -2063,15 +2063,15 @@ mod tests {
     #[test]
     fn works_with_iterable() {
         let src = "
-            protocol Iterator<Element> {
+            protocol Iterator2<Element> {
                 func next() -> Element?
             }
 
-            protocol Iterable<Element> {
-                func iter<T: Iterator<Element>>() -> T
+            protocol Iterable2<Element> {
+                func iter<T: Iterator2<Element>>() -> T
             }
 
-            struct ArrayIterator<Element>: Iterator<Element> {
+            struct ArrayIterator2<Element>: Iterator2<Element> {
                 let array: Array<Element>
                 let cur: Int
 
@@ -2084,9 +2084,9 @@ mod tests {
                 }
             }
 
-            extend Array<Element>: Iterable<Element> {
-                func iter() -> ArrayIterator<Element> {
-                        ArrayIterator<Element>(array: self, cur: 0)
+            extend Array<Element>: Iterable2<Element> {
+                func iter() -> ArrayIterator2<Element> {
+                        ArrayIterator2<Element>(array: self, cur: 0)
                 }
             }
         ";
