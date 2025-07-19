@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
 use crate::{
     compiling::compiled_module::ImportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
@@ -125,6 +128,7 @@ pub struct SymbolTable {
     next_id: i32,
     pub types: BTreeMap<SymbolID, TypeTable>,
     pub symbol_map: BTreeMap<Span, SymbolID>,
+    pub import_symbol_map: HashMap<SymbolID, SymbolID>,
 }
 
 impl SymbolTable {
@@ -134,11 +138,16 @@ impl SymbolTable {
             next_id: Default::default(),
             types: Default::default(),
             symbol_map: Default::default(),
+            import_symbol_map: Default::default(),
         };
 
         crate::builtins::import_symbols(&mut table);
 
         table
+    }
+
+    pub fn find_imported(&self, imported: &SymbolID) -> Option<&SymbolID> {
+        self.import_symbol_map.get(imported)
     }
 
     pub fn add_map(&mut self, span: Span, symbol_id: &SymbolID) {
@@ -214,6 +223,10 @@ impl SymbolTable {
         };
 
         self.types.insert(to_symbol_id, table);
+    }
+
+    pub fn map_import(&mut self, theirs: SymbolID, ours: SymbolID) {
+        self.import_symbol_map.insert(theirs, ours);
     }
 
     pub fn add_property(

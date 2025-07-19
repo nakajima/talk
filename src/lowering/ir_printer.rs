@@ -187,7 +187,7 @@ mod tests {
                 include_comments: false,
             },
         );
-        driver.update_file(&"-".into(), input.into());
+        driver.update_file(&"-".into(), input);
         let module = driver.lower().into_iter().next().unwrap().module();
         Ok(module)
     }

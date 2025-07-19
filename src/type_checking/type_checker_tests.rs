@@ -1,14 +1,13 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::path::PathBuf;
 
     use crate::{
         SymbolID, any_typed, assert_eq_diff, check, check_with_imports,
-        compiling::compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
+        compiling::driver::{Driver, DriverConfig},
         diagnostic::{Diagnostic, DiagnosticKind},
         dumb_dot::{self, dump_unification_dot},
         expr_id::ExprID,
-        lowering::ir_module::IRModule,
         name::ResolvedName,
         token_kind::TokenKind,
         ty::Ty,
@@ -2008,33 +2007,27 @@ mod tests {
 
     #[test]
     fn imports_simple_func() {
-        let mut symbols = HashMap::new();
-        symbols.insert(
-            "importedFunc".to_string(),
-            ImportedSymbol {
-                name: "importedFunc".to_string(),
-                module: "Imported".to_string(),
-                symbol: SymbolID(123123123),
-                kind: ImportedSymbolKind::Function { index: 0 },
+        let mut driver = Driver::new(
+            "Imported",
+            DriverConfig {
+                executable: false,
+                include_prelude: false,
+                include_comments: false,
             },
         );
 
-        let mut types = HashMap::new();
-        types.insert(
-            SymbolID(123123123),
-            Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
+        driver.update_file(
+            &PathBuf::from("-"),
+            "
+            @export
+            func importedFunc(x: Int) { true }
+        ",
         );
 
+        let compiled_module = driver.compile_modules().unwrap().first().unwrap().clone();
+
         let checked = check_with_imports(
-            &[CompiledModule {
-                module_name: "Imported".to_string(),
-                symbols,
-                types,
-                ir_module: IRModule {
-                    functions: vec![],
-                    constants: vec![],
-                },
-            }],
+            &[compiled_module],
             r#"
             import Imported
 
@@ -2043,10 +2036,60 @@ mod tests {
         )
         .unwrap();
 
+        assert!(
+            checked.diagnostics().is_empty(),
+            "{:?}",
+            checked.diagnostics()
+        );
+
         assert_eq!(
             checked.nth(1).unwrap(),
             Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
         );
+    }
+
+    #[test]
+    fn imports_type() {
+        let mut driver = Driver::new(
+            "Imported",
+            DriverConfig {
+                executable: false,
+                include_prelude: false,
+                include_comments: false,
+            },
+        );
+
+        driver.update_file(
+            &PathBuf::from("-"),
+            "
+            @export
+            struct ImportedStruct {
+                let x: Int
+                let y: Float
+            }
+        ",
+        );
+
+        let compiled_module = driver.compile_modules().unwrap().first().unwrap().clone();
+        let checked = check_with_imports(
+            &[compiled_module],
+            r#"
+            import Imported
+
+            let imported = ImportedStruct(x: 123, y: 1.23)
+            imported
+            imported.x
+            imported.y
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            checked.nth(2).unwrap(),
+            Ty::Struct(SymbolID::resolved(1), vec![])
+        );
+        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(4).unwrap(), Ty::Float);
     }
 
     #[test]

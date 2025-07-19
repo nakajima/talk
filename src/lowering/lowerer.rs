@@ -2097,7 +2097,7 @@ impl<'a> Lowerer<'a> {
                 .expect("Did not find module");
 
             let func_ty = module
-                .types
+                .typed_symbols
                 .get(&imported_symbol.symbol)
                 .expect("did not find type for imported function");
 

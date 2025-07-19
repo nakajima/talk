@@ -119,7 +119,7 @@ pub struct TypeChecker<'a> {
     session: SharedCompilationSession,
     pub(super) path: PathBuf,
     pub(super) meta: &'a ExprMetaStorage,
-    module_env: &'a HashMap<String, CompiledModule>,
+    pub(super) module_env: &'a HashMap<String, CompiledModule>,
 }
 
 fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
@@ -2014,7 +2014,7 @@ impl<'a> TypeChecker<'a> {
 
     pub fn import_ty(&self, imported_symbol: &ImportedSymbol) -> Option<Ty> {
         if let Some(module) = self.module_env.get(&imported_symbol.module) {
-            return module.types.get(&imported_symbol.symbol).cloned();
+            return module.typed_symbols.get(&imported_symbol.symbol).cloned();
         }
 
         None

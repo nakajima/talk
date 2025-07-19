@@ -156,6 +156,13 @@ impl TypeVarContext {
 
         let id = self.table.find(VarKey(var.id));
         let (kind, expr_id) = self.kinds[id.0 as usize].clone();
+
+        #[cfg(test)]
+        tracing::trace!(
+            "Finding {var:?} -> {:?}",
+            TypeVarID::new(id.0, kind.clone(), expr_id)
+        );
+
         TypeVarID::new(id.0, kind, expr_id)
     }
 
@@ -179,20 +186,24 @@ impl TypeVarContext {
         self.table.union(VarKey(a.id), VarKey(b.id));
 
         let found = self.table.find(VarKey(a.id));
-        if found == VarKey(a.id) {
-            self.history.push(UnificationEntry::Unify {
-                expr_id: a.expr_id,
-                before: Ty::TypeVar(a.clone()),
-                after: Ty::TypeVar(b.clone()),
-                generation,
-            })
-        } else {
-            self.history.push(UnificationEntry::Unify {
-                expr_id: b.expr_id,
-                before: Ty::TypeVar(b.clone()),
-                after: Ty::TypeVar(a.clone()),
-                generation,
-            })
+
+        #[cfg(debug_assertions)]
+        {
+            if found == VarKey(a.id) {
+                self.history.push(UnificationEntry::Unify {
+                    expr_id: a.expr_id,
+                    before: Ty::TypeVar(a.clone()),
+                    after: Ty::TypeVar(b.clone()),
+                    generation,
+                })
+            } else {
+                self.history.push(UnificationEntry::Unify {
+                    expr_id: b.expr_id,
+                    before: Ty::TypeVar(b.clone()),
+                    after: Ty::TypeVar(a.clone()),
+                    generation,
+                })
+            }
         }
 
         if let Some((kind, expr_id)) = canonical_kind {

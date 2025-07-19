@@ -36,6 +36,27 @@ impl TypeMember {
             TypeMember::Variant(variant) => &variant.ty,
         }
     }
+
+    pub fn replace(&mut self, substitutions: &Substitutions) {
+        match self {
+            TypeMember::Method(method) => {
+                method.ty = ConstraintSolver::substitute_ty_with_map(&method.ty, substitutions);
+            }
+            TypeMember::MethodRequirement(method) => {
+                method.ty = ConstraintSolver::substitute_ty_with_map(&method.ty, substitutions);
+            }
+            TypeMember::Property(property) => {
+                property.ty = ConstraintSolver::substitute_ty_with_map(&property.ty, substitutions);
+            }
+            TypeMember::Initializer(initializer) => {
+                initializer.ty =
+                    ConstraintSolver::substitute_ty_with_map(&initializer.ty, substitutions);
+            }
+            TypeMember::Variant(variant) => {
+                variant.ty = ConstraintSolver::substitute_ty_with_map(&variant.ty, substitutions);
+            }
+        };
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

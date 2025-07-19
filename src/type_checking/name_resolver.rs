@@ -1135,7 +1135,10 @@ impl<'a> NameResolver<'a> {
         let Some(scope) = self.scopes.last_mut() else {
             return SymbolID(0);
         };
+
         scope.import(name.clone(), symbol_id, symbol.clone());
+        symbol_table.map_import(symbol.symbol, symbol_id);
+
         if let Some(span) = meta.span(&expr_id) {
             symbol_table.add_map(span, &symbol_id);
         } else {
@@ -1998,6 +2001,7 @@ mod tests {
                 module_name: "Imported".to_string(),
                 symbols,
                 types: Default::default(),
+                typed_symbols: Default::default(),
                 ir_module: IRModule {
                     functions: vec![],
                     constants: vec![],

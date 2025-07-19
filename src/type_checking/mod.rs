@@ -106,7 +106,7 @@ pub fn check(input: &str) -> Result<CheckResult, TypeError> {
 
     let path = &PathBuf::from("-");
     let mut driver = Driver::new("TypeTests", Default::default());
-    driver.update_file(path, input.into());
+    driver.update_file(path, input);
     let units = driver.check();
     let typed_compilation_unit = units.clone().into_iter().next().unwrap();
     let source_file = typed_compilation_unit.source_file(path).unwrap().clone();
@@ -143,7 +143,7 @@ pub fn check_with_imports(
 
     let path = &PathBuf::from("-");
     let mut driver = Driver::new("-", Default::default());
-    driver.update_file(path, input.into());
+    driver.update_file(path, input);
     driver.import_modules(imports.to_vec());
     let units = driver.check();
     let typed_compilation_unit = units.clone().into_iter().next().unwrap();
@@ -157,9 +157,9 @@ pub fn check_with_imports(
         }
     }
 
-    for diagnostic in driver.session.lock().unwrap().diagnostics_for(path) {
-        tracing::error!("{diagnostic:?}");
-    }
+    let diagnostics = driver.session.lock().unwrap()._diagnostics().clone();
+
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
 
     Ok(CheckResult {
         session: driver.session,
@@ -185,7 +185,7 @@ pub fn check_without_prelude(input: &str) -> Result<CheckResult, TypeError> {
             include_comments: false,
         },
     );
-    driver.update_file(path, input.into());
+    driver.update_file(path, input);
     let typed_compilation_unit = driver.check().into_iter().next().unwrap();
 
     let mut merged = ExprMetaStorage::default();

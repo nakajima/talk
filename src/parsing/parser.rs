@@ -609,6 +609,10 @@ impl<'a> Parser<'a> {
 
         match current.kind {
             TokenKind::At => self.attributed_expr(attributes),
+            TokenKind::Struct => {
+                // TODO: Actually save attributes on struct
+                self.struct_expr(false)
+            }
             TokenKind::Func => {
                 self.consume(TokenKind::Func)?;
                 self.func(attributes)

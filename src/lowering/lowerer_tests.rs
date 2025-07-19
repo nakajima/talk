@@ -17,7 +17,7 @@ pub mod helpers {
                 include_comments: false,
             },
         );
-        driver.update_file(&PathBuf::from("-"), input.into());
+        driver.update_file(&PathBuf::from("-"), input);
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
         let module = lowered.module().clone();
@@ -37,7 +37,7 @@ pub mod helpers {
                 include_comments: false,
             },
         );
-        driver.update_file(&PathBuf::from("-"), input.into());
+        driver.update_file(&PathBuf::from("-"), input);
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
         let module = lowered.module().clone();
@@ -49,12 +49,12 @@ pub mod helpers {
 
 #[cfg(test)]
 pub mod lowering_tests {
-    use std::{collections::HashMap, path::PathBuf};
+    use std::path::PathBuf;
 
     use crate::{
         SymbolID, assert_lowered_function,
         compiling::{
-            compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
+            compiled_module::{CompiledModule, compile_module},
             driver::{Driver, DriverConfig},
         },
         lowering::{
@@ -70,7 +70,6 @@ pub mod lowering_tests {
             register::Register,
         },
         prelude::compile_prelude,
-        ty::Ty,
     };
 
     pub fn lower_with_imports(
@@ -85,7 +84,7 @@ pub mod lowering_tests {
                 include_comments: false,
             },
         );
-        driver.update_file(&PathBuf::from("-"), input.into());
+        driver.update_file(&PathBuf::from("-"), input);
         driver.import_modules(imports);
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
@@ -104,7 +103,7 @@ pub mod lowering_tests {
                 include_comments: false,
             },
         );
-        driver.update_file(&PathBuf::from("-"), input.into());
+        driver.update_file(&PathBuf::from("-"), input);
         let lowered = driver.lower().into_iter().next().unwrap();
         let diagnostics = driver.refresh_diagnostics_for(&PathBuf::from("-")).unwrap();
         let module = lowered.module().clone();
@@ -1828,29 +1827,12 @@ pub mod lowering_tests {
 
     #[test]
     fn lowers_imported_func() {
-        let mut symbols = HashMap::new();
-        symbols.insert(
-            "importedFunc".to_string(),
-            ImportedSymbol {
-                name: "importedFunc".to_string(),
-                module: "Imported".to_string(),
-                symbol: SymbolID(123123123),
-                kind: ImportedSymbolKind::Function { index: 0 },
-            },
-        );
-
-        let mut types = HashMap::new();
-        types.insert(
-            SymbolID(123123123),
-            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]),
-        );
-
         let imported_func = IRFunction {
             ty: IRType::Func(vec![IRType::Int], IRType::Int.into()),
-            name: "@_123123123_importedFunc".to_string(),
+            name: "@_1_importedFunc".to_string(),
             blocks: vec![BasicBlock {
                 id: BasicBlockID::ENTRY,
-                instructions: vec![Instr::Ret(IRType::Int, Some(IRValue::ImmediateInt(123)))],
+                instructions: vec![Instr::Ret(IRType::Int, Some(Register(0).into()))],
             }],
             env_ty: None,
             env_reg: None,
@@ -1858,16 +1840,16 @@ pub mod lowering_tests {
             debug_info: Default::default(),
         };
 
+        let compiled_module = compile_module(
+            "Imported",
+            "
+            @export
+            func importedFunc(x: Int) { x } 
+        ",
+        );
+
         let lowered = lower_with_imports(
-            vec![CompiledModule {
-                module_name: "Imported".to_string(),
-                symbols,
-                types,
-                ir_module: IRModule {
-                    constants: vec![],
-                    functions: vec![imported_func.clone()],
-                },
-            }],
+            vec![compiled_module],
             "
         import Imported
 

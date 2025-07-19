@@ -123,7 +123,9 @@ impl<'a> ConstraintSolver<'a> {
             unsolved_constraints.push(constraint.clone());
             errors.push((
                 *constraint.expr_id(),
-                TypeError::Unknown("Could not solve deferred constraint".to_string()),
+                TypeError::Unknown(format!(
+                    "Could not solve deferred constraint: {constraint:?}"
+                )),
             ));
         }
 

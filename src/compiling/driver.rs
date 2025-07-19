@@ -88,7 +88,7 @@ impl Driver {
 
     pub fn with_str(string: &str) -> Self {
         let mut driver = Driver::default();
-        driver.update_file(&PathBuf::from("-"), string.into());
+        driver.update_file(&PathBuf::from("-"), string);
         driver
     }
 
@@ -106,7 +106,8 @@ impl Driver {
         driver
     }
 
-    pub fn update_file(&mut self, path: &PathBuf, contents: String) {
+    pub fn update_file(&mut self, path: &PathBuf, contents: impl Into<String>) {
+        let contents: String = contents.into();
         for unit in &mut self.units {
             if unit.has_file(path) {
                 unit.src_cache.insert(path.clone(), contents.clone());
@@ -329,7 +330,7 @@ impl Driver {
 
             let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
 
-            let mut types = HashMap::<SymbolID, Ty>::new();
+            let mut typed_symbols = HashMap::<SymbolID, Ty>::new();
             for (_, imported) in symbols.iter() {
                 let info = self
                     .symbol_table
@@ -341,9 +342,11 @@ impl Driver {
                         TypedExpr::find_in(file.roots(), info.expr_id).unwrap_or_else(|| {
                             panic!("did not find type for compiled module export: {info:?}")
                         });
-                    types.insert(imported.symbol, typed_expr.ty.clone());
+                    typed_symbols.insert(imported.symbol, typed_expr.ty.clone());
                 }
             }
+
+            let types = typed.env.types.clone();
 
             let lowered = typed
                 .lower(
@@ -359,7 +362,7 @@ impl Driver {
             for (i, function) in lowered.functions.iter().enumerate() {
                 for symbol in symbols.values_mut() {
                     if ResolvedName(symbol.symbol, symbol.name.clone())
-                        .mangled(types.get(&symbol.symbol).expect("how tho"))
+                        .mangled(typed_symbols.get(&symbol.symbol).expect("how tho"))
                         == function.name
                         && let ImportedSymbolKind::Function { index } = &mut symbol.kind
                     {
@@ -372,6 +375,7 @@ impl Driver {
                 module_name: unit.name.clone(),
                 symbols,
                 types,
+                typed_symbols,
                 ir_module: lowered,
             };
 
@@ -426,12 +430,12 @@ mod tests {
         );
 
         assert_eq!(
-            module.types.get(&SymbolID::resolved(1)).unwrap(),
+            module.typed_symbols.get(&SymbolID::resolved(1)).unwrap(),
             &Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
         );
 
         assert_eq!(
-            module.types.get(&SymbolID::resolved(2)).unwrap(),
+            module.typed_symbols.get(&SymbolID::resolved(2)).unwrap(),
             &Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
         );
     }
