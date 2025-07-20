@@ -174,10 +174,20 @@ mod tests {
         let module = lowered.module();
         (module, file, env)
     }
+    
+    fn lower_without_prelude(code: &'static str) -> (IRModule, SourceFile<source_file::Lowered>, Environment) {
+        let mut driver = Driver::with_str_no_prelude(code);
+
+        let lowered = driver.lower().into_iter().next().unwrap();
+        let file = lowered.source_file(Path::new("-")).unwrap().clone();
+        let env = lowered.env.clone();
+        let module = lowered.module();
+        (module, file, env)
+    }
 
     #[test]
     fn does_nothing_when_its_fine() {
-        let (module, _, env) = lower(
+        let (module, _, env) = lower_without_prelude(
             "
       struct Person {
         let age: Int
@@ -189,12 +199,15 @@ mod tests {
       ",
         );
 
-        let person_id = SymbolID::resolved(1);
         let function = module
             .functions
             .iter()
-            .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
+            .find(|f| f.name.contains("_Person_init"))
             .unwrap();
+        
+        // Extract person_id from function name
+        let person_id_str = function.name.split('_').nth(1).unwrap();
+        let person_id = SymbolID(person_id_str.parse().unwrap());
 
         let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
@@ -221,12 +234,15 @@ mod tests {
       ",
         );
 
-        let person_id = SymbolID::resolved(1);
         let function = module
             .functions
             .iter()
-            .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
+            .find(|f| f.name.contains("_Person_init"))
             .unwrap();
+        
+        // Extract person_id from function name
+        let person_id_str = function.name.split('_').nth(1).unwrap();
+        let person_id = SymbolID(person_id_str.parse().unwrap());
 
         let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
@@ -240,7 +256,7 @@ mod tests {
             panic!("did not get error");
         };
 
-        assert_eq!(name, format!("@_{}_Person_init", person_id.0));
+        assert!(name.contains("_Person_init"));
         let Property { name, ty, .. } = &properties[0];
         assert_eq!(name, "age");
         assert_eq!(ty, &Ty::Int);
@@ -248,7 +264,7 @@ mod tests {
 
     #[test]
     fn provides_error_with_conditional() {
-        let (module, _, env) = lower(
+        let (module, _, env) = lower_without_prelude(
             "
       struct Person {
         let age: Int
@@ -262,12 +278,15 @@ mod tests {
       ",
         );
 
-        let person_id = SymbolID::resolved(1);
         let function = module
             .functions
             .iter()
-            .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
+            .find(|f| f.name.contains("_Person_init"))
             .unwrap();
+        
+        // Extract person_id from function name
+        let person_id_str = function.name.split('_').nth(1).unwrap();
+        let person_id = SymbolID(person_id_str.parse().unwrap());
 
         let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
@@ -281,7 +300,7 @@ mod tests {
             panic!("did not get error");
         };
 
-        assert_eq!(name, format!("@_{}_Person_init", person_id.0));
+        assert!(name.contains("_Person_init"));
         let Property { name, ty, .. } = &properties[0];
         assert_eq!(name, "age");
         assert_eq!(ty, &Ty::Int);
@@ -305,12 +324,15 @@ mod tests {
       ",
         );
 
-        let person_id = SymbolID::resolved(1);
         let function = module
             .functions
             .iter()
-            .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
+            .find(|f| f.name.contains("_Person_init"))
             .unwrap();
+        
+        // Extract person_id from function name
+        let person_id_str = function.name.split('_').nth(1).unwrap();
+        let person_id = SymbolID(person_id_str.parse().unwrap());
 
         let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");
@@ -336,12 +358,15 @@ mod tests {
       ",
         );
 
-        let person_id = SymbolID::resolved(1);
         let function = module
             .functions
             .iter()
-            .find(|f| f.name == format!("@_{}_Person_init", person_id.0))
+            .find(|f| f.name.contains("_Person_init"))
             .unwrap();
+        
+        // Extract person_id from function name
+        let person_id_str = function.name.split('_').nth(1).unwrap();
+        let person_id = SymbolID(person_id_str.parse().unwrap());
 
         let Some(struct_def) = env.lookup_type(&person_id) else {
             panic!("didn't get struct def");

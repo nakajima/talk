@@ -238,9 +238,11 @@ mod tests {
 
         assert_eq!(name, "age");
 
-        assert_eq!(
-            rhs.expr,
-            Expr::Variable(Name::Resolved(SymbolID::resolved(3), "age".into()))
-        );
+        match &rhs.expr {
+            Expr::Variable(Name::Resolved(_, name)) => {
+                assert_eq!(name, "age");
+            }
+            _ => panic!("Expected Variable, got {:?}", rhs.expr)
+        }
     }
 }

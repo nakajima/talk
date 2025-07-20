@@ -19,7 +19,7 @@ mod tests {
 
     #[test]
     fn checks_initializer() {
-        let checked = check(
+        let checked = crate::type_checking::check_without_prelude(
             "
         struct Person {
             let age: Int
@@ -278,7 +278,15 @@ mod tests {
     #[test]
     fn checks_a_string() {
         let checker = check("\"hello world\"").unwrap();
-        assert_eq!(checker.first_root().ty, Ty::string())
+        // Should be a String type
+        match &checker.first_root().ty {
+            Ty::Struct(id, params) if params.is_empty() => {
+                // Check that it's the String type by looking it up in the environment
+                let type_def = checker.env.lookup_type(id).expect("Should find String type");
+                assert_eq!(type_def.name_str, "String");
+            }
+            _ => panic!("Expected String type, got {:?}", checker.first_root().ty)
+        }
     }
 
     #[test]
@@ -817,10 +825,15 @@ mod tests {
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(checker.root_ids()[1]).unwrap();
-        assert_eq!(
-            call_result,
-            Ty::EnumVariant(SymbolID::typed(1), vec![Ty::Int])
-        );
+        match &call_result {
+            Ty::EnumVariant(id, generics) => {
+                assert_eq!(generics, &vec![Ty::Int]);
+                // Check that it's the Option type by looking it up
+                let type_def = checker.env.lookup_type(id).expect("Should find Option type");
+                assert_eq!(type_def.name_str, "Option");
+            }
+            _ => panic!("Expected EnumVariant, got {:?}", call_result)
+        }
     }
 
     #[test]
@@ -916,7 +929,14 @@ mod tests {
         match func_ty {
             Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::Enum(SymbolID::typed(1), vec![])); // Bool
+                // Check that the parameter is the Bool enum
+                match &params[0] {
+                    Ty::Enum(id, generics) if generics.is_empty() => {
+                        let type_def = checker.env.lookup_type(id).expect("Should find Bool type");
+                        assert_eq!(type_def.name_str, "Bool");
+                    }
+                    _ => panic!("Expected Bool enum, got {:?}", params[0])
+                }
                 assert_eq!(*ret, Ty::Int);
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
@@ -1138,7 +1158,9 @@ mod tests {
         assert_eq!(x_ty, Ty::Int.some());
         match x_ty {
             Ty::EnumVariant(symbol_id, generics) => {
-                assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
+                // Check that it's the Optional type by looking it up
+                let type_def = checker.env.lookup_type(&symbol_id).expect("Should find Optional type");
+                assert_eq!(type_def.name_str, "Optional");
                 assert_eq!(generics, vec![Ty::Int]);
             }
             _ => panic!("Expected Optional<Int>, got {x_ty:?}"),
@@ -1205,7 +1227,9 @@ mod tests {
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
         match call_result {
             Ty::Enum(sym, generics) => {
-                assert_eq!(*symbol_id, sym); // Optional's ID
+                // Check that it's the Optional type by looking it up
+                let type_def = checker.env.lookup_type(&sym).expect("Should find Optional type");
+                assert_eq!(type_def.name_str, "Optional");
                 assert_eq!(generics, vec![Ty::Int]);
             }
             _ => panic!("Expected Optional<Int>, got {call_result:?}"),
@@ -1284,10 +1308,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
-        );
+        // Check that it's Array<Int>
+        match checked.type_for(checked.root_ids()[0]).unwrap() {
+            Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                let type_def = checked.env.lookup_type(&id).expect("Should find Array type");
+                assert_eq!(type_def.name_str, "Array");
+                assert_eq!(type_params[0], Ty::Int);
+            }
+            ty => panic!("Expected Array<Int>, got {:?}", ty)
+        }
     }
 
     #[test]
@@ -1299,13 +1328,29 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::Method {
-                self_ty: Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+        // Check that it's a method on Array<Int> that takes Int and returns Int
+        match checked.type_for(checked.root_ids()[0]).unwrap() {
+            Ty::Method { self_ty, func } => {
+                // Check self type is Array<Int>
+                match self_ty.as_ref() {
+                    Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                        let type_def = checked.env.lookup_type(id).expect("Should find Array type");
+                        assert_eq!(type_def.name_str, "Array");
+                        assert_eq!(type_params[0], Ty::Int);
+                    }
+                    _ => panic!("Expected Array<Int> self type, got {:?}", self_ty)
+                }
+                // Check function signature
+                match func.as_ref() {
+                    Ty::Func(params, ret, _) if params.len() == 1 => {
+                        assert_eq!(params[0], Ty::Int);
+                        assert_eq!(**ret, Ty::Int);
+                    }
+                    _ => panic!("Expected func(Int) -> Int, got {:?}", func)
+                }
             }
-        );
+            ty => panic!("Expected Method type, got {:?}", ty)
+        }
     }
 
     #[test]
@@ -1319,14 +1364,30 @@ mod tests {
         assert_eq!(1, params.len());
 
         let root = checked.typed_expr(checked.root_ids()[0]).unwrap();
-        assert_eq!(
-            root.ty,
-            Ty::Func(
-                vec![Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])],
-                Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
-                vec![],
-            )
-        );
+        // Check that the function takes and returns Array<Int>
+        match &root.ty {
+            Ty::Func(params, ret, _) if params.len() == 1 => {
+                // Check parameter type
+                match &params[0] {
+                    Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                        let type_def = checked.env.lookup_type(id).expect("Should find Array type");
+                        assert_eq!(type_def.name_str, "Array");
+                        assert_eq!(type_params[0], Ty::Int);
+                    }
+                    _ => panic!("Expected Array<Int> parameter, got {:?}", params[0])
+                }
+                // Check return type
+                match ret.as_ref() {
+                    Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                        let type_def = checked.env.lookup_type(id).expect("Should find Array type");
+                        assert_eq!(type_def.name_str, "Array");
+                        assert_eq!(type_params[0], Ty::Int);
+                    }
+                    _ => panic!("Expected Array<Int> return type, got {:?}", ret)
+                }
+            }
+            _ => panic!("Expected function type, got {:?}", root.ty)
+        }
     }
 
     #[test]
@@ -1358,13 +1419,29 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::Method {
-                self_ty: Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+        // Check that it's a method on Array<Int> that takes Int and returns Int
+        match checked.type_for(checked.root_ids()[1]).unwrap() {
+            Ty::Method { self_ty, func } => {
+                // Check self type is Array<Int>
+                match self_ty.as_ref() {
+                    Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                        let type_def = checked.env.lookup_type(id).expect("Should find Array type");
+                        assert_eq!(type_def.name_str, "Array");
+                        assert_eq!(type_params[0], Ty::Int);
+                    }
+                    _ => panic!("Expected Array<Int> self type, got {:?}", self_ty)
+                }
+                // Check function signature
+                match func.as_ref() {
+                    Ty::Func(params, ret, _) if params.len() == 1 => {
+                        assert_eq!(params[0], Ty::Int);
+                        assert_eq!(**ret, Ty::Int);
+                    }
+                    _ => panic!("Expected func(Int) -> Int, got {:?}", func)
+                }
             }
-        );
+            ty => panic!("Expected Method type, got {:?}", ty)
+        }
     }
 
     #[test]
@@ -1379,14 +1456,25 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
-        );
-        assert_eq!(
-            checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Float])
-        );
+        // Check first call returns Array<Int>
+        match checked.type_for(checked.root_ids()[1]).unwrap() {
+            Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                let type_def = checked.env.lookup_type(&id).expect("Should find Array type");
+                assert_eq!(type_def.name_str, "Array");
+                assert_eq!(type_params[0], Ty::Int);
+            }
+            ty => panic!("Expected Array<Int>, got {:?}", ty)
+        }
+        
+        // Check second call returns Array<Float>  
+        match checked.type_for(checked.root_ids()[2]).unwrap() {
+            Ty::Struct(id, type_params) if type_params.len() == 1 => {
+                let type_def = checked.env.lookup_type(&id).expect("Should find Array type");
+                assert_eq!(type_def.name_str, "Array");
+                assert_eq!(type_params[0], Ty::Float);
+            }
+            ty => panic!("Expected Array<Float>, got {:?}", ty)
+        }
     }
 
     #[test]
@@ -1974,7 +2062,16 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(2).unwrap(), Ty::string());
+        // Should be a String type
+        let result_type = checked.nth(2).unwrap();
+        match result_type {
+            Ty::Struct(id, params) if params.is_empty() => {
+                // Check that it's the String type by looking it up in the environment
+                let type_def = checked.env.lookup_type(&id).expect("Should find String type");
+                assert_eq!(type_def.name_str, "String");
+            }
+            _ => panic!("Expected String type, got {:?}", result_type)
+        }
     }
 
     #[test]
@@ -2002,7 +2099,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.first_root().ty, Ty::string());
+        // Should be a String type
+        match &checked.first_root().ty {
+            Ty::Struct(id, params) if params.is_empty() => {
+                // Check that it's the String type by looking it up in the environment
+                let type_def = checked.env.lookup_type(id).expect("Should find String type");
+                assert_eq!(type_def.name_str, "String");
+            }
+            _ => panic!("Expected String type, got {:?}", checked.first_root().ty)
+        }
     }
 
     #[test]

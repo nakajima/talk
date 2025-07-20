@@ -40,9 +40,34 @@ impl<'a> ConformanceChecker<'a> {
 
     #[tracing::instrument(level = Level::TRACE, skip(self), fields(result))]
     pub fn check(mut self) -> Result<Vec<(Ty, Ty)>, TypeError> {
+        // Try to find the protocol with the given ID first
+        let protocol_id = self.conformance.protocol_id;
+        
+        // If it's a known prelude protocol ID, try to find the remapped version
+        let actual_protocol_id = if protocol_id == SymbolID::ADD 
+            || protocol_id == SymbolID::SUBTRACT 
+            || protocol_id == SymbolID::MULTIPLY 
+            || protocol_id == SymbolID::DIVIDE {
+            // Try to find the protocol by name in the environment
+            let protocol_name = match protocol_id {
+                id if id == SymbolID::ADD => "Add",
+                id if id == SymbolID::SUBTRACT => "Subtract", 
+                id if id == SymbolID::MULTIPLY => "Multiply",
+                id if id == SymbolID::DIVIDE => "Divide",
+                _ => unreachable!(),
+            };
+            
+            self.env.types.iter()
+                .find(|(_, type_def)| type_def.name_str == protocol_name && type_def.kind == crate::type_defs::TypeDefKind::Protocol)
+                .map(|(id, _)| *id)
+                .unwrap_or(protocol_id)
+        } else {
+            protocol_id
+        };
+        
         let Some(protocol) = self
             .env
-            .lookup_protocol(&self.conformance.protocol_id)
+            .lookup_protocol(&actual_protocol_id)
             .cloned()
         else {
             return Err(TypeError::Unknown(

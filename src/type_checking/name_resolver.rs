@@ -482,6 +482,8 @@ impl<'a> NameResolver<'a> {
                                 name
                             } else if let Some((symbol_id, _)) = self.lookup(&raw_name_str) {
                                 Name::Resolved(symbol_id, raw_name_str)
+                            } else if let Some((symbol_id, _imported)) = self.lookup_import(&raw_name_str) {
+                                Name::Resolved(symbol_id, raw_name_str)
                             } else {
                                 return Err(NameResolverError::UnresolvedName(raw_name_str));
                             }
@@ -1211,6 +1213,11 @@ mod tests {
     };
 
     fn resolve(code: &'static str) -> SourceFile<NameResolved> {
+        let mut driver = Driver::with_str_no_prelude(code);
+        driver.resolved_source_file(&PathBuf::from("-")).unwrap()
+    }
+    
+    fn resolve_with_prelude(code: &'static str) -> SourceFile<NameResolved> {
         let mut driver = Driver::with_str(code);
         driver.resolved_source_file(&PathBuf::from("-")).unwrap()
     }
@@ -1219,7 +1226,7 @@ mod tests {
         imports: Vec<CompiledModule>,
         code: &'static str,
     ) -> SourceFile<NameResolved> {
-        let mut driver = Driver::with_str(code);
+        let mut driver = Driver::with_str_no_prelude(code);
         driver.import_modules(imports);
         driver.resolved_source_file(&PathBuf::from("-")).unwrap()
     }
@@ -1227,7 +1234,7 @@ mod tests {
     fn resolve_with_session(
         code: &'static str,
     ) -> (SourceFile<NameResolved>, SharedCompilationSession) {
-        let mut driver = Driver::with_str(code);
+        let mut driver = Driver::with_str_no_prelude(code);
         (
             driver.resolved_source_file(&PathBuf::from("-")).unwrap(),
             driver.session,
@@ -1235,7 +1242,7 @@ mod tests {
     }
 
     pub fn resolve_with_symbols(code: &'static str) -> (SourceFile<NameResolved>, SymbolTable) {
-        let mut driver = Driver::with_str(code);
+        let mut driver = Driver::with_str_no_prelude(code);
         let file = driver.units[0]
             .clone()
             .parse(false)
@@ -1473,7 +1480,7 @@ mod tests {
 
     #[test]
     fn resolves_let_rhs() {
-        let tree = resolve(
+        let tree = resolve_with_prelude(
             "
         let x = Optional.none
         ",
@@ -1486,7 +1493,7 @@ mod tests {
                 any_expr!(Expr::Member(
                     Some(
                         any_expr!(Expr::Variable(Name::Resolved(
-                            SymbolID::OPTIONAL,
+                            SymbolID::ANY,
                             "Optional".into()
                         )))
                         .into()
@@ -1762,7 +1769,7 @@ mod tests {
 
     #[test]
     fn resolves_array_builtin() {
-        let resolved = resolve("func c() -> Array<Int> {}");
+        let resolved = resolve_with_prelude("func c() -> Array<Int> {}");
 
         assert_eq!(
             resolved.roots()[0],
@@ -1773,9 +1780,9 @@ mod tests {
                 body: any_expr!(Expr::Block(vec![])).into(),
                 ret: Some(
                     any_expr!(Expr::TypeRepr {
-                        name: Name::Resolved(SymbolID::ARRAY, "Array".into()),
+                        name: Name::Resolved(SymbolID::ANY, "Array".into()),
                         generics: vec![any_expr!(Expr::TypeRepr {
-                            name: Name::Resolved(SymbolID::INT, "Int".to_string()),
+                            name: Name::Resolved(SymbolID::ANY, "Int".to_string()),
                             generics: vec![],
                             conformances: vec![],
                             introduces_type: false

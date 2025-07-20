@@ -167,7 +167,26 @@ impl<'a> TypeChecker<'a> {
         // This should probably all live in TypeDef or something..
         for (type_symbol, type_def) in module.types.iter() {
             if type_symbol.0 <= 0 {
-                continue; // Don't re-import builtins
+                // For builtins, we still need to update their conformances
+                if !type_def.conformances.is_empty() || !type_def.members.is_empty() {
+                    if let Some(existing_type) = env.types.get_mut(type_symbol) {
+                        // Add members from extensions
+                        for (name, member) in &type_def.members {
+                            if !existing_type.members.contains_key(name) {
+                                existing_type.members.insert(name.clone(), member.clone());
+                            }
+                        }
+                        for conformance in &type_def.conformances {
+                            let mut updated_conformance = conformance.clone();
+                            // Remap the protocol ID if it's imported
+                            if let Some(remapped_id) = env.imported_type_symbol_map.get(&conformance.protocol_id) {
+                                updated_conformance.protocol_id = *remapped_id;
+                            }
+                            existing_type.conformances.push(updated_conformance);
+                        }
+                    }
+                }
+                continue;
             }
 
             let Some(our_symbol) = self.symbol_table.find_imported(type_symbol) else {
@@ -213,6 +232,22 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 member.replace_type_vars(&type_var_substitutions);
+            }
+            
+            // Update conformances with remapped protocol IDs
+            for conformance in &mut our_type_def.conformances {
+                // Remap the protocol ID if it's imported
+                if let Some(remapped_id) = env.imported_type_symbol_map.get(&conformance.protocol_id) {
+                    conformance.protocol_id = *remapped_id;
+                }
+                // Also update associated types with type var substitutions
+                for i in 0..conformance.associated_types.len() {
+                    conformance.associated_types[i] = type_var_substitutions.apply(
+                        &conformance.associated_types[i], 
+                        0, 
+                        &mut env.context
+                    );
+                }
             }
 
             tracing::debug!(
@@ -1687,11 +1722,12 @@ impl<'a> TypeChecker<'a> {
                 let ret_ty = expected.clone().unwrap_or_else(|| {
                     Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), id))
                 });
+                let protocol_id = env.find_protocol_by_name("Add").unwrap_or(SymbolID::ADD);
                 env.constrain(Constraint::ConformsTo {
                     expr_id: id,
                     ty: lhs.ty.clone(),
                     conformance: Conformance {
-                        protocol_id: SymbolID::ADD,
+                        protocol_id,
                         associated_types: vec![rhs.ty.clone(), ret_ty.clone()],
                     },
                 });

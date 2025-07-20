@@ -351,11 +351,23 @@ impl Environment {
     }
 
     pub fn lookup_type(&self, symbol_id: &SymbolID) -> Option<&TypeDef> {
+        // First check if this is an imported symbol that was mapped to a different ID
+        if let Some(our_id) = self.imported_type_symbol_map.get(symbol_id) {
+            return self.types.get(our_id);
+        }
+        
+        // Otherwise look it up directly
         self.types.get(symbol_id)
     }
 
-    pub fn lookup_type_mut(&mut self, name: &SymbolID) -> Option<&mut TypeDef> {
-        self.types.get_mut(name)
+    pub fn lookup_type_mut(&mut self, symbol_id: &SymbolID) -> Option<&mut TypeDef> {
+        // First check if this is an imported symbol that was mapped to a different ID
+        if let Some(our_id) = self.imported_type_symbol_map.get(symbol_id).cloned() {
+            return self.types.get_mut(&our_id);
+        }
+        
+        // Otherwise look it up directly
+        self.types.get_mut(symbol_id)
     }
 
     pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {
@@ -369,7 +381,14 @@ impl Environment {
     }
 
     pub fn lookup_enum(&self, name: &SymbolID) -> Option<&TypeDef> {
-        if let Some(def) = self.types.get(name)
+        // First check if this is an imported symbol that was mapped to a different ID
+        let actual_id = if let Some(our_id) = self.imported_type_symbol_map.get(name) {
+            our_id
+        } else {
+            name
+        };
+        
+        if let Some(def) = self.types.get(actual_id)
             && def.kind == TypeDefKind::Enum
         {
             Some(def)
@@ -389,7 +408,14 @@ impl Environment {
     }
 
     pub fn lookup_struct(&self, name: &SymbolID) -> Option<&TypeDef> {
-        if let Some(def) = self.types.get(name)
+        // First check if this is an imported symbol that was mapped to a different ID
+        let actual_id = if let Some(our_id) = self.imported_type_symbol_map.get(name) {
+            our_id
+        } else {
+            name
+        };
+        
+        if let Some(def) = self.types.get(actual_id)
             && def.kind == TypeDefKind::Struct
         {
             Some(def)
@@ -399,13 +425,26 @@ impl Environment {
     }
 
     pub fn lookup_protocol(&self, name: &SymbolID) -> Option<&TypeDef> {
-        if let Some(def) = self.types.get(name)
+        // First check if this is an imported symbol that was mapped to a different ID
+        let actual_id = if let Some(our_id) = self.imported_type_symbol_map.get(name) {
+            our_id
+        } else {
+            name
+        };
+        
+        if let Some(def) = self.types.get(actual_id)
             && def.kind == TypeDefKind::Protocol
         {
             Some(def)
         } else {
             None
         }
+    }
+    
+    pub fn find_protocol_by_name(&self, name: &str) -> Option<SymbolID> {
+        self.types.iter()
+            .find(|(_, type_def)| type_def.name_str == name && type_def.kind == TypeDefKind::Protocol)
+            .map(|(id, _)| *id)
     }
 }
 

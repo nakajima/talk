@@ -157,6 +157,36 @@ impl SymbolTable {
     pub fn find_imported(&self, imported: &SymbolID) -> Option<&SymbolID> {
         self.import_symbol_map.get(imported)
     }
+    
+    // Get the actual symbol ID, checking import map for hardcoded prelude symbols
+    pub fn resolve_symbol_id(&self, symbol_id: &SymbolID) -> SymbolID {
+        // Check if this is a hardcoded prelude symbol that was imported with a different ID
+        let name = if *symbol_id == SymbolID::ARRAY {
+            Some("Array")
+        } else if *symbol_id == SymbolID::OPTIONAL {
+            Some("Optional")
+        } else if *symbol_id == SymbolID::STRING {
+            Some("String")
+        } else if *symbol_id == SymbolID::ADD {
+            Some("Add")
+        } else if *symbol_id == SymbolID::SUBTRACT {
+            Some("Subtract")
+        } else if *symbol_id == SymbolID::MULTIPLY {
+            Some("Multiply")
+        } else if *symbol_id == SymbolID::DIVIDE {
+            Some("Divide")
+        } else {
+            None
+        };
+        
+        if let Some(name) = name {
+            if let Some(actual_id) = self.lookup(name) {
+                return actual_id;
+            }
+        }
+        
+        *symbol_id
+    }
 
     pub fn add_map(&mut self, span: Span, symbol_id: &SymbolID) {
         self.symbol_map.insert(span, *symbol_id);
@@ -201,7 +231,7 @@ impl SymbolTable {
             SymbolInfo {
                 name: imported_symbol.name.clone(),
                 expr_id: imported_symbol.expr_id,
-                kind: SymbolKind::Import(imported_symbol),
+                kind: SymbolKind::Import(imported_symbol.clone()),
                 is_captured: false,
                 definition: None,
             },
