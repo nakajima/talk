@@ -37,7 +37,11 @@ impl TypeMember {
         }
     }
 
-    pub fn replace(&mut self, substitutions: &Substitutions) {
+    pub fn replace_symbols(&mut self, substitutions: &HashMap<&SymbolID, SymbolID>)  {
+
+    }
+
+    pub fn replace_type_vars(&mut self, substitutions: &Substitutions) {
         match self {
             TypeMember::Method(method) => {
                 method.ty = ConstraintSolver::substitute_ty_with_map(&method.ty, substitutions);
@@ -77,7 +81,6 @@ pub struct TypeDef {
     pub type_parameters: TypeParams,
     pub members: HashMap<String, TypeMember>,
     pub conformances: Vec<Conformance>,
-    pub exported: bool,
 }
 
 impl TypeDef {

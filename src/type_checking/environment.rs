@@ -44,6 +44,7 @@ pub struct Environment {
     pub context: TypeVarContext,
     next_id: i32,
     generation: u32,
+    pub imported_type_symbol_map: BTreeMap<SymbolID /* Imported */, SymbolID /* Ours */>,
 }
 
 impl Default for Environment {
@@ -60,6 +61,7 @@ impl Default for Environment {
             selfs: vec![],
             context,
             generation: 0,
+            imported_type_symbol_map: Default::default(),
         }
     }
 }
@@ -266,7 +268,7 @@ impl Environment {
             }
         }
 
-        walk(&scheme.ty(), &var_map)
+        walk(&scheme.ty(), &var_map, &self.imported_type_symbol_map)
     }
 
     pub fn end_scope(&mut self) {
@@ -348,8 +350,8 @@ impl Environment {
         Ok(scheme)
     }
 
-    pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {
-        self.types.get(name)
+    pub fn lookup_type(&self, symbol_id: &SymbolID) -> Option<&TypeDef> {
+        self.types.get(symbol_id)
     }
 
     pub fn lookup_type_mut(&mut self, name: &SymbolID) -> Option<&mut TypeDef> {
@@ -407,7 +409,7 @@ impl Environment {
     }
 }
 
-fn walk(ty: &Ty, map: &Substitutions) -> Ty {
+fn walk(ty: &Ty, map: &Substitutions, symbol_map: &BTreeMap<SymbolID, SymbolID>) -> Ty {
     match ty {
         Ty::TypeVar(tv) => {
             if let Some(new_tv) = map.get(tv).cloned() {
@@ -417,44 +419,59 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
             }
         }
         Ty::Func(params, ret, generics) => {
-            let new_params = params.iter().map(|p| walk(p, map)).collect();
-            let new_ret = Box::new(walk(ret, map));
-            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
+            let new_params = params.iter().map(|p| walk(p, map, symbol_map)).collect();
+            let new_ret = Box::new(walk(ret, map, symbol_map));
+            let new_generics = generics.iter().map(|g| walk(g, map, symbol_map)).collect();
             Ty::Func(new_params, new_ret, new_generics)
         }
         Ty::Init(struct_id, params) => {
-            let new_params = params.iter().map(|p| walk(p, map)).collect();
-            Ty::Init(*struct_id, new_params)
+            let new_params = params.iter().map(|p| walk(p, map, symbol_map)).collect();
+            Ty::Init(
+                symbol_map.get(struct_id).cloned().unwrap_or(*struct_id),
+                new_params,
+            )
         }
         Ty::Method { self_ty, func } => Ty::Method {
-            self_ty: walk(self_ty, map).into(),
-            func: walk(func, map).into(),
+            self_ty: walk(self_ty, map, symbol_map).into(),
+            func: walk(func, map, symbol_map).into(),
         },
         Ty::Closure { func, captures } => {
-            let func = Box::new(walk(func, map));
+            let func = Box::new(walk(func, map, symbol_map));
             Ty::Closure {
                 func,
                 captures: captures.clone(),
             }
         }
-        Ty::Enum(name, generics) => {
-            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-            Ty::Enum(*name, new_generics)
+        Ty::Enum(enum_id, generics) => {
+            let new_generics = generics.iter().map(|g| walk(g, map, symbol_map)).collect();
+            Ty::Enum(
+                symbol_map.get(enum_id).cloned().unwrap_or(*enum_id),
+                new_generics,
+            )
         }
-        Ty::EnumVariant(name, values) => {
-            let new_values = values.iter().map(|g| walk(g, map)).collect();
-            Ty::EnumVariant(*name, new_values)
+        Ty::EnumVariant(enum_id, values) => {
+            let new_values = values.iter().map(|g| walk(g, map, symbol_map)).collect();
+            Ty::EnumVariant(
+                symbol_map.get(enum_id).cloned().unwrap_or(*enum_id),
+                new_values,
+            )
         }
-        Ty::Struct(sym, generics) => {
-            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-            Ty::Struct(*sym, new_generics)
+        Ty::Struct(struct_id, generics) => {
+            let new_generics = generics.iter().map(|g| walk(g, map, symbol_map)).collect();
+            Ty::Struct(
+                symbol_map.get(struct_id).cloned().unwrap_or(*struct_id),
+                new_generics,
+            )
         }
-        Ty::Protocol(sym, generics) => {
-            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-            Ty::Protocol(*sym, new_generics)
+        Ty::Protocol(protocol_id, generics) => {
+            let new_generics = generics.iter().map(|g| walk(g, map, symbol_map)).collect();
+            Ty::Protocol(
+                symbol_map.get(protocol_id).cloned().unwrap_or(*protocol_id),
+                new_generics,
+            )
         }
-        Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
-        Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
+        Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map, symbol_map))),
+        Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map, symbol_map)).collect()),
         Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
             ty.clone()
         }

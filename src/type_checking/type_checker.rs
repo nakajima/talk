@@ -1,18 +1,18 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use tracing::trace_span;
+use tracing::{info_span, trace_span};
 
 use crate::{
     ExprMetaStorage, NameResolved, SymbolID, SymbolTable, Typed,
     compiling::{
         compilation_session::SharedCompilationSession,
-        compiled_module::{CompiledModule, ImportedSymbol},
+        compiled_module::{CompiledModule, ExportedSymbol},
     },
     conformance_checker::ConformanceError,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
-    environment::free_type_vars,
+    environment::{TypeParameter, free_type_vars},
     expr_id::ExprID,
     name::{Name, ResolvedName},
     name_resolver::NameResolverError,
@@ -157,6 +157,76 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    pub(crate) fn import_module(
+        &mut self,
+        module: &CompiledModule,
+        env: &mut Environment,
+    ) -> Result<(), TypeError> {
+        let mut type_var_substitutions = Substitutions::new();
+
+        // This should probably all live in TypeDef or something..
+        for (type_symbol, type_def) in module.types.iter() {
+            if type_symbol.0 <= 0 {
+                continue; // Don't re-import builtins
+            }
+
+            let Some(our_symbol) = self.symbol_table.find_imported(type_symbol) else {
+                panic!(
+                    "Unable to find imported symbol for {type_def:?}\nEnv:{:#?}",
+                    self.symbol_table.import_symbol_map
+                );
+                continue;
+            };
+
+            let mut our_type_def = type_def.clone();
+            our_type_def.symbol_id = *our_symbol;
+            env.imported_type_symbol_map
+                .insert(*type_symbol, *our_symbol);
+
+            let mut our_type_parameters = vec![];
+            for t in type_def.type_parameters().iter() {
+                let new_type_var =
+                    env.new_type_variable(t.type_var.kind.clone(), t.type_var.expr_id);
+
+                type_var_substitutions
+                    .insert(t.type_var.clone(), Ty::TypeVar(new_type_var.clone()));
+
+                our_type_parameters.push(TypeParameter {
+                    id: *self
+                        .symbol_table
+                        .find_imported(type_symbol)
+                        .ok_or(TypeError::Unknown(format!(
+                            "Unable to find imported symbol for type parameter: {t:?}"
+                        )))?,
+                    type_var: new_type_var,
+                })
+            }
+
+            our_type_def.type_parameters = our_type_parameters;
+
+            for member in our_type_def.members.values_mut() {
+                for type_var in free_type_vars(member.ty()) {
+                    type_var_substitutions.insert(
+                        type_var.clone(),
+                        Ty::TypeVar(env.new_type_variable(type_var.kind.clone(), type_var.expr_id)),
+                    )
+                }
+
+                member.replace_type_vars(&type_var_substitutions);
+            }
+
+            tracing::debug!(
+                "Importing type: {our_type_def:?}, substitutions: {type_var_substitutions:?}"
+            );
+
+            env.register(&our_type_def)?;
+        }
+
+        env.replace_constraint_values(&mut type_var_substitutions);
+
+        Ok(())
+    }
+
     pub fn infer(
         &mut self,
         source_file: &'a mut SourceFile<NameResolved>,
@@ -170,6 +240,8 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         source_file: &'a mut SourceFile<NameResolved>,
     ) -> SourceFile<Typed> {
+        let _s = info_span!("Type checking").entered();
+
         synthesize_inits(source_file, self.symbol_table, env);
 
         let roots = source_file.roots();
@@ -2012,7 +2084,7 @@ impl<'a> TypeChecker<'a> {
         Ok(typed_pattern)
     }
 
-    pub fn import_ty(&self, imported_symbol: &ImportedSymbol) -> Option<Ty> {
+    pub fn import_ty(&self, imported_symbol: &ExportedSymbol) -> Option<Ty> {
         if let Some(module) = self.module_env.get(&imported_symbol.module) {
             return module.typed_symbols.get(&imported_symbol.symbol).cloned();
         }

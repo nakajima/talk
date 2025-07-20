@@ -13,7 +13,7 @@ use crate::{
     },
     compiling::{
         compilation_session::SharedCompilationSession,
-        compiled_module::{ImportedSymbol, ImportedSymbolKind},
+        compiled_module::{ExportedSymbol, ImportedSymbolKind},
         driver::{DriverConfig, ModuleEnvironment},
     },
     constraint::Constraint,
@@ -117,7 +117,10 @@ impl Ty {
             },
             Ty::Struct(symbol_id, generics) => {
                 let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
-                    tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
+                    tracing::error!(
+                        "Unable to determine definition of struct: {symbol_id:?}\nEnv: {:#?}",
+                        lowerer.env.types
+                    );
                     return IRType::Void;
                 };
 
@@ -2085,7 +2088,7 @@ impl<'a> Lowerer<'a> {
         if let Expr::Variable(name) = &callee_typed_expr.expr
             && let Some(name_info) = self.symbol_table.get(&name.symbol_id())
             && let SymbolKind::Import(
-                imported_symbol @ ImportedSymbol {
+                imported_symbol @ ExportedSymbol {
                     kind: ImportedSymbolKind::Function { index },
                     ..
                 },
@@ -2627,7 +2630,7 @@ fn find_or_create_main(
 
     // source_file.roots_mut().insert(0, typed_expr.clone());
 
-    symbol_table.import(
+    symbol_table.import_symbol_info(
         &SymbolID::GENERATED_MAIN,
         SymbolInfo {
             name: "@main".into(),

@@ -38,7 +38,6 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Int),
                 type_parameters: vec![],
-                exported: false,
             }),
         },
         Builtin {
@@ -59,7 +58,6 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Float),
                 type_parameters: vec![],
-                exported: false,
             }),
         },
         Builtin {
@@ -80,7 +78,6 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Bool),
                 type_parameters: vec![],
-                exported: false,
             }),
         },
         Builtin {
@@ -101,7 +98,6 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Pointer),
                 type_parameters: vec![],
-                exported: false,
             }),
         },
         Builtin {
@@ -308,7 +304,6 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Byte),
                 type_parameters: vec![],
-                exported: false,
             }),
         },
     ]
@@ -366,7 +361,7 @@ pub fn default_name_scope() -> BTreeMap<String, SymbolID> {
 
 pub fn import_symbols_into(symbol_table: &mut SymbolTable) {
     for builtin in builtins() {
-        symbol_table.import(&SymbolID(builtin.id), builtin.info.clone());
+        symbol_table.import_symbol_info(&SymbolID(builtin.id), builtin.info.clone());
     }
 }
 

@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use talk::{
     analysis::module_pass_manager::ModulePassManager, compiling::driver::Driver,
-    lowering::ir_module::IRModule, prelude,
+    lowering::ir_module::IRModule,
 };
 
 const CODE: &str = include_str!("../dev/fixtures/bench.tlk");

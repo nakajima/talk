@@ -398,7 +398,7 @@ impl<'a> ConstraintSolver<'a> {
                             .env
                             .lookup_type(type_id)
                             .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve member receiver type with id: {type_id:?}, {receiver_ty:?}"
+                                "Unable to resolve member receiver type with id: {type_id:?}, {receiver_ty:?}\nEnv:{:?}", self.env.types
                             )))?
                             .clone();
                         let Some(member_ty) =

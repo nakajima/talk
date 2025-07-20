@@ -9,7 +9,7 @@ use crate::SymbolInfo;
 use crate::SymbolKind;
 use crate::SymbolTable;
 use crate::compiling::compilation_session::SharedCompilationSession;
-use crate::compiling::compiled_module::ImportedSymbol;
+use crate::compiling::compiled_module::ExportedSymbol;
 use crate::compiling::driver::ModuleEnvironment;
 use crate::diagnostic::Diagnostic;
 use crate::expr_id::ExprID;
@@ -59,7 +59,7 @@ impl NameResolverError {
 #[derive(Default, Debug, Clone)]
 pub struct Scope {
     pub defined: BTreeMap<String, SymbolID>,
-    pub imported: BTreeMap<String, (SymbolID, ImportedSymbol)>,
+    pub imported: BTreeMap<String, (SymbolID, ExportedSymbol)>,
 }
 
 impl Scope {
@@ -74,7 +74,7 @@ impl Scope {
         self.defined.get(name).cloned()
     }
 
-    pub fn get_imported(&self, name: &str) -> Option<(SymbolID, ImportedSymbol)> {
+    pub fn get_imported(&self, name: &str) -> Option<(SymbolID, ExportedSymbol)> {
         self.imported.get(name).cloned()
     }
 
@@ -82,7 +82,7 @@ impl Scope {
         self.defined.insert(name, symbol);
     }
 
-    pub fn import(&mut self, name: String, symbol: SymbolID, imported_symbol: ImportedSymbol) {
+    pub fn import(&mut self, name: String, symbol: SymbolID, imported_symbol: ExportedSymbol) {
         self.imported.insert(name, (symbol, imported_symbol));
     }
 }
@@ -128,6 +128,13 @@ impl<'a> NameResolver<'a> {
         mut source_file: SourceFile,
         symbol_table: &mut SymbolTable,
     ) -> SourceFile<NameResolved> {
+        if let Some(prelude) = self.imported_modules.get("Prelude") {
+            let meta = source_file.meta.borrow_mut();
+            for sym in prelude.symbols.values() {
+                self.import(sym, sym.expr_id, &meta, symbol_table);
+            }
+        }
+
         // Create the root scope for the file
         #[allow(clippy::unwrap_used)]
         if !source_file.roots().is_empty()
@@ -1113,7 +1120,7 @@ impl<'a> NameResolver<'a> {
     #[tracing::instrument(skip(self, symbol_table, meta))]
     fn import(
         &mut self,
-        symbol: &ImportedSymbol,
+        symbol: &ExportedSymbol,
         expr_id: ExprID,
         meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
@@ -1137,7 +1144,7 @@ impl<'a> NameResolver<'a> {
         };
 
         scope.import(name.clone(), symbol_id, symbol.clone());
-        symbol_table.map_import(symbol.symbol, symbol_id);
+        symbol_table.map_import(symbol_id, symbol.symbol);
 
         if let Some(span) = meta.span(&expr_id) {
             symbol_table.add_map(span, &symbol_id);
@@ -1160,7 +1167,7 @@ impl<'a> NameResolver<'a> {
         None
     }
 
-    fn lookup_import(&self, name: &str) -> Option<(SymbolID, ImportedSymbol)> {
+    fn lookup_import(&self, name: &str) -> Option<(SymbolID, ExportedSymbol)> {
         for scope in self.scopes.iter().rev() {
             if let Some(imported) = scope.get_imported(name) {
                 return Some(imported);
@@ -1195,7 +1202,7 @@ mod tests {
     use crate::{
         any_expr,
         compiling::{
-            compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
+            compiled_module::{CompiledModule, ExportedSymbol, ImportedSymbolKind},
             driver::Driver,
         },
         diagnostic::DiagnosticKind,
@@ -1988,11 +1995,12 @@ mod tests {
         let mut symbols = HashMap::new();
         symbols.insert(
             "importedFunc".to_string(),
-            ImportedSymbol {
+            ExportedSymbol {
                 module: "Imported".to_string(),
                 name: "importedFunc".to_string(),
                 symbol: SymbolID(123123123),
                 kind: ImportedSymbolKind::Function { index: 0 },
+                expr_id: ExprID(123456789),
             },
         );
 
@@ -2018,10 +2026,11 @@ mod tests {
             resolved.roots()[1],
             any_expr!(Expr::Variable(Name::Imported(
                 SymbolID::resolved(1),
-                ImportedSymbol {
+                ExportedSymbol {
                     module: "Imported".to_string(),
                     name: "importedFunc".to_string(),
                     symbol: SymbolID(123123123),
+                    expr_id: ExprID(123456789),
                     kind: ImportedSymbolKind::Function { index: 0 }
                 }
             )))

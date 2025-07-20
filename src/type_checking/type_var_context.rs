@@ -158,10 +158,14 @@ impl TypeVarContext {
         let (kind, expr_id) = self.kinds[id.0 as usize].clone();
 
         #[cfg(test)]
-        tracing::trace!(
-            "Finding {var:?} -> {:?}",
-            TypeVarID::new(id.0, kind.clone(), expr_id)
-        );
+        {
+            if var.id != id.0 {
+                tracing::trace!(
+                    "Finding {var:?} -> {:?}",
+                    TypeVarID::new(id.0, kind.clone(), expr_id)
+                );
+            }
+        }
 
         TypeVarID::new(id.0, kind, expr_id)
     }

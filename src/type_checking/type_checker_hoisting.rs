@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tracing::info_span;
 
 use crate::{
@@ -55,62 +57,13 @@ impl<'a> TypeChecker<'a> {
         items: &'a [ParsedExpr],
         env: &mut Environment,
     ) -> Result<(), TypeError> {
-        tracing::info!("importing types");
+        let _s = info_span!("importing types").entered();
+
         for module in self.module_env.values() {
-            // This should probably all live in TypeDef or something..
-            for (type_symbol, type_def) in module.types.iter() {
-                if type_symbol.0 <= 0 {
-                    continue; // Don't re-import builtins
-                }
-
-                let Some(our_symbol) = self.symbol_table.find_imported(type_symbol) else {
-                    tracing::warn!("Unable to find imported symbol for {type_def:?}");
-                    continue;
-                };
-
-                let mut our_type_def = type_def.clone();
-                our_type_def.symbol_id = *our_symbol;
-
-                let mut our_type_parameters = vec![];
-                let mut substitutions = Substitutions::new();
-                for t in type_def.type_parameters().iter() {
-                    let new_type_var =
-                        env.new_type_variable(t.type_var.kind.clone(), t.type_var.expr_id);
-
-                    substitutions.insert(t.type_var.clone(), Ty::TypeVar(new_type_var.clone()));
-
-                    our_type_parameters.push(TypeParameter {
-                        id: *self.symbol_table.find_imported(type_symbol).ok_or(
-                            TypeError::Unknown(format!(
-                                "Unable to find imported symbol for type parameter: {t:?}"
-                            )),
-                        )?,
-                        type_var: new_type_var,
-                    })
-                }
-
-                our_type_def.type_parameters = our_type_parameters;
-
-                for member in our_type_def.members.values_mut() {
-                    for type_var in free_type_vars(member.ty()) {
-                        substitutions.insert(
-                            type_var.clone(),
-                            Ty::TypeVar(
-                                env.new_type_variable(type_var.kind.clone(), type_var.expr_id),
-                            ),
-                        )
-                    }
-
-                    member.replace(&substitutions)
-                }
-
-                tracing::debug!(
-                    "Importing type: {our_type_def:?}, substitutions: {substitutions:?}"
-                );
-
-                env.register(&our_type_def)?;
-            }
+            self.import_module(module, env)?;
         }
+
+        drop(_s);
 
         let _s = info_span!("hoisting", path = self.path.to_str()).entered();
         let mut to_generalize = vec![];
@@ -396,7 +349,6 @@ impl<'a> TypeChecker<'a> {
                     type_parameters: type_params,
                     members: Default::default(),
                     conformances: Default::default(),
-                    exported: true,
                 }
             });
 

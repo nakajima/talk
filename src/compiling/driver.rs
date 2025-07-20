@@ -3,12 +3,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use tracing::trace_span;
+
 use crate::{
     SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable,
     compiling::{
         compilation_session::{CompilationSession, SharedCompilationSession},
         compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
-        compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
+        compiled_module::{CompiledModule, ExportedSymbol, ImportedSymbolKind},
     },
     diagnostic::{Diagnostic, Position},
     environment::Environment,
@@ -79,6 +81,14 @@ impl Driver {
         };
 
         if driver.config.include_prelude {
+            let _s = trace_span!("Importing prelude symbols").entered();
+            let prelude = compile_prelude().clone();
+            tracing::info!("Symbols: {:#?}", prelude.symbols);
+            for (_, symbol) in prelude.symbols {
+                tracing::trace!("Importing {symbol:?}");
+                driver.symbol_table.import(symbol);
+            }
+
             driver.import_modules(vec![compile_prelude().clone()]);
         }
 
@@ -297,13 +307,16 @@ impl Driver {
                 .parse(false /* don't include comments */)
                 .resolved(&mut self.symbol_table, &self.config, &self.module_env);
 
-            let mut symbols = HashMap::<String, ImportedSymbol>::new();
+            // Prepare this units symbols to be exported in the module
+            let mut symbols = HashMap::<String, ExportedSymbol>::new();
             for (name, symbol_id) in &resolved.stage.global_scope {
                 let Some(info) = self.symbol_table.get(symbol_id) else {
+                    tracing::trace!("didn't get info for {symbol_id:?}",);
                     continue;
                 };
 
                 if info.kind.is_builtin() {
+                    tracing::trace!("skipping builtin: {symbol_id:?}",);
                     continue;
                 }
 
@@ -312,15 +325,23 @@ impl Driver {
                         kind: SymbolKind::FuncDef,
                         ..
                     } => ImportedSymbolKind::Function { index: 0 },
-                    _ => continue,
+                    SymbolInfo {
+                        kind: SymbolKind::Enum | SymbolKind::Struct | SymbolKind::Protocol,
+                        ..
+                    } => ImportedSymbolKind::Type,
+                    _ => {
+                        tracing::trace!("non-exported info for {symbol_id:?}: {info:?}");
+                        continue;
+                    }
                 };
                 symbols.insert(
                     name.clone(),
-                    ImportedSymbol {
+                    ExportedSymbol {
                         module: unit.name.clone(),
                         name: name.clone(),
                         symbol: *symbol_id,
                         kind: imported_kind,
+                        expr_id: info.expr_id,
                     },
                 );
             }
@@ -331,7 +352,7 @@ impl Driver {
             for (_, imported) in symbols.iter() {
                 let info = self
                     .symbol_table
-                    .get(&imported.symbol)
+                    .get_own(&imported.symbol)
                     .expect("didn't get symbol for exported ty");
 
                 if info.kind.is_builtin() {
@@ -396,9 +417,10 @@ mod tests {
     use crate::{
         SymbolID,
         compiling::{
-            compiled_module::{ImportedSymbol, ImportedSymbolKind},
+            compiled_module::{ExportedSymbol, ImportedSymbolKind},
             driver::Driver,
         },
+        expr_id::ExprID,
         ty::Ty,
     };
 
@@ -417,20 +439,22 @@ mod tests {
         assert_eq!("default", module.module_name);
         assert_eq!(
             module.symbols.get("foo").unwrap(),
-            &ImportedSymbol {
+            &ExportedSymbol {
                 module: "default".into(),
                 name: "foo".into(),
                 symbol: SymbolID::resolved(1),
-                kind: ImportedSymbolKind::Function { index: 0 }
+                kind: ImportedSymbolKind::Function { index: 0 },
+                expr_id: ExprID(123456789),
             }
         );
         assert_eq!(
             module.symbols.get("bar").unwrap(),
-            &ImportedSymbol {
+            &ExportedSymbol {
                 module: "default".into(),
                 name: "bar".into(),
                 symbol: SymbolID::resolved(2),
-                kind: ImportedSymbolKind::Function { index: 1 }
+                kind: ImportedSymbolKind::Function { index: 1 },
+                expr_id: ExprID(123456789),
             }
         );
 

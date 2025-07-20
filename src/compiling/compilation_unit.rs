@@ -228,25 +228,27 @@ impl CompilationUnit<Resolved> {
             let path = file.path.clone();
             let meta = file.meta.borrow().clone();
 
-            let mut typed = if driver_config.include_prelude {
-                TypeChecker::new(
-                    self.session.clone(),
-                    symbol_table,
-                    file.path.clone(),
-                    &meta,
-                    module_env,
-                )
-                .infer(&mut file, &mut self.env)
-            } else {
-                TypeChecker::new(
-                    self.session.clone(),
-                    symbol_table,
-                    file.path.clone(),
-                    &meta,
-                    module_env,
-                )
-                .infer_without_prelude(&mut self.env, &mut file)
-            };
+            let mut type_checker = TypeChecker::new(
+                self.session.clone(),
+                symbol_table,
+                file.path.clone(),
+                &meta,
+                module_env,
+            );
+
+            #[allow(clippy::expect_used)]
+            #[allow(clippy::panic)]
+            if driver_config.include_prelude {
+                let Some(prelude) = module_env.get("Prelude") else {
+                    panic!("Could not include prelude!");
+                };
+
+                type_checker
+                    .import_module(prelude, &mut self.env)
+                    .expect("Unable to import prelude");
+            }
+
+            let mut typed = type_checker.infer(&mut file, &mut self.env);
 
             if let Ok(mut solution) = self.env.flush_constraints(&meta) {
                 TypedExpr::apply_mult(

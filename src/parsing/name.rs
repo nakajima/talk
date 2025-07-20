@@ -1,5 +1,5 @@
 use crate::{
-    SymbolID, compiling::compiled_module::ImportedSymbol, ty::Ty, type_checker::TypeError,
+    SymbolID, compiling::compiled_module::ExportedSymbol, ty::Ty, type_checker::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -8,7 +8,7 @@ pub enum Name {
     Resolved(SymbolID, String),
     _Self(SymbolID),
     SelfType,
-    Imported(SymbolID, ImportedSymbol),
+    Imported(SymbolID, ExportedSymbol),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

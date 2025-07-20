@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    compiling::compiled_module::ImportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
+    compiling::compiled_module::ExportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
     span::Span,
 };
 
@@ -89,7 +89,7 @@ pub enum SymbolKind {
     SyntheticConstructor,
     Property,
     Protocol,
-    Import(ImportedSymbol),
+    Import(ExportedSymbol),
 }
 
 impl SymbolKind {
@@ -131,6 +131,7 @@ pub struct TypeTable {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolTable {
     symbols: BTreeMap<SymbolID, SymbolInfo>,
+    imported_symbols: BTreeMap<SymbolID, SymbolInfo>,
     next_id: i32,
     pub types: BTreeMap<SymbolID, TypeTable>,
     pub symbol_map: BTreeMap<Span, SymbolID>,
@@ -141,6 +142,7 @@ impl SymbolTable {
     pub fn base() -> Self {
         let mut table = Self {
             symbols: Default::default(),
+            imported_symbols: Default::default(),
             next_id: Default::default(),
             types: Default::default(),
             symbol_map: Default::default(),
@@ -160,8 +162,8 @@ impl SymbolTable {
         self.symbol_map.insert(span, *symbol_id);
     }
 
-    pub fn import(&mut self, symbol_id: &SymbolID, info: SymbolInfo) {
-        self.symbols.insert(*symbol_id, info);
+    pub fn import_symbol_info(&mut self, symbol_id: &SymbolID, info: SymbolInfo) {
+        self.imported_symbols.insert(*symbol_id, info);
     }
 
     pub fn initializers_for(&self, symbol_id: &SymbolID) -> Option<&Vec<ExprID>> {
@@ -186,6 +188,26 @@ impl SymbolTable {
         {
             info.is_captured = true;
         }
+    }
+
+    pub fn import(&mut self, imported_symbol: ExportedSymbol) -> SymbolID {
+        tracing::trace!("import symbol {:?}", imported_symbol,);
+
+        self.next_id += 1;
+        let symbol_id = SymbolID(self.next_id);
+
+        self.symbols.insert(
+            symbol_id,
+            SymbolInfo {
+                name: imported_symbol.name.clone(),
+                expr_id: imported_symbol.expr_id,
+                kind: SymbolKind::Import(imported_symbol),
+                is_captured: false,
+                definition: None,
+            },
+        );
+
+        symbol_id
     }
 
     pub fn add(
@@ -232,7 +254,7 @@ impl SymbolTable {
     }
 
     pub fn map_import(&mut self, theirs: SymbolID, ours: SymbolID) {
-        self.import_symbol_map.insert(theirs, ours);
+        self.import_symbol_map.insert(ours, theirs);
     }
 
     pub fn add_property(
@@ -272,8 +294,15 @@ impl SymbolTable {
         self.types.get(struct_id).map(|table| table.initializers[0])
     }
 
+    // TODO: Use a lookup table for this
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
         for (id, info) in &self.symbols {
+            if info.name == name {
+                return Some(*id);
+            }
+        }
+
+        for (id, info) in &self.imported_symbols {
             if info.name == name {
                 return Some(*id);
             }
@@ -282,8 +311,14 @@ impl SymbolTable {
         None
     }
 
-    pub fn get(&self, symbol_id: &SymbolID) -> Option<&SymbolInfo> {
+    pub fn get_own(&self, symbol_id: &SymbolID) -> Option<&SymbolInfo> {
         self.symbols.get(symbol_id)
+    }
+
+    pub fn get(&self, symbol_id: &SymbolID) -> Option<&SymbolInfo> {
+        self.symbols
+            .get(symbol_id)
+            .or_else(|| self.imported_symbols.get(symbol_id))
     }
 
     pub fn get_mut(&mut self, symbol_id: &SymbolID) -> Option<&mut SymbolInfo> {
