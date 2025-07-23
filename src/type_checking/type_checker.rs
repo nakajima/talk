@@ -8,6 +8,7 @@ use crate::{
         compilation_session::SharedCompilationSession,
         compiled_module::{CompiledModule, ImportedSymbol},
     },
+    conformance::Conformance,
     conformance_checker::ConformanceError,
     constraint::Constraint,
     constraint_solver::ConstraintSolver,
@@ -22,7 +23,7 @@ use crate::{
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
-    type_defs::{TypeDef, protocol_def::Conformance},
+    type_defs::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr,
 };

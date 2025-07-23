@@ -16,6 +16,7 @@ use crate::{
         compiled_module::{ImportedSymbol, ImportedSymbolKind},
         driver::{DriverConfig, ModuleEnvironment},
     },
+    conformance::Conformance,
     constraint::Constraint,
     diagnostic::Diagnostic,
     environment::Environment,
@@ -38,7 +39,7 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{TypeDef, TypeDefKind, protocol_def::Conformance},
+    type_defs::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{Expr, Pattern, TypedExpr},
 };

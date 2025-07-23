@@ -8,6 +8,7 @@ use tracing::Level;
 
 use crate::{
     ExprMetaStorage, SymbolID,
+    conformance::Conformance,
     conformance_checker::{ConformanceChecker, ConformanceError},
     constraint::Constraint,
     environment::{Environment, TypeParameter},
@@ -16,7 +17,6 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
-    type_defs::protocol_def::Conformance,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -558,6 +558,7 @@ impl<'a> ConstraintSolver<'a> {
         ))
     }
 
+    #[allow(clippy::type_complexity)]
     fn resolve_type_var_member(
         &self,
         type_var: &TypeVarID,
@@ -611,6 +612,7 @@ impl<'a> ConstraintSolver<'a> {
         ))
     }
 
+    #[allow(clippy::type_complexity)]
     fn resolve_protocol_member(
         &self,
         protocol_id: &SymbolID,
@@ -661,6 +663,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn find_conforming_types(
         &mut self,
         conformance: &Conformance,

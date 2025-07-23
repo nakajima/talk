@@ -2,11 +2,11 @@ use derive_visitor::{Drive, Visitor};
 
 use crate::{
     SymbolID,
+    conformance::Conformance,
     parsing::expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::protocol_def::Conformance,
     type_var_context::TypeVarContext,
     type_var_id::{TypeVarID, TypeVarKind},
 };

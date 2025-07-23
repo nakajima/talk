@@ -11,6 +11,7 @@ use crate::{
     typed_expr::TypedExpr,
 };
 
+pub mod conformance;
 pub mod conformance_checker;
 pub mod constraint;
 pub mod constraint_solver;

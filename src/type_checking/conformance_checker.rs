@@ -2,11 +2,12 @@ use tracing::Level;
 
 use crate::{
     SymbolID,
+    conformance::Conformance,
     environment::{Environment, free_type_vars},
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::{TypeDef, protocol_def::Conformance, struct_def::Property},
+    type_defs::{TypeDef, struct_def::Property},
     type_var_id::TypeVarKind,
 };
 
@@ -238,10 +239,8 @@ impl<'a> ConformanceChecker<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        check, conformance_checker::ConformanceChecker, ty::Ty,
-        type_defs::protocol_def::Conformance,
-    };
+    use super::*;
+    use crate::check;
 
     #[test]
     fn checks_basic() {

@@ -2,6 +2,7 @@ use tracing::info_span;
 
 use crate::{
     SymbolID, builtin_type,
+    conformance::Conformance,
     constraint::Constraint,
     environment::{Environment, RawTypeParameter, TypeParameter, free_type_vars},
     name::Name,
@@ -13,8 +14,7 @@ use crate::{
     type_defs::{
         TypeDef, TypeDefKind,
         enum_def::{EnumVariant, RawEnumVariant},
-        protocol_def::Conformance,
-        struct_def::{Initializer, Method, Property, RawInitializer, RawMethod, RawProperty},
+        struct_def::{Initializer, Method, Property},
     },
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::Expr,
@@ -770,4 +770,39 @@ impl<'a> TypeChecker<'a> {
 
         None
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawInitializer<'a> {
+    pub name: String,
+    pub expr: &'a ParsedExpr,
+    pub func_id: ExprID,
+    pub params: &'a [ParsedExpr],
+    pub placeholder: TypeVarID,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawMethod<'a> {
+    pub name: String,
+    pub expr: &'a ParsedExpr,
+    pub placeholder: TypeVarID,
+}
+
+impl<'a> RawMethod<'a> {
+    pub fn new(name: String, expr: &'a ParsedExpr, placeholder: TypeVarID) -> Self {
+        Self {
+            name,
+            expr,
+            placeholder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawProperty<'a> {
+    pub index: usize,
+    pub name: String,
+    pub expr: &'a ParsedExpr,
+    pub placeholder: TypeVarID,
+    pub default_value: &'a Option<Box<ParsedExpr>>,
 }

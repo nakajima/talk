@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     SymbolID,
+    conformance::Conformance,
     constraint_solver::ConstraintSolver,
     environment::{Environment, TypeParameter},
     substitutions::Substitutions,
@@ -9,7 +10,6 @@ use crate::{
     type_checker::Scheme,
     type_defs::{
         enum_def::EnumVariant,
-        protocol_def::Conformance,
         struct_def::{Initializer, Method, Property},
     },
     type_var_id::TypeVarID,

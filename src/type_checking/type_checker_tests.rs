@@ -5,6 +5,7 @@ mod tests {
     use crate::{
         SymbolID, any_typed, assert_eq_diff, check, check_with_imports,
         compiling::driver::{Driver, DriverConfig},
+        conformance::Conformance,
         diagnostic::{Diagnostic, DiagnosticKind},
         dumb_dot::{self, dump_unification_dot},
         expr_id::ExprID,
@@ -12,7 +13,6 @@ mod tests {
         token_kind::TokenKind,
         ty::Ty,
         type_checker::TypeError,
-        type_defs::protocol_def::Conformance,
         type_var_id::{TypeVarID, TypeVarKind},
         typed_expr::{Expr, TypedExpr},
     };
