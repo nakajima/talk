@@ -13,7 +13,7 @@ use crate::{
     type_checker::{Scheme, TypeChecker, TypeError},
     type_defs::{
         TypeDef, TypeDefKind,
-        enum_def::{EnumVariant, RawEnumVariant},
+        enum_def::EnumVariant,
         struct_def::{Initializer, Method, Property},
     },
     type_var_id::{TypeVarID, TypeVarKind},
@@ -805,4 +805,12 @@ pub struct RawProperty<'a> {
     pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
     pub default_value: &'a Option<Box<ParsedExpr>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawEnumVariant<'a> {
+    pub tag: usize,
+    pub name: String,
+    pub expr: &'a ParsedExpr,
+    pub values: &'a [ParsedExpr],
 }
