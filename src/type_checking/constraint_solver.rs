@@ -1,3 +1,9 @@
+//! Constraint solver for the type checking system.
+//!
+//! This module implements a constraint solver that processes type constraints
+//! generated during type checking. It handles various constraint types including
+//! equality, conformance, member access, and pattern matching.
+
 use tracing::Level;
 
 use crate::{
@@ -10,19 +16,29 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
-    type_var_id::TypeVarKind,
+    type_defs::protocol_def::Conformance,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
+/// The result of running the constraint solver.
 pub struct ConstraintSolverSolution {
+    /// Constraints that could not be solved
     pub unsolved_constraints: Vec<Constraint>,
+    /// Type substitutions derived from solving constraints
     pub substitutions: Substitutions,
+    /// Type errors encountered during solving
     pub errors: Vec<(ExprID, TypeError)>,
 }
 
+/// The constraint solver processes type constraints to infer types.
 pub struct ConstraintSolver<'a> {
+    /// The type environment containing type definitions and bindings
     env: &'a mut Environment,
+    /// Metadata storage for expression information
     meta: &'a ExprMetaStorage,
+    /// Stack of constraints to be solved
     constraints: Vec<Constraint>,
+    /// Generation counter for type variables
     generation: u32,
 }
 
@@ -36,7 +52,8 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    /// Check if a constraint should be deferred based on its dependencies
+    /// Determines if a constraint should be deferred based on its dependencies.
+    /// Some constraints need to wait for other type information to be resolved first.
     fn should_defer_constraint(
         &mut self,
         constraint: &Constraint,
@@ -65,6 +82,8 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
+    /// Solves all constraints and returns the solution.
+    /// Uses an iterative approach with constraint deferral to handle dependencies.
     pub fn solve(&mut self) -> ConstraintSolverSolution {
         let mut substitutions = Substitutions::new();
         let mut errors = vec![];
@@ -149,6 +168,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
+    /// Processes a single constraint by dispatching to the appropriate handler.
     #[tracing::instrument(level = Level::TRACE, skip(self, substitutions), fields(result))]
     fn solve_constraint(
         &mut self,
@@ -163,115 +183,13 @@ impl<'a> ConstraintSolver<'a> {
                 ty, conformance, ..
             } => {
                 if let Ty::TypeVar(type_var) = ty {
-                    // There has to be a better way to figure out the conforming type...
-                    let types: Vec<_> = self
-                        .env
-                        .types
-                        .values()
-                        .filter_map(|t| {
-                            let c = t
-                                .conformances()
-                                .iter()
-                                .find(|c| c.protocol_id == conformance.protocol_id)?;
-
-                            if conformance
-                                .associated_types
-                                .iter()
-                                .zip(c.associated_types.iter())
-                                .all(|(provided, required)| {
-                                    substitutions.unifiable(
-                                        provided,
-                                        required,
-                                        &mut self.env.context,
-                                    )
-                                })
-                            {
-                                Some((t.clone(), c.clone()))
-                            } else {
-                                None
-                            }
-                            // .map(|c| )
-                        })
-                        .collect();
-
-                    tracing::trace!("Possible conforming types: {types:?}");
-
-                    let mut conforming_candidates = vec![];
-                    for (type_def, type_def_conformance) in types {
-                        let type_def_ty = type_def.ty();
-
-                        let conformance_checker =
-                            ConformanceChecker::new(&type_def_ty, &type_def_conformance, self.env);
-                        match conformance_checker.check() {
-                            Ok(unifications) => {
-                                conforming_candidates.push((
-                                    type_def_ty,
-                                    unifications,
-                                    type_def_conformance,
-                                ));
-                            }
-                            Err(e) => {
-                                tracing::error!("e is {e:?}");
-                                continue;
-                            }
-                        }
+                    self.solve_type_var_conformance(type_var, conformance, substitutions)?;
+                } else {
+                    let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
+                    let unifications = conformance_checker.check()?;
+                    for (lhs, rhs) in unifications {
+                        substitutions.unify(&lhs, &rhs, &mut self.env.context, self.generation)?;
                     }
-
-                    match conforming_candidates.len() {
-                        0 => {
-                            // Still no information: keep deferring.
-                            return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
-                                ty.to_string(),
-                            )));
-                        }
-                        1 => {
-                            // Exactly one candidate, we can solve this bad boy.
-                            let (candidate_ty, candidate_unifs, type_def_conf) =
-                                &conforming_candidates[0];
-
-                            substitutions.unify(
-                                &Ty::TypeVar(type_var.clone()),
-                                candidate_ty,
-                                &mut self.env.context,
-                                self.generation,
-                            )?;
-
-                            for (prov, req) in conformance
-                                .associated_types
-                                .iter()
-                                .zip(type_def_conf.associated_types.iter())
-                            {
-                                substitutions.unify(
-                                    prov,
-                                    req,
-                                    &mut self.env.context,
-                                    self.generation,
-                                )?;
-                            }
-
-                            for (lhs, rhs) in candidate_unifs {
-                                substitutions.unify(
-                                    lhs,
-                                    rhs,
-                                    &mut self.env.context,
-                                    self.generation,
-                                )?;
-                            }
-
-                            return Ok(());
-                        }
-                        _ => {
-                            // Multiple candidates: do **not** raise an error.
-                            // Keep the constraint around for later but mark it as processed.
-                            return Ok(()); // <- leave generic
-                        }
-                    }
-                }
-
-                let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
-                let unifications = conformance_checker.check()?;
-                for (lhs, rhs) in unifications {
-                    substitutions.unify(&lhs, &rhs, &mut self.env.context, self.generation)?;
                 }
             }
             Constraint::Equality(expr_id, lhs, rhs) => {
@@ -309,220 +227,14 @@ impl<'a> ConstraintSolver<'a> {
             }
             Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
-
-                match &result_ty {
-                    // A variant with no values
-                    Ty::Enum(enum_id, _generics) => {
-                        let variant = self
-                            .env
-                            .lookup_enum(enum_id)
-                            .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve unqualified enum with id: {enum_id:?}, got {result_ty:?}"
-                            )))
-                            .map(|a| a.find_variant(member_name).cloned())?;
-
-                        if let Some(variant) = variant {
-                            substitutions.unify(
-                                &result_ty,
-                                &variant.ty,
-                                &mut self.env.context,
-                                self.generation,
-                            )?;
-                        }
-                    }
-                    // A variant with values
-                    Ty::Func(_args, ret, _generics) => {
-                        let Ty::Enum(enum_id, _generics) =
-                            substitutions.apply(ret, 0, &mut self.env.context)
-                        else {
-                            tracing::error!(
-                                "did not get enum type: {:?}",
-                                substitutions.apply(ret, 0, &mut self.env.context)
-                            );
-                            return Ok(());
-                        };
-
-                        // let variant = Ty::EnumVariant(enum_id, args.clone());
-                        let variant = self
-                            .env
-                            .lookup_enum(&enum_id)
-                            .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve unqualified func enum with id: {enum_id:?}, got {result_ty:?}"
-                            )))
-                            .map(|a| a.find_variant(member_name).cloned())?;
-
-                        if let Some(variant) = variant {
-                            substitutions.unify(
-                                &result_ty,
-                                &variant.ty,
-                                &mut self.env.context,
-                                self.generation,
-                            )?;
-                        }
-                    }
-                    _ => (),
-                }
+                self.solve_unqualified_member(&result_ty, member_name, substitutions)?;
             }
             Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
                 let receiver_ty = substitutions.apply(receiver_ty, 0, &mut self.env.context);
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
-                let (member_ty, type_params, type_args) = match &receiver_ty {
-                    builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
-                        #[allow(clippy::expect_used)]
-                        let type_def = match builtin {
-                            Ty::Int => self.env.lookup_type(&SymbolID::INT),
-                            Ty::Float => self.env.lookup_type(&SymbolID::FLOAT),
-                            Ty::Bool => self.env.lookup_type(&SymbolID::BOOL),
-                            Ty::Pointer => self.env.lookup_type(&SymbolID::POINTER),
-                            _ => {
-                                return Err(TypeError::Unknown("no idea how this happened".into()));
-                            }
-                        }
-                        .cloned()
-                        .expect("builtins should have type defs");
-
-                        let Some(member) =
-                            type_def.member_ty_with_conformances(member_name, self.env)
-                        else {
-                            return Err(TypeError::MemberNotFound(
-                                builtin.to_string(),
-                                member_name.to_string(),
-                            ));
-                        };
-
-                        (member, vec![], vec![])
-                    }
-                    Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
-                        let type_def = self
-                            .env
-                            .lookup_type(type_id)
-                            .ok_or(TypeError::Unknown(format!(
-                                "Unable to resolve member receiver type with id: {type_id:?}, {receiver_ty:?}"
-                            )))?
-                            .clone();
-                        let Some(member_ty) =
-                            type_def.member_ty_with_conformances(member_name, self.env)
-                        else {
-                            return Err(TypeError::MemberNotFound(
-                                type_def.name().to_string(),
-                                member_name.to_string(),
-                            ));
-                        };
-
-                        (
-                            member_ty.clone(),
-                            type_def.type_parameters().clone(),
-                            generics.clone(),
-                        )
-                    }
-                    Ty::Enum(enum_id, generics) => {
-                        let enum_def = self.env.lookup_enum(enum_id).ok_or(TypeError::Unknown(
-                            format!(
-                                "Unable to resolve enum with id: {enum_id:?}, got {receiver_ty:?}"
-                            ),
-                        ))?;
-
-                        let Some(member_ty) = enum_def.member_ty(member_name) else {
-                            return Err(TypeError::Unknown(format!(
-                                "Member not found for enum {}: {}",
-                                enum_def.name_str, member_name
-                            )));
-                        };
-
-                        tracing::trace!(
-                            "MemberAccess {receiver_ty:?}.{member_name:?} {member_ty:?} -> {result_ty:?} {generics:?}"
-                        );
-
-                        (
-                            member_ty.clone(),
-                            enum_def.type_parameters.clone(),
-                            generics.clone(),
-                        )
-                    }
-                    Ty::TypeVar(type_var) => {
-                        let matching_constraints = self
-                            .constraints
-                            .iter()
-                            .filter(|constraint| {
-                                constraint.contains(|t| *t == Ty::TypeVar(type_var.clone()))
-                            })
-                            .collect::<Vec<&Constraint>>();
-
-                        let mut result: Option<(Ty, Vec<TypeParameter>, Vec<Ty>)> = None;
-
-                        for constraint in matching_constraints {
-                            match constraint {
-                                Constraint::ConformsTo { conformance, .. } => {
-                                    let Some(protocol_def) =
-                                        self.env.lookup_protocol(&conformance.protocol_id).cloned()
-                                    else {
-                                        tracing::error!(
-                                            "Did not find protocol {:?}",
-                                            conformance.protocol_id
-                                        );
-                                        return Err(TypeError::Unknown(format!(
-                                            "did not find protocol with ID: {:?}",
-                                            conformance.protocol_id
-                                        )));
-                                    };
-
-                                    if let Some(ty) = protocol_def.member_ty(member_name) {
-                                        result = Some((
-                                            ty.clone(),
-                                            protocol_def.type_parameters(),
-                                            conformance.associated_types.clone(),
-                                        ));
-
-                                        break;
-                                    }
-                                }
-                                Constraint::InstanceOf {
-                                    symbol_id, scheme, ..
-                                } => {
-                                    let Some(type_def) = self.env.lookup_type(symbol_id) else {
-                                        continue;
-                                    };
-                                    let Some(ty) = type_def.member_ty(member_name) else {
-                                        return Err(TypeError::MemberNotFound(
-                                            member_name.to_string(),
-                                            type_def.name().to_string(),
-                                        ));
-                                    };
-
-                                    let associated_types = scheme
-                                        .unbound_vars()
-                                        .iter()
-                                        .map(|t| Ty::TypeVar(t.clone()))
-                                        .collect();
-
-                                    result = Some((
-                                        ty.clone(),
-                                        type_def.type_parameters().clone(),
-                                        associated_types,
-                                    ));
-                                }
-                                _ => (),
-                            }
-                        }
-
-                        if let Some(result) = result {
-                            result
-                        } else {
-                            return Err(TypeError::MemberNotFound(
-                                receiver_ty.to_string(),
-                                member_name.to_string(),
-                            ));
-                        }
-                    }
-
-                    _ => {
-                        return Err(TypeError::MemberNotFound(
-                            receiver_ty.to_string(),
-                            member_name.to_string(),
-                        ));
-                    }
-                };
+                let (member_ty, type_params, type_args) =
+                    self.resolve_member_type(&receiver_ty, member_name)?;
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in type_params.iter().zip(type_args) {
@@ -546,56 +258,14 @@ impl<'a> ConstraintSolver<'a> {
                 type_args,
                 ..
             } => {
-                let Some(struct_def) = self.env.lookup_struct(initializes_id).cloned() else {
-                    return Err(TypeError::Unresolved(
-                        "did not find struct def for initialization".into(),
-                    ));
-                };
-
-                // TODO: Support multiple initializers
-                let initializer = &struct_def.initializers()[0];
-                let Ty::Init(_, params) = &initializer.ty else {
-                    unreachable!();
-                };
-
-                if args.len() != params.len() {
-                    return Err(TypeError::ArgumentError(format!(
-                        "Expected {} arguments, got {}",
-                        params.len(),
-                        args.len()
-                    )));
-                }
-
-                for (param, arg) in params.iter().zip(args) {
-                    let param = &substitutions.apply(param, 0, &mut self.env.context);
-                    let arg = &substitutions.apply(arg, 0, &mut self.env.context);
-
-                    substitutions.unify(param, arg, &mut self.env.context, self.generation)?;
-                }
-
-                substitutions.unify(
-                    &initializer.ty,
+                self.solve_initializer_call(
+                    initializes_id,
+                    args,
                     func_ty,
-                    &mut self.env.context,
-                    self.generation,
-                )?;
-
-                let struct_with_generics = Ty::Struct(*initializes_id, type_args.clone());
-
-                let specialized_struct = self.env.instantiate(&Scheme::new(
-                    struct_with_generics,
-                    struct_def.canonical_type_variables(),
-                    vec![],
-                ));
-
-                substitutions.unify(
                     result_ty,
-                    &specialized_struct,
-                    &mut self.env.context,
-                    self.generation,
+                    type_args,
+                    substitutions,
                 )?;
-
-                // TODO: Make sure we're chill with our conformances
             }
             Constraint::VariantMatch {
                 scrutinee_ty,
@@ -604,59 +274,474 @@ impl<'a> ConstraintSolver<'a> {
                 ..
             } => {
                 let scrutinee_ty = substitutions.apply(scrutinee_ty, 0, &mut self.env.context);
+                self.solve_variant_match(&scrutinee_ty, variant_name, field_tys, substitutions)?;
+            }
+        };
 
-                let Ty::Enum(enum_id, concrete_type_args) = &scrutinee_ty else {
-                    return Err(TypeError::Unknown(format!(
-                        "VariantMatch expected an enum, but got {scrutinee_ty:?}"
-                    )));
-                };
+        Ok(())
+    }
 
-                let Some(enum_def) = self.env.lookup_enum(enum_id) else {
-                    unreachable!("Enum definition not found for a typed enum.");
-                };
+    fn solve_initializer_call(
+        &mut self,
+        initializes_id: &SymbolID,
+        args: &[Ty],
+        func_ty: &Ty,
+        result_ty: &Ty,
+        type_args: &[Ty],
+        substitutions: &mut Substitutions,
+    ) -> Result<(), TypeError> {
+        let struct_def = self
+            .env
+            .lookup_struct(initializes_id)
+            .ok_or_else(|| {
+                TypeError::Unresolved("Struct definition not found for initialization".into())
+            })?
+            .clone();
 
-                let Some(variant_def) = enum_def.find_variant(variant_name) else {
-                    return Err(TypeError::UnknownVariant(Name::Raw(variant_name.clone())));
-                };
+        // TODO: Support multiple initializers
+        let initializer = &struct_def.initializers()[0];
+        let Ty::Init(_, params) = &initializer.ty else {
+            return Err(TypeError::Unknown("Invalid initializer type".into()));
+        };
 
-                // Extract the generic field types from the variant's definition (e.g., `[T]` for `some(T)`).
-                let Ty::EnumVariant(_, generic_field_tys) = &variant_def.ty else {
-                    unreachable!("Variant's type is not an EnumVariant.");
-                };
+        // Check argument count
+        if args.len() != params.len() {
+            return Err(TypeError::ArgumentError(format!(
+                "Expected {} arguments, got {}",
+                params.len(),
+                args.len()
+            )));
+        }
 
-                // Create a substitution map to specialize the variant's types.
-                // This maps the enum's generic parameters (e.g., T) to the scrutinee's concrete types (e.g., Int).
-                let mut local_substitutions = Substitutions::new();
-                for (type_param, concrete_arg) in
-                    enum_def.type_parameters.iter().zip(concrete_type_args)
-                {
-                    local_substitutions.insert(type_param.type_var.clone(), concrete_arg.clone());
-                }
+        // Unify parameter types with argument types
+        for (param, arg) in params.iter().zip(args) {
+            let param = substitutions.apply(param, 0, &mut self.env.context);
+            let arg = substitutions.apply(arg, 0, &mut self.env.context);
+            substitutions.unify(&param, &arg, &mut self.env.context, self.generation)?;
+        }
 
-                // Specialize the variant's generic field types using the local map.
-                // This turns `[T]` into `[Int]`.
-                let specialized_field_tys = generic_field_tys
-                    .iter()
-                    .map(|ty| Self::substitute_ty_with_map(ty, &local_substitutions))
-                    .collect::<Vec<_>>();
+        // Unify initializer type with function type
+        substitutions.unify(
+            &initializer.ty,
+            func_ty,
+            &mut self.env.context,
+            self.generation,
+        )?;
 
-                // Now, unify the specialized, concrete field types with the types from the pattern.
-                if specialized_field_tys.len() != field_tys.len() {
-                    return Err(TypeError::Unknown(
-                        "Variant pattern has incorrect number of fields.".into(),
-                    ));
-                }
+        // Create and unify the specialized struct type
+        let struct_with_generics = Ty::Struct(*initializes_id, type_args.to_vec());
+        let specialized_struct = self.env.instantiate(&Scheme::new(
+            struct_with_generics,
+            struct_def.canonical_type_variables(),
+            vec![],
+        ));
 
-                for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
+        substitutions.unify(
+            result_ty,
+            &specialized_struct,
+            &mut self.env.context,
+            self.generation,
+        )?;
+
+        Ok(())
+    }
+
+    fn solve_variant_match(
+        &mut self,
+        scrutinee_ty: &Ty,
+        variant_name: &str,
+        field_tys: &[Ty],
+        substitutions: &mut Substitutions,
+    ) -> Result<(), TypeError> {
+        let Ty::Enum(enum_id, concrete_type_args) = scrutinee_ty else {
+            return Err(TypeError::Unknown(format!(
+                "VariantMatch expected an enum, but got {scrutinee_ty:?}"
+            )));
+        };
+
+        let enum_def = self
+            .env
+            .lookup_enum(enum_id)
+            .ok_or_else(|| TypeError::Unknown("Enum definition not found".into()))?;
+
+        let variant_def = enum_def
+            .find_variant(variant_name)
+            .ok_or_else(|| TypeError::UnknownVariant(Name::Raw(variant_name.to_string())))?;
+
+        // Extract the generic field types from the variant's definition
+        let Ty::EnumVariant(_, generic_field_tys) = &variant_def.ty else {
+            return Err(TypeError::Unknown("Invalid variant type".into()));
+        };
+
+        // Create substitutions for the enum's type parameters
+        let mut local_substitutions = Substitutions::new();
+        for (type_param, concrete_arg) in enum_def.type_parameters.iter().zip(concrete_type_args) {
+            local_substitutions.insert(type_param.type_var.clone(), concrete_arg.clone());
+        }
+
+        // Specialize the variant's field types
+        let specialized_field_tys = generic_field_tys
+            .iter()
+            .map(|ty| Self::substitute_ty_with_map(ty, &local_substitutions))
+            .collect::<Vec<_>>();
+
+        // Check field count
+        if specialized_field_tys.len() != field_tys.len() {
+            return Err(TypeError::Unknown(
+                "Variant pattern has incorrect number of fields.".into(),
+            ));
+        }
+
+        // Unify field types
+        for (specialized_ty, pattern_ty) in specialized_field_tys.iter().zip(field_tys) {
+            substitutions.unify(
+                specialized_ty,
+                pattern_ty,
+                &mut self.env.context,
+                self.generation,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn solve_unqualified_member(
+        &mut self,
+        result_ty: &Ty,
+        member_name: &str,
+        substitutions: &mut Substitutions,
+    ) -> Result<(), TypeError> {
+        match result_ty {
+            // A variant with no values
+            Ty::Enum(enum_id, _) => {
+                let enum_def = self.env.lookup_enum(enum_id).ok_or_else(|| {
+                    TypeError::Unknown(format!("Unable to resolve enum with id: {enum_id:?}"))
+                })?;
+
+                if let Some(variant) = enum_def.find_variant(member_name).cloned() {
                     substitutions.unify(
-                        specialized_ty,
-                        pattern_ty,
+                        result_ty,
+                        &variant.ty,
                         &mut self.env.context,
                         self.generation,
                     )?;
                 }
             }
+            // A variant with values (function type returning enum)
+            Ty::Func(_, ret, _) => {
+                let ret_ty = substitutions.apply(ret, 0, &mut self.env.context);
+                if let Ty::Enum(enum_id, _) = ret_ty {
+                    let enum_def = self.env.lookup_enum(&enum_id).ok_or_else(|| {
+                        TypeError::Unknown(format!("Unable to resolve enum with id: {enum_id:?}"))
+                    })?;
+
+                    if let Some(variant) = enum_def.find_variant(member_name).cloned() {
+                        substitutions.unify(
+                            result_ty,
+                            &variant.ty,
+                            &mut self.env.context,
+                            self.generation,
+                        )?;
+                    }
+                } else {
+                    tracing::error!("Expected enum return type, got: {:?}", ret_ty);
+                }
+            }
+            _ => (),
+        }
+        Ok(())
+    }
+
+    fn resolve_member_type(
+        &mut self,
+        receiver_ty: &Ty,
+        member_name: &str,
+    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        match receiver_ty {
+            builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
+                self.resolve_builtin_member(builtin, member_name)
+            }
+            Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
+                self.resolve_type_member(type_id, member_name, generics)
+            }
+            Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
+            Ty::TypeVar(type_var) => self.resolve_type_var_member(type_var, member_name),
+            _ => Err(TypeError::MemberNotFound(
+                receiver_ty.to_string(),
+                member_name.to_string(),
+            )),
+        }
+    }
+
+    fn resolve_builtin_member(
+        &mut self,
+        builtin: &Ty,
+        member_name: &str,
+    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        let symbol_id = match builtin {
+            Ty::Int => SymbolID::INT,
+            Ty::Float => SymbolID::FLOAT,
+            Ty::Bool => SymbolID::BOOL,
+            Ty::Pointer => SymbolID::POINTER,
+            _ => unreachable!("Invalid builtin type"),
         };
+
+        let type_def = self
+            .env
+            .lookup_type(&symbol_id)
+            .ok_or_else(|| TypeError::Unknown("Builtin type definition not found".into()))?
+            .clone();
+
+        let member = type_def
+            .member_ty_with_conformances(member_name, self.env)
+            .ok_or_else(|| {
+                TypeError::MemberNotFound(builtin.to_string(), member_name.to_string())
+            })?;
+
+        Ok((member, vec![], vec![]))
+    }
+
+    fn resolve_type_member(
+        &mut self,
+        type_id: &SymbolID,
+        member_name: &str,
+        generics: &[Ty],
+    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        // First get the type def info we need
+        let (type_name, type_params) = {
+            let type_def = self.env.lookup_type(type_id).ok_or_else(|| {
+                TypeError::Unknown(format!("Unable to resolve type with id: {type_id:?}"))
+            })?;
+            (
+                type_def.name().to_string(),
+                type_def.type_parameters().clone(),
+            )
+        };
+
+        // Then look up the member with mutable env access
+        let type_def = self
+            .env
+            .lookup_type(type_id)
+            .ok_or_else(|| {
+                TypeError::Unknown(format!("Unable to resolve type with id: {type_id:?}"))
+            })?
+            .clone();
+
+        let member_ty = type_def
+            .member_ty_with_conformances(member_name, self.env)
+            .ok_or_else(|| TypeError::MemberNotFound(type_name, member_name.to_string()))?;
+
+        Ok((member_ty, type_params, generics.to_vec()))
+    }
+
+    fn resolve_enum_member(
+        &self,
+        enum_id: &SymbolID,
+        member_name: &str,
+        generics: &[Ty],
+    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        let enum_def = self.env.lookup_enum(enum_id).ok_or_else(|| {
+            TypeError::Unknown(format!("Unable to resolve enum with id: {enum_id:?}"))
+        })?;
+
+        let member_ty = enum_def.member_ty(member_name).ok_or_else(|| {
+            TypeError::Unknown(format!(
+                "Member not found for enum {}: {}",
+                enum_def.name_str, member_name
+            ))
+        })?;
+
+        Ok((
+            member_ty.clone(),
+            enum_def.type_parameters.clone(),
+            generics.to_vec(),
+        ))
+    }
+
+    fn resolve_type_var_member(
+        &self,
+        type_var: &TypeVarID,
+        member_name: &str,
+    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        let matching_constraints = self
+            .constraints
+            .iter()
+            .filter(|constraint| constraint.contains(|t| *t == Ty::TypeVar(type_var.clone())))
+            .collect::<Vec<_>>();
+
+        for constraint in matching_constraints {
+            match constraint {
+                Constraint::ConformsTo { conformance, .. } => {
+                    if let Some((ty, params, assoc_types)) = self.resolve_protocol_member(
+                        &conformance.protocol_id,
+                        member_name,
+                        &conformance.associated_types,
+                    )? {
+                        return Ok((ty, params, assoc_types));
+                    }
+                }
+                Constraint::InstanceOf {
+                    symbol_id, scheme, ..
+                } => {
+                    let type_def = self.env.lookup_type(symbol_id).ok_or_else(|| {
+                        TypeError::Unknown(format!("Type not found: {symbol_id:?}"))
+                    })?;
+
+                    if let Some(ty) = type_def.member_ty(member_name) {
+                        let associated_types = scheme
+                            .unbound_vars()
+                            .iter()
+                            .map(|t| Ty::TypeVar(t.clone()))
+                            .collect();
+
+                        return Ok((
+                            ty.clone(),
+                            type_def.type_parameters().clone(),
+                            associated_types,
+                        ));
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        Err(TypeError::MemberNotFound(
+            Ty::TypeVar(type_var.clone()).to_string(),
+            member_name.to_string(),
+        ))
+    }
+
+    fn resolve_protocol_member(
+        &self,
+        protocol_id: &SymbolID,
+        member_name: &str,
+        associated_types: &[Ty],
+    ) -> Result<Option<(Ty, Vec<TypeParameter>, Vec<Ty>)>, TypeError> {
+        let protocol_def = self
+            .env
+            .lookup_protocol(protocol_id)
+            .ok_or_else(|| TypeError::Unknown(format!("Protocol not found: {protocol_id:?}")))?
+            .clone();
+
+        if let Some(ty) = protocol_def.member_ty(member_name) {
+            Ok(Some((
+                ty.clone(),
+                protocol_def.type_parameters(),
+                associated_types.to_vec(),
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn solve_type_var_conformance(
+        &mut self,
+        type_var: &TypeVarID,
+        conformance: &Conformance,
+        substitutions: &mut Substitutions,
+    ) -> Result<(), TypeError> {
+        let candidates = self.find_conforming_types(conformance, substitutions)?;
+
+        match candidates.len() {
+            0 => Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+                Ty::TypeVar(type_var.clone()).to_string(),
+            ))),
+            1 => {
+                let (candidate_ty, candidate_unifs, type_def_conf) = &candidates[0];
+                self.apply_conformance_solution(
+                    type_var,
+                    candidate_ty,
+                    candidate_unifs,
+                    conformance,
+                    type_def_conf,
+                    substitutions,
+                )
+            }
+            _ => Ok(()), // Multiple candidates: leave generic
+        }
+    }
+
+    fn find_conforming_types(
+        &mut self,
+        conformance: &Conformance,
+        substitutions: &mut Substitutions,
+    ) -> Result<Vec<(Ty, Vec<(Ty, Ty)>, Conformance)>, TypeError> {
+        let types: Vec<_> = self
+            .env
+            .types
+            .values()
+            .filter_map(|t| {
+                let c = t
+                    .conformances()
+                    .iter()
+                    .find(|c| c.protocol_id == conformance.protocol_id)?;
+
+                if conformance
+                    .associated_types
+                    .iter()
+                    .zip(c.associated_types.iter())
+                    .all(|(provided, required)| {
+                        substitutions.unifiable(provided, required, &mut self.env.context)
+                    })
+                {
+                    Some((t.clone(), c.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        tracing::trace!("Possible conforming types: {types:?}");
+
+        let mut conforming_candidates = vec![];
+        for (type_def, type_def_conformance) in types {
+            let type_def_ty = type_def.ty();
+            let conformance_checker =
+                ConformanceChecker::new(&type_def_ty, &type_def_conformance, self.env);
+
+            match conformance_checker.check() {
+                Ok(unifications) => {
+                    conforming_candidates.push((type_def_ty, unifications, type_def_conformance));
+                }
+                Err(e) => {
+                    tracing::error!("Conformance check failed: {e:?}");
+                }
+            }
+        }
+
+        Ok(conforming_candidates)
+    }
+
+    fn apply_conformance_solution(
+        &mut self,
+        type_var: &TypeVarID,
+        candidate_ty: &Ty,
+        candidate_unifications: &[(Ty, Ty)],
+        conformance: &Conformance,
+        type_def_conformance: &Conformance,
+        substitutions: &mut Substitutions,
+    ) -> Result<(), TypeError> {
+        // Unify the type variable with the candidate type
+        substitutions.unify(
+            &Ty::TypeVar(type_var.clone()),
+            candidate_ty,
+            &mut self.env.context,
+            self.generation,
+        )?;
+
+        // Unify associated types
+        for (provided, required) in conformance
+            .associated_types
+            .iter()
+            .zip(type_def_conformance.associated_types.iter())
+        {
+            substitutions.unify(provided, required, &mut self.env.context, self.generation)?;
+        }
+
+        // Apply candidate unifications
+        for (lhs, rhs) in candidate_unifications {
+            substitutions.unify(lhs, rhs, &mut self.env.context, self.generation)?;
+        }
 
         Ok(())
     }
