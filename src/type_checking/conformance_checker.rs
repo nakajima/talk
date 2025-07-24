@@ -7,7 +7,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::{TypeDef, struct_def::Property},
+    type_def::{Property, TypeDef},
     type_var_id::TypeVarKind,
 };
 

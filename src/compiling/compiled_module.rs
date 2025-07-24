@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::{SymbolID, lowering::ir_module::IRModule, ty::Ty, type_defs::TypeDef};
+use crate::{SymbolID, lowering::ir_module::IRModule, ty::Ty, type_def::TypeDef};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImportedSymbolKind {

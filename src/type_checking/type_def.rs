@@ -5,15 +5,60 @@ use crate::{
     conformance::Conformance,
     constraint_solver::ConstraintSolver,
     environment::{Environment, TypeParameter},
+    expr_id::ExprID,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{
-        enum_def::EnumVariant,
-        struct_def::{Initializer, Method, Property},
-    },
     type_var_id::TypeVarID,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Property {
+    pub index: usize,
+    pub name: String,
+    pub expr_id: ExprID,
+    pub ty: Ty,
+    pub has_default: bool,
+}
+
+impl Property {
+    pub fn new(index: usize, name: String, expr_id: ExprID, ty: Ty, has_default: bool) -> Self {
+        Self {
+            index,
+            name,
+            expr_id,
+            ty,
+            has_default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Initializer {
+    pub name: String,
+    pub expr_id: ExprID,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Method {
+    pub name: String,
+    pub expr_id: ExprID,
+    pub ty: Ty,
+}
+
+impl Method {
+    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
+        Self { name, expr_id, ty }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariant {
+    pub tag: usize,
+    pub name: String,
+    pub ty: Ty,
+}
 
 pub type TypeParams = Vec<TypeParameter>;
 

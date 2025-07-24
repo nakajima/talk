@@ -11,7 +11,7 @@ use crate::{
         ir_type::IRType,
         lowerer::{BasicBlock, RefKind, RegisterList, TypedRegister},
     },
-    type_defs::TypeDef,
+    type_def::TypeDef,
 };
 
 // The Monomorphizer monomorphizes. So it takes a func like this:
@@ -210,12 +210,10 @@ impl<'a> Monomorphizer<'a> {
         }
 
         if let Some(IRType::Struct(_, _, generics)) = &function.env_ty {
-            let replacement = substitutions
-                .iter()
-                .find_map(|(k, v)| match k {
-                    IRType::TypeVar(_) => Some(v.clone()),
-                    _ => None,
-                });
+            let replacement = substitutions.iter().find_map(|(k, v)| match k {
+                IRType::TypeVar(_) => Some(v.clone()),
+                _ => None,
+            });
 
             if let Some(concrete) = replacement {
                 for g in generics {

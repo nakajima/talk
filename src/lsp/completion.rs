@@ -4,7 +4,7 @@ use crate::compiling::driver::Driver;
 use crate::environment::Environment;
 use crate::symbol_table::SymbolKind;
 use crate::type_checking::ty::Ty;
-use crate::type_defs::TypeMember;
+use crate::type_def::TypeMember;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
 use async_lsp::lsp_types::Position;

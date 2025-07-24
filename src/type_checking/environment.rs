@@ -10,7 +10,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
-    type_defs::{TypeDef, TypeDefKind},
+    type_def::{TypeDef, TypeDefKind},
     type_var_context::{TypeVarContext, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };

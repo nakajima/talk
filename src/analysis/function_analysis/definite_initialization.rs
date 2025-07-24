@@ -6,7 +6,7 @@ use crate::{
         instr::Instr, ir_error::IRError, ir_function::IRFunction, ir_value::IRValue,
         lowerer::BasicBlockID, register::Register,
     },
-    type_defs::{TypeDef, struct_def::Property},
+    type_def::{Property, TypeDef},
 };
 
 pub struct DefiniteInitizationPass {

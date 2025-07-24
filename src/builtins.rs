@@ -6,7 +6,7 @@ use crate::{
     parsing::expr_id::ExprID,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{TypeDef, TypeDefKind},
+    type_def::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 

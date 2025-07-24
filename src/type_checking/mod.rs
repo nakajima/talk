@@ -24,7 +24,7 @@ pub mod ty;
 pub mod type_checker;
 pub mod type_checker_hoisting;
 pub mod type_constraint;
-pub mod type_defs;
+pub mod type_def;
 pub mod type_var_context;
 pub mod type_var_id;
 pub mod typed_expr;

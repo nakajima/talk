@@ -6,7 +6,7 @@ use crate::{
     SymbolID, builtin_type_def,
     environment::Environment,
     type_checker::{FuncParams, FuncReturning},
-    type_defs::TypeDef,
+    type_def::TypeDef,
     type_var_id::TypeVarID,
 };
 

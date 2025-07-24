@@ -39,7 +39,7 @@ use crate::{
     token_kind::TokenKind,
     ty::Ty,
     type_checker::Scheme,
-    type_defs::{TypeDef, TypeDefKind},
+    type_def::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{Expr, Pattern, TypedExpr},
 };

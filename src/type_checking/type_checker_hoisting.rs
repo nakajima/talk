@@ -11,11 +11,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeChecker, TypeError},
-    type_defs::{
-        TypeDef, TypeDefKind,
-        enum_def::EnumVariant,
-        struct_def::{Initializer, Method, Property},
-    },
+    type_def::{EnumVariant, Initializer, Method, Property, TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::Expr,
 };

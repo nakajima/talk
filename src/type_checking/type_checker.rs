@@ -23,7 +23,7 @@ use crate::{
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::Ty,
-    type_defs::TypeDef,
+    type_def::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr,
 };
