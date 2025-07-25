@@ -11,6 +11,9 @@ use crate::{
     typed_expr::TypedExpr,
 };
 
+pub mod row;
+pub mod row_constraints;
+
 pub mod conformance;
 pub mod conformance_checker;
 pub mod constraint;
@@ -31,6 +34,8 @@ pub mod typed_expr;
 
 #[cfg(test)]
 pub mod dumb_dot;
+#[cfg(test)]
+pub mod test_qualified_rows;
 #[cfg(test)]
 pub mod type_checker_tests;
 

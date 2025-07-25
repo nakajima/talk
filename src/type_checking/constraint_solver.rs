@@ -14,6 +14,7 @@ use crate::{
     environment::{Environment, TypeParameter},
     name::Name,
     parsing::expr_id::ExprID,
+    row_constraints::RowConstraintSolver,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
@@ -40,6 +41,8 @@ pub struct ConstraintSolver<'a> {
     constraints: Vec<Constraint>,
     /// Generation counter for type variables
     generation: u32,
+    /// Solved row constraints for member resolution
+    row_constraints: Vec<crate::row::RowConstraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
@@ -49,6 +52,7 @@ impl<'a> ConstraintSolver<'a> {
             env,
             meta,
             generation,
+            row_constraints: Vec::new(),
         }
     }
 
@@ -73,7 +77,50 @@ impl<'a> ConstraintSolver<'a> {
                             );
                             return true;
                         }
-                        _ => {}
+                        _ => {
+                            // Also defer if there are any unprocessed row constraints for this type var
+                            let has_row_constraints = self.constraints.iter().any(|c| {
+                                matches!(c, Constraint::Row { constraint, .. } if {
+                                    use crate::row::RowConstraint;
+                                    match constraint {
+                                        RowConstraint::HasField { type_var, .. } |
+                                        RowConstraint::HasRow { type_var, .. } |
+                                        RowConstraint::HasExactRow { type_var, .. } => type_var == tv,
+                                        RowConstraint::RowConcat { result, .. } => result == tv,
+                                        _ => false,
+                                    }
+                                })
+                            });
+                            
+                            if has_row_constraints {
+                                tracing::trace!(
+                                    "Deferring MemberAccess on TypeVar with pending row constraints: {:?}",
+                                    tv
+                                );
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            Constraint::Row { constraint, .. } => {
+                use crate::row::RowConstraint;
+                if let RowConstraint::RowConcat { left, right, .. } = constraint {
+                    // Defer RowConcat if we haven't processed HasField constraints for left/right yet
+                    let has_pending_fields = self.constraints.iter().any(|c| {
+                        matches!(c, Constraint::Row { constraint: rc, .. } if {
+                            match rc {
+                                RowConstraint::HasField { type_var, .. } => 
+                                    type_var == left || type_var == right,
+                                _ => false,
+                            }
+                        })
+                    });
+                    
+                    if has_pending_fields {
+                        tracing::trace!("Deferring RowConcat until HasField constraints are processed");
+                        return true;
                     }
                 }
                 false
@@ -275,6 +322,57 @@ impl<'a> ConstraintSolver<'a> {
             } => {
                 let scrutinee_ty = substitutions.apply(scrutinee_ty, 0, &mut self.env.context);
                 self.solve_variant_match(&scrutinee_ty, variant_name, field_tys, substitutions)?;
+            }
+            Constraint::Row { constraint, expr_id: _ } => {
+                use crate::row::RowConstraint;
+                tracing::trace!("Solving row constraint: {:?}", constraint);
+                
+                match constraint {
+                    RowConstraint::HasField { .. } => {
+                        // Store for member resolution
+                        self.row_constraints.push(constraint.clone());
+                        tracing::trace!("Stored HasField constraint: {:?}", constraint);
+                    }
+                    RowConstraint::RowConcat { left, right, result } => {
+                        tracing::trace!("Processing RowConcat: left={:?}, right={:?}, result={:?}", left, right, result);
+                        
+                        // Find all fields from left and right type variables
+                        let mut result_fields = Vec::new();
+                        
+                        for rc in &self.row_constraints.clone() {
+                            match rc {
+                                RowConstraint::HasField { type_var, label, field_ty, metadata } 
+                                    if type_var == left || type_var == right => {
+                                    tracing::trace!("Found field for concat: {} from {:?}", label, type_var);
+                                    result_fields.push((label.clone(), field_ty.clone(), metadata.clone()));
+                                }
+                                _ => {}
+                            }
+                        }
+                        
+                        tracing::trace!("RowConcat found {} fields to propagate", result_fields.len());
+                        
+                        // Add HasField constraints for the result type variable
+                        for (label, field_ty, metadata) in result_fields {
+                            let new_constraint = RowConstraint::HasField {
+                                type_var: result.clone(),
+                                label: label.clone(),
+                                field_ty,
+                                metadata,
+                            };
+                            tracing::trace!("Adding HasField to result: {:?}", new_constraint);
+                            self.row_constraints.push(new_constraint);
+                        }
+                    }
+                    _ => {
+                        // Store and process with row solver
+                        self.row_constraints.push(constraint.clone());
+                        let mut row_solver = RowConstraintSolver::new(self.env, self.generation);
+                        row_solver.solve_row_constraint(constraint, substitutions)?;
+                    }
+                }
+                
+                tracing::trace!("Row constraint handled");
             }
         };
 
@@ -603,6 +701,30 @@ impl<'a> ConstraintSolver<'a> {
                     }
                 }
                 _ => (),
+            }
+        }
+
+        // Check stored row constraints
+        use crate::row::RowConstraint;
+        tracing::trace!("Checking row constraints for type_var {:?}, member {}", type_var, member_name);
+        tracing::trace!("Available row constraints: {:?}", self.row_constraints);
+        
+        for row_constraint in &self.row_constraints {
+            match row_constraint {
+                RowConstraint::HasField { type_var: tv, label, field_ty, .. } 
+                    if tv == type_var && label == member_name => {
+                    tracing::trace!("Found matching HasField constraint!");
+                    return Ok((field_ty.clone(), vec![], vec![]));
+                }
+                RowConstraint::HasRow { type_var: tv, row, .. } | 
+                RowConstraint::HasExactRow { type_var: tv, row } 
+                    if tv == type_var => {
+                    if let Some(field) = row.get_field(&member_name.to_string()) {
+                        tracing::trace!("Found field in row constraint!");
+                        return Ok((field.ty.clone(), vec![], vec![]));
+                    }
+                }
+                _ => {}
             }
         }
 

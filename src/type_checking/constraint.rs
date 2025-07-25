@@ -4,6 +4,7 @@ use crate::{
     SymbolID,
     conformance::Conformance,
     parsing::expr_id::ExprID,
+    row::RowConstraint,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
@@ -58,6 +59,11 @@ pub enum Constraint {
         ty: Ty,
         conformance: Conformance,
     },
+    /// Row-specific constraint
+    Row {
+        expr_id: ExprID,
+        constraint: RowConstraint,
+    },
     Retry(Box<Constraint>, usize),
 }
 
@@ -71,6 +77,7 @@ impl Constraint {
             Self::VariantMatch { expr_id, .. } => expr_id,
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
+            Self::Row { expr_id, .. } => expr_id,
             Self::Retry(c, _) => c.expr_id(),
         }
     }
@@ -99,6 +106,19 @@ impl Constraint {
             Constraint::ConformsTo {
                 ty, conformance, ..
             } => f(ty) || conformance.associated_types.iter().any(f),
+            Constraint::Row { constraint, .. } => {
+                use crate::row::RowConstraint;
+                match constraint {
+                    RowConstraint::HasField { field_ty, .. } => f(field_ty),
+                    RowConstraint::HasRow { row, .. } => {
+                        row.fields.values().any(|field| f(&field.ty))
+                    }
+                    RowConstraint::HasExactRow { row, .. } => {
+                        row.fields.values().any(|field| f(&field.ty))
+                    }
+                    _ => false,
+                }
+            }
             _ => false,
         }
     }
@@ -257,6 +277,42 @@ impl Constraint {
             },
             Constraint::Retry(c, retries) => {
                 Constraint::Retry(c.replacing(substitutions, context).clone().into(), *retries)
+            }
+            Constraint::Row { expr_id, constraint } => {
+                use crate::row::RowConstraint;
+                // Apply substitutions to types within row constraints
+                let new_constraint = match constraint {
+                    RowConstraint::HasField { type_var, label, field_ty, metadata } => {
+                        RowConstraint::HasField {
+                            type_var: type_var.clone(),
+                            label: label.clone(),
+                            field_ty: substitutions.apply(field_ty, 0, context),
+                            metadata: metadata.clone(),
+                        }
+                    }
+                    RowConstraint::HasRow { type_var, row, extension } => {
+                        let mut new_row = row.clone();
+                        new_row.substitute(substitutions);
+                        RowConstraint::HasRow {
+                            type_var: type_var.clone(),
+                            row: new_row,
+                            extension: extension.clone(),
+                        }
+                    }
+                    RowConstraint::HasExactRow { type_var, row } => {
+                        let mut new_row = row.clone();
+                        new_row.substitute(substitutions);
+                        RowConstraint::HasExactRow {
+                            type_var: type_var.clone(),
+                            row: new_row,
+                        }
+                    }
+                    other => other.clone(),
+                };
+                Constraint::Row {
+                    expr_id: *expr_id,
+                    constraint: new_constraint,
+                }
             }
         }
     }
