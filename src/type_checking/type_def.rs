@@ -188,9 +188,34 @@ impl TypeDef {
     }
 
     pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
-        // Check the members HashMap (populated from rows after constraint solving)
+        // First check the members HashMap
+        // This handles:
+        // 1. Post-constraint-solving access (members populated from rows)
+        // 2. Imported types from prelude/modules (have members pre-populated)
+        // 3. Enum variants (populated in both HashMap and rows for immediate availability)
         if let Some(member) = self.members.get(name) {
             return Some(member.ty().clone());
+        }
+        
+        // During type checking, also check row constraints for types being defined
+        // This handles types currently being defined that use row constraints
+        if let Some(row_var) = self.row_var.clone() {
+            // Look through constraints to find HasField constraints for this row variable
+            for constraint in env.constraints() {
+                if let crate::constraint::Constraint::Row { 
+                    constraint: ref row_constraint, 
+                    .. 
+                } = constraint {
+                    use crate::row::RowConstraint;
+                    match row_constraint {
+                        RowConstraint::HasField { type_var, label, field_ty, .. } 
+                            if type_var == &row_var && label == name => {
+                            return Some(field_ty.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
         for conformance in self.conformances() {
@@ -428,7 +453,13 @@ impl TypeDef {
             return;
         }
         
-        // Only add row constraints - no HashMap update
+        // For types that will be exported (e.g., prelude types), we need to populate
+        // the HashMap immediately so they're available across compilation units.
+        for property in &properties {
+            self.members.insert(property.name.clone(), TypeMember::Property(property.clone()));
+        }
+        
+        // Also add row constraints for row polymorphism within this compilation unit
         let row_var = self.ensure_row_var(env);
         
         use crate::constraint::Constraint;
@@ -461,7 +492,15 @@ impl TypeDef {
             return;
         }
         
-        // Only add row constraints - no HashMap update
+        // For types that will be exported (e.g., prelude types), we need to populate
+        // the HashMap immediately so they're available across compilation units.
+        // Row constraints are compilation-unit specific and won't be available
+        // when the type is imported elsewhere.
+        for method in &methods {
+            self.members.insert(method.name.clone(), TypeMember::Method(method.clone()));
+        }
+        
+        // Also add row constraints for row polymorphism within this compilation unit
         let row_var = self.ensure_row_var(env);
         
         use crate::constraint::Constraint;
@@ -490,7 +529,13 @@ impl TypeDef {
             return;
         }
         
-        // Only add row constraints - no HashMap update
+        // For types that will be exported (e.g., prelude types), we need to populate
+        // the HashMap immediately so they're available across compilation units.
+        for initializer in &initializers {
+            self.members.insert(initializer.name.clone(), TypeMember::Initializer(initializer.clone()));
+        }
+        
+        // Also add row constraints for row polymorphism within this compilation unit
         let row_var = self.ensure_row_var(env);
         
         use crate::constraint::Constraint;
@@ -519,7 +564,14 @@ impl TypeDef {
             return;
         }
         
-        // Only add row constraints - no HashMap update
+        // For enum variants, we need immediate availability during type checking
+        // So we populate both the HashMap AND add row constraints
+        for variant in &variants {
+            self.members
+                .insert(variant.name.clone(), TypeMember::Variant(variant.clone()));
+        }
+        
+        // Also add row constraints for row polymorphism
         let row_var = self.ensure_row_var(env);
         
         use crate::constraint::Constraint;
@@ -542,12 +594,68 @@ impl TypeDef {
     
     /// Populate the members HashMap from row constraints after constraint solving
     pub fn populate_from_rows(&mut self, env: &Environment) {
-        let Some(ref row_var) = self.row_var else {
+        let Some(row_var) = self.row_var.clone() else {
             return;
         };
         
-        // Clear existing members
-        self.members.clear();
+        // First, check if there are any row constraints for this type
+        let mut has_row_constraints = false;
+        for constraint in env.constraints() {
+            if let crate::constraint::Constraint::Row { constraint: row_constraint, .. } = constraint {
+                use crate::row::RowConstraint;
+                match row_constraint {
+                    RowConstraint::HasField { type_var, .. } |
+                    RowConstraint::HasRow { type_var, .. } |
+                    RowConstraint::HasExactRow { type_var, .. } 
+                        if type_var == row_var => {
+                        has_row_constraints = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Only clear and repopulate if we have row constraints
+        // This preserves members for imported types that don't use row constraints
+        if !has_row_constraints {
+            tracing::trace!("No row constraints for {} (has {} members), skipping populate_from_rows", 
+                self.name_str, self.members.len());
+            return;
+        }
+        
+        // Count how many members will be populated from row constraints
+        let mut row_member_count = 0;
+        for constraint in env.constraints() {
+            if let crate::constraint::Constraint::Row { constraint: row_constraint, .. } = constraint {
+                use crate::row::RowConstraint;
+                match &row_constraint {
+                    RowConstraint::HasField { type_var, .. } 
+                        if type_var == &row_var => {
+                        row_member_count += 1;
+                    }
+                    RowConstraint::HasRow { type_var, row, .. } | 
+                    RowConstraint::HasExactRow { type_var, row } 
+                        if type_var == &row_var => {
+                        row_member_count += row.fields.len();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // If we have existing members but row constraints would populate fewer,
+        // this is likely an extension of an imported type - only add new members
+        if self.members.len() > row_member_count && row_member_count > 0 {
+            tracing::debug!("Type {} has {} existing members but only {} in row constraints - preserving existing and adding new", 
+                self.name_str, self.members.len(), row_member_count);
+            // Don't clear - just add new members from rows below
+        } else {
+            tracing::debug!("Clearing {} members from {} to repopulate from row constraints", 
+                self.members.len(), self.name_str);
+            // Clear existing members since we'll repopulate from rows
+            self.members.clear();
+        }
         
         // Collect all fields from row constraints
         for constraint in env.constraints() {
@@ -555,7 +663,7 @@ impl TypeDef {
                 use crate::row::{RowConstraint, FieldMetadata};
                 match &row_constraint {
                     RowConstraint::HasField { type_var, label, field_ty, metadata } 
-                        if type_var == row_var => {
+                        if type_var == &row_var => {
                         match metadata {
                             FieldMetadata::RecordField { index, has_default, .. } => {
                                 self.members.insert(
@@ -616,7 +724,7 @@ impl TypeDef {
                     }
                     RowConstraint::HasRow { type_var, row, .. } | 
                     RowConstraint::HasExactRow { type_var, row } 
-                        if type_var == row_var => {
+                        if type_var == &row_var => {
                         for (label, field) in &row.fields {
                             match &field.metadata {
                                 FieldMetadata::RecordField { index, has_default, .. } => {

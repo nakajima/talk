@@ -2136,7 +2136,7 @@ mod tests {
         assert!(
             checked.diagnostics().is_empty(),
             "{:#?}",
-            checked.diagnostics().is_empty()
+            checked.diagnostics()
         );
     }
 }

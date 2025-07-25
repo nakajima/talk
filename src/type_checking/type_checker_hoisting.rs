@@ -396,7 +396,11 @@ impl<'a> TypeChecker<'a> {
                 }
             });
 
-            env.register(&type_def).map_err(|e| (root.id, e))?;
+            // Only register if this is a new type definition, not an extension
+            // Extensions will register after adding their new members
+            if env.lookup_type(symbol_id).is_none() {
+                env.register(&type_def).map_err(|e| (root.id, e))?;
+            }
 
             placeholders.push((type_def.symbol_id(), ty_placeholders));
         }
@@ -421,12 +425,9 @@ impl<'a> TypeChecker<'a> {
             let ty = if let TypeDefKind::Builtin(ref ty) = def.kind {
                 ty.clone()
             } else {
-                let Ok(scheme) = env.lookup_symbol(&sym).cloned() else {
-                    tracing::warn!("Did not find symbol for inference: {sym:?}");
-                    continue;
-                };
-
-                env.instantiate(&scheme)
+                // Use the canonical type with the type definition's parameters
+                // instead of instantiating to avoid creating instantiation type variables
+                def.ty()
             };
 
             env.selfs.push(ty);
@@ -454,7 +455,7 @@ impl<'a> TypeChecker<'a> {
                     substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());
                 }
 
-                def.add_properties(properties.clone());
+                def.add_properties_with_rows(properties.clone(), env);
                 env.register(&def)
                     .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
             }
@@ -472,7 +473,7 @@ impl<'a> TypeChecker<'a> {
 
                 substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
             }
-            def.add_methods(methods.clone());
+            def.add_methods_with_rows(methods.clone(), env);
             env.register(&def)
                 .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
 
@@ -519,7 +520,7 @@ impl<'a> TypeChecker<'a> {
                     });
                 }
 
-                def.add_initializers(initializers.clone());
+                def.add_initializers_with_rows(initializers.clone(), env);
                 env.register(&def).map_err(|e| {
                     (
                         initializers.last().map(|p| p.expr_id).unwrap_or_default(),
@@ -541,7 +542,7 @@ impl<'a> TypeChecker<'a> {
                     });
                 }
 
-                def.add_variants(variants);
+                def.add_variants_with_rows(variants, env);
                 env.register(&def).map_err(|e| (Default::default(), e))?;
             }
 

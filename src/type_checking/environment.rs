@@ -318,7 +318,41 @@ impl Environment {
             Scheme::new(def.ty(), def.canonical_type_variables(), vec![]),
         )?;
 
-        self.types.insert(def.symbol_id(), def.clone());
+        // If the type already exists (e.g., from a struct definition being extended),
+        // merge the new members instead of replacing the entire definition
+        if let Some(existing_def) = self.types.get_mut(&def.symbol_id()) {
+            tracing::debug!("Merging type {} - existing has {} members, new has {} members", 
+                existing_def.name_str, existing_def.members.len(), def.members.len());
+            
+            // If the new definition has no members but the existing one does,
+            // this might be an initial registration of an extension - keep existing members
+            if def.members.is_empty() && !existing_def.members.is_empty() {
+                tracing::debug!("New definition is empty, keeping existing {} members", existing_def.members.len());
+                // Update other fields but keep existing members
+                if def.row_var.is_some() {
+                    existing_def.row_var = def.row_var.clone();
+                }
+                existing_def.conformances.extend(def.conformances.clone());
+            } else {
+                // Normal merge - add new members to existing
+                for (name, member) in &def.members {
+                    tracing::trace!("  Adding member: {}", name);
+                    existing_def.members.insert(name.clone(), member.clone());
+                }
+                // Merge conformances
+                existing_def.conformances.extend(def.conformances.clone());
+                // Update row_var if the new definition has one but existing doesn't
+                if existing_def.row_var.is_none() && def.row_var.is_some() {
+                    existing_def.row_var = def.row_var.clone();
+                }
+            }
+            tracing::debug!("After merge, {} has {} members", 
+                existing_def.name_str, existing_def.members.len());
+        } else {
+            tracing::trace!("Inserting new type {} with {} members", def.name_str, def.members.len());
+            // Type doesn't exist yet, insert the whole definition
+            self.types.insert(def.symbol_id(), def.clone());
+        }
         Ok(())
     }
 

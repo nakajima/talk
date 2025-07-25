@@ -154,8 +154,21 @@ impl<'a> ConstraintSolver<'a> {
                 match self.solve_constraint(&constraint, &mut substitutions) {
                     Ok(_) => (),
                     Err(err) => {
-                        // Try deferring on first error
-                        if iterations == 1 {
+                        // For MemberAccess on TypeVars, keep deferring as long as possible
+                        // since the TypeVar might be resolved in a later iteration
+                        let should_defer = if let Constraint::MemberAccess(_, receiver_ty, member_name, _) = &constraint {
+                            let resolved = substitutions.apply(receiver_ty, 0, &mut self.env.context);
+                            if matches!(resolved, Ty::TypeVar(_)) && iterations < MAX_ITERATIONS - 1 {
+                                tracing::trace!("Deferring MemberAccess({}) on TypeVar in iteration {}", member_name, iterations);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        
+                        if iterations == 1 || should_defer {
                             deferred_constraints.push(constraint.clone());
                         } else {
                             unsolved_constraints.push(constraint.clone());
@@ -397,7 +410,15 @@ impl<'a> ConstraintSolver<'a> {
             .clone();
 
         // TODO: Support multiple initializers
-        let initializer = &struct_def.initializers()[0];
+        let initializers = struct_def.initializers();
+        if initializers.is_empty() {
+            return Err(TypeError::Unknown(format!(
+                "No initializers found for struct {}",
+                struct_def.name_str
+            )));
+        }
+        
+        let initializer = &initializers[0];
         let Ty::Init(_, params) = &initializer.ty else {
             return Err(TypeError::Unknown("Invalid initializer type".into()));
         };
@@ -636,7 +657,9 @@ impl<'a> ConstraintSolver<'a> {
         // Fall back to traditional member lookup
         let member_ty = type_def
             .member_ty_with_conformances(member_name, self.env)
-            .ok_or_else(|| TypeError::MemberNotFound(type_name, member_name.to_string()))?;
+            .ok_or_else(|| {
+                TypeError::MemberNotFound(type_name, member_name.to_string())
+            })?;
 
         Ok((member_ty, type_params, generics.to_vec()))
     }
@@ -737,10 +760,12 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        Err(TypeError::MemberNotFound(
-            Ty::TypeVar(type_var.clone()).to_string(),
-            member_name.to_string(),
-        ))
+        // For TypeVars that haven't been resolved yet, we should defer rather than
+        // report MemberNotFound, as the TypeVar might be unified with a concrete type
+        // that has the member in a later iteration
+        Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+            format!("TypeVar {} member '{}' not yet resolved", type_var.id, member_name)
+        )))
     }
 
     #[allow(clippy::type_complexity)]
