@@ -28,6 +28,7 @@ pub mod type_checker;
 pub mod type_checker_hoisting;
 pub mod type_constraint;
 pub mod type_def;
+pub mod type_def_rows;
 pub mod type_var_context;
 pub mod type_var_id;
 pub mod typed_expr;
@@ -36,6 +37,20 @@ pub mod typed_expr;
 pub mod dumb_dot;
 #[cfg(test)]
 pub mod test_qualified_rows;
+#[cfg(test)]
+pub mod test_type_def_rows;
+#[cfg(test)]
+pub mod test_integration_rows;
+#[cfg(test)]
+pub mod test_row_typedef_integration;
+#[cfg(test)]
+pub mod test_hoisting_rows;
+#[cfg(test)]
+pub mod test_row_system_integration;
+#[cfg(test)]
+pub mod test_single_source_rows;
+#[cfg(test)]
+pub mod example_row_usage;
 #[cfg(test)]
 pub mod type_checker_tests;
 

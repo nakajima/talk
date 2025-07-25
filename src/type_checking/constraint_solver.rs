@@ -625,6 +625,15 @@ impl<'a> ConstraintSolver<'a> {
             })?
             .clone();
 
+        // Check if this type uses row-based members
+        if let Some(row_var) = &type_def.row_var {
+            // Try to resolve through row constraints
+            if let Ok((ty, params, assoc)) = self.resolve_type_var_member(row_var, member_name) {
+                return Ok((ty, params, assoc));
+            }
+        }
+
+        // Fall back to traditional member lookup
         let member_ty = type_def
             .member_ty_with_conformances(member_name, self.env)
             .ok_or_else(|| TypeError::MemberNotFound(type_name, member_name.to_string()))?;

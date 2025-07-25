@@ -148,6 +148,15 @@ impl Environment {
         for constraint in &solution.unsolved_constraints {
             self.constrain(constraint.clone());
         }
+        
+        // Populate TypeDef members from row constraints after solving
+        let type_ids: Vec<SymbolID> = self.types.keys().cloned().collect();
+        for type_id in type_ids {
+            if let Some(mut type_def) = self.types.remove(&type_id) {
+                type_def.populate_from_rows(self);
+                self.types.insert(type_id, type_def);
+            }
+        }
 
         Ok(solution)
     }

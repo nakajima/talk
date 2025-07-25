@@ -392,6 +392,7 @@ impl<'a> TypeChecker<'a> {
                     type_parameters: type_params,
                     members: Default::default(),
                     conformances: Default::default(),
+                    row_var: None,  // Row vars can be added later if needed
                 }
             });
 

@@ -38,6 +38,7 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Int),
                 type_parameters: vec![],
+                row_var: None,
             }),
         },
         Builtin {
@@ -58,6 +59,7 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Float),
                 type_parameters: vec![],
+                row_var: None,
             }),
         },
         Builtin {
@@ -78,6 +80,7 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Bool),
                 type_parameters: vec![],
+                row_var: None,
             }),
         },
         Builtin {
@@ -98,6 +101,7 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Pointer),
                 type_parameters: vec![],
+                row_var: None,
             }),
         },
         Builtin {
@@ -304,6 +308,7 @@ pub fn builtins() -> Vec<Builtin> {
                 conformances: vec![],
                 kind: TypeDefKind::Builtin(Ty::Byte),
                 type_parameters: vec![],
+                row_var: None,
             }),
         },
     ]

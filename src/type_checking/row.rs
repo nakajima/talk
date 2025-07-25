@@ -68,7 +68,7 @@ pub enum RowConstraint {
 }
 
 /// Information about a single field/variant
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldInfo {
     /// The type of this field
     pub ty: Ty,
@@ -79,9 +79,9 @@ pub struct FieldInfo {
 }
 
 /// Metadata for fields (different for records vs variants)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FieldMetadata {
-    /// Record field metadata
+    /// Record field metadata (struct property)
     RecordField {
         /// Position index in the struct
         index: usize,
@@ -90,26 +90,21 @@ pub enum FieldMetadata {
         /// Whether this is a mutable field
         is_mutable: bool,
     },
-    /// Variant metadata  
-    Variant {
+    /// Variant field (for pattern matching)
+    VariantField {
+        /// Position in the variant
+        position: usize,
+    },
+    /// Method on a type
+    Method,
+    /// Method requirement in a protocol
+    MethodRequirement,
+    /// Initializer function
+    Initializer,
+    /// Enum variant
+    EnumVariant {
         /// Tag for pattern matching
         tag: usize,
-        /// Arity of the variant
-        arity: usize,
-    },
-    /// Method metadata
-    Method {
-        /// Whether this is a requirement (protocol) or implementation
-        is_requirement: bool,
-        /// Whether this is a static method
-        is_static: bool,
-    },
-    /// Property metadata
-    Property {
-        /// Whether this has a getter
-        has_getter: bool,
-        /// Whether this has a setter
-        has_setter: bool,
     },
 }
 

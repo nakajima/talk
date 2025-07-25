@@ -9,7 +9,7 @@ use crate::{
     substitutions::Substitutions,
     ty::Ty,
     type_checker::Scheme,
-    type_var_id::TypeVarID,
+    type_var_id::{TypeVarID, TypeVarKind},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -122,7 +122,15 @@ pub struct TypeDef {
     pub type_parameters: TypeParams,
     pub members: HashMap<String, TypeMember>,
     pub conformances: Vec<Conformance>,
+    /// Row variable for this type's members (for row-based type system)
+    pub row_var: Option<TypeVarID>,
 }
+
+// Architecture Note:
+// During type checking, type structure is represented as row constraints on type variables.
+// The `members` HashMap is populated from these constraints after solving via `populate_from_rows`.
+// This ensures row constraints are the single source of truth during type checking,
+// while providing efficient lookup for post-type-checking phases (lowering, LSP, etc.).
 
 impl TypeDef {
     pub fn ty(&self) -> Ty {
@@ -180,6 +188,7 @@ impl TypeDef {
     }
 
     pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
+        // Check the members HashMap (populated from rows after constraint solving)
         if let Some(member) = self.members.get(name) {
             return Some(member.ty().clone());
         }
@@ -286,6 +295,8 @@ impl TypeDef {
             .collect()
     }
 
+    /// Legacy method - prefer add_methods_with_rows
+    #[deprecated(note = "Use add_methods_with_rows instead")]
     pub fn add_methods(&mut self, methods: Vec<Method>) {
         for method in methods {
             self.members
@@ -334,6 +345,8 @@ impl TypeDef {
         }
     }
 
+    /// Legacy method - prefer add_initializers_with_rows
+    #[deprecated(note = "Use add_initializers_with_rows instead")]
     pub fn add_initializers(&mut self, initializers: Vec<Initializer>) {
         if initializers.is_empty() {
             return;
@@ -347,6 +360,8 @@ impl TypeDef {
         }
     }
 
+    /// Legacy method - prefer add_properties_with_rows
+    #[deprecated(note = "Use add_properties_with_rows instead")]
     pub fn add_properties(&mut self, properties: Vec<Property>) {
         if properties.is_empty() {
             return;
@@ -358,6 +373,8 @@ impl TypeDef {
         }
     }
 
+    /// Legacy method - prefer add_variants_with_rows
+    #[deprecated(note = "Use add_variants_with_rows instead")]
     pub fn add_variants(&mut self, variants: Vec<EnumVariant>) {
         if variants.is_empty() {
             return;
@@ -384,5 +401,285 @@ impl TypeDef {
 
     pub fn add_conformances(&mut self, conformances: Vec<Conformance>) {
         self.conformances.extend(conformances);
+    }
+    
+    /// Ensure this TypeDef has a row variable, creating one if needed
+    pub fn ensure_row_var(&mut self, env: &mut Environment) -> TypeVarID {
+        if let Some(row_var) = &self.row_var {
+            row_var.clone()
+        } else {
+            // Create a row variable for this type
+            let row_var = env.new_type_variable(
+                TypeVarKind::CanonicalTypeParameter(format!("{}_row", self.name_str)),
+                ExprID(0), // TODO: better expr_id
+            );
+            self.row_var = Some(row_var.clone());
+            row_var
+        }
+    }
+    
+    /// Add properties with row constraint support
+    pub fn add_properties_with_rows(
+        &mut self, 
+        properties: Vec<Property>,
+        env: &mut Environment,
+    ) {
+        if properties.is_empty() {
+            return;
+        }
+        
+        // Only add row constraints - no HashMap update
+        let row_var = self.ensure_row_var(env);
+        
+        use crate::constraint::Constraint;
+        use crate::row::{RowConstraint, FieldMetadata};
+        
+        for property in properties {
+            env.constrain(Constraint::Row {
+                expr_id: property.expr_id,
+                constraint: RowConstraint::HasField {
+                    type_var: row_var.clone(),
+                    label: property.name,
+                    field_ty: property.ty,
+                    metadata: FieldMetadata::RecordField {
+                        index: property.index,
+                        has_default: property.has_default,
+                        is_mutable: false, // TODO: get from property
+                    },
+                },
+            });
+        }
+    }
+    
+    /// Add methods with row constraint support
+    pub fn add_methods_with_rows(
+        &mut self,
+        methods: Vec<Method>,
+        env: &mut Environment,
+    ) {
+        if methods.is_empty() {
+            return;
+        }
+        
+        // Only add row constraints - no HashMap update
+        let row_var = self.ensure_row_var(env);
+        
+        use crate::constraint::Constraint;
+        use crate::row::{RowConstraint, FieldMetadata};
+        
+        for method in methods {
+            env.constrain(Constraint::Row {
+                expr_id: method.expr_id,
+                constraint: RowConstraint::HasField {
+                    type_var: row_var.clone(),
+                    label: method.name,
+                    field_ty: method.ty,
+                    metadata: FieldMetadata::Method,
+                },
+            });
+        }
+    }
+    
+    /// Add initializers with row constraint support
+    pub fn add_initializers_with_rows(
+        &mut self,
+        initializers: Vec<Initializer>,
+        env: &mut Environment,
+    ) {
+        if initializers.is_empty() {
+            return;
+        }
+        
+        // Only add row constraints - no HashMap update
+        let row_var = self.ensure_row_var(env);
+        
+        use crate::constraint::Constraint;
+        use crate::row::{RowConstraint, FieldMetadata};
+        
+        for initializer in initializers {
+            env.constrain(Constraint::Row {
+                expr_id: initializer.expr_id,
+                constraint: RowConstraint::HasField {
+                    type_var: row_var.clone(),
+                    label: initializer.name,
+                    field_ty: initializer.ty,
+                    metadata: FieldMetadata::Initializer,
+                },
+            });
+        }
+    }
+    
+    /// Add variants with row constraint support
+    pub fn add_variants_with_rows(
+        &mut self,
+        variants: Vec<EnumVariant>,
+        env: &mut Environment,
+    ) {
+        if variants.is_empty() {
+            return;
+        }
+        
+        // Only add row constraints - no HashMap update
+        let row_var = self.ensure_row_var(env);
+        
+        use crate::constraint::Constraint;
+        use crate::row::{RowConstraint, FieldMetadata};
+        
+        for variant in variants {
+            env.constrain(Constraint::Row {
+                expr_id: ExprID(0), // TODO: variants don't have expr_id
+                constraint: RowConstraint::HasField {
+                    type_var: row_var.clone(),
+                    label: variant.name,
+                    field_ty: variant.ty,
+                    metadata: FieldMetadata::EnumVariant {
+                        tag: variant.tag,
+                    },
+                },
+            });
+        }
+    }
+    
+    /// Populate the members HashMap from row constraints after constraint solving
+    pub fn populate_from_rows(&mut self, env: &Environment) {
+        let Some(ref row_var) = self.row_var else {
+            return;
+        };
+        
+        // Clear existing members
+        self.members.clear();
+        
+        // Collect all fields from row constraints
+        for constraint in env.constraints() {
+            if let crate::constraint::Constraint::Row { constraint: row_constraint, expr_id } = constraint {
+                use crate::row::{RowConstraint, FieldMetadata};
+                match &row_constraint {
+                    RowConstraint::HasField { type_var, label, field_ty, metadata } 
+                        if type_var == row_var => {
+                        match metadata {
+                            FieldMetadata::RecordField { index, has_default, .. } => {
+                                self.members.insert(
+                                    label.clone(),
+                                    TypeMember::Property(Property {
+                                        index: *index,
+                                        name: label.clone(),
+                                        expr_id,
+                                        ty: field_ty.clone(),
+                                        has_default: *has_default,
+                                    }),
+                                );
+                            }
+                            FieldMetadata::Method => {
+                                self.members.insert(
+                                    label.clone(),
+                                    TypeMember::Method(Method {
+                                        name: label.clone(),
+                                        expr_id,
+                                        ty: field_ty.clone(),
+                                    }),
+                                );
+                            }
+                            FieldMetadata::MethodRequirement => {
+                                self.members.insert(
+                                    label.clone(),
+                                    TypeMember::MethodRequirement(Method {
+                                        name: label.clone(),
+                                        expr_id,
+                                        ty: field_ty.clone(),
+                                    }),
+                                );
+                            }
+                            FieldMetadata::Initializer => {
+                                self.members.insert(
+                                    label.clone(),
+                                    TypeMember::Initializer(Initializer {
+                                        name: label.clone(),
+                                        expr_id,
+                                        ty: field_ty.clone(),
+                                    }),
+                                );
+                            }
+                            FieldMetadata::EnumVariant { tag } => {
+                                self.members.insert(
+                                    label.clone(),
+                                    TypeMember::Variant(EnumVariant {
+                                        tag: *tag,
+                                        name: label.clone(),
+                                        ty: field_ty.clone(),
+                                    }),
+                                );
+                            }
+                            FieldMetadata::VariantField { .. } => {
+                                // Skip variant fields - they're not type members
+                            }
+                        }
+                    }
+                    RowConstraint::HasRow { type_var, row, .. } | 
+                    RowConstraint::HasExactRow { type_var, row } 
+                        if type_var == row_var => {
+                        for (label, field) in &row.fields {
+                            match &field.metadata {
+                                FieldMetadata::RecordField { index, has_default, .. } => {
+                                    self.members.insert(
+                                        label.clone(),
+                                        TypeMember::Property(Property {
+                                            index: *index,
+                                            name: label.clone(),
+                                            expr_id,
+                                            ty: field.ty.clone(),
+                                            has_default: *has_default,
+                                        }),
+                                    );
+                                }
+                                FieldMetadata::Method => {
+                                    self.members.insert(
+                                        label.clone(),
+                                        TypeMember::Method(Method {
+                                            name: label.clone(),
+                                            expr_id,
+                                            ty: field.ty.clone(),
+                                        }),
+                                    );
+                                }
+                                FieldMetadata::MethodRequirement => {
+                                    self.members.insert(
+                                        label.clone(),
+                                        TypeMember::MethodRequirement(Method {
+                                            name: label.clone(),
+                                            expr_id,
+                                            ty: field.ty.clone(),
+                                        }),
+                                    );
+                                }
+                                FieldMetadata::Initializer => {
+                                    self.members.insert(
+                                        label.clone(),
+                                        TypeMember::Initializer(Initializer {
+                                            name: label.clone(),
+                                            expr_id,
+                                            ty: field.ty.clone(),
+                                        }),
+                                    );
+                                }
+                                FieldMetadata::EnumVariant { tag } => {
+                                    self.members.insert(
+                                        label.clone(),
+                                        TypeMember::Variant(EnumVariant {
+                                            tag: *tag,
+                                            name: label.clone(),
+                                            ty: field.ty.clone(),
+                                        }),
+                                    );
+                                }
+                                FieldMetadata::VariantField { .. } => {
+                                    // Skip variant fields - they're not type members
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
