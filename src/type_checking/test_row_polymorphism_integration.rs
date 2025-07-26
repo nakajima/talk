@@ -10,6 +10,7 @@ mod tests {
     
     /// Test basic row-polymorphic function
     #[test]
+    #[ignore = "Requires parser support for row variables and record literals"]
     fn test_basic_row_polymorphic_function() {
         // This test demonstrates what we want to support:
         /*
@@ -25,16 +26,11 @@ mod tests {
             let x2 = getX(point3d)  // R = {y: Int, z: Int}
         }
         */
-        
-        // Currently skipped - needs parser support for:
-        // 1. Row variables in generic parameters
-        // 2. Row extension syntax {x: Int, ..R}
-        // 3. Record literal syntax in expressions
-        println!("Skipping test_basic_row_polymorphic_function - needs parser support");
     }
     
     /// Test row polymorphism with constraints
     #[test]
+    #[ignore = "Requires parser support for row extension syntax"]
     fn test_row_polymorphic_with_constraints() {
         // This test demonstrates constrained row polymorphism:
         /*
@@ -54,12 +50,11 @@ mod tests {
             let moved = translate(p3d, 10, 10)  // Result has type {x: Int, y: Int, z: Int}
         }
         */
-        
-        println!("Skipping test_row_polymorphic_with_constraints - needs parser support");
     }
     
     /// Test row polymorphism with lacks constraints
     #[test]
+    #[ignore = "Requires parser support for Lacks constraints"]
     fn test_row_polymorphic_lacks() {
         // This demonstrates security-oriented row polymorphism:
         /*
@@ -76,12 +71,11 @@ mod tests {
             let info2 = processPublic(privateUser)  // Error: has password field
         }
         */
-        
-        println!("Skipping test_row_polymorphic_lacks - needs parser support");
     }
     
     /// Test higher-order functions with row polymorphism
     #[test]
+    #[ignore = "Requires parser support for row-polymorphic function types"]
     fn test_higher_order_row_polymorphism() {
         // This demonstrates row polymorphism in higher-order functions:
         /*
@@ -104,12 +98,11 @@ mod tests {
             // withAge has type {name: String, age: Int, email: String}
         }
         */
-        
-        println!("Skipping test_higher_order_row_polymorphism - needs parser support");
     }
     
     /// Test row polymorphism with protocols
     #[test]
+    #[ignore = "Requires parser support for row constraints on protocols"]
     fn test_row_polymorphism_with_protocols() {
         // This demonstrates combining row polymorphism with protocols:
         /*
@@ -140,12 +133,11 @@ mod tests {
             drawAt(c, 100, 100)  // R = {radius: Int} + Drawable constraint
         }
         */
-        
-        println!("Skipping test_row_polymorphism_with_protocols - needs parser support");
     }
     
     /// Test row polymorphism preserving exact types
     #[test]
+    #[ignore = "Requires parser support for exact row types"]
     fn test_row_polymorphism_exact_preservation() {
         // This demonstrates that row polymorphism can preserve exact types:
         /*
@@ -166,7 +158,5 @@ mod tests {
             let extended = withId(exact, 123)  // Type is {id: Int, x: Int, y: Int}
         }
         */
-        
-        println!("Skipping test_row_polymorphism_exact_preservation - needs parser support");
     }
 }

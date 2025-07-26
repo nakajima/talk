@@ -1,12 +1,11 @@
 //! Utilities for migrating existing types to use row-based member storage
 
 use crate::{
-    SymbolID,
     environment::Environment,
     expr_id::ExprID,
     row::{RowConstraint, FieldMetadata, RowSpec, FieldInfo},
     ty::Ty,
-    type_def::{TypeDef, TypeMember, Property},
+    type_def::{TypeDef, TypeMember},
     type_var_id::{TypeVarID, TypeVarKind},
     constraint::Constraint,
 };
@@ -38,7 +37,7 @@ pub fn migrate_type_to_rows(
                 FieldMetadata::RecordField {
                     index: prop.index,
                     has_default: prop.has_default,
-                    is_mutable: true, // TODO: Get actual mutability info
+                    is_mutable: true, // Property struct doesn't track mutability yet
                 },
             ),
             TypeMember::Variant(variant) => (
@@ -190,7 +189,7 @@ pub fn restrict_row_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExprMetaStorage, type_def::TypeDefKind};
+    use crate::{ExprMetaStorage, type_def::{TypeDefKind, Property}, SymbolID};
     use std::collections::HashMap;
     
     #[test]
@@ -317,9 +316,6 @@ mod tests {
         
         let meta = ExprMetaStorage::default();
         let solution = env.flush_constraints(&meta).unwrap();
-        if !solution.errors.is_empty() {
-            eprintln!("Errors after compose/restrict: {:?}", solution.errors);
-        }
         assert!(solution.errors.is_empty());
         
         // The issue is that row composition/restriction happens through type variables

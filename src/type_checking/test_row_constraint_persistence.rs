@@ -26,14 +26,11 @@ mod tests {
         
         assert!(result.is_ok());
         if let Ok(check_result) = result {
-            // Access the environment from the check result
-            let env = &check_result.env;
+            // Verify that the environment has row_constraints field
+            // This test just ensures the infrastructure exists
+            let _row_constraints = &check_result.env.row_constraints;
             
-            // For now, just check that the environment has row_constraints field
-            // Traditional enums might not generate row constraints
-            eprintln!("Row constraints collected: {}", env.row_constraints.len());
-            
-            // The important thing is that the field exists and can be accessed
+            // Traditional enums might not generate row constraints yet
             // The actual row constraint generation for enums will come when we
             // fully migrate enum definitions to use rows
         }

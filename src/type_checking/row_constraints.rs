@@ -27,8 +27,6 @@ pub enum ExtendedConstraint {
 
 /// Solver for row constraints integrated with the main type system
 pub struct RowConstraintSolver<'a> {
-    #[allow(dead_code)]
-    env: &'a mut Environment,
     /// Tracks which fields each type variable has
     type_var_fields: HashMap<TypeVarID, BTreeMap<Label, FieldInfo>>,
     /// Tracks which fields each type variable lacks
@@ -37,23 +35,21 @@ pub struct RowConstraintSolver<'a> {
     type_var_exact: HashMap<TypeVarID, bool>,
     /// All row constraints being processed (for exactness checking)
     all_constraints: Vec<RowConstraint>,
-    /// Generation counter for fresh variables
-    #[allow(dead_code)]
-    generation: u32,
     /// Tracks which type variables extend other type variables
     type_var_extensions: HashMap<TypeVarID, Vec<TypeVarID>>,
+    /// Phantom data to keep the lifetime parameter
+    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> RowConstraintSolver<'a> {
-    pub fn new(env: &'a mut Environment, generation: u32) -> Self {
+    pub fn new(_env: &'a mut Environment, _generation: u32) -> Self {
         Self {
-            env,
             type_var_fields: HashMap::new(),
             type_var_lacks: HashMap::new(),
             type_var_exact: HashMap::new(),
             all_constraints: Vec::new(),
-            generation,
             type_var_extensions: HashMap::new(),
+            _phantom: std::marker::PhantomData,
         }
     }
     

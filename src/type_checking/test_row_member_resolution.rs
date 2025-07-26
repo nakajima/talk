@@ -95,9 +95,6 @@ mod tests {
         
         // This should succeed
         let mut solution = env.flush_constraints(&meta).unwrap();
-        if !solution.errors.is_empty() {
-            eprintln!("Errors on concat result member access: {:?}", solution.errors);
-        }
         assert!(solution.errors.is_empty());
         
         // Verify types

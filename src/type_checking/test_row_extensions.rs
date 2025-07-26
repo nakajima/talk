@@ -24,8 +24,7 @@ mod tests {
         let mut solver = RowConstraintSolver::new(&mut env, 0);
         let mut type_subs = Substitutions::new();
         
-        // Create a base type with name field
-        let base = TypeVarID::new(1, TypeVarKind::Blank, ExprID(1));
+        // Create base fields directly (no base type variable needed)
         let mut base_fields = BTreeMap::new();
         base_fields.insert(
             "name".to_string(),

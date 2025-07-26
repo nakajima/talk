@@ -68,12 +68,12 @@ mod examples {
         assert_eq!(resolved, Ty::Float);
     }
     
-    /// Example: Gradual migration - mixing traditional and row-based members
+    /// Example: Building a type with multiple sets of members using rows
     #[test]
-    fn example_gradual_migration() {
+    fn example_building_type_with_rows() {
         let mut env = Environment::new();
         
-        // Create a type that uses both approaches
+        // Create a type and add members in multiple calls
         let rect_id = SymbolID(2000);
         let mut rect_def = TypeDef {
             symbol_id: rect_id,
@@ -87,11 +87,11 @@ mod examples {
         
         env.register(&rect_def).unwrap();
         
-        // Add some properties the traditional way
-        rect_def.add_properties(vec![
+        // Add some properties using the row-based approach
+        rect_def.add_properties_with_rows(vec![
             Property::new(0, "width".to_string(), ExprID(10), Ty::Float, false),
             Property::new(1, "height".to_string(), ExprID(11), Ty::Float, false),
-        ]);
+        ], &mut env);
         
         // Add more properties using rows
         rect_def.add_properties_with_rows(vec![
@@ -110,11 +110,11 @@ mod examples {
         
         env.register(&rect_def).unwrap();
         
-        // Both traditional and row-based members are accessible
+        // All members are accessible through row constraints
         let meta = ExprMetaStorage::default();
         let rect_ty = Ty::Struct(rect_id, vec![]);
         
-        // Test traditional member
+        // Test first set of members
         let width_result = env.new_type_variable(TypeVarKind::Blank, ExprID(15));
         env.constrain(Constraint::MemberAccess(
             ExprID(16),
@@ -123,7 +123,7 @@ mod examples {
             Ty::TypeVar(width_result.clone()),
         ));
         
-        // Test row-based member
+        // Test second set of members
         let x_result = env.new_type_variable(TypeVarKind::Blank, ExprID(17));
         env.constrain(Constraint::MemberAccess(
             ExprID(18),
@@ -132,7 +132,7 @@ mod examples {
             Ty::TypeVar(x_result.clone()),
         ));
         
-        // Test row-based method
+        // Test method added with rows
         let area_result = env.new_type_variable(TypeVarKind::Blank, ExprID(19));
         env.constrain(Constraint::MemberAccess(
             ExprID(20),

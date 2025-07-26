@@ -320,15 +320,6 @@ impl TypeDef {
             .collect()
     }
 
-    /// Legacy method - prefer add_methods_with_rows
-    #[deprecated(note = "Use add_methods_with_rows instead")]
-    pub fn add_methods(&mut self, methods: Vec<Method>) {
-        for method in methods {
-            self.members
-                .insert(method.name.clone(), TypeMember::Method(method));
-        }
-    }
-
     pub fn methods(&self) -> Vec<Method> {
         self.members
             .values()
@@ -367,47 +358,6 @@ impl TypeDef {
         for method in methods {
             self.members
                 .insert(method.name.clone(), TypeMember::MethodRequirement(method));
-        }
-    }
-
-    /// Legacy method - prefer add_initializers_with_rows
-    #[deprecated(note = "Use add_initializers_with_rows instead")]
-    pub fn add_initializers(&mut self, initializers: Vec<Initializer>) {
-        if initializers.is_empty() {
-            return;
-        }
-
-        for initializer in initializers {
-            self.members.insert(
-                initializer.name.clone(),
-                TypeMember::Initializer(initializer),
-            );
-        }
-    }
-
-    /// Legacy method - prefer add_properties_with_rows
-    #[deprecated(note = "Use add_properties_with_rows instead")]
-    pub fn add_properties(&mut self, properties: Vec<Property>) {
-        if properties.is_empty() {
-            return;
-        }
-
-        for property in properties {
-            self.members
-                .insert(property.name.clone(), TypeMember::Property(property));
-        }
-    }
-
-    /// Legacy method - prefer add_variants_with_rows
-    #[deprecated(note = "Use add_variants_with_rows instead")]
-    pub fn add_variants(&mut self, variants: Vec<EnumVariant>) {
-        if variants.is_empty() {
-            return;
-        }
-
-        for variants in variants {
-            self.members
-                .insert(variants.name.clone(), TypeMember::Variant(variants));
         }
     }
 
