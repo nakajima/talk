@@ -95,6 +95,11 @@ pub enum FieldMetadata {
         /// Position in the variant
         position: usize,
     },
+    /// Enum case/variant
+    EnumCase {
+        /// Tag/discriminant value
+        tag: usize,
+    },
     /// Method on a type
     Method,
     /// Method requirement in a protocol

@@ -720,6 +720,16 @@ impl TypeDef {
                             FieldMetadata::VariantField { .. } => {
                                 // Skip variant fields - they're not type members
                             }
+                            FieldMetadata::EnumCase { tag } => {
+                                self.members.insert(
+                                    label.clone(),
+                                    TypeMember::Variant(EnumVariant {
+                                        tag: *tag,
+                                        name: label.clone(),
+                                        ty: field_ty.clone(),
+                                    }),
+                                );
+                            }
                         }
                     }
                     RowConstraint::HasRow { type_var, row, .. } | 
@@ -781,6 +791,16 @@ impl TypeDef {
                                 }
                                 FieldMetadata::VariantField { .. } => {
                                     // Skip variant fields - they're not type members
+                                }
+                                FieldMetadata::EnumCase { tag } => {
+                                    self.members.insert(
+                                        label.clone(),
+                                        TypeMember::Variant(EnumVariant {
+                                            tag: *tag,
+                                            name: label.clone(),
+                                            ty: field.ty.clone(),
+                                        }),
+                                    );
                                 }
                             }
                         }

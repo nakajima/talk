@@ -33,6 +33,10 @@ pub struct RowConstraintSolver<'a> {
     type_var_fields: HashMap<TypeVarID, BTreeMap<Label, FieldInfo>>,
     /// Tracks which fields each type variable lacks
     type_var_lacks: HashMap<TypeVarID, LabelSet>,
+    /// Tracks which type variables have exact rows (no additional fields allowed)
+    type_var_exact: HashMap<TypeVarID, bool>,
+    /// All row constraints being processed (for exactness checking)
+    all_constraints: Vec<RowConstraint>,
     /// Generation counter for fresh variables
     #[allow(dead_code)]
     generation: u32,
@@ -44,8 +48,15 @@ impl<'a> RowConstraintSolver<'a> {
             env,
             type_var_fields: HashMap::new(),
             type_var_lacks: HashMap::new(),
+            type_var_exact: HashMap::new(),
+            all_constraints: Vec::new(),
             generation,
         }
+    }
+    
+    /// Set all constraints for exactness checking
+    pub fn set_all_constraints(&mut self, constraints: &[RowConstraint]) {
+        self.all_constraints = constraints.to_vec();
     }
 
     /// Main entry point for solving a row constraint
@@ -54,7 +65,8 @@ impl<'a> RowConstraintSolver<'a> {
         constraint: &RowConstraint,
         type_subs: &mut Substitutions,
     ) -> Result<(), TypeError> {
-        match constraint {
+        tracing::trace!("solve_row_constraint: {:?}", constraint);
+        let result = match constraint {
             RowConstraint::HasField { type_var, label, field_ty, metadata } => {
                 self.add_field_constraint(type_var, label, field_ty, metadata)
             }
@@ -78,7 +90,12 @@ impl<'a> RowConstraintSolver<'a> {
             RowConstraint::RowRestrict { source, labels, result } => {
                 self.solve_row_restrict(source, labels, result)
             }
+        };
+        
+        if let Err(ref e) = result {
+            tracing::trace!("Row constraint error: {:?}", e);
         }
+        result
     }
 
     /// Add a field constraint to a type variable
@@ -89,6 +106,43 @@ impl<'a> RowConstraintSolver<'a> {
         field_ty: &Ty,
         metadata: &crate::row::FieldMetadata,
     ) -> Result<(), TypeError> {
+        tracing::trace!("add_field_constraint: type_var={:?}, label={}, exact={:?}", 
+                       type_var, label, self.type_var_exact.get(type_var));
+        
+        // Check if this type variable has an exact row constraint
+        // First check our local state
+        let mut is_exact = self.type_var_exact.get(type_var).copied().unwrap_or(false);
+        
+        // Also check if there's a HasExactRow constraint in all_constraints
+        if !is_exact {
+            is_exact = self.all_constraints.iter().any(|c| {
+                matches!(c, RowConstraint::HasExactRow { type_var: tv, .. } if tv == type_var)
+            });
+        }
+        
+        if is_exact {
+            // Check if the field already exists or is part of the exact row definition
+            let field_allowed = self.type_var_fields.get(type_var)
+                .map(|fields| fields.contains_key(label))
+                .unwrap_or(false) ||
+                self.all_constraints.iter().any(|c| {
+                    match c {
+                        RowConstraint::HasExactRow { type_var: tv, row } if tv == type_var => {
+                            row.fields.contains_key(label)
+                        }
+                        _ => false,
+                    }
+                });
+                
+            if !field_allowed {
+                tracing::trace!("Rejecting field '{}' due to exact row constraint", label);
+                return Err(TypeError::Unknown(format!(
+                    "Cannot add field '{}' to type with exact row constraint",
+                    label
+                )));
+            }
+        }
+        
         // Check lacks constraints
         if let Some(lacks) = self.type_var_lacks.get(type_var) {
             if lacks.contains(label) {
@@ -148,12 +202,15 @@ impl<'a> RowConstraintSolver<'a> {
         type_var: &TypeVarID,
         row: &RowSpec,
     ) -> Result<(), TypeError> {
+        tracing::trace!("add_exact_row_constraint: type_var={:?}", type_var);
+        
         // First add all the fields
         self.add_row_constraint(type_var, row, None)?;
 
-        // Then mark that no other fields are allowed
-        // This is done by recording the exact field set
-        // TODO: Implement exact row tracking
+        // Mark this type variable as having an exact row
+        self.type_var_exact.insert(type_var.clone(), true);
+        
+        tracing::trace!("Marked {:?} as exact", type_var);
 
         Ok(())
     }
@@ -229,6 +286,10 @@ impl<'a> RowConstraintSolver<'a> {
             self.type_var_lacks.insert(result.clone(), result_lacks);
         }
 
+        // Result of concatenation is NOT exact, even if inputs were exact
+        // (concatenation implies the ability to add more fields)
+        self.type_var_exact.insert(result.clone(), false);
+
         Ok(())
     }
 
@@ -255,6 +316,11 @@ impl<'a> RowConstraintSolver<'a> {
         let mut result_lacks = self.type_var_lacks.get(source).cloned().unwrap_or_default();
         result_lacks.extend(labels.clone());
         self.type_var_lacks.insert(result.clone(), result_lacks);
+
+        // Inherit exactness from source
+        if let Some(&is_exact) = self.type_var_exact.get(source) {
+            self.type_var_exact.insert(result.clone(), is_exact);
+        }
 
         Ok(())
     }

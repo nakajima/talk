@@ -1713,11 +1713,20 @@ impl<'a> TypeChecker<'a> {
         let pattern_ty = self.infer_node(pattern, env, &None)?;
         let mut typed_arms = vec![];
         let mut arm_tys = vec![];
+        let mut patterns = vec![];
 
         for arm in arms {
             let typed = self.infer_node(arm, env, &Some(pattern_ty.ty.clone()))?;
             let ty = typed.ty.clone();
             arm_tys.push(ty);
+            
+            // Extract pattern from the typed arm
+            if let typed_expr::Expr::MatchArm(ref pattern_expr, _) = typed.expr {
+                if let Some(pattern) = self.extract_pattern_from_typed_expr(pattern_expr) {
+                    patterns.push(pattern);
+                }
+            }
+            
             typed_arms.push(typed);
         }
 
@@ -1732,6 +1741,12 @@ impl<'a> TypeChecker<'a> {
                     arm_ty.clone(),
                 ));
             }
+        }
+
+        // Check exhaustiveness
+        use crate::type_checking::exhaustiveness_integration::check_match_exhaustiveness;
+        if let Err(msg) = check_match_exhaustiveness(env, &pattern_ty.ty, &patterns) {
+            return Err(TypeError::Unknown(msg));
         }
 
         Ok(TypedExpr {
@@ -2019,5 +2034,52 @@ impl<'a> TypeChecker<'a> {
         }
 
         None
+    }
+
+    /// Extract a Pattern from a TypedExpr that represents a pattern
+    fn extract_pattern_from_typed_expr(&self, typed_expr: &TypedExpr) -> Option<Pattern> {
+        match &typed_expr.expr {
+            typed_expr::Expr::ParsedPattern(typed_pattern) => {
+                // Convert from typed pattern to parsed pattern
+                self.convert_typed_pattern_to_parsed(typed_pattern)
+            }
+            typed_expr::Expr::PatternVariant(enum_name, variant_name, _) => {
+                // Convert from typed pattern variant to parsed pattern
+                let enum_name = enum_name.as_ref().map(|rn| {
+                    // ResolvedName is a tuple struct (SymbolID, String)
+                    Name::Raw(rn.1.clone())
+                });
+                Some(Pattern::Variant {
+                    enum_name,
+                    variant_name: variant_name.1.clone(),
+                    fields: vec![], // TODO: Handle variant fields
+                })
+            }
+            typed_expr::Expr::LiteralTrue => Some(Pattern::LiteralTrue),
+            typed_expr::Expr::LiteralFalse => Some(Pattern::LiteralFalse),
+            typed_expr::Expr::LiteralInt(n) => Some(Pattern::LiteralInt(n.clone())),
+            typed_expr::Expr::LiteralFloat(f) => Some(Pattern::LiteralFloat(f.clone())),
+            _ => None,
+        }
+    }
+    
+    /// Convert a typed pattern to a parsed pattern
+    fn convert_typed_pattern_to_parsed(&self, typed_pattern: &typed_expr::Pattern) -> Option<Pattern> {
+        match typed_pattern {
+            typed_expr::Pattern::LiteralInt(n) => Some(Pattern::LiteralInt(n.clone())),
+            typed_expr::Pattern::LiteralFloat(f) => Some(Pattern::LiteralFloat(f.clone())),
+            typed_expr::Pattern::LiteralTrue => Some(Pattern::LiteralTrue),
+            typed_expr::Pattern::LiteralFalse => Some(Pattern::LiteralFalse),
+            typed_expr::Pattern::Wildcard => Some(Pattern::Wildcard),
+            typed_expr::Pattern::Bind(name) => Some(Pattern::Bind(Name::Raw(name.1.clone()))),
+            typed_expr::Pattern::Variant { enum_name, variant_name, .. } => {
+                let enum_name = enum_name.as_ref().map(|rn| Name::Raw(rn.1.clone()));
+                Some(Pattern::Variant {
+                    enum_name,
+                    variant_name: variant_name.clone(),
+                    fields: vec![], // TODO: Handle variant fields
+                })
+            }
+        }
     }
 }

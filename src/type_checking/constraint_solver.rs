@@ -87,6 +87,7 @@ impl<'a> ConstraintSolver<'a> {
                                         RowConstraint::HasRow { type_var, .. } |
                                         RowConstraint::HasExactRow { type_var, .. } => type_var == tv,
                                         RowConstraint::RowConcat { result, .. } => result == tv,
+                                        RowConstraint::RowRestrict { result, .. } => result == tv,
                                         _ => false,
                                     }
                                 })
@@ -106,22 +107,41 @@ impl<'a> ConstraintSolver<'a> {
             }
             Constraint::Row { constraint, .. } => {
                 use crate::row::RowConstraint;
-                if let RowConstraint::RowConcat { left, right, .. } = constraint {
-                    // Defer RowConcat if we haven't processed HasField constraints for left/right yet
-                    let has_pending_fields = self.constraints.iter().any(|c| {
-                        matches!(c, Constraint::Row { constraint: rc, .. } if {
-                            match rc {
-                                RowConstraint::HasField { type_var, .. } => 
-                                    type_var == left || type_var == right,
-                                _ => false,
-                            }
-                        })
-                    });
-                    
-                    if has_pending_fields {
-                        tracing::trace!("Deferring RowConcat until HasField constraints are processed");
-                        return true;
+                match constraint {
+                    RowConstraint::RowConcat { left, right, .. } => {
+                        // Defer RowConcat if we haven't processed HasField constraints for left/right yet
+                        let has_pending_fields = self.constraints.iter().any(|c| {
+                            matches!(c, Constraint::Row { constraint: rc, .. } if {
+                                match rc {
+                                    RowConstraint::HasField { type_var, .. } => 
+                                        type_var == left || type_var == right,
+                                    _ => false,
+                                }
+                            })
+                        });
+                        
+                        if has_pending_fields {
+                            tracing::trace!("Deferring RowConcat until HasField constraints are processed");
+                            return true;
+                        }
                     }
+                    RowConstraint::RowRestrict { source, .. } => {
+                        // Defer RowRestrict if we haven't processed HasField constraints for source yet
+                        let has_pending_fields = self.constraints.iter().any(|c| {
+                            matches!(c, Constraint::Row { constraint: rc, .. } if {
+                                match rc {
+                                    RowConstraint::HasField { type_var, .. } => type_var == source,
+                                    _ => false,
+                                }
+                            })
+                        });
+                        
+                        if has_pending_fields {
+                            tracing::trace!("Deferring RowRestrict until HasField constraints are processed");
+                            return true;
+                        }
+                    }
+                    _ => {}
                 }
                 false
             }
@@ -154,9 +174,14 @@ impl<'a> ConstraintSolver<'a> {
                 match self.solve_constraint(&constraint, &mut substitutions) {
                     Ok(_) => (),
                     Err(err) => {
+                        // Row constraint errors should never be deferred - they are immediate failures
+                        let is_row_constraint = matches!(&constraint, Constraint::Row { .. });
+                        
                         // For MemberAccess on TypeVars, keep deferring as long as possible
                         // since the TypeVar might be resolved in a later iteration
-                        let should_defer = if let Constraint::MemberAccess(_, receiver_ty, member_name, _) = &constraint {
+                        let should_defer = if is_row_constraint {
+                            false // Never defer row constraint errors
+                        } else if let Constraint::MemberAccess(_, receiver_ty, member_name, _) = &constraint {
                             let resolved = substitutions.apply(receiver_ty, 0, &mut self.env.context);
                             if matches!(resolved, Ty::TypeVar(_)) && iterations < MAX_ITERATIONS - 1 {
                                 tracing::trace!("Deferring MemberAccess({}) on TypeVar in iteration {}", member_name, iterations);
@@ -168,7 +193,7 @@ impl<'a> ConstraintSolver<'a> {
                             false
                         };
                         
-                        if iterations == 1 || should_defer {
+                        if (iterations == 1 && !is_row_constraint) || should_defer {
                             deferred_constraints.push(constraint.clone());
                         } else {
                             unsolved_constraints.push(constraint.clone());
@@ -340,49 +365,59 @@ impl<'a> ConstraintSolver<'a> {
                 use crate::row::RowConstraint;
                 tracing::trace!("Solving row constraint: {:?}", constraint);
                 
+                // Store the current constraint for member resolution
+                self.row_constraints.push(constraint.clone());
+                
+                // Use the row constraint solver for all row constraints
+                let mut row_solver = RowConstraintSolver::new(self.env, self.generation);
+                
+                // Pass all row constraints to the solver for exactness checking
+                row_solver.set_all_constraints(&self.row_constraints);
+                
+                // First populate the row solver with existing row constraints
+                // This ensures operations like RowConcat and RowRestrict can see necessary fields
+                for existing_constraint in &self.row_constraints[..self.row_constraints.len()-1] {
+                    // Process all constraints to build up the row solver's state
+                    // If any constraint fails, we should propagate the error
+                    row_solver.solve_row_constraint(existing_constraint, substitutions)?;
+                }
+                
+                // Now solve the current constraint
+                row_solver.solve_row_constraint(constraint, substitutions)?;
+                
+                // Update our stored constraints with the result fields
                 match constraint {
-                    RowConstraint::HasField { .. } => {
-                        // Store for member resolution
-                        self.row_constraints.push(constraint.clone());
-                        tracing::trace!("Stored HasField constraint: {:?}", constraint);
-                    }
-                    RowConstraint::RowConcat { left, right, result } => {
-                        tracing::trace!("Processing RowConcat: left={:?}, right={:?}, result={:?}", left, right, result);
-                        
-                        // Find all fields from left and right type variables
-                        let mut result_fields = Vec::new();
-                        
-                        for rc in &self.row_constraints.clone() {
-                            match rc {
-                                RowConstraint::HasField { type_var, label, field_ty, metadata } 
-                                    if type_var == left || type_var == right => {
-                                    tracing::trace!("Found field for concat: {} from {:?}", label, type_var);
-                                    result_fields.push((label.clone(), field_ty.clone(), metadata.clone()));
+                    RowConstraint::RowConcat { result, .. } => {
+                        if let Some(result_fields) = row_solver.get_resolved_fields(result) {
+                            for (label, field_info) in result_fields {
+                                let new_constraint = RowConstraint::HasField {
+                                    type_var: result.clone(),
+                                    label: label.clone(),
+                                    field_ty: field_info.ty.clone(),
+                                    metadata: field_info.metadata.clone(),
+                                };
+                                if !self.row_constraints.contains(&new_constraint) {
+                                    self.row_constraints.push(new_constraint);
                                 }
-                                _ => {}
                             }
                         }
-                        
-                        tracing::trace!("RowConcat found {} fields to propagate", result_fields.len());
-                        
-                        // Add HasField constraints for the result type variable
-                        for (label, field_ty, metadata) in result_fields {
-                            let new_constraint = RowConstraint::HasField {
-                                type_var: result.clone(),
-                                label: label.clone(),
-                                field_ty,
-                                metadata,
-                            };
-                            tracing::trace!("Adding HasField to result: {:?}", new_constraint);
-                            self.row_constraints.push(new_constraint);
+                    }
+                    RowConstraint::RowRestrict { result, .. } => {
+                        if let Some(result_fields) = row_solver.get_resolved_fields(result) {
+                            for (label, field_info) in result_fields {
+                                let new_constraint = RowConstraint::HasField {
+                                    type_var: result.clone(),
+                                    label: label.clone(),
+                                    field_ty: field_info.ty.clone(),
+                                    metadata: field_info.metadata.clone(),
+                                };
+                                if !self.row_constraints.contains(&new_constraint) {
+                                    self.row_constraints.push(new_constraint);
+                                }
+                            }
                         }
                     }
-                    _ => {
-                        // Store and process with row solver
-                        self.row_constraints.push(constraint.clone());
-                        let mut row_solver = RowConstraintSolver::new(self.env, self.generation);
-                        row_solver.solve_row_constraint(constraint, substitutions)?;
-                    }
+                    _ => {}
                 }
                 
                 tracing::trace!("Row constraint handled");
