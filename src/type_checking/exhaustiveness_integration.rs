@@ -28,15 +28,12 @@ pub struct RowEnumInfo {
 /// Helper to extract enum information from row constraints
 pub struct RowEnumAnalyzer<'a> {
     env: &'a Environment,
-    /// Cached row constraints from the environment
-    row_constraints: Vec<RowConstraint>,
 }
 
 impl<'a> RowEnumAnalyzer<'a> {
     pub fn new(env: &'a Environment) -> Self {
         Self {
             env,
-            row_constraints: Vec::new(),
         }
     }
     
@@ -54,12 +51,8 @@ impl<'a> RowEnumAnalyzer<'a> {
         let mut variants = HashMap::new();
         let mut is_exact = false;
         
-        // In a real implementation, we'd need to access the constraint solver's
-        // stored row constraints. For now, we'll simulate this.
-        
-        
-        // Look for HasField constraints with EnumCase metadata
-        for constraint in &self.row_constraints {
+        // Look for HasField constraints with EnumCase metadata in the environment
+        for constraint in &self.env.row_constraints {
             match constraint {
                 RowConstraint::HasField { type_var: tv, label, metadata: FieldMetadata::EnumCase { tag }, .. } 
                     if tv == type_var => {

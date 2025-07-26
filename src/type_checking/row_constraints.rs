@@ -40,6 +40,8 @@ pub struct RowConstraintSolver<'a> {
     /// Generation counter for fresh variables
     #[allow(dead_code)]
     generation: u32,
+    /// Tracks which type variables extend other type variables
+    type_var_extensions: HashMap<TypeVarID, Vec<TypeVarID>>,
 }
 
 impl<'a> RowConstraintSolver<'a> {
@@ -51,6 +53,7 @@ impl<'a> RowConstraintSolver<'a> {
             type_var_exact: HashMap::new(),
             all_constraints: Vec::new(),
             generation,
+            type_var_extensions: HashMap::new(),
         }
     }
     
@@ -118,6 +121,11 @@ impl<'a> RowConstraintSolver<'a> {
             is_exact = self.all_constraints.iter().any(|c| {
                 matches!(c, RowConstraint::HasExactRow { type_var: tv, .. } if tv == type_var)
             });
+        }
+        
+        // Types with extensions cannot be exact
+        if is_exact && self.type_var_extensions.contains_key(type_var) {
+            is_exact = false;
         }
         
         if is_exact {
@@ -189,8 +197,12 @@ impl<'a> RowConstraintSolver<'a> {
         }
 
         // If there's an extension, record that relationship
-        if let Some(_ext) = extension {
-            // TODO: Track that type_var can have additional fields from ext
+        if let Some(ext) = extension {
+            // Track that type_var is extended by ext
+            self.type_var_extensions
+                .entry(type_var.clone())
+                .or_default()
+                .push(ext.clone());
         }
 
         Ok(())
@@ -325,16 +337,50 @@ impl<'a> RowConstraintSolver<'a> {
         Ok(())
     }
 
-    /// Get the resolved fields for a type variable
+    /// Get the resolved fields for a type variable (without extensions)
     pub fn get_resolved_fields(&self, type_var: &TypeVarID) -> Option<&BTreeMap<Label, FieldInfo>> {
         self.type_var_fields.get(type_var)
+    }
+    
+    /// Get all fields for a type variable including extensions
+    pub fn get_all_fields(&self, type_var: &TypeVarID) -> BTreeMap<Label, FieldInfo> {
+        let mut all_fields = BTreeMap::new();
+        
+        // Collect fields from extensions first (so direct fields can override)
+        if let Some(extensions) = self.type_var_extensions.get(type_var) {
+            for ext in extensions {
+                let ext_fields = self.get_all_fields(ext);
+                all_fields.extend(ext_fields);
+            }
+        }
+        
+        // Then add direct fields (these take precedence)
+        if let Some(fields) = self.type_var_fields.get(type_var) {
+            all_fields.extend(fields.clone());
+        }
+        
+        all_fields
     }
 
     /// Check if a type variable has a specific field
     pub fn has_field(&self, type_var: &TypeVarID, label: &Label) -> Option<&FieldInfo> {
-        self.type_var_fields
-            .get(type_var)
-            .and_then(|fields| fields.get(label))
+        // First check direct fields
+        if let Some(fields) = self.type_var_fields.get(type_var) {
+            if let Some(field) = fields.get(label) {
+                return Some(field);
+            }
+        }
+        
+        // Then check extensions
+        if let Some(extensions) = self.type_var_extensions.get(type_var) {
+            for ext in extensions {
+                if let Some(field) = self.has_field(ext, label) {
+                    return Some(field);
+                }
+            }
+        }
+        
+        None
     }
 }
 

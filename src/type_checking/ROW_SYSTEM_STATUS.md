@@ -93,6 +93,33 @@ We've successfully enhanced the row-based type system to support type compositio
 - Created `pattern_exhaustiveness` and `exhaustiveness_integration` modules
 - Exhaustiveness errors include helpful messages listing missing patterns
 
+### 13. Row Extension Mechanism ✓
+- Implemented row extensions that allow types to inherit fields from other row variables
+- Extensions enable true row polymorphism and flexible type composition
+- Key features:
+  - Types can extend other types through the `extension` field in `HasRow` constraints
+  - Extended types automatically inherit all fields from their extensions
+  - Extensions are recursive - types can extend types that extend other types
+  - Types with extensions cannot be exact (closed) - they remain open to additional fields
+- The `has_field` method checks both direct fields and fields from extensions
+- The `get_all_fields` method collects fields from the entire extension chain
+- Tests demonstrate:
+  - Basic row extension with field inheritance
+  - Extended types are not exact even if base type tries to be
+  - Row polymorphism with extensions for generic functions
+  - Chained extensions (A extends B extends C)
+
+### 14. Row Constraint Persistence ✓
+- Added `row_constraints` field to the Environment to persist row constraints
+- The constraint solver now stores all row constraints in both its local cache and the environment
+- This allows later stages (like exhaustiveness checking) to access row constraint information
+- Key changes:
+  - Environment now has a `row_constraints: Vec<RowConstraint>` field
+  - Constraint solver populates this field as it processes row constraints
+  - Exhaustiveness checker can now access row constraints from the environment
+- Infrastructure is ready for when enum definitions fully migrate to row-based representation
+- Tests verify that the persistence mechanism is working correctly
+
 ## Current Architecture
 
 1. **Dual Storage**: Types maintain both HashMap members and row constraints
@@ -123,10 +150,9 @@ All row-related tests are passing, including exhaustiveness checking:
 ## Next Steps
 
 1. **Parser Support**: Add syntax for record types and row variables in type positions
-2. **Row Extension**: Implement row extension mechanism for open types
-3. **Row Constraint Persistence**: Improve access to row constraints from exhaustiveness checker
-4. **Performance Optimization**: Profile and optimize row constraint solving
-5. **Documentation**: Create user-facing documentation for the row system
+2. **Row Constraint Persistence**: Improve access to row constraints from exhaustiveness checker
+3. **Performance Optimization**: Profile and optimize row constraint solving
+4. **Documentation**: Create user-facing documentation for the row system
 
 ## Migration Strategy
 

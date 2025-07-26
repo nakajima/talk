@@ -44,6 +44,8 @@ pub struct Environment {
     pub context: TypeVarContext,
     next_id: i32,
     generation: u32,
+    /// Row constraints collected during type checking
+    pub row_constraints: Vec<crate::row::RowConstraint>,
 }
 
 impl Default for Environment {
@@ -60,6 +62,7 @@ impl Default for Environment {
             selfs: vec![],
             context,
             generation: 0,
+            row_constraints: vec![],
         }
     }
 }

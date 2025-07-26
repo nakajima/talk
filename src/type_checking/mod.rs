@@ -75,6 +75,10 @@ pub mod test_row_pattern_matching;
 #[cfg(test)]
 pub mod test_row_pattern_matching_integration;
 #[cfg(test)]
+pub mod test_row_extensions;
+#[cfg(test)]
+pub mod test_row_constraint_persistence;
+#[cfg(test)]
 pub mod example_row_usage;
 #[cfg(test)]
 pub mod type_checker_tests;

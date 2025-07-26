@@ -367,6 +367,8 @@ impl<'a> ConstraintSolver<'a> {
                 
                 // Store the current constraint for member resolution
                 self.row_constraints.push(constraint.clone());
+                // Also store in the environment for later access
+                self.env.row_constraints.push(constraint.clone());
                 
                 // Use the row constraint solver for all row constraints
                 let mut row_solver = RowConstraintSolver::new(self.env, self.generation);
@@ -385,6 +387,9 @@ impl<'a> ConstraintSolver<'a> {
                 // Now solve the current constraint
                 row_solver.solve_row_constraint(constraint, substitutions)?;
                 
+                // Collect new constraints to add after row solver is done
+                let mut new_constraints = Vec::new();
+                
                 // Update our stored constraints with the result fields
                 match constraint {
                     RowConstraint::RowConcat { result, .. } => {
@@ -397,7 +402,8 @@ impl<'a> ConstraintSolver<'a> {
                                     metadata: field_info.metadata.clone(),
                                 };
                                 if !self.row_constraints.contains(&new_constraint) {
-                                    self.row_constraints.push(new_constraint);
+                                    self.row_constraints.push(new_constraint.clone());
+                                    new_constraints.push(new_constraint);
                                 }
                             }
                         }
@@ -412,12 +418,18 @@ impl<'a> ConstraintSolver<'a> {
                                     metadata: field_info.metadata.clone(),
                                 };
                                 if !self.row_constraints.contains(&new_constraint) {
-                                    self.row_constraints.push(new_constraint);
+                                    self.row_constraints.push(new_constraint.clone());
+                                    new_constraints.push(new_constraint);
                                 }
                             }
                         }
                     }
                     _ => {}
+                }
+                
+                // Now add the new constraints to the environment
+                for new_constraint in new_constraints {
+                    self.env.row_constraints.push(new_constraint);
                 }
                 
                 tracing::trace!("Row constraint handled");
