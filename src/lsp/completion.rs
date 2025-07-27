@@ -54,9 +54,9 @@ impl<'a> CompletionContext<'a> {
 
         let type_sym = self
             .driver
-            .symbol_from_position(position_before_dot.into(), &self.source_file.path)
+            .symbol_at_position(position_before_dot.into(), &self.source_file.path)
             .and_then(|sym| {
-                let info = self.driver.symbol_table.get(sym)?;
+                let info = self.driver.symbol_table.get(&sym)?;
 
                 // Attempt to find type symbol in order of precedence:
                 // 1. From the symbol's definition (e.g., a variable's type).
@@ -64,7 +64,7 @@ impl<'a> CompletionContext<'a> {
                     .as_ref()
                     .and_then(|def| def.sym)
                     // 2. If the symbol itself is a type.
-                    .or_else(|| self.env.lookup_type(sym).map(|_| *sym))
+                    .or_else(|| self.env.lookup_type(&sym).map(|_| sym))
                     // 3. From the type of the expression the symbol is part of.
                     .or_else(|| {
                         self.source_file.typed_expr(info.expr_id).and_then(|typed| {

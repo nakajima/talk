@@ -175,7 +175,7 @@ impl LanguageServer for ServerState {
         let position = params.text_document_position_params.position;
 
         // Find the symbol at the current position
-        let Some(symbol_id) = self.driver.symbol_from_position(
+        let Some(symbol_id) = self.driver.symbol_at_position(
             crate::diagnostic::Position {
                 line: position.line,
                 col: position.character,
@@ -188,7 +188,7 @@ impl LanguageServer for ServerState {
         // Find all occurrences of this symbol in the current file
         let mut highlights = Vec::new();
         for (span, sym_id) in &self.driver.symbol_table.symbol_map {
-            if sym_id == symbol_id && span.path == path {
+            if *sym_id == symbol_id && span.path == path {
                 highlights.push(DocumentHighlight {
                     range: Range::new(
                         Position::new(span.start_line, span.start_col),
