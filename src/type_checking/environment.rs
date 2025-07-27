@@ -151,7 +151,7 @@ impl Environment {
         for constraint in &solution.unsolved_constraints {
             self.constrain(constraint.clone());
         }
-        
+
         // Populate TypeDef members from row constraints after solving
         let type_ids: Vec<SymbolID> = self.types.keys().cloned().collect();
         for type_id in type_ids {
@@ -318,10 +318,14 @@ impl Environment {
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
         self.register_with_mode(def, false)
     }
-    
+
     /// Register a type definition with explicit mode
     /// If `is_extension` is true, only new members are added to existing types
-    pub fn register_with_mode(&mut self, def: &TypeDef, is_extension: bool) -> Result<(), TypeError> {
+    pub fn register_with_mode(
+        &mut self,
+        def: &TypeDef,
+        is_extension: bool,
+    ) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
             Scheme::new(def.ty(), def.canonical_type_variables(), vec![]),
@@ -330,30 +334,42 @@ impl Environment {
         // If the type already exists (e.g., from a struct definition being extended),
         // merge the new members instead of replacing the entire definition
         if let Some(existing_def) = self.types.get_mut(&def.symbol_id()) {
-            tracing::debug!("Merging type {} - existing has {} members, new has {} members, is_extension: {}", 
-                existing_def.name_str, existing_def.members.len(), def.members.len(), is_extension);
-            
+            tracing::debug!(
+                "Merging type {} - existing has {} members, new has {} members, is_extension: {}",
+                existing_def.name_str,
+                existing_def.members.len(),
+                def.members.len(),
+                is_extension
+            );
+
             // Always merge new members into existing
             for (name, member) in &def.members {
                 tracing::trace!("  Adding member: {}", name);
                 existing_def.members.insert(name.clone(), member.clone());
             }
-            
+
             // Merge conformances
             existing_def.conformances.extend(def.conformances.clone());
-            
+
             // Update row_var if the new definition has one but existing doesn't
             if existing_def.row_var.is_none() && def.row_var.is_some() {
                 existing_def.row_var = def.row_var.clone();
             }
-            
+
             // Merge row_managed_members set
             existing_def.merge_row_managed_members(def);
-            
-            tracing::debug!("After merge, {} has {} members", 
-                existing_def.name_str, existing_def.members.len());
+
+            tracing::debug!(
+                "After merge, {} has {} members",
+                existing_def.name_str,
+                existing_def.members.len()
+            );
         } else {
-            tracing::trace!("Inserting new type {} with {} members", def.name_str, def.members.len());
+            tracing::trace!(
+                "Inserting new type {} with {} members",
+                def.name_str,
+                def.members.len()
+            );
             // Type doesn't exist yet, insert the whole definition
             self.types.insert(def.symbol_id(), def.clone());
         }
