@@ -7,6 +7,7 @@ use crate::{
     constraint::Constraint,
     constraint_solver::{ConstraintSolver, ConstraintSolverSolution},
     parsing::expr_id::ExprID,
+    semantic_index::SemanticIndex,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::TypeError,
@@ -48,6 +49,8 @@ pub struct Environment {
     pub row_constraints: Vec<crate::row::RowConstraint>,
     /// Deferred exhaustiveness checks (match_id, scrutinee_type, patterns)
     pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty, Vec<crate::parsed_expr::Pattern>)>,
+    /// Semantic index for query-based lookups
+    pub semantic_index: SemanticIndex,
 }
 
 impl Default for Environment {
@@ -66,6 +69,7 @@ impl Default for Environment {
             generation: 0,
             row_constraints: vec![],
             deferred_exhaustiveness_checks: vec![],
+            semantic_index: SemanticIndex::new(),
         }
     }
 }
@@ -140,9 +144,15 @@ impl Environment {
     pub fn clear_constraints(&mut self) {
         self.constraints.clear()
     }
-    
-    pub fn defer_exhaustiveness_check(&mut self, match_id: ExprID, scrutinee_ty: Ty, patterns: Vec<crate::parsed_expr::Pattern>) {
-        self.deferred_exhaustiveness_checks.push((match_id, scrutinee_ty, patterns));
+
+    pub fn defer_exhaustiveness_check(
+        &mut self,
+        match_id: ExprID,
+        scrutinee_ty: Ty,
+        patterns: Vec<crate::parsed_expr::Pattern>,
+    ) {
+        self.deferred_exhaustiveness_checks
+            .push((match_id, scrutinee_ty, patterns));
     }
 
     #[tracing::instrument(skip(self, meta))]

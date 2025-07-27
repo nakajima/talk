@@ -14,6 +14,7 @@ use crate::{
     environment::Environment,
     lowering::ir_module::IRModule,
     name::ResolvedName,
+    semantic_index::QueryDatabase,
     source_file,
     ty::Ty,
     typed_expr::TypedExpr,
@@ -158,21 +159,60 @@ impl Driver {
 
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
+        let mut new_units = vec![];
 
-        for unit in self.units.clone() {
-            let parsed = unit.parse(self.config.include_comments);
+        // for unit in self.units.clone() {
+        //     let parsed = unit.clone().parse(self.config.include_comments);
+        //     let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
+        //     let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
+
+        //     // Update the unit's environment with the typed environment to preserve semantic index
+        //     let mut updated_unit = unit;
+        //     updated_unit.env = typed.env.clone();
+        //     new_units.push(updated_unit);
+
+        //     result.push(typed);
+        // }
+        for unit in std::mem::take(&mut self.units) {
+            let parsed = unit.clone().parse(self.config.include_comments);
             let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
             let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
+
+            // Update the unit's environment with the typed environment to preserve semantic index
+            let mut updated_unit = unit;
+            updated_unit.env = typed.env.clone();
+            new_units.push(updated_unit);
+
             result.push(typed);
         }
+
+        // Update the driver's units with the new environments
+        self.units = new_units;
 
         result
     }
 
-    pub fn symbol_from_position(&self, position: Position, path: &PathBuf) -> Option<&SymbolID> {
-        let mut result = None;
+    /// Find symbol at position using the semantic index and symbol table (immutable version)
+    pub fn symbol_at_position(&self, position: Position, path: &PathBuf) -> Option<SymbolID> {
+        // First try the semantic index for member accesses and other expressions
+        for unit in &self.units {
+            if !unit.has_file(path) {
+                continue;
+            }
 
-        // We want to find the smallest possible span
+            // Look for an expression at this position
+            if let Some(expr_id) = unit
+                .env
+                .semantic_index
+                .find_expr_at_position(&position, path)
+                && let Some(symbol) = unit.env.semantic_index.expr_symbol(expr_id)
+            {
+                return Some(symbol);
+            }
+        }
+
+        // Fall back to symbol table lookup
+        let mut result = None;
         let mut min = u32::MAX;
 
         for (span, sym) in &self.symbol_table.symbol_map {
@@ -187,7 +227,7 @@ impl Driver {
             }
         }
 
-        result
+        result.copied()
     }
 
     pub fn refresh_diagnostics_for(

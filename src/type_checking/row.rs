@@ -1,5 +1,5 @@
 //! Qualified row types for extensible data types.
-//! 
+//!
 //! This module implements row types using qualified types (constraints on type variables)
 //! based on the papers by J. Garrett Morris et al. Row structure is expressed as
 //! constraints rather than being embedded directly in types.
@@ -7,12 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::{
-    expr_id::ExprID,
-    substitutions::Substitutions,
-    ty::Ty,
-    type_var_id::TypeVarID,
-};
+use crate::{expr_id::ExprID, substitutions::Substitutions, ty::Ty, type_var_id::TypeVarID};
 
 /// A label for a field/variant in a row
 pub type Label = String;
@@ -31,7 +26,7 @@ pub enum RowConstraint {
         field_ty: Ty,
         metadata: FieldMetadata,
     },
-    
+
     /// Type variable has at least these fields (open row)
     HasRow {
         type_var: TypeVarID,
@@ -39,26 +34,23 @@ pub enum RowConstraint {
         /// If Some, the type may have additional unknown fields
         extension: Option<TypeVarID>,
     },
-    
+
     /// Type variable has exactly these fields (closed row)
-    HasExactRow {
-        type_var: TypeVarID,
-        row: RowSpec,
-    },
-    
+    HasExactRow { type_var: TypeVarID, row: RowSpec },
+
     /// Type variable lacks certain fields
     Lacks {
         type_var: TypeVarID,
         labels: LabelSet,
     },
-    
+
     /// Row concatenation: T1 ⊕ T2 = T3
     RowConcat {
         left: TypeVarID,
         right: TypeVarID,
         result: TypeVarID,
     },
-    
+
     /// Row restriction: T1 \ labels = T2  
     RowRestrict {
         source: TypeVarID,
@@ -154,7 +146,9 @@ impl RowSpec {
         let mut new_fields = BTreeMap::new();
         for (label, field) in &self.fields {
             let new_field = FieldInfo {
-                ty: crate::constraint_solver::ConstraintSolver::substitute_ty_with_map(&field.ty, subs),
+                ty: crate::constraint_solver::ConstraintSolver::substitute_ty_with_map(
+                    &field.ty, subs,
+                ),
                 expr_id: field.expr_id,
                 metadata: field.metadata.clone(),
             };
@@ -166,7 +160,7 @@ impl RowSpec {
     /// Concatenate two row specs
     pub fn concat(&self, other: &RowSpec) -> Result<RowSpec, RowError> {
         let mut fields = self.fields.clone();
-        
+
         for (label, field) in &other.fields {
             if let Some(existing) = self.fields.get(label) {
                 // Check compatibility
@@ -176,18 +170,19 @@ impl RowSpec {
             }
             fields.insert(label.clone(), field.clone());
         }
-        
+
         Ok(RowSpec { fields })
     }
 
     /// Restrict (remove) fields from the row
     pub fn restrict(&self, labels: &LabelSet) -> RowSpec {
-        let fields = self.fields
+        let fields = self
+            .fields
             .iter()
             .filter(|(label, _)| !labels.contains(*label))
             .map(|(l, f)| (l.clone(), f.clone()))
             .collect();
-        
+
         RowSpec { fields }
     }
 }
@@ -257,9 +252,12 @@ pub fn has_field_constraint<'a>(
             } if tv == type_var && l == label => {
                 return Some(field_ty);
             }
-            RowConstraint::HasRow { type_var: tv, row, .. }
+            RowConstraint::HasRow {
+                type_var: tv, row, ..
+            }
             | RowConstraint::HasExactRow { type_var: tv, row }
-                if tv == type_var => {
+                if tv == type_var =>
+            {
                 if let Some(field) = row.get_field(label) {
                     return Some(&field.ty);
                 }
@@ -319,12 +317,14 @@ impl RowConstraintBuilder {
     }
 
     pub fn has_exact_row(mut self, type_var: TypeVarID, row: RowSpec) -> Self {
-        self.constraints.push(RowConstraint::HasExactRow { type_var, row });
+        self.constraints
+            .push(RowConstraint::HasExactRow { type_var, row });
         self
     }
 
     pub fn lacks(mut self, type_var: TypeVarID, labels: LabelSet) -> Self {
-        self.constraints.push(RowConstraint::Lacks { type_var, labels });
+        self.constraints
+            .push(RowConstraint::Lacks { type_var, labels });
         self
     }
 
@@ -339,33 +339,31 @@ mod tests {
 
     #[test]
     fn test_row_spec_operations() {
-        let row1 = RowSpec::empty()
-            .with_field(
-                "x".to_string(),
-                FieldInfo {
-                    ty: Ty::Int,
-                    expr_id: ExprID(0),
-                    metadata: FieldMetadata::RecordField {
-                        index: 0,
-                        has_default: false,
-                        is_mutable: false,
-                    },
+        let row1 = RowSpec::empty().with_field(
+            "x".to_string(),
+            FieldInfo {
+                ty: Ty::Int,
+                expr_id: ExprID(0),
+                metadata: FieldMetadata::RecordField {
+                    index: 0,
+                    has_default: false,
+                    is_mutable: false,
                 },
-            );
+            },
+        );
 
-        let row2 = RowSpec::empty()
-            .with_field(
-                "y".to_string(),
-                FieldInfo {
-                    ty: Ty::Float,
-                    expr_id: ExprID(1),
-                    metadata: FieldMetadata::RecordField {
-                        index: 1,
-                        has_default: false,
-                        is_mutable: false,
-                    },
+        let row2 = RowSpec::empty().with_field(
+            "y".to_string(),
+            FieldInfo {
+                ty: Ty::Float,
+                expr_id: ExprID(1),
+                metadata: FieldMetadata::RecordField {
+                    index: 1,
+                    has_default: false,
+                    is_mutable: false,
                 },
-            );
+            },
+        );
 
         // Test concatenation
         let combined = row1.concat(&row2).unwrap();
@@ -386,7 +384,7 @@ mod tests {
     fn test_row_constraints() {
         use crate::type_var_id::TypeVarKind;
         let tv = TypeVarID::new(0, TypeVarKind::Blank, ExprID(0));
-        
+
         let constraints = RowConstraintBuilder::new()
             .has_field(
                 tv.clone(),

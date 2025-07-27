@@ -18,6 +18,7 @@ use crate::{
     name::{Name, ResolvedName},
     name_resolver::NameResolverError,
     parsed_expr::{self, IncompleteExpr, ParsedExpr, Pattern},
+    semantic_index::ResolvedExpr,
     source_file::SourceFile,
     substitutions::Substitutions,
     synthesis::synthesize_inits,
@@ -1872,6 +1873,32 @@ impl<'a> TypeChecker<'a> {
                     member_name.to_string(),
                     member_var.clone(),
                 ));
+
+                // Record the member access in the semantic index
+                // Note: resolved_symbol will be None for now, will be filled in during constraint solving
+                env.semantic_index.record_expression(
+                    id,
+                    ResolvedExpr::MemberAccess {
+                        receiver: typed_receiver.id,
+                        member_name: member_name.to_string(),
+                        resolved_symbol: None,
+                        ty: member_var.clone(),
+                    },
+                );
+
+                // Record the span if available
+                if let Some(meta) = self.meta.get(&id) {
+                    let span = crate::lexing::span::Span {
+                        start: meta.start.start,
+                        end: meta.end.end,
+                        start_line: meta.start.line,
+                        start_col: meta.start.col,
+                        end_line: meta.end.line,
+                        end_col: meta.end.col,
+                        path: self.path.clone(),
+                    };
+                    env.semantic_index.record_expr_span(id, span);
+                }
 
                 (Some(Box::new(typed_receiver)), member_var.clone())
             }
