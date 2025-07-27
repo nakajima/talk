@@ -134,13 +134,13 @@ The implementation maintains both the HashMap and row constraints for the follow
 
 ## Implementation Status
 
-- ✅ Row type definitions and constraints
-- ✅ Integration with constraint solver
-- ✅ Row operations (concatenation, restriction)
-- ✅ TypeDef integration with backwards compatibility
-- ✅ Row-aware member addition methods
-- ✅ Comprehensive test suite
-- ⚠️ Automatic migration disabled to avoid breaking tests
+- [x] Row type definitions and constraints
+- [x] Integration with constraint solver
+- [x] Row operations (concatenation, restriction)
+- [x] TypeDef integration with backwards compatibility
+- [x] Row-aware member addition methods
+- [x] Comprehensive test suite
+- [ ] Automatic migration disabled to avoid breaking tests
 
 ## Future Work
 

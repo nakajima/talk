@@ -13,14 +13,15 @@ use crate::{
 
 pub mod row;
 pub mod row_constraints;
-pub mod row_migration_utils;
 
 pub mod conformance;
 pub mod conformance_checker;
 pub mod constraint;
 pub mod constraint_solver;
 pub mod environment;
+pub mod exhaustiveness_integration;
 pub mod name_resolver;
+pub mod pattern_exhaustiveness;
 pub mod scope_tree;
 pub mod substitutions;
 pub mod synthesis;
@@ -33,57 +34,10 @@ pub mod type_def_rows;
 pub mod type_var_context;
 pub mod type_var_id;
 pub mod typed_expr;
-pub mod pattern_exhaustiveness;
-pub mod exhaustiveness_integration;
 
 #[cfg(test)]
 pub mod dumb_dot;
-#[cfg(test)]
-pub mod test_qualified_rows;
-#[cfg(test)]
-pub mod test_type_def_rows;
-#[cfg(test)]
-pub mod test_integration_rows;
-#[cfg(test)]
-pub mod test_row_typedef_integration;
-#[cfg(test)]
-pub mod test_hoisting_rows;
-#[cfg(test)]
-pub mod test_row_system_integration;
-#[cfg(test)]
-pub mod test_single_source_rows;
-#[cfg(test)]
-pub mod test_row_composition;
-#[cfg(test)]
-pub mod test_row_protocol_conformance;
-#[cfg(test)]
-pub mod test_row_member_resolution;
-#[cfg(test)]
-pub mod test_row_enum_variants;
-#[cfg(test)]
-pub mod test_exact_row_semantics;
-#[cfg(test)]
-pub mod test_row_associated_types;
-#[cfg(test)]
-pub mod test_row_associated_types_integration;
-#[cfg(test)]
-pub mod test_row_polymorphism;
-#[cfg(test)]
-pub mod test_row_polymorphism_integration;
-#[cfg(test)]
-pub mod test_row_pattern_matching;
-#[cfg(test)]
-pub mod test_row_pattern_matching_integration;
-#[cfg(test)]
-pub mod test_row_extensions;
-#[cfg(test)]
-pub mod test_row_constraint_persistence;
-#[cfg(test)]
-pub mod test_row_populate_robust;
-#[cfg(test)]
-pub mod test_row_populate_edge_case;
-#[cfg(test)]
-pub mod test_row_populate_real_world;
+
 #[cfg(test)]
 pub mod example_row_usage;
 #[cfg(test)]
