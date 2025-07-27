@@ -140,8 +140,7 @@ impl<'a> RowConstraintSolver<'a> {
         // Types with extensions cannot be exact
         if is_exact && self.type_var_extensions.contains_key(type_var) {
             return Err(TypeError::Unknown(format!(
-                "Type variable {:?} has exact row constraint but also has extensions, which is not allowed",
-                type_var
+                "Type variable {type_var:?} has exact row constraint but also has extensions, which is not allowed"
             )));
         }
 
@@ -197,7 +196,7 @@ impl<'a> RowConstraintSolver<'a> {
                     metadata: metadata.clone(),
                 },
             );
-            
+
             // Invalidate cache since we added a new field
             self.invalidate_cache(type_var);
         }
@@ -223,49 +222,52 @@ impl<'a> RowConstraintSolver<'a> {
             // Check if this type variable has an exact row constraint
             if self.type_var_exact.get(type_var).copied().unwrap_or(false) {
                 return Err(TypeError::Unknown(format!(
-                    "Cannot add extension to type variable {:?} which has exact row constraint",
-                    type_var
+                    "Cannot add extension to type variable {type_var:?} which has exact row constraint",
                 )));
             }
-            
+
             // Check for cycles before adding extension
             if self.would_create_cycle(type_var, ext) {
                 return Err(TypeError::Unknown(format!(
-                    "Adding extension from {:?} to {:?} would create a cycle",
-                    type_var, ext
+                    "Adding extension from {type_var:?} to {ext:?} would create a cycle",
                 )));
             }
-            
+
             // Track that type_var is extended by ext
             self.type_var_extensions
                 .entry(type_var.clone())
                 .or_default()
                 .push(ext.clone());
-                
+
             // Invalidate cache for affected type vars
             self.invalidate_cache(type_var);
         }
 
         Ok(())
     }
-    
+
     /// Check if adding an extension would create a cycle
     fn would_create_cycle(&self, from: &TypeVarID, to: &TypeVarID) -> bool {
         // Check if 'to' can reach 'from' through existing extensions
         let mut visited = HashSet::new();
         self.can_reach(to, from, &mut visited)
     }
-    
+
     /// Check if 'from' can reach 'target' through extensions
-    fn can_reach(&self, from: &TypeVarID, target: &TypeVarID, visited: &mut HashSet<TypeVarID>) -> bool {
+    fn can_reach(
+        &self,
+        from: &TypeVarID,
+        target: &TypeVarID,
+        visited: &mut HashSet<TypeVarID>,
+    ) -> bool {
         if from == target {
             return true;
         }
-        
+
         if !visited.insert(from.clone()) {
             return false; // Already visited, avoid infinite loop
         }
-        
+
         if let Some(extensions) = self.type_var_extensions.get(from) {
             for ext in extensions {
                 if self.can_reach(ext, target, visited) {
@@ -273,17 +275,18 @@ impl<'a> RowConstraintSolver<'a> {
                 }
             }
         }
-        
+
         false
     }
-    
+
     /// Invalidate cache for a type variable and all that depend on it
     fn invalidate_cache(&mut self, type_var: &TypeVarID) {
         // Remove from cache
         self.all_fields_cache.remove(type_var);
-        
+
         // Invalidate any type vars that extend this one
-        let dependents: Vec<TypeVarID> = self.type_var_extensions
+        let dependents: Vec<TypeVarID> = self
+            .type_var_extensions
             .iter()
             .filter_map(|(tv, exts)| {
                 if exts.contains(type_var) {
@@ -293,7 +296,7 @@ impl<'a> RowConstraintSolver<'a> {
                 }
             })
             .collect();
-            
+
         for dep in dependents {
             self.invalidate_cache(&dep);
         }
@@ -307,12 +310,11 @@ impl<'a> RowConstraintSolver<'a> {
         expr_id: ExprID,
     ) -> Result<(), TypeError> {
         tracing::trace!("add_exact_row_constraint: type_var={:?}", type_var);
-        
+
         // Check if this type variable already has extensions
         if self.type_var_extensions.contains_key(type_var) {
             return Err(TypeError::Unknown(format!(
-                "Cannot add exact row constraint to type variable {:?} which already has extensions",
-                type_var
+                "Cannot add exact row constraint to type variable {type_var:?} which already has extensions",
             )));
         }
 
@@ -363,12 +365,12 @@ impl<'a> RowConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         // Build result fields without unnecessary cloning
         let mut result_fields = BTreeMap::new();
-        
+
         // Add fields from left
         if let Some(left_fields) = self.type_var_fields.get(left) {
             result_fields.extend(left_fields.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
-        
+
         // Add fields from right (right-biased for conflicts)
         if let Some(right_fields) = self.type_var_fields.get(right) {
             for (label, field) in right_fields {
@@ -385,18 +387,18 @@ impl<'a> RowConstraintSolver<'a> {
 
         // Set result fields
         self.type_var_fields.insert(result.clone(), result_fields);
-        
+
         // Invalidate cache for result
         self.invalidate_cache(result);
 
         // Concatenate lacks constraints
         let mut result_lacks = LabelSet::new();
-        
+
         // Add lacks from left
         if let Some(left_lacks) = self.type_var_lacks.get(left) {
             result_lacks.extend(left_lacks.iter().cloned());
         }
-        
+
         // Add lacks from right
         if let Some(right_lacks) = self.type_var_lacks.get(right) {
             result_lacks.extend(right_lacks.iter().cloned());
@@ -429,7 +431,7 @@ impl<'a> RowConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         // Build result fields without cloning the entire source map
         let mut result_fields = BTreeMap::new();
-        
+
         if let Some(source_fields) = self.type_var_fields.get(source) {
             for (label, field) in source_fields {
                 if !labels.contains(label) {
@@ -440,18 +442,18 @@ impl<'a> RowConstraintSolver<'a> {
 
         // Set result fields
         self.type_var_fields.insert(result.clone(), result_fields);
-        
+
         // Invalidate cache for result
         self.invalidate_cache(result);
 
         // Update lacks - result lacks everything source lacks plus the restricted labels
         let mut result_lacks = LabelSet::new();
-        
+
         if let Some(source_lacks) = self.type_var_lacks.get(source) {
             result_lacks.extend(source_lacks.iter().cloned());
         }
         result_lacks.extend(labels.iter().cloned());
-        
+
         self.type_var_lacks.insert(result.clone(), result_lacks);
 
         // Inherit exactness from source
@@ -468,30 +470,37 @@ impl<'a> RowConstraintSolver<'a> {
     }
 
     /// Get all fields for a type variable including extensions
-    pub fn get_all_fields(&mut self, type_var: &TypeVarID) -> Result<BTreeMap<Label, FieldInfo>, TypeError> {
+    pub fn get_all_fields(
+        &mut self,
+        type_var: &TypeVarID,
+    ) -> Result<BTreeMap<Label, FieldInfo>, TypeError> {
         // Check cache first
         if let Some(cached) = self.all_fields_cache.get(type_var) {
             return Ok(cached.clone());
         }
-        
+
         let mut visited = HashSet::new();
         let result = self.get_all_fields_impl(type_var, &mut visited)?;
-        
+
         // Cache the result
-        self.all_fields_cache.insert(type_var.clone(), result.clone());
+        self.all_fields_cache
+            .insert(type_var.clone(), result.clone());
         Ok(result)
     }
-    
+
     /// Internal implementation with cycle detection
-    fn get_all_fields_impl(&self, type_var: &TypeVarID, visited: &mut HashSet<TypeVarID>) -> Result<BTreeMap<Label, FieldInfo>, TypeError> {
+    fn get_all_fields_impl(
+        &self,
+        type_var: &TypeVarID,
+        visited: &mut HashSet<TypeVarID>,
+    ) -> Result<BTreeMap<Label, FieldInfo>, TypeError> {
         // Check for cycles
         if !visited.insert(type_var.clone()) {
             return Err(TypeError::Unknown(format!(
-                "Cycle detected in row extensions for type variable {:?}",
-                type_var
+                "Cycle detected in row extensions for type variable {type_var:?}",
             )));
         }
-        
+
         let mut all_fields = BTreeMap::new();
 
         // Collect fields from extensions first
@@ -519,7 +528,7 @@ impl<'a> RowConstraintSolver<'a> {
                 all_fields.insert(label.clone(), field.clone());
             }
         }
-        
+
         // Remove from visited set when returning (allows diamond patterns)
         visited.remove(type_var);
 
@@ -531,15 +540,24 @@ impl<'a> RowConstraintSolver<'a> {
         let mut visited = HashSet::new();
         self.has_field_impl(type_var, label, &mut visited)
     }
-    
+
     /// Internal implementation with cycle detection
-    fn has_field_impl(&self, type_var: &TypeVarID, label: &Label, visited: &mut HashSet<TypeVarID>) -> Option<&FieldInfo> {
+    fn has_field_impl(
+        &self,
+        type_var: &TypeVarID,
+        label: &Label,
+        visited: &mut HashSet<TypeVarID>,
+    ) -> Option<&FieldInfo> {
         // Check for cycles
         if !visited.insert(type_var.clone()) {
-            tracing::warn!("Cycle detected in row extensions while looking for field '{}' in type variable {:?}", label, type_var);
+            tracing::warn!(
+                "Cycle detected in row extensions while looking for field '{}' in type variable {:?}",
+                label,
+                type_var
+            );
             return None;
         }
-        
+
         // First check direct fields
         if let Some(fields) = self.type_var_fields.get(type_var)
             && let Some(field) = fields.get(label)
@@ -557,7 +575,7 @@ impl<'a> RowConstraintSolver<'a> {
                 }
             }
         }
-        
+
         visited.remove(type_var);
         None
     }

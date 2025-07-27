@@ -1,15 +1,15 @@
 //! Integration of exhaustiveness checking with row-based enums
 
-use std::collections::{HashMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::{
+    SymbolID,
     environment::Environment,
     expr_id::ExprID,
     parsed_expr::Pattern,
     row::{FieldMetadata, RowConstraint},
     ty::Ty,
     type_var_id::{TypeVarID, TypeVarKind},
-    SymbolID,
 };
 
 use super::pattern_exhaustiveness::{ExhaustivenessResult, MissingPattern};
@@ -32,11 +32,9 @@ pub struct RowEnumAnalyzer<'a> {
 
 impl<'a> RowEnumAnalyzer<'a> {
     pub fn new(env: &'a Environment) -> Self {
-        Self {
-            env,
-        }
+        Self { env }
     }
-    
+
     /// Analyze a type to extract enum variant information
     pub fn analyze_type(&self, ty: &Ty) -> Option<RowEnumInfo> {
         match ty {
@@ -49,25 +47,28 @@ impl<'a> RowEnumAnalyzer<'a> {
             _ => None,
         }
     }
-    
+
     /// Analyze a type variable to see if it represents an enum through row constraints
     fn analyze_type_var(&self, type_var: &TypeVarID) -> Option<RowEnumInfo> {
         tracing::debug!("Analyzing type var: {:?}", type_var);
         tracing::debug!("Total row constraints: {}", self.env.row_constraints.len());
-        
+
         let mut variants = HashMap::new();
         let mut is_exact = false;
-        
+
         // Look for HasField constraints with EnumCase metadata in the environment
         for constraint in &self.env.row_constraints {
             match constraint {
-                RowConstraint::HasField { type_var: tv, label, metadata: FieldMetadata::EnumCase { tag }, .. } 
-                    if tv == type_var => {
+                RowConstraint::HasField {
+                    type_var: tv,
+                    label,
+                    metadata: FieldMetadata::EnumCase { tag },
+                    ..
+                } if tv == type_var => {
                     tracing::debug!("Found enum variant {} with tag {} for {:?}", label, tag, tv);
                     variants.insert(label.clone(), *tag);
                 }
-                RowConstraint::HasExactRow { type_var: tv, row } 
-                    if tv == type_var => {
+                RowConstraint::HasExactRow { type_var: tv, row } if tv == type_var => {
                     is_exact = true;
                     // Extract enum variants from the exact row
                     for (label, field_info) in &row.fields {
@@ -76,8 +77,11 @@ impl<'a> RowEnumAnalyzer<'a> {
                         }
                     }
                 }
-                RowConstraint::HasRow { type_var: tv, row, extension } 
-                    if tv == type_var => {
+                RowConstraint::HasRow {
+                    type_var: tv,
+                    row,
+                    extension,
+                } if tv == type_var => {
                     // If there's an extension, it's not exact
                     is_exact = extension.is_none();
                     // Extract enum variants from the row
@@ -90,7 +94,7 @@ impl<'a> RowEnumAnalyzer<'a> {
                 _ => {}
             }
         }
-        
+
         if variants.is_empty() {
             None
         } else {
@@ -101,17 +105,17 @@ impl<'a> RowEnumAnalyzer<'a> {
             })
         }
     }
-    
+
     /// Analyze a traditional enum type
     fn analyze_traditional_enum(&self, enum_id: &SymbolID) -> Option<RowEnumInfo> {
         let enum_def = self.env.lookup_enum(enum_id)?;
-        
+
         let variants = enum_def
             .variants()
             .iter()
             .map(|v| (v.name.clone(), v.tag))
             .collect();
-            
+
         Some(RowEnumInfo {
             variants,
             is_exact: true, // Traditional enums are always closed
@@ -131,19 +135,17 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             analyzer: RowEnumAnalyzer::new(env),
         }
     }
-    
+
     /// Check if a match expression is exhaustive
-    pub fn check_match(
-        &self,
-        scrutinee_ty: &Ty,
-        patterns: &[Pattern],
-    ) -> ExhaustivenessResult {
+    pub fn check_match(&self, scrutinee_ty: &Ty, patterns: &[Pattern]) -> ExhaustivenessResult {
         // First check if there's a wildcard or catch-all variable pattern
-        if patterns.iter().any(|p| matches!(p, Pattern::Wildcard | Pattern::Bind(_))) {
+        if patterns
+            .iter()
+            .any(|p| matches!(p, Pattern::Wildcard | Pattern::Bind(_)))
+        {
             return ExhaustivenessResult::Exhaustive;
         }
-        
-        
+
         // Try to get enum information from the type
         if let Some(enum_info) = self.analyzer.analyze_type(scrutinee_ty) {
             self.check_enum_exhaustiveness(enum_info, patterns)
@@ -158,7 +160,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             }
         }
     }
-    
+
     /// Check exhaustiveness for enums (both traditional and row-based)
     fn check_enum_exhaustiveness(
         &self,
@@ -167,79 +169,75 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
     ) -> ExhaustivenessResult {
         // If it's an open enum (not exact), it can't be exhaustive without wildcard
         if !enum_info.is_exact {
-            return ExhaustivenessResult::NonExhaustive(vec![
-                MissingPattern::OpenEnum {
-                    enum_name: format!("TypeVar({})", enum_info.type_var.id),
-                }
-            ]);
+            return ExhaustivenessResult::NonExhaustive(vec![MissingPattern::OpenEnum {
+                enum_name: format!("TypeVar({})", enum_info.type_var.id),
+            }]);
         }
-        
+
         // Collect covered variants, considering whether they have restrictive patterns
         let mut covered_variants = BTreeSet::new();
         let mut has_restrictive_patterns = false;
-        
+
         for pattern in patterns {
-            match pattern {
-                Pattern::Variant { variant_name, fields, .. } => {
-                    // Check if this variant has restrictive patterns (literals)
-                    // Since fields are ParsedExpr, we need to check if any are literals
-                    for field in fields {
-                        // Check if the field is a literal expression
-                        // Fields in patterns are wrapped in ParsedPattern
-                        if let crate::parsed_expr::Expr::ParsedPattern(inner_pattern) = &field.expr {
-                            match inner_pattern {
-                                Pattern::LiteralInt(_) => {
-                                    has_restrictive_patterns = true;
-                                }
-                                Pattern::LiteralFloat(_) => {
-                                    has_restrictive_patterns = true;
-                                }
-                                Pattern::LiteralTrue | Pattern::LiteralFalse => {
-                                    has_restrictive_patterns = true;
-                                }
-                                _ => {}
+            if let Pattern::Variant {
+                variant_name,
+                fields,
+                ..
+            } = pattern
+            {
+                // Check if this variant has restrictive patterns (literals)
+                // Since fields are ParsedExpr, we need to check if any are literals
+                for field in fields {
+                    // Check if the field is a literal expression
+                    // Fields in patterns are wrapped in ParsedPattern
+                    if let crate::parsed_expr::Expr::ParsedPattern(inner_pattern) = &field.expr {
+                        match inner_pattern {
+                            Pattern::LiteralInt(_) => {
+                                has_restrictive_patterns = true;
                             }
+                            Pattern::LiteralFloat(_) => {
+                                has_restrictive_patterns = true;
+                            }
+                            Pattern::LiteralTrue | Pattern::LiteralFalse => {
+                                has_restrictive_patterns = true;
+                            }
+                            _ => {}
                         }
                     }
-                    covered_variants.insert(variant_name.clone());
                 }
-                _ => {}
+                covered_variants.insert(variant_name.clone());
             }
         }
-            
+
         // Find missing variants
         let all_variant_names: BTreeSet<_> = enum_info.variants.keys().cloned().collect();
         let missing_variants: Vec<_> = all_variant_names
             .difference(&covered_variants)
             .cloned()
             .collect();
-            
+
         if missing_variants.is_empty() && !has_restrictive_patterns {
             ExhaustivenessResult::Exhaustive
         } else if has_restrictive_patterns {
             // If we have restrictive patterns (like Thing.Ok(123)), the match is not exhaustive
             // even if all variants are mentioned, because the patterns don't cover all values
-            ExhaustivenessResult::NonExhaustive(vec![
-                MissingPattern::Variants {
-                    enum_name: "Enum".to_string(),
-                    variant_names: vec!["Pattern with literal values is not exhaustive".to_string()],
-                }
-            ])
+            ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
+                enum_name: "Enum".to_string(),
+                variant_names: vec!["Pattern with literal values is not exhaustive".to_string()],
+            }])
         } else {
-            ExhaustivenessResult::NonExhaustive(vec![
-                MissingPattern::Variants {
-                    enum_name: "Enum".to_string(),
-                    variant_names: missing_variants,
-                }
-            ])
+            ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
+                enum_name: "Enum".to_string(),
+                variant_names: missing_variants,
+            }])
         }
     }
-    
+
     /// Check exhaustiveness for boolean patterns
     fn check_bool_exhaustiveness(&self, patterns: &[Pattern]) -> ExhaustivenessResult {
         let mut has_true = false;
         let mut has_false = false;
-        
+
         for pattern in patterns {
             match pattern {
                 Pattern::LiteralTrue => has_true = true,
@@ -248,7 +246,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
                 _ => {}
             }
         }
-        
+
         if has_true && has_false {
             ExhaustivenessResult::Exhaustive
         } else {
@@ -259,12 +257,10 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             if !has_false {
                 missing.push("false");
             }
-            ExhaustivenessResult::NonExhaustive(vec![
-                MissingPattern::Variants {
-                    enum_name: "Bool".to_string(),
-                    variant_names: missing.into_iter().map(|s| s.to_string()).collect(),
-                }
-            ])
+            ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
+                enum_name: "Bool".to_string(),
+                variant_names: missing.into_iter().map(|s| s.to_string()).collect(),
+            }])
         }
     }
 }
@@ -274,9 +270,9 @@ pub fn check_match_exhaustiveness(
     env: &Environment,
     scrutinee_ty: &Ty,
     patterns: &[Pattern],
-) -> Result<(), String> {    
+) -> Result<(), String> {
     let checker = RowAwareExhaustivenessChecker::new(env);
-    
+
     match checker.check_match(scrutinee_ty, patterns) {
         ExhaustivenessResult::Exhaustive => Ok(()),
         ExhaustivenessResult::NonExhaustive(missing) => {
@@ -292,7 +288,9 @@ pub fn check_match_exhaustiveness(
                         }
                     }
                     MissingPattern::OpenEnum { enum_name } => {
-                        msg.push_str(&format!("\n  - {enum_name} is an open enum and requires a wildcard pattern"));
+                        msg.push_str(&format!(
+                            "\n  - {enum_name} is an open enum and requires a wildcard pattern"
+                        ));
                     }
                 }
             }
@@ -304,31 +302,28 @@ pub fn check_match_exhaustiveness(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        expr_id::ExprID,
-        type_var_id::TypeVarKind,
-    };
-    
+    use crate::{expr_id::ExprID, type_var_id::TypeVarKind};
+
     #[test]
     fn test_row_enum_analyzer() {
         let env = Environment::new();
         let analyzer = RowEnumAnalyzer::new(&env);
-        
+
         // Test with a type variable (would need row constraints in real scenario)
         let type_var = TypeVarID::new(1, TypeVarKind::Let, ExprID(1));
         let result = analyzer.analyze_type_var(&type_var);
         assert!(result.is_none()); // No constraints, so no enum info
     }
-    
+
     #[test]
     fn test_bool_exhaustiveness_detailed() {
         let env = Environment::new();
         let checker = RowAwareExhaustivenessChecker::new(&env);
-        
+
         // Missing false
         let patterns = vec![Pattern::LiteralTrue];
         let result = checker.check_match(&Ty::Bool, &patterns);
-        
+
         match result {
             ExhaustivenessResult::NonExhaustive(missing) => {
                 assert_eq!(missing.len(), 1);
@@ -343,3 +338,4 @@ mod tests {
         }
     }
 }
+
