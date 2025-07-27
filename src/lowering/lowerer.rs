@@ -278,7 +278,7 @@ impl FromStr for RegisterList {
 pub enum SymbolValue {
     Register(Register),
     Capture(usize, IRType),
-    Struct(TypeDef),
+    Struct(Box<TypeDef>),
     FuncRef(String),
 }
 
@@ -914,7 +914,7 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        self.register_global(&struct_id, SymbolValue::Struct(struct_def));
+        self.register_global(&struct_id, SymbolValue::Struct(struct_def.into()));
 
         None
     }

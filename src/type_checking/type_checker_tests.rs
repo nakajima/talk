@@ -2160,7 +2160,7 @@ mod tests {
 
         // Create a row variable for this type (this is what hoisting should do)
         let row_var = env.new_type_variable(
-            TypeVarKind::CanonicalTypeParameter(format!("{}_row", name_str)),
+            TypeVarKind::CanonicalTypeParameter(format!("{name_str}_row")),
             ExprID(1),
         );
 
@@ -2217,7 +2217,7 @@ mod tests {
         let name_str = "Option";
 
         let row_var = env.new_type_variable(
-            TypeVarKind::CanonicalTypeParameter(format!("{}_row", name_str)),
+            TypeVarKind::CanonicalTypeParameter(format!("{name_str}_row")),
             ExprID(10),
         );
 
@@ -3595,8 +3595,7 @@ mod tests {
             let diagnostics = check_result.diagnostics();
             assert!(
                 diagnostics.is_empty(),
-                "Expected no diagnostics for exhaustive match, got: {:?}",
-                diagnostics
+                "Expected no diagnostics for exhaustive match, got: {diagnostics:?}",
             );
         }
     }
@@ -3628,13 +3627,12 @@ mod tests {
                 "Expected exhaustiveness error for non-exhaustive match"
             );
 
-            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{d:?}")).collect();
             let all_msgs = error_msgs.join(", ");
 
             assert!(
                 all_msgs.contains("not exhaustive") || all_msgs.contains("None"),
-                "Expected exhaustiveness error mentioning 'None', got: {}",
-                all_msgs
+                "Expected exhaustiveness error mentioning 'None', got: {all_msgs}",
             );
         }
     }
@@ -3976,8 +3974,8 @@ mod tests {
         // Check that all fields includes both
         let all_fields = solver.get_all_fields(&extended);
         assert_eq!(all_fields.len(), 2);
-        assert!(all_fields.contains_key(&"name".to_string()));
-        assert!(all_fields.contains_key(&"age".to_string()));
+        assert!(all_fields.contains_key("name"));
+        assert!(all_fields.contains_key("age"));
     }
 
     /// Test that extended types are not exact
@@ -4010,7 +4008,7 @@ mod tests {
             },
         };
 
-        solver.set_all_constraints(&[exact_constraint.clone()]);
+        solver.set_all_constraints(std::slice::from_ref(&exact_constraint));
         solver
             .solve_row_constraint(&exact_constraint, &mut type_subs)
             .unwrap();
@@ -4576,13 +4574,12 @@ mod tests {
                 "Expected exhaustiveness error but got no diagnostics"
             );
 
-            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{d:?}")).collect();
             let all_msgs = error_msgs.join(", ");
 
             assert!(
                 all_msgs.contains("not exhaustive") || all_msgs.contains("Blue"),
-                "Expected exhaustiveness error, got: {}",
-                all_msgs
+                "Expected exhaustiveness error, got: {all_msgs}",
             );
         }
     }
@@ -4678,13 +4675,12 @@ mod tests {
                 "Expected exhaustiveness error but got no diagnostics"
             );
 
-            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{:?}", d)).collect();
+            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{d:?}")).collect();
             let all_msgs = error_msgs.join(", ");
 
             assert!(
                 all_msgs.contains("not exhaustive") || all_msgs.contains("false"),
-                "Expected exhaustiveness error, got: {}",
-                all_msgs
+                "Expected exhaustiveness error, got: {all_msgs}",
             );
         }
     }

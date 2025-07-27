@@ -186,7 +186,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
         } else {
             ExhaustivenessResult::NonExhaustive(vec![
                 MissingPattern::Variants {
-                    enum_name: format!("Enum"),
+                    enum_name: "Enum".to_string(),
                     variant_names: missing_variants,
                 }
             ])
@@ -243,15 +243,15 @@ pub fn check_match_exhaustiveness(
             for pattern in missing {
                 match pattern {
                     MissingPattern::Variant { variant_name, .. } => {
-                        msg.push_str(&format!("\n  - {}", variant_name));
+                        msg.push_str(&format!("\n  - {variant_name}"));
                     }
                     MissingPattern::Variants { variant_names, .. } => {
                         for name in variant_names {
-                            msg.push_str(&format!("\n  - {}", name));
+                            msg.push_str(&format!("\n  - {name}"));
                         }
                     }
                     MissingPattern::OpenEnum { enum_name } => {
-                        msg.push_str(&format!("\n  - {} is an open enum and requires a wildcard pattern", enum_name));
+                        msg.push_str(&format!("\n  - {enum_name} is an open enum and requires a wildcard pattern"));
                     }
                 }
             }

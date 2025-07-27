@@ -1,5 +1,5 @@
 //! Row-based type definitions using the qualified types approach.
-//! 
+//!
 //! Instead of storing members directly, types have an associated row type variable
 //! with constraints that specify their members.
 
@@ -8,7 +8,7 @@ use crate::{
     conformance::Conformance,
     environment::{Environment, TypeParameter},
     expr_id::ExprID,
-    row::{RowConstraint, FieldMetadata},
+    row::{FieldMetadata, RowConstraint},
     ty::Ty,
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -45,10 +45,10 @@ impl RowTypeDef {
     ) -> Self {
         // Create a row type variable for this type's members
         let row_var = env.new_type_variable(
-            TypeVarKind::CanonicalTypeParameter(format!("{}_row", name)),
+            TypeVarKind::CanonicalTypeParameter(format!("{name}_row")),
             ExprID(0), // TODO: proper expr_id
         );
-        
+
         Self {
             symbol_id,
             name_str: name,
@@ -58,8 +58,9 @@ impl RowTypeDef {
             conformances: Vec::new(),
         }
     }
-    
+
     /// Add a property to this type by adding a HasField constraint
+    #[allow(clippy::too_many_arguments)]
     pub fn add_property(
         &self,
         env: &mut Environment,
@@ -80,34 +81,28 @@ impl RowTypeDef {
                 is_mutable,
             },
         };
-        
+
         env.constrain(crate::constraint::Constraint::Row {
             expr_id,
             constraint,
         });
     }
-    
+
     /// Add a method to this type
-    pub fn add_method(
-        &self,
-        env: &mut Environment,
-        name: String,
-        ty: Ty,
-        expr_id: ExprID,
-    ) {
+    pub fn add_method(&self, env: &mut Environment, name: String, ty: Ty, expr_id: ExprID) {
         let constraint = RowConstraint::HasField {
             type_var: self.row_var.clone(),
             label: name,
             field_ty: ty,
             metadata: FieldMetadata::Method,
         };
-        
+
         env.constrain(crate::constraint::Constraint::Row {
             expr_id,
             constraint,
         });
     }
-    
+
     /// Add a method requirement (for protocols)
     pub fn add_method_requirement(
         &self,
@@ -122,34 +117,28 @@ impl RowTypeDef {
             field_ty: ty,
             metadata: FieldMetadata::MethodRequirement,
         };
-        
+
         env.constrain(crate::constraint::Constraint::Row {
             expr_id,
             constraint,
         });
     }
-    
+
     /// Add an initializer
-    pub fn add_initializer(
-        &self,
-        env: &mut Environment,
-        name: String,
-        ty: Ty,
-        expr_id: ExprID,
-    ) {
+    pub fn add_initializer(&self, env: &mut Environment, name: String, ty: Ty, expr_id: ExprID) {
         let constraint = RowConstraint::HasField {
             type_var: self.row_var.clone(),
             label: name,
             field_ty: ty,
             metadata: FieldMetadata::Initializer,
         };
-        
+
         env.constrain(crate::constraint::Constraint::Row {
             expr_id,
             constraint,
         });
     }
-    
+
     /// Add an enum variant
     pub fn add_variant(
         &self,
@@ -165,13 +154,13 @@ impl RowTypeDef {
             field_ty: ty,
             metadata: FieldMetadata::EnumVariant { tag },
         };
-        
+
         env.constrain(crate::constraint::Constraint::Row {
             expr_id,
             constraint,
         });
     }
-    
+
     /// Get the type for this definition
     pub fn ty(&self) -> Ty {
         match &self.kind {
@@ -181,7 +170,7 @@ impl RowTypeDef {
             TypeDefKind::Builtin(ty) => ty.clone(),
         }
     }
-    
+
     pub fn canonical_type_parameters(&self) -> Vec<Ty> {
         self.type_parameters
             .iter()
@@ -207,7 +196,7 @@ impl<'a> RowTypeDefBuilder<'a> {
         let type_def = RowTypeDef::new(symbol_id, name, kind, type_parameters, env);
         Self { type_def, env }
     }
-    
+
     pub fn with_property(
         self,
         name: String,
@@ -217,20 +206,21 @@ impl<'a> RowTypeDefBuilder<'a> {
         is_mutable: bool,
         expr_id: ExprID,
     ) -> Self {
-        self.type_def.add_property(self.env, name, ty, index, has_default, is_mutable, expr_id);
+        self.type_def
+            .add_property(self.env, name, ty, index, has_default, is_mutable, expr_id);
         self
     }
-    
+
     pub fn with_method(self, name: String, ty: Ty, expr_id: ExprID) -> Self {
         self.type_def.add_method(self.env, name, ty, expr_id);
         self
     }
-    
+
     pub fn with_conformance(mut self, conformance: Conformance) -> Self {
         self.type_def.conformances.push(conformance);
         self
     }
-    
+
     pub fn build(self) -> RowTypeDef {
         self.type_def
     }

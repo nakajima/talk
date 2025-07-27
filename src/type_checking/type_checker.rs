@@ -1721,11 +1721,10 @@ impl<'a> TypeChecker<'a> {
             arm_tys.push(ty);
             
             // Extract pattern from the typed arm
-            if let typed_expr::Expr::MatchArm(ref pattern_expr, _) = typed.expr {
-                if let Some(pattern) = self.extract_pattern_from_typed_expr(pattern_expr) {
+            if let typed_expr::Expr::MatchArm(ref pattern_expr, _) = typed.expr
+                && let Some(pattern) = self.extract_pattern_from_typed_expr(pattern_expr) {
                     patterns.push(pattern);
                 }
-            }
             
             typed_arms.push(typed);
         }

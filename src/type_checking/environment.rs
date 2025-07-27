@@ -348,7 +348,7 @@ impl Environment {
             }
             
             // Merge row_managed_members set
-            existing_def.merge_row_managed_members(&def);
+            existing_def.merge_row_managed_members(def);
             
             tracing::debug!("After merge, {} has {} members", 
                 existing_def.name_str, existing_def.members.len());

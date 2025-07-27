@@ -202,16 +202,16 @@ impl fmt::Display for RowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RowError::FieldConflict(label) => {
-                write!(f, "Conflicting definitions for field '{}'", label)
+                write!(f, "Conflicting definitions for field '{label}'")
             }
             RowError::MissingField(label) => {
-                write!(f, "Missing required field '{}'", label)
+                write!(f, "Missing required field '{label}'")
             }
             RowError::LacksViolation(label) => {
-                write!(f, "Row variable cannot have field '{}'", label)
+                write!(f, "Row variable cannot have field '{label}'")
             }
             RowError::InvalidOperation(msg) => {
-                write!(f, "Invalid row operation: {}", msg)
+                write!(f, "Invalid row operation: {msg}")
             }
         }
     }
@@ -266,6 +266,12 @@ pub fn has_field_constraint<'a>(
 /// Builder for creating row constraints
 pub struct RowConstraintBuilder {
     constraints: Vec<RowConstraint>,
+}
+
+impl Default for RowConstraintBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RowConstraintBuilder {
