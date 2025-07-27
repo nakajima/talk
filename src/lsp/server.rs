@@ -368,10 +368,10 @@ impl LanguageServer for ServerState {
                 }
 
                 // Fallback to symbol table lookup
-                if type_info.is_none() {
-                    if let Ok(scheme) = unit.env.lookup_symbol(&symbol_id) {
-                        type_info = Some(scheme.ty().clone());
-                    }
+                if type_info.is_none()
+                    && let Ok(scheme) = unit.env.lookup_symbol(&symbol_id)
+                {
+                    type_info = Some(scheme.ty().clone());
                 }
                 break;
             }
@@ -389,7 +389,7 @@ impl LanguageServer for ServerState {
 
         // Add documentation if available
         if let Some(doc) = &info.documentation {
-            contents.push(format!("---\n\n{}", doc));
+            contents.push(format!("---\n\n{doc}"));
         }
 
         // Add symbol kind information
@@ -683,10 +683,7 @@ impl LanguageServer for ServerState {
                 };
 
                 if let Ok(uri) = Url::from_file_path(&span.path) {
-                    edits_by_file
-                        .entry(uri)
-                        .or_insert_with(Vec::new)
-                        .push(text_edit);
+                    edits_by_file.entry(uri).or_default().push(text_edit);
                 }
             }
         }
@@ -736,41 +733,39 @@ impl LanguageServer for ServerState {
         let mut locations = Vec::new();
 
         for (span, sym_id) in &self.driver.symbol_table.symbol_map {
-            if sym_id == &symbol_id {
-                if let Ok(uri) = Url::from_file_path(&span.path) {
-                    let location = Location::new(
-                        uri,
-                        Range::new(
-                            Position::new(span.start_line, span.start_col),
-                            Position::new(span.end_line, span.end_col),
-                        ),
-                    );
-                    locations.push(location);
-                }
+            if sym_id == &symbol_id
+                && let Ok(uri) = Url::from_file_path(&span.path)
+            {
+                let location = Location::new(
+                    uri,
+                    Range::new(
+                        Position::new(span.start_line, span.start_col),
+                        Position::new(span.end_line, span.end_col),
+                    ),
+                );
+                locations.push(location);
             }
         }
 
         // Include the definition if requested
-        if params.context.include_declaration {
-            if let Some(info) = self.driver.symbol_table.get(&symbol_id) {
-                if let Some(def) = &info.definition {
-                    if let Ok(uri) = Url::from_file_path(&def.path) {
-                        let location = Location::new(
-                            uri,
-                            Range::new(
-                                Position::new(def.line, def.col),
-                                Position::new(def.line, def.col),
-                            ),
-                        );
-                        // Only add if not already in the list
-                        if !locations
-                            .iter()
-                            .any(|l| l.uri == location.uri && l.range == location.range)
-                        {
-                            locations.push(location);
-                        }
-                    }
-                }
+        if params.context.include_declaration
+            && let Some(info) = self.driver.symbol_table.get(&symbol_id)
+            && let Some(def) = &info.definition
+            && let Ok(uri) = Url::from_file_path(&def.path)
+        {
+            let location = Location::new(
+                uri,
+                Range::new(
+                    Position::new(def.line, def.col),
+                    Position::new(def.line, def.col),
+                ),
+            );
+            // Only add if not already in the list
+            if !locations
+                .iter()
+                .any(|l| l.uri == location.uri && l.range == location.range)
+            {
+                locations.push(location);
             }
         }
 
@@ -809,7 +804,7 @@ impl ServerState {
     fn on_tick(&mut self, _: TickEvent) -> ControlFlow<async_lsp::Result<()>> {
         self.counter += 1;
 
-        // Check if we have pending diagnostics and enough time has passed (500ms = ~0.5 ticks)
+        // Check if we have pending diagnostics and enough time has passed
         if !self.pending_diagnostics.is_empty() && self.counter > self.last_change_tick {
             // Run diagnostics for all pending files
             self.driver.check();
