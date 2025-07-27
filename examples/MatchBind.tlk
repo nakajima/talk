@@ -7,5 +7,5 @@ let maybe = Maybe.definitely(1234)
 
 match maybe {
 	.definitely(x) -> x
-	.nope -> 0
+	.nope => 0
 }

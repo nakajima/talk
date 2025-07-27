@@ -4543,6 +4543,44 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_non_exhaustive_integration() {
+        // Test non-exhaustive match inside a function where types are resolved
+        let result = check(
+            "
+        enum Maybe<T> {
+            case definitely(T)
+            case nope
+        }
+
+        func process() -> Int {
+            let maybe = Maybe.definitely(1234)
+            match maybe {
+                .definitely(x) -> x
+                // Missing .nope case
+            }
+        }
+        ",
+        );
+
+        assert!(result.is_ok());
+        if let Ok(check_result) = result {
+            let diagnostics = check_result.diagnostics();
+            assert!(
+                !diagnostics.is_empty(),
+                "Expected exhaustiveness error but got no diagnostics"
+            );
+
+            let error_msgs: Vec<String> = diagnostics.iter().map(|d| format!("{d:?}")).collect();
+            let all_msgs = error_msgs.join(", ");
+
+            assert!(
+                all_msgs.contains("not exhaustive") || all_msgs.contains("nope"),
+                "Expected exhaustiveness error, got: {all_msgs}",
+            );
+        }
+    }
+
     /// Test non-exhaustive pattern matching
     #[test]
     fn test_non_exhaustive_match_error() {

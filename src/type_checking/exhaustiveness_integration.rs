@@ -42,12 +42,19 @@ impl<'a> RowEnumAnalyzer<'a> {
         match ty {
             Ty::TypeVar(type_var) => self.analyze_type_var(type_var),
             Ty::Enum(enum_id, _) => self.analyze_traditional_enum(enum_id),
+            Ty::EnumVariant(enum_id, _) => {
+                // When matching on an enum variant value, we need info about the enum
+                self.analyze_traditional_enum(enum_id)
+            }
             _ => None,
         }
     }
     
     /// Analyze a type variable to see if it represents an enum through row constraints
     fn analyze_type_var(&self, type_var: &TypeVarID) -> Option<RowEnumInfo> {
+        tracing::debug!("Analyzing type var: {:?}", type_var);
+        tracing::debug!("Total row constraints: {}", self.env.row_constraints.len());
+        
         let mut variants = HashMap::new();
         let mut is_exact = false;
         
@@ -56,6 +63,7 @@ impl<'a> RowEnumAnalyzer<'a> {
             match constraint {
                 RowConstraint::HasField { type_var: tv, label, metadata: FieldMetadata::EnumCase { tag }, .. } 
                     if tv == type_var => {
+                    tracing::debug!("Found enum variant {} with tag {} for {:?}", label, tag, tv);
                     variants.insert(label.clone(), *tag);
                 }
                 RowConstraint::HasExactRow { type_var: tv, row } 
@@ -134,6 +142,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
         if patterns.iter().any(|p| matches!(p, Pattern::Wildcard | Pattern::Bind(_))) {
             return ExhaustivenessResult::Exhaustive;
         }
+        
         
         // Try to get enum information from the type
         if let Some(enum_info) = self.analyzer.analyze_type(scrutinee_ty) {

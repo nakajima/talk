@@ -209,6 +209,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+
         source_file.to_typed(typed_roots, source_file.phase_data.scope_tree.clone())
     }
 
@@ -1744,8 +1745,39 @@ impl<'a> TypeChecker<'a> {
 
         // Check exhaustiveness
         use crate::type_checking::exhaustiveness_integration::check_match_exhaustiveness;
-        if let Err(msg) = check_match_exhaustiveness(env, &pattern_ty.ty, &patterns) {
-            return Err(TypeError::Unknown(msg));
+        
+        // For enum variants, we need to check against the enum type, not the variant
+        let check_ty = match &pattern_ty.ty {
+            Ty::EnumVariant(enum_id, type_args) => Ty::Enum(*enum_id, type_args.clone()),
+            other => other.clone(),
+        };
+        
+        
+        // Store match information for deferred exhaustiveness checking
+        env.defer_exhaustiveness_check(id, pattern_ty.ty.clone(), patterns.clone());
+        
+        // For now, only check exhaustiveness immediately for resolved types
+        let should_check = match &check_ty {
+            Ty::TypeVar(_) => false,
+            _ => true
+        };
+        
+        if should_check {
+            if let Err(msg) = check_match_exhaustiveness(env, &check_ty, &patterns) {
+            // Add diagnostic instead of failing type checking
+            if let Ok(mut lock) = self.session.lock() {
+                let span = if let Some(meta) = self.meta.get(&id) {
+                    meta.span()
+                } else {
+                    (0, 0)
+                };
+                lock.add_diagnostic(Diagnostic::typing(
+                    self.path.clone(),
+                    span,
+                    TypeError::Unknown(msg),
+                ));
+            }
+            }
         }
 
         Ok(TypedExpr {

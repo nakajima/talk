@@ -46,6 +46,8 @@ pub struct Environment {
     generation: u32,
     /// Row constraints collected during type checking
     pub row_constraints: Vec<crate::row::RowConstraint>,
+    /// Deferred exhaustiveness checks (match_id, scrutinee_type, patterns)
+    pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty, Vec<crate::parsed_expr::Pattern>)>,
 }
 
 impl Default for Environment {
@@ -63,6 +65,7 @@ impl Default for Environment {
             context,
             generation: 0,
             row_constraints: vec![],
+            deferred_exhaustiveness_checks: vec![],
         }
     }
 }
@@ -136,6 +139,10 @@ impl Environment {
 
     pub fn clear_constraints(&mut self) {
         self.constraints.clear()
+    }
+    
+    pub fn defer_exhaustiveness_check(&mut self, match_id: ExprID, scrutinee_ty: Ty, patterns: Vec<crate::parsed_expr::Pattern>) {
+        self.deferred_exhaustiveness_checks.push((match_id, scrutinee_ty, patterns));
     }
 
     #[tracing::instrument(skip(self, meta))]
