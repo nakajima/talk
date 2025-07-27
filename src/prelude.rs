@@ -27,30 +27,33 @@ pub fn compile_prelude() -> &'static Prelude {
 #[cfg(feature = "wasm")]
 fn load_files(driver: &mut Driver) {
     for (path, contents) in [
-        (
-            "./core/Operators.tlk",
-            include_str!("../core/Operators.tlk"),
-        ),
-        ("./core/Optional.tlk", include_str!("../core/Optional.tlk")),
-        ("./core/Array.tlk", include_str!("../core/Array.tlk")),
-        ("./core/String.tlk", include_str!("../core/String.tlk")),
-        // ("./core/Iterable.tlk", include_str!("../core/Iterable.tlk")),
+        ("core/Operators.tlk", include_str!("../core/Operators.tlk")),
+        ("core/Optional.tlk", include_str!("../core/Optional.tlk")),
+        ("core/Array.tlk", include_str!("../core/Array.tlk")),
+        ("core/String.tlk", include_str!("../core/String.tlk")),
+        // ("core/Iterable.tlk", include_str!("../core/Iterable.tlk")),
     ] {
-        driver.update_file(&PathBuf::from(path), contents.to_string());
+        // For WASM, we'll use absolute paths starting from root
+        let absolute_path = PathBuf::from("/").join(path);
+        driver.update_file(&absolute_path, contents.to_string());
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(not(feature = "wasm"))]
 fn load_files(driver: &mut Driver) {
+    // Get the current directory to make absolute paths
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
     for file in [
-        PathBuf::from("./core/Operators.tlk"),
-        PathBuf::from("./core/Optional.tlk"),
-        PathBuf::from("./core/Array.tlk"),
-        PathBuf::from("./core/String.tlk"),
-        // PathBuf::from("./core/Iterable.tlk"),
+        current_dir.join("core/Operators.tlk"),
+        current_dir.join("core/Optional.tlk"),
+        current_dir.join("core/Array.tlk"),
+        current_dir.join("core/String.tlk"),
+        // current_dir.join("core/Iterable.tlk"),
     ] {
-        #[allow(clippy::unwrap_used)]
-        driver.update_file(&file, std::fs::read_to_string(&file).unwrap());
+        let absolute_path = file.canonicalize().unwrap_or_else(|_| file.clone());
+        driver.update_file(&absolute_path, std::fs::read_to_string(&file).unwrap());
     }
 }
 
@@ -153,10 +156,11 @@ pub fn _compile_prelude() -> Prelude {
     for type_id in type_ids {
         if let Some(mut type_def) = environment.types.remove(&type_id) {
             type_def.populate_from_rows(&environment);
+
             environment.types.insert(type_id, type_def);
         }
     }
-    
+
     environment.clear_constraints();
 
     Prelude {

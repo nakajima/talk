@@ -2636,6 +2636,7 @@ fn find_or_create_main(
             expr_id: ExprID(SymbolID::GENERATED_MAIN.0),
             is_captured: false,
             definition: None,
+            documentation: None,
         },
     );
 

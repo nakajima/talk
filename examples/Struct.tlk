@@ -1,3 +1,4 @@
+// It's a dog
 struct Dog {
 	let age: Int
 	let count: Int

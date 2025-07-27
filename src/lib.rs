@@ -16,6 +16,7 @@ pub mod prelude;
 
 pub mod builtins;
 pub use builtins::*;
+pub mod semantic_index;
 pub mod source_file;
 pub use source_file::*;
 pub mod symbol_table;

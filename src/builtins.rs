@@ -28,6 +28,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-1),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Int,
             unbound_vars: vec![],
@@ -46,6 +47,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-2),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Float,
             unbound_vars: vec![],
@@ -64,6 +66,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-3),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Bool,
             unbound_vars: vec![],
@@ -82,6 +85,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-4),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Pointer,
             unbound_vars: vec![],
@@ -100,6 +104,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-5),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(
                 vec![Ty::Int /* capacity */],
@@ -125,6 +130,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-6),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(
                 vec![Ty::Pointer, Ty::Int],
@@ -150,6 +156,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-7),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(vec![Ty::Pointer], Ty::Void.into(), vec![]),
             unbound_vars: vec![],
@@ -163,6 +170,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-8),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(
                 vec![
@@ -196,6 +204,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-9),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(
                 vec![Ty::Pointer, Ty::Int],
@@ -227,6 +236,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-11),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(
                 vec![Ty::TypeVar(TypeVarID {
@@ -256,6 +266,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-12),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Func(
                 vec![Ty::string()],
@@ -286,6 +297,7 @@ pub fn builtins() -> Vec<Builtin> {
                 expr_id: ExprID(-13),
                 is_captured: false,
                 definition: None,
+                documentation: None,
             },
             ty: Ty::Byte,
             unbound_vars: vec![],

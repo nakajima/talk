@@ -272,6 +272,7 @@ impl<'a> TypeChecker<'a> {
                             expr: body_expr,
                             placeholder: type_var.clone(),
                             default_value,
+                            symbol_id: *prop_id,
                         });
 
                         last_property_index += 1;
@@ -338,6 +339,7 @@ impl<'a> TypeChecker<'a> {
                             name: name_str.clone(),
                             expr: body_expr,
                             placeholder: type_var.clone(),
+                            symbol_id: *func_id,
                         });
                     }
                     crate::parsed_expr::Expr::FuncSignature {
@@ -360,6 +362,7 @@ impl<'a> TypeChecker<'a> {
                             name: name_str.clone(),
                             expr: body_expr,
                             placeholder: type_var.clone(),
+                            symbol_id: *func_id,
                         });
                     }
                     _ => {
@@ -456,7 +459,7 @@ impl<'a> TypeChecker<'a> {
                     let typed_expr = self
                         .infer_node(property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
-                    properties.push(Property {
+                    let prop = Property {
                         index: property.index,
                         name: property.name.clone(),
                         expr_id: property.expr.id,
@@ -468,7 +471,9 @@ impl<'a> TypeChecker<'a> {
                                 ..
                             }
                         ),
-                    });
+                        symbol_id: Some(property.symbol_id),
+                    };
+                    properties.push(prop);
 
                     substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());
                 }
@@ -487,6 +492,7 @@ impl<'a> TypeChecker<'a> {
                     name: method.name.clone(),
                     expr_id: method.expr.id,
                     ty: typed_expr.ty.clone(),
+                    symbol_id: Some(method.symbol_id),
                 });
 
                 substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
@@ -505,6 +511,7 @@ impl<'a> TypeChecker<'a> {
                         name: method.name.clone(),
                         expr_id: method.expr.id,
                         ty: typed_expr.ty.clone(),
+                        symbol_id: Some(method.symbol_id),
                     });
                     substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
                 }
@@ -812,14 +819,16 @@ pub struct RawMethod<'a> {
     pub name: String,
     pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
+    pub symbol_id: SymbolID,
 }
 
 impl<'a> RawMethod<'a> {
-    pub fn new(name: String, expr: &'a ParsedExpr, placeholder: TypeVarID) -> Self {
+    pub fn new(name: String, expr: &'a ParsedExpr, placeholder: TypeVarID, symbol_id: SymbolID) -> Self {
         Self {
             name,
             expr,
             placeholder,
+            symbol_id,
         }
     }
 }
@@ -831,6 +840,7 @@ pub struct RawProperty<'a> {
     pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
     pub default_value: &'a Option<Box<ParsedExpr>>,
+    pub symbol_id: SymbolID,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

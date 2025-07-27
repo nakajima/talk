@@ -105,6 +105,7 @@ pub struct PropertyInfo {
     pub name: String,
     pub type_id: Option<ParsedExpr>,
     pub default_value_id: Option<ParsedExpr>,
+    pub symbol_id: Option<SymbolID>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -114,6 +115,7 @@ pub struct SymbolInfo {
     pub expr_id: ExprID,
     pub is_captured: bool,
     pub definition: Option<Definition>,
+    pub documentation: Option<String>,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
@@ -210,6 +212,7 @@ impl SymbolTable {
                 expr_id,
                 is_captured: false,
                 definition,
+                documentation: None,
             },
         );
 
@@ -235,11 +238,13 @@ impl SymbolTable {
         name: String,
         type_id: Option<Box<ParsedExpr>>,
         default_value_id: Option<Box<ParsedExpr>>,
+        property_symbol_id: Option<SymbolID>,
     ) {
         let info = PropertyInfo {
             name,
             type_id: type_id.map(|e| *e),
             default_value_id: default_value_id.map(|e| *e),
+            symbol_id: property_symbol_id,
         };
 
         let Some(table) = self.types.get_mut(&to_symbol_id) else {

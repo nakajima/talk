@@ -15,6 +15,7 @@ use crate::{
     name::Name,
     parsing::expr_id::ExprID,
     row_constraints::RowConstraintSolver,
+    semantic_index::ResolvedExpr,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
@@ -314,7 +315,7 @@ impl<'a> ConstraintSolver<'a> {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
                 self.solve_unqualified_member(&result_ty, member_name, substitutions)?;
             }
-            Constraint::MemberAccess(_node_id, receiver_ty, member_name, result_ty) => {
+            Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
                 let receiver_ty = substitutions.apply(receiver_ty, 0, &mut self.env.context);
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
@@ -334,6 +335,27 @@ impl<'a> ConstraintSolver<'a> {
                     &mut self.env.context,
                     self.generation,
                 )?;
+                
+                // Try to find the member symbol and update the semantic index
+                if let Some(member_symbol) = self.find_member_symbol(&receiver_ty, member_name) {
+                    // Update the semantic index with the resolved symbol
+                    if let Some(ResolvedExpr::MemberAccess { 
+                        receiver, 
+                        member_name: name, 
+                        resolved_symbol: _, 
+                        ty 
+                    }) = self.env.semantic_index.get_expression(node_id).cloned() {
+                        self.env.semantic_index.record_expression(
+                            *node_id,
+                            ResolvedExpr::MemberAccess {
+                                receiver,
+                                member_name: name,
+                                resolved_symbol: Some(member_symbol),
+                                ty,
+                            },
+                        );
+                    }
+                }
             }
             Constraint::InitializerCall {
                 initializes_id,
@@ -1042,6 +1064,35 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
                 ty.clone()
             }
+        }
+    }
+    
+    /// Find the symbol ID for a member of a type
+    fn find_member_symbol(&self, receiver_ty: &Ty, member_name: &str) -> Option<SymbolID> {
+        match receiver_ty {
+            Ty::Struct(type_id, _) | Ty::Enum(type_id, _) | Ty::Protocol(type_id, _) => {
+                // Look up the type definition using just the type_id, ignoring type parameters
+                let type_def = self.env.types.get(type_id)?;
+                
+                // Check if it's a property
+                if let Some(property) = type_def.find_property(member_name) {
+                    return property.symbol_id;
+                }
+                
+                // Check if it's a method
+                if let Some(method) = type_def.find_method(member_name) {
+                    return method.symbol_id;
+                }
+                
+                // Check if it's an enum variant
+                if let Some(_variant) = type_def.find_variant(member_name) {
+                    // Variants also don't have symbol IDs yet
+                    return None;
+                }
+                
+                None
+            }
+            _ => None,
         }
     }
 }

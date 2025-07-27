@@ -19,6 +19,7 @@ pub struct Property {
     pub expr_id: ExprID,
     pub ty: Ty,
     pub has_default: bool,
+    pub symbol_id: Option<SymbolID>,
 }
 
 impl Property {
@@ -29,6 +30,7 @@ impl Property {
             expr_id,
             ty,
             has_default,
+            symbol_id: None,
         }
     }
 }
@@ -45,11 +47,12 @@ pub struct Method {
     pub name: String,
     pub expr_id: ExprID,
     pub ty: Ty,
+    pub symbol_id: Option<SymbolID>,
 }
 
 impl Method {
     pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
-        Self { name, expr_id, ty }
+        Self { name, expr_id, ty, symbol_id: None }
     }
 }
 
@@ -649,6 +652,9 @@ impl TypeDef {
             }
         }
         
+        // Capture existing members to preserve symbol_ids
+        let existing_members: HashMap<String, TypeMember> = self.members.clone();
+        
         // Only remove members that are being redefined (exist in both old and new)
         let members_before = self.members.len();
         self.members.retain(|name, _| {
@@ -673,6 +679,13 @@ impl TypeDef {
                         match metadata {
                             FieldMetadata::RecordField { index, has_default, .. } => {
                                 tracing::debug!("Adding property {} to type {}", label, self.name_str);
+                                // Check if we already have this property and preserve its symbol_id
+                                let existing_symbol_id = existing_members.get(label)
+                                    .and_then(|member| match member {
+                                        TypeMember::Property(prop) => prop.symbol_id,
+                                        _ => None,
+                                    });
+                                    
                                 self.members.insert(
                                     label.clone(),
                                     TypeMember::Property(Property {
@@ -681,16 +694,25 @@ impl TypeDef {
                                         expr_id,
                                         ty: field_ty.clone(),
                                         has_default: *has_default,
+                                        symbol_id: existing_symbol_id,
                                     }),
                                 );
                             }
                             FieldMetadata::Method => {
+                                // Check if we already have this method and preserve its symbol_id
+                                let existing_symbol_id = existing_members.get(label)
+                                    .and_then(|member| match member {
+                                        TypeMember::Method(method) => method.symbol_id,
+                                        _ => None,
+                                    });
+                                    
                                 self.members.insert(
                                     label.clone(),
                                     TypeMember::Method(Method {
                                         name: label.clone(),
                                         expr_id,
                                         ty: field_ty.clone(),
+                                        symbol_id: existing_symbol_id,
                                     }),
                                 );
                             }
@@ -701,6 +723,7 @@ impl TypeDef {
                                         name: label.clone(),
                                         expr_id,
                                         ty: field_ty.clone(),
+                                        symbol_id: None,
                                     }),
                                 );
                             }
@@ -745,6 +768,13 @@ impl TypeDef {
                         for (label, field) in &row.fields {
                             match &field.metadata {
                                 FieldMetadata::RecordField { index, has_default, .. } => {
+                                    // Check if we already have this property and preserve its symbol_id
+                                    let existing_symbol_id = existing_members.get(label)
+                                        .and_then(|member| match member {
+                                            TypeMember::Property(prop) => prop.symbol_id,
+                                            _ => None,
+                                        });
+                                        
                                     self.members.insert(
                                         label.clone(),
                                         TypeMember::Property(Property {
@@ -753,16 +783,25 @@ impl TypeDef {
                                             expr_id,
                                             ty: field.ty.clone(),
                                             has_default: *has_default,
+                                            symbol_id: existing_symbol_id,
                                         }),
                                     );
                                 }
                                 FieldMetadata::Method => {
+                                    // Check if we already have this method and preserve its symbol_id
+                                    let existing_symbol_id = existing_members.get(label)
+                                        .and_then(|member| match member {
+                                            TypeMember::Method(method) => method.symbol_id,
+                                            _ => None,
+                                        });
+                                        
                                     self.members.insert(
                                         label.clone(),
                                         TypeMember::Method(Method {
                                             name: label.clone(),
                                             expr_id,
                                             ty: field.ty.clone(),
+                                            symbol_id: existing_symbol_id,
                                         }),
                                     );
                                 }
@@ -773,6 +812,7 @@ impl TypeDef {
                                             name: label.clone(),
                                             expr_id,
                                             ty: field.ty.clone(),
+                                            symbol_id: None,
                                         }),
                                     );
                                 }

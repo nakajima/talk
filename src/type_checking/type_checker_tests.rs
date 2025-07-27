@@ -7141,6 +7141,7 @@ mod tests {
                 expr_id: ExprID(11),
                 ty: Ty::Float,
                 has_default: false,
+                symbol_id: None,
             }),
         );
 

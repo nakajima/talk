@@ -790,12 +790,6 @@ impl<'a> NameResolver<'a> {
                 {
                     let name_str = name.name_str();
 
-                    symbol_table.add_property(
-                        struct_symbol,
-                        name_str.clone(),
-                        ty.clone(),
-                        val.clone(),
-                    );
                     let property_symbol = self.declare(
                         name_str.clone(),
                         SymbolKind::Property,
@@ -803,6 +797,15 @@ impl<'a> NameResolver<'a> {
                         meta,
                         symbol_table,
                     );
+
+                    symbol_table.add_property(
+                        struct_symbol,
+                        name_str.clone(),
+                        ty.clone(),
+                        val.clone(),
+                        Some(property_symbol),
+                    );
+
                     *name = Name::Resolved(property_symbol, name_str.clone());
                 }
                 if let Expr::Init(None, func) = &mut body_expr.expr {
@@ -1971,6 +1974,7 @@ mod tests {
                         expr_id: _,
                         is_captured: false,
                         definition: Some(Definition { .. }),
+                        documentation: None,
                     },
                 )),
             ..
