@@ -124,6 +124,9 @@ pub struct TypeDef {
     pub conformances: Vec<Conformance>,
     /// Row variable for this type's members (for row-based type system)
     pub row_var: Option<TypeVarID>,
+    /// Tracks which members were populated from row constraints
+    /// This allows populate_from_rows to correctly update only row-managed members
+    row_managed_members: std::collections::HashSet<String>,
 }
 
 // Architecture Note:
@@ -133,6 +136,41 @@ pub struct TypeDef {
 // while providing efficient lookup for post-type-checking phases (lowering, LSP, etc.).
 
 impl TypeDef {
+    /// Create a new TypeDef with all fields initialized
+    pub fn new(
+        symbol_id: SymbolID,
+        name_str: String,
+        kind: TypeDefKind,
+        type_parameters: TypeParams,
+    ) -> Self {
+        TypeDef {
+            symbol_id,
+            name_str,
+            kind,
+            type_parameters,
+            members: HashMap::new(),
+            conformances: Vec::new(),
+            row_var: None,
+            row_managed_members: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Merge row_managed_members from another TypeDef
+    pub fn merge_row_managed_members(&mut self, other: &TypeDef) {
+        let before = self.row_managed_members.len();
+        self.row_managed_members.extend(other.row_managed_members.clone());
+        let after = self.row_managed_members.len();
+        if after > before {
+            tracing::debug!("Merged {} row-managed members into {} (now has {})", 
+                other.row_managed_members.len(), self.name_str, after);
+        }
+    }
+    
+    /// Clear row_managed_members (used when importing types)
+    pub fn clear_row_managed_members(&mut self) {
+        self.row_managed_members.clear();
+    }
+
     pub fn ty(&self) -> Ty {
         match &self.kind {
             TypeDefKind::Enum => Ty::Enum(self.symbol_id, self.canonical_type_parameters()),
@@ -543,10 +581,18 @@ impl TypeDef {
     }
     
     /// Populate the members HashMap from row constraints after constraint solving
+    /// 
+    /// This method updates the members HashMap to reflect the current state of row constraints.
+    /// It uses a targeted approach: only members that are defined by row constraints are
+    /// removed and re-added. This preserves any members not managed by the row system,
+    /// such as methods from imported types or manually added members.
     pub fn populate_from_rows(&mut self, env: &Environment) {
         let Some(row_var) = self.row_var.clone() else {
             return;
         };
+        
+        tracing::debug!("populate_from_rows for {} (id={:?}) with row_var {:?}, has {} members, {} are row-managed", 
+            self.name_str, self.symbol_id, row_var, self.members.len(), self.row_managed_members.len());
         
         // First, check if there are any row constraints for this type
         let mut has_row_constraints = false;
@@ -566,46 +612,56 @@ impl TypeDef {
             }
         }
         
-        // Only clear and repopulate if we have row constraints
-        // This preserves members for imported types that don't use row constraints
+        // If we have NO row constraints, preserve existing members
         if !has_row_constraints {
-            tracing::trace!("No row constraints for {} (has {} members), skipping populate_from_rows", 
-                self.name_str, self.members.len());
+            // If we have row-managed members but no constraints, this likely means
+            // we're an imported type whose constraints were cleared after initial population.
+            // Don't remove the members in this case.
+            if !self.row_managed_members.is_empty() {
+                tracing::trace!("Type {} has {} row-managed members but no constraints (likely imported), preserving members", 
+                    self.name_str, self.row_managed_members.len());
+            } else {
+                tracing::trace!("No row constraints for {} (has {} members), skipping populate_from_rows", 
+                    self.name_str, self.members.len());
+            }
             return;
         }
         
-        // Count how many members will be populated from row constraints
-        let mut row_member_count = 0;
+        // Collect all member names that are defined by row constraints
+        let mut row_defined_members = std::collections::HashSet::new();
         for constraint in env.constraints() {
             if let crate::constraint::Constraint::Row { constraint: row_constraint, .. } = constraint {
                 use crate::row::RowConstraint;
                 match &row_constraint {
-                    RowConstraint::HasField { type_var, .. } 
+                    RowConstraint::HasField { type_var, label, .. } 
                         if type_var == &row_var => {
-                        row_member_count += 1;
+                        row_defined_members.insert(label.clone());
                     }
                     RowConstraint::HasRow { type_var, row, .. } | 
                     RowConstraint::HasExactRow { type_var, row } 
                         if type_var == &row_var => {
-                        row_member_count += row.fields.len();
+                        for field_name in row.fields.keys() {
+                            row_defined_members.insert(field_name.clone());
+                        }
                     }
                     _ => {}
                 }
             }
         }
         
-        // If we have existing members but row constraints would populate fewer,
-        // this is likely an extension of an imported type - only add new members
-        if self.members.len() > row_member_count && row_member_count > 0 {
-            tracing::debug!("Type {} has {} existing members but only {} in row constraints - preserving existing and adding new", 
-                self.name_str, self.members.len(), row_member_count);
-            // Don't clear - just add new members from rows below
-        } else {
-            tracing::debug!("Clearing {} members from {} to repopulate from row constraints", 
-                self.members.len(), self.name_str);
-            // Clear existing members since we'll repopulate from rows
-            self.members.clear();
-        }
+        // Only remove members that are being redefined (exist in both old and new)
+        let members_before = self.members.len();
+        self.members.retain(|name, _| {
+            !self.row_managed_members.contains(name) || !row_defined_members.contains(name)
+        });
+        let removed_old = members_before - self.members.len();
+        
+        // Update row_managed_members to include all current row-defined members
+        self.row_managed_members = row_defined_members.clone();
+        
+        tracing::debug!("Type {}: removed {} old row members, will add {} new row members, preserving {} imported row members", 
+            self.name_str, removed_old, row_defined_members.len(), 
+            self.row_managed_members.len() - row_defined_members.len());
         
         // Collect all fields from row constraints
         for constraint in env.constraints() {
@@ -616,6 +672,7 @@ impl TypeDef {
                         if type_var == &row_var => {
                         match metadata {
                             FieldMetadata::RecordField { index, has_default, .. } => {
+                                tracing::debug!("Adding property {} to type {}", label, self.name_str);
                                 self.members.insert(
                                     label.clone(),
                                     TypeMember::Property(Property {

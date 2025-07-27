@@ -13,7 +13,6 @@ mod tests {
         type_var_id::TypeVarKind,
         ExprMetaStorage,
     };
-    use std::collections::HashMap;
     
     /// Test that enum variants can be defined through row constraints
     #[test]
@@ -58,15 +57,13 @@ mod tests {
             },
         });
         
-        let result_def = TypeDef {
-            symbol_id: result_id,
-            name_str: "Result".to_string(),
-            kind: TypeDefKind::Enum,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(result_row.clone()),
-        };
+        let mut result_def = TypeDef::new(
+            result_id,
+            "Result".to_string(),
+            TypeDefKind::Enum,
+            vec![],
+        );
+        result_def.row_var = Some(result_row.clone());
         
         env.register(&result_def).unwrap();
         
@@ -170,15 +167,13 @@ mod tests {
         
         // Create the enum
         let error_enum_id = SymbolID(8001);
-        let error_enum_def = TypeDef {
-            symbol_id: error_enum_id,
-            name_str: "Error".to_string(),
-            kind: TypeDefKind::Enum,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(all_errors.clone()),
-        };
+        let mut error_enum_def = TypeDef::new(
+            error_enum_id,
+            "Error".to_string(),
+            TypeDefKind::Enum,
+            vec![],
+        );
+        error_enum_def.row_var = Some(all_errors.clone());
         
         env.register(&error_enum_def).unwrap();
         

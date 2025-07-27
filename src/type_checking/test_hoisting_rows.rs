@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    
     use crate::{
         SymbolID,
         constraint::Constraint,
@@ -30,15 +28,13 @@ mod tests {
             ExprID(1),
         );
         
-        let mut type_def = TypeDef {
-            symbol_id: point_id,
-            name_str: name_str.to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(row_var),
-        };
+        let mut type_def = TypeDef::new(
+            point_id,
+            name_str.to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
+        type_def.row_var = Some(row_var);
         
         // Register the type
         env.register(&type_def).unwrap();
@@ -87,15 +83,13 @@ mod tests {
             ExprID(10),
         );
         
-        let mut type_def = TypeDef {
-            symbol_id: option_id,
-            name_str: name_str.to_string(),
-            kind: TypeDefKind::Enum,
-            type_parameters: vec![], // simplified
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(row_var),
-        };
+        let mut type_def = TypeDef::new(
+            option_id,
+            name_str.to_string(),
+            TypeDefKind::Enum,
+            vec![], // simplified
+        );
+        type_def.row_var = Some(row_var);
         
         env.register(&type_def).unwrap();
         

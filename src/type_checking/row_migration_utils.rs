@@ -190,20 +190,16 @@ pub fn restrict_row_fields(
 mod tests {
     use super::*;
     use crate::{ExprMetaStorage, type_def::{TypeDefKind, Property}, SymbolID};
-    use std::collections::HashMap;
     
     #[test]
     fn test_migrate_type_to_rows() {
         let mut env = Environment::new();
-        let mut type_def = TypeDef {
-            symbol_id: SymbolID(7000),
-            name_str: "Point".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: None,
-        };
+        let mut type_def = TypeDef::new(
+            SymbolID(7000),
+            "Point".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
         
         // Add members
         type_def.members.insert(

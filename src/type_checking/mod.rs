@@ -79,6 +79,12 @@ pub mod test_row_extensions;
 #[cfg(test)]
 pub mod test_row_constraint_persistence;
 #[cfg(test)]
+pub mod test_row_populate_robust;
+#[cfg(test)]
+pub mod test_row_populate_edge_case;
+#[cfg(test)]
+pub mod test_row_populate_real_world;
+#[cfg(test)]
 pub mod example_row_usage;
 #[cfg(test)]
 pub mod type_checker_tests;

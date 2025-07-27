@@ -14,7 +14,6 @@ mod tests {
         ExprMetaStorage,
         conformance::Conformance,
     };
-    use std::collections::HashMap;
     
     /// Test that a type with the right row structure conforms to a protocol
     #[test]
@@ -74,15 +73,13 @@ mod tests {
         });
         
         // Create the protocol definition
-        let drawable_protocol = TypeDef {
-            symbol_id: drawable_id,
-            name_str: "Drawable".to_string(),
-            kind: TypeDefKind::Protocol,
-            type_parameters: vec![],
-            members: HashMap::new(), // Will be populated from row
-            conformances: vec![],
-            row_var: Some(drawable_row.clone()),
-        };
+        let mut drawable_protocol = TypeDef::new(
+            drawable_id,
+            "Drawable".to_string(),
+            TypeDefKind::Protocol,
+            vec![],
+        );
+        drawable_protocol.row_var = Some(drawable_row.clone());
         
         env.register(&drawable_protocol).unwrap();
         
@@ -150,18 +147,17 @@ mod tests {
             },
         });
         
-        let circle_def = TypeDef {
-            symbol_id: circle_id,
-            name_str: "Circle".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![Conformance {
-                protocol_id: drawable_id,
-                associated_types: vec![],
-            }],
-            row_var: Some(circle_row.clone()),
-        };
+        let mut circle_def = TypeDef::new(
+            circle_id,
+            "Circle".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
+        circle_def.conformances = vec![Conformance {
+            protocol_id: drawable_id,
+            associated_types: vec![],
+        }];
+        circle_def.row_var = Some(circle_row.clone());
         
         env.register(&circle_def).unwrap();
         

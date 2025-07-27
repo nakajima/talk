@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    
     use crate::{
         SymbolID,
         conformance::Conformance,
@@ -35,15 +33,13 @@ mod tests {
             ExprID(1),
         );
         
-        let drawable_def = TypeDef {
-            symbol_id: drawable_id,
-            name_str: "Drawable".to_string(),
-            kind: TypeDefKind::Protocol,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(drawable_row.clone()),
-        };
+        let mut drawable_def = TypeDef::new(
+            drawable_id,
+            "Drawable".to_string(),
+            TypeDefKind::Protocol,
+            vec![],
+        );
+        drawable_def.row_var = Some(drawable_row.clone());
         
         env.register(&drawable_def).unwrap();
         
@@ -65,20 +61,19 @@ mod tests {
             ExprID(3),
         );
         
-        let mut circle_def = TypeDef {
-            symbol_id: circle_id,
-            name_str: "Circle".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![
-                Conformance {
-                    protocol_id: drawable_id,
-                    associated_types: vec![],
-                }
-            ],
-            row_var: Some(circle_row.clone()),
-        };
+        let mut circle_def = TypeDef::new(
+            circle_id,
+            "Circle".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
+        circle_def.conformances = vec![
+            Conformance {
+                protocol_id: drawable_id,
+                associated_types: vec![],
+            }
+        ];
+        circle_def.row_var = Some(circle_row.clone());
         
         env.register(&circle_def).unwrap();
         

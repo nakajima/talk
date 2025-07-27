@@ -13,7 +13,6 @@ mod tests {
         type_var_id::TypeVarKind,
         ExprMetaStorage,
     };
-    use std::collections::HashMap;
     
     /// This test shows how to compose types using row operations
     /// instead of traditional inheritance or mixins
@@ -97,15 +96,13 @@ mod tests {
         
         // Step 3: Create an actual ColoredPoint type that uses this row
         let colored_point_id = SymbolID(5000);
-        let colored_point_def = TypeDef {
-            symbol_id: colored_point_id,
-            name_str: "ColoredPoint".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(colored_point_row.clone()),
-        };
+        let mut colored_point_def = TypeDef::new(
+            colored_point_id,
+            "ColoredPoint".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
+        colored_point_def.row_var = Some(colored_point_row.clone());
         
         env.register(&colored_point_def).unwrap();
         

@@ -336,6 +336,8 @@ impl Environment {
                     existing_def.row_var = def.row_var.clone();
                 }
                 existing_def.conformances.extend(def.conformances.clone());
+                // Merge row_managed_members even in this case
+                existing_def.merge_row_managed_members(&def);
             } else {
                 // Normal merge - add new members to existing
                 for (name, member) in &def.members {
@@ -348,6 +350,8 @@ impl Environment {
                 if existing_def.row_var.is_none() && def.row_var.is_some() {
                     existing_def.row_var = def.row_var.clone();
                 }
+                // Merge row_managed_members set
+                existing_def.merge_row_managed_members(&def);
             }
             tracing::debug!("After merge, {} has {} members", 
                 existing_def.name_str, existing_def.members.len());

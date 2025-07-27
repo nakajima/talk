@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    
     use crate::{
         SymbolID,
         constraint::Constraint,
@@ -32,15 +30,13 @@ mod tests {
         );
         
         // Create the TypeDef with row_var set
-        let point_def = TypeDef {
-            symbol_id: point_id,
-            name_str: "Point".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(), // No traditional members
-            conformances: vec![],
-            row_var: Some(point_row.clone()),
-        };
+        let mut point_def = TypeDef::new(
+            point_id,
+            "Point".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
+        point_def.row_var = Some(point_row.clone());
         
         // Register the type
         env.register(&point_def).unwrap();
@@ -110,15 +106,13 @@ mod tests {
         );
         
         // Create TypeDef with some traditional members
-        let mut rect_def = TypeDef {
-            symbol_id: rect_id,
-            name_str: "Rectangle".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: Some(rect_row.clone()),
-        };
+        let mut rect_def = TypeDef::new(
+            rect_id,
+            "Rectangle".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
+        rect_def.row_var = Some(rect_row.clone());
         
         // Add a traditional property (for backwards compatibility)
         rect_def.members.insert(

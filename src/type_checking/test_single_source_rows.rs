@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    
     use crate::{
         SymbolID,
         ExprMetaStorage,
@@ -18,15 +16,12 @@ mod tests {
         
         // Create a struct type
         let struct_id = SymbolID(1000);
-        let mut struct_def = TypeDef {
-            symbol_id: struct_id,
-            name_str: "Point".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: None,
-        };
+        let mut struct_def = TypeDef::new(
+            struct_id,
+            "Point".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
         
         // Register the type
         env.register(&struct_def).unwrap();
@@ -73,15 +68,12 @@ mod tests {
         
         // Create a struct
         let struct_id = SymbolID(2000);
-        let mut struct_def = TypeDef {
-            symbol_id: struct_id,
-            name_str: "Rectangle".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: None,
-        };
+        let mut struct_def = TypeDef::new(
+            struct_id,
+            "Rectangle".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
         
         env.register(&struct_def).unwrap();
         

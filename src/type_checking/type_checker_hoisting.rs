@@ -66,6 +66,9 @@ impl<'a> TypeChecker<'a> {
 
                 let mut our_type_def = type_def.clone();
                 our_type_def.symbol_id = *our_symbol;
+                // Clear row_managed_members since row management is compilation-unit specific
+                // The imported type's members are already in the members HashMap
+                our_type_def.clear_row_managed_members();
 
                 let mut our_type_parameters = vec![];
                 let mut substitutions = Substitutions::new();
@@ -385,15 +388,20 @@ impl<'a> TypeChecker<'a> {
                     }
                 };
 
-                TypeDef {
-                    symbol_id: *symbol_id,
-                    name_str: name_str.clone(),
+                // Create new TypeDef, but preserve row_managed_members if type exists
+                let mut new_def = TypeDef::new(
+                    *symbol_id,
+                    name_str.clone(),
                     kind,
-                    type_parameters: type_params,
-                    members: Default::default(),
-                    conformances: Default::default(),
-                    row_var: None,  // Row vars can be added later if needed
+                    type_params,
+                );
+                
+                // If this type already exists, preserve its row_managed_members
+                if let Some(existing) = env.lookup_type(symbol_id) {
+                    new_def.merge_row_managed_members(existing);
                 }
+                
+                new_def
             });
 
             // Only register if this is a new type definition, not an extension

@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 mod examples {
-    use std::collections::HashMap;
-    
     use crate::{
         SymbolID,
         constraint::Constraint,
@@ -23,15 +21,12 @@ mod examples {
         
         // Step 1: Create the TypeDef
         let point_id = SymbolID(1000);
-        let mut point_def = TypeDef {
-            symbol_id: point_id,
-            name_str: "Point".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: None, // Will be created automatically
-        };
+        let mut point_def = TypeDef::new(
+            point_id,
+            "Point".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
         
         // Step 2: Register the type
         env.register(&point_def).unwrap();
@@ -75,15 +70,12 @@ mod examples {
         
         // Create a type and add members in multiple calls
         let rect_id = SymbolID(2000);
-        let mut rect_def = TypeDef {
-            symbol_id: rect_id,
-            name_str: "Rectangle".to_string(),
-            kind: TypeDefKind::Struct,
-            type_parameters: vec![],
-            members: HashMap::new(),
-            conformances: vec![],
-            row_var: None,
-        };
+        let mut rect_def = TypeDef::new(
+            rect_id,
+            "Rectangle".to_string(),
+            TypeDefKind::Struct,
+            vec![],
+        );
         
         env.register(&rect_def).unwrap();
         
