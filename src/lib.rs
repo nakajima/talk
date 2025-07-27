@@ -42,9 +42,6 @@ pub mod lsp;
 pub mod test_utils;
 
 #[cfg(test)]
-mod semantic_index_bench;
-
-#[cfg(test)]
 #[ctor::ctor]
 pub fn init_tracing() {
     test_utils::trace::init()
