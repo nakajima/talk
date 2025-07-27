@@ -2,8 +2,7 @@ use crate::{
     environment::Environment,
     lowering::ir_module::IRModule,
     transforms::{
-        constant_folding::ConstantFolder,
-        dead_code_elimination::DeadCodeEliminator,
+        constant_folding::ConstantFolder, dead_code_elimination::DeadCodeEliminator,
         monomorphizer::Monomorphizer,
     },
 };

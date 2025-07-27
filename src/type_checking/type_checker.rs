@@ -1876,12 +1876,15 @@ impl<'a> TypeChecker<'a> {
 
                 // Record the member access in the semantic index
                 // Note: resolved_symbol will be None for now, will be filled in during constraint solving
-                env.semantic_index.record_expression(id, ResolvedExpr::MemberAccess {
-                    receiver: typed_receiver.id,
-                    member_name: member_name.to_string(),
-                    resolved_symbol: None,
-                    ty: member_var.clone(),
-                });
+                env.semantic_index.record_expression(
+                    id,
+                    ResolvedExpr::MemberAccess {
+                        receiver: typed_receiver.id,
+                        member_name: member_name.to_string(),
+                        resolved_symbol: None,
+                        ty: member_var.clone(),
+                    },
+                );
 
                 // Record the span if available
                 if let Some(meta) = self.meta.get(&id) {

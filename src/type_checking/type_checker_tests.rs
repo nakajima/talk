@@ -3633,7 +3633,6 @@ mod tests {
         }
     }
 
-
     /// Test non-exhaustive match detection with persisted constraints
     #[test]
     fn test_non_exhaustive_with_persisted_constraints() {
@@ -7515,10 +7514,10 @@ mod tests {
             let x: Int = c.value  // Should resolve to Int, not T
             ",
         );
-        
+
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_immutable_row_spec() {
         // This tests that RowSpec substitution returns new instance
@@ -7536,10 +7535,10 @@ mod tests {
             let y: String = g2.field
             ",
         );
-        
+
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_field_type_consistency() {
         // Test that fields maintain consistent types
@@ -7562,10 +7561,10 @@ mod tests {
             let sum = getX(p) + getY(p)
             ",
         );
-        
+
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_row_concatenation_type_consistency() {
         // Test that row concatenation properly handles field type conflicts
@@ -7587,11 +7586,11 @@ mod tests {
             }
             ",
         );
-        
+
         // The type checker should handle this gracefully
         assert!(result.is_ok() || result.is_err());
     }
-    
+
     #[test]
     fn test_row_restriction_validation() {
         // Test that row restriction properly validates constraints
@@ -7617,10 +7616,10 @@ mod tests {
             let r2 = dropY(r)  // Should have x and z
             ",
         );
-        
+
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_row_operations_preserve_type_safety() {
         // Test that row operations maintain type safety through transformations
@@ -7644,8 +7643,7 @@ mod tests {
             // let z = p2d.z  // This should fail - z was restricted
             ",
         );
-        
+
         assert!(result.is_ok());
     }
-
 }

@@ -229,7 +229,9 @@ impl<'a> TypeChecker<'a> {
                 }
             };
 
-            if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_)) && !matches!(expr_ids.kind, PredeclarationKind::Extension) {
+            if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_))
+                && !matches!(expr_ids.kind, PredeclarationKind::Extension)
+            {
                 let scheme = Scheme::new(ty, unbound_vars, vec![]);
                 env.declare(*symbol_id, scheme).map_err(|e| (root.id, e))?;
             }
@@ -402,18 +404,13 @@ impl<'a> TypeChecker<'a> {
                 };
 
                 // Create new TypeDef, but preserve row_managed_members if type exists
-                let mut new_def = TypeDef::new(
-                    *symbol_id,
-                    name_str.clone(),
-                    kind,
-                    type_params,
-                );
-                
+                let mut new_def = TypeDef::new(*symbol_id, name_str.clone(), kind, type_params);
+
                 // If this type already exists, preserve its row_managed_members
                 if let Some(existing) = env.lookup_type(symbol_id) {
                     new_def.merge_row_managed_members(existing);
                 }
-                
+
                 new_def
             });
 
@@ -517,15 +514,16 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 def.add_method_requirements(method_requirements.clone());
-                env.register_with_mode(&def, placeholders.is_extension).map_err(|e| {
-                    (
-                        method_requirements
-                            .last()
-                            .map(|p| p.expr_id)
-                            .unwrap_or_default(),
-                        e,
-                    )
-                })?;
+                env.register_with_mode(&def, placeholders.is_extension)
+                    .map_err(|e| {
+                        (
+                            method_requirements
+                                .last()
+                                .map(|p| p.expr_id)
+                                .unwrap_or_default(),
+                            e,
+                        )
+                    })?;
             }
 
             if def.kind != TypeDefKind::Enum {
@@ -546,12 +544,13 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 def.add_initializers_with_rows(initializers.clone(), env);
-                env.register_with_mode(&def, placeholders.is_extension).map_err(|e| {
-                    (
-                        initializers.last().map(|p| p.expr_id).unwrap_or_default(),
-                        e,
-                    )
-                })?;
+                env.register_with_mode(&def, placeholders.is_extension)
+                    .map_err(|e| {
+                        (
+                            initializers.last().map(|p| p.expr_id).unwrap_or_default(),
+                            e,
+                        )
+                    })?;
             }
 
             if def.kind == TypeDefKind::Enum {
@@ -568,7 +567,8 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 def.add_variants_with_rows(variants, env);
-                env.register_with_mode(&def, placeholders.is_extension).map_err(|e| (Default::default(), e))?;
+                env.register_with_mode(&def, placeholders.is_extension)
+                    .map_err(|e| (Default::default(), e))?;
             }
 
             let mut conformance_constraints = vec![];
@@ -593,7 +593,8 @@ impl<'a> TypeChecker<'a> {
             }
 
             def.add_conformances(conformances);
-            env.register_with_mode(&def, placeholders.is_extension).map_err(|e| (Default::default(), e))?;
+            env.register_with_mode(&def, placeholders.is_extension)
+                .map_err(|e| (Default::default(), e))?;
 
             for constraint in conformance_constraints {
                 env.constrain(constraint);
@@ -823,7 +824,12 @@ pub struct RawMethod<'a> {
 }
 
 impl<'a> RawMethod<'a> {
-    pub fn new(name: String, expr: &'a ParsedExpr, placeholder: TypeVarID, symbol_id: SymbolID) -> Self {
+    pub fn new(
+        name: String,
+        expr: &'a ParsedExpr,
+        placeholder: TypeVarID,
+        symbol_id: SymbolID,
+    ) -> Self {
         Self {
             name,
             expr,

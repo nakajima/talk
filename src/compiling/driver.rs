@@ -165,15 +165,15 @@ impl Driver {
             let parsed = unit.clone().parse(self.config.include_comments);
             let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
             let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
-            
+
             // Update the unit's environment with the typed environment to preserve semantic index
             let mut updated_unit = unit;
             updated_unit.env = typed.env.clone();
             new_units.push(updated_unit);
-            
+
             result.push(typed);
         }
-        
+
         // Update the driver's units with the new environments
         self.units = new_units;
 
@@ -208,15 +208,19 @@ impl Driver {
             if !unit.has_file(path) {
                 continue;
             }
-            
+
             // Look for an expression at this position
-            if let Some(expr_id) = unit.env.semantic_index.find_expr_at_position(&position, path) {
+            if let Some(expr_id) = unit
+                .env
+                .semantic_index
+                .find_expr_at_position(&position, path)
+            {
                 if let Some(symbol) = unit.env.semantic_index.expr_symbol(expr_id) {
                     return Some(symbol);
                 }
             }
         }
-        
+
         // Fall back to traditional symbol map
         self.symbol_from_position(position, path).copied()
     }

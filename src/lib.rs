@@ -18,6 +18,7 @@ pub mod builtins;
 pub use builtins::*;
 pub mod semantic_index;
 pub mod source_file;
+pub mod span_index;
 pub use source_file::*;
 pub mod symbol_table;
 pub use symbol_table::*;
@@ -39,6 +40,9 @@ pub mod lsp;
 
 #[cfg(test)]
 pub mod test_utils;
+
+#[cfg(test)]
+mod semantic_index_bench;
 
 #[cfg(test)]
 #[ctor::ctor]

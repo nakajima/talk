@@ -180,8 +180,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
         tracing::info!(
             "\n{}:{}\n{:?}\n{}\n",
             func.name,
-            func
-                .debug_info
+            func.debug_info
                 .get(&BasicBlockID(frame.block_idx as u32))
                 .map(|i| i.get(&frame.pc))
                 .map(|expr_id| format!("{expr_id:?}"))
@@ -296,12 +295,10 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                             }
                         }
                     }
-                    Callee::Name(name) => {
-                        *self
-                            .function_map
-                            .get(&name)
-                            .ok_or(InterpreterError::CalleeNotFound(name))?
-                    }
+                    Callee::Name(name) => *self
+                        .function_map
+                        .get(&name)
+                        .ok_or(InterpreterError::CalleeNotFound(name))?,
                 };
 
                 let arg_values = self.register_values(&args);
@@ -535,9 +532,10 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
     fn set_register_value(&mut self, register: &Register, value: Value) {
         tracing::trace!("set {register:?} to {value:?}");
         let frame = self.call_stack.last_mut().expect("Stack underflow");
-        let stack = self
-            .memory
-            .range_mut(frame.sp, self.program.functions[frame.function].size as usize);
+        let stack = self.memory.range_mut(
+            frame.sp,
+            self.program.functions[frame.function].size as usize,
+        );
         stack[register.0 as usize] = Some(value);
     }
 
@@ -551,7 +549,10 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
     fn register_value(&self, register: &Register) -> Value {
         let frame = self.call_stack.last().expect("Stack underflow");
-        let stack = self.memory.range(frame.sp, self.program.functions[frame.function].size as usize);
+        let stack = self.memory.range(
+            frame.sp,
+            self.program.functions[frame.function].size as usize,
+        );
         stack[register.0 as usize]
             .clone()
             .expect("null pointer lol")

@@ -11,17 +11,17 @@ use async_lsp::lsp_types::{
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentDiagnosticParams,
     DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, FullDocumentDiagnosticReport,
+    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, DocumentSymbol,
+    DocumentSymbolParams, DocumentSymbolResponse, FullDocumentDiagnosticReport,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, InitializeParams, InitializeResult, Location, MarkupContent,
     MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range, ReferenceParams,
-    RenameOptions, RenameParams, SymbolKind as LspSymbolKind, WorkspaceEdit,
-    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, SemanticTokens,
-    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensParams,
-    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
-    UnchangedDocumentDiagnosticReport, Url,
+    RelatedFullDocumentDiagnosticReport, RelatedUnchangedDocumentDiagnosticReport, RenameOptions,
+    RenameParams, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, SymbolKind as LspSymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, UnchangedDocumentDiagnosticReport,
+    Url, WorkspaceEdit,
 };
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::router::Router;
@@ -335,7 +335,7 @@ impl LanguageServer for ServerState {
         };
 
         let position = params.text_document_position_params.position;
-        
+
         // Find the symbol at the hover position
         let Some(symbol_id) = self.driver.symbol_at_position(
             crate::diagnostic::Position {
@@ -346,12 +346,12 @@ impl LanguageServer for ServerState {
         ) else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         // Get symbol information
         let Some(info) = self.driver.symbol_table.get(&symbol_id) else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         // Get type information from the environment
         let mut type_info = None;
         for unit in &self.driver.units {
@@ -366,7 +366,7 @@ impl LanguageServer for ServerState {
                 ) {
                     type_info = unit.env.semantic_index.expr_type(expr_id);
                 }
-                
+
                 // Fallback to symbol table lookup
                 if type_info.is_none() {
                     if let Ok(scheme) = unit.env.lookup_symbol(&symbol_id) {
@@ -376,32 +376,32 @@ impl LanguageServer for ServerState {
                 break;
             }
         }
-        
+
         // Format the hover content
         let mut contents = vec![];
-        
+
         // Add type signature
         if let Some(ty) = type_info {
             contents.push(format!("```talk\n{}: {}\n```", info.name, ty));
         } else {
             contents.push(format!("```talk\n{}\n```", info.name));
         }
-        
+
         // Add documentation if available
         if let Some(doc) = &info.documentation {
             contents.push(format!("---\n\n{}", doc));
         }
-        
+
         // Add symbol kind information
         contents.push(format!("_{:?}_", info.kind));
-        
+
         // Add definition location if available
         if let Some(def) = &info.definition {
             contents.push(format!("\nDefined at `{}`", def.path.display()));
         }
-        
+
         let hover_text = contents.join("\n\n");
-        
+
         Box::pin(async move {
             Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -463,20 +463,22 @@ impl LanguageServer for ServerState {
         self.driver.update_file(&path, contents);
         self.driver.check();
         self.refresh_semantic_tokens();
-        
+
         // Publish diagnostics for the opened file
         let diagnostics = self.refresh_diagnostics_for(&path);
         if let Ok(uri) = Url::from_file_path(&path) {
             let mut client = self.client.clone();
             tokio::spawn(async move {
-                client.publish_diagnostics(PublishDiagnosticsParams {
-                    uri,
-                    diagnostics,
-                    version: None,
-                }).ok();
+                client
+                    .publish_diagnostics(PublishDiagnosticsParams {
+                        uri,
+                        diagnostics,
+                        version: None,
+                    })
+                    .ok();
             });
         }
-        
+
         ControlFlow::Continue(())
     }
 
@@ -492,37 +494,39 @@ impl LanguageServer for ServerState {
 
         self.driver.check();
         self.refresh_semantic_tokens();
-        
+
         // Publish diagnostics for all files since save might affect multiple files
         let files_with_diagnostics = {
             if let Ok(session) = self.driver.session.lock() {
                 let mut files_with_diagnostics = std::collections::HashSet::new();
                 files_with_diagnostics.insert(path.clone());
-                
+
                 for diagnostic in &session.diagnostics {
                     files_with_diagnostics.insert(diagnostic.path.clone());
                 }
-                
+
                 files_with_diagnostics
             } else {
                 std::collections::HashSet::new()
             }
         };
-        
+
         for file_path in files_with_diagnostics {
             let diagnostics = self.refresh_diagnostics_for(&file_path);
             if let Ok(uri) = Url::from_file_path(&file_path) {
                 let mut client = self.client.clone();
                 tokio::spawn(async move {
-                    client.publish_diagnostics(PublishDiagnosticsParams {
-                        uri,
-                        diagnostics,
-                        version: None,
-                    }).ok();
+                    client
+                        .publish_diagnostics(PublishDiagnosticsParams {
+                            uri,
+                            diagnostics,
+                            version: None,
+                        })
+                        .ok();
                 });
             }
         }
-        
+
         ControlFlow::Continue(())
     }
 
@@ -535,7 +539,7 @@ impl LanguageServer for ServerState {
         if let Some(change) = params.content_changes.first() {
             self.driver.update_file(&path, change.text.clone());
             self.refresh_semantic_tokens();
-            
+
             // Mark this file as needing diagnostics refresh
             if !self.pending_diagnostics.contains(&path) {
                 self.pending_diagnostics.push(path);
@@ -563,7 +567,7 @@ impl LanguageServer for ServerState {
     fn did_close(&mut self, _params: DidCloseTextDocumentParams) -> Self::NotifyResult {
         ControlFlow::Continue(())
     }
-    
+
     fn document_symbol(
         &mut self,
         params: DocumentSymbolParams,
@@ -571,24 +575,24 @@ impl LanguageServer for ServerState {
         let Ok(path) = params.text_document.uri.to_file_path() else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         // Check if we have this file
         if !self.driver.has_file(&path) {
             return Box::pin(async { Ok(None) });
         }
-        
+
         let mut symbols = Vec::new();
-        
+
         // Collect all symbols from the file
         for (span, symbol_id) in &self.driver.symbol_table.symbol_map {
             if span.path != path {
                 continue;
             }
-            
+
             let Some(info) = self.driver.symbol_table.get(symbol_id) else {
                 continue;
             };
-            
+
             // Convert our symbol kind to LSP symbol kind
             let kind = match info.kind {
                 crate::SymbolKind::FuncDef => LspSymbolKind::FUNCTION,
@@ -604,12 +608,12 @@ impl LanguageServer for ServerState {
                 crate::SymbolKind::BuiltinFunc => LspSymbolKind::FUNCTION,
                 _ => LspSymbolKind::VARIABLE,
             };
-            
+
             let range = Range::new(
                 Position::new(span.start_line, span.start_col),
                 Position::new(span.end_line, span.end_col),
             );
-            
+
             #[allow(deprecated)]
             symbols.push(DocumentSymbol {
                 name: info.name.clone(),
@@ -622,29 +626,35 @@ impl LanguageServer for ServerState {
                 children: None,
             });
         }
-        
+
         // Sort symbols by position
         symbols.sort_by(|a, b| {
-            a.range.start.line.cmp(&b.range.start.line)
+            a.range
+                .start
+                .line
+                .cmp(&b.range.start.line)
                 .then(a.range.start.character.cmp(&b.range.start.character))
         });
-        
-        Box::pin(async move {
-            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
-        })
+
+        Box::pin(async move { Ok(Some(DocumentSymbolResponse::Nested(symbols))) })
     }
-    
+
     fn rename(
         &mut self,
         params: RenameParams,
     ) -> BoxFuture<'static, Result<Option<WorkspaceEdit>, Self::Error>> {
-        let Ok(path) = params.text_document_position.text_document.uri.to_file_path() else {
+        let Ok(path) = params
+            .text_document_position
+            .text_document
+            .uri
+            .to_file_path()
+        else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-        
+
         // Find the symbol at the rename position
         let Some(symbol_id) = self.driver.symbol_at_position(
             crate::diagnostic::Position {
@@ -655,34 +665,38 @@ impl LanguageServer for ServerState {
         ) else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         // Collect all occurrences of this symbol across all files
-        let mut edits_by_file: std::collections::HashMap<Url, Vec<TextEdit>> = std::collections::HashMap::new();
-        
+        let mut edits_by_file: std::collections::HashMap<Url, Vec<TextEdit>> =
+            std::collections::HashMap::new();
+
         for (span, sym_id) in &self.driver.symbol_table.symbol_map {
             if sym_id == &symbol_id {
                 let range = Range::new(
                     Position::new(span.start_line, span.start_col),
                     Position::new(span.end_line, span.end_col),
                 );
-                
+
                 let text_edit = TextEdit {
                     range,
                     new_text: new_name.clone(),
                 };
-                
+
                 if let Ok(uri) = Url::from_file_path(&span.path) {
-                    edits_by_file.entry(uri).or_insert_with(Vec::new).push(text_edit);
+                    edits_by_file
+                        .entry(uri)
+                        .or_insert_with(Vec::new)
+                        .push(text_edit);
                 }
             }
         }
-        
+
         // Convert to workspace edit
         let mut changes = std::collections::HashMap::new();
         for (uri, edits) in edits_by_file {
             changes.insert(uri, edits);
         }
-        
+
         Box::pin(async move {
             Ok(Some(WorkspaceEdit {
                 changes: Some(changes),
@@ -691,17 +705,22 @@ impl LanguageServer for ServerState {
             }))
         })
     }
-    
+
     fn references(
         &mut self,
         params: ReferenceParams,
     ) -> BoxFuture<'static, Result<Option<Vec<Location>>, Self::Error>> {
-        let Ok(path) = params.text_document_position.text_document.uri.to_file_path() else {
+        let Ok(path) = params
+            .text_document_position
+            .text_document
+            .uri
+            .to_file_path()
+        else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         let position = params.text_document_position.position;
-        
+
         // Find the symbol at the reference position
         let Some(symbol_id) = self.driver.symbol_at_position(
             crate::diagnostic::Position {
@@ -712,10 +731,10 @@ impl LanguageServer for ServerState {
         ) else {
             return Box::pin(async { Ok(None) });
         };
-        
+
         // Collect all references to this symbol
         let mut locations = Vec::new();
-        
+
         for (span, sym_id) in &self.driver.symbol_table.symbol_map {
             if sym_id == &symbol_id {
                 if let Ok(uri) = Url::from_file_path(&span.path) {
@@ -730,7 +749,7 @@ impl LanguageServer for ServerState {
                 }
             }
         }
-        
+
         // Include the definition if requested
         if params.context.include_declaration {
             if let Some(info) = self.driver.symbol_table.get(&symbol_id) {
@@ -744,14 +763,17 @@ impl LanguageServer for ServerState {
                             ),
                         );
                         // Only add if not already in the list
-                        if !locations.iter().any(|l| l.uri == location.uri && l.range == location.range) {
+                        if !locations
+                            .iter()
+                            .any(|l| l.uri == location.uri && l.range == location.range)
+                        {
                             locations.push(location);
                         }
                     }
                 }
             }
         }
-        
+
         Box::pin(async move {
             if locations.is_empty() {
                 Ok(None)
@@ -786,46 +808,48 @@ impl ServerState {
 
     fn on_tick(&mut self, _: TickEvent) -> ControlFlow<async_lsp::Result<()>> {
         self.counter += 1;
-        
+
         // Check if we have pending diagnostics and enough time has passed (500ms = ~0.5 ticks)
         if !self.pending_diagnostics.is_empty() && self.counter > self.last_change_tick {
             // Run diagnostics for all pending files
             self.driver.check();
-            
+
             // Get all files with diagnostics to publish updates for all affected files
             let mut files_to_publish = std::collections::HashSet::new();
-            
+
             // Add pending files
             for path in &self.pending_diagnostics {
                 files_to_publish.insert(path.clone());
             }
-            
+
             // Add all files that have diagnostics (to clear stale ones)
             if let Ok(session) = self.driver.session.lock() {
                 for diagnostic in &session.diagnostics {
                     files_to_publish.insert(diagnostic.path.clone());
                 }
             }
-            
+
             // Publish diagnostics for each file
             for path in files_to_publish {
                 let diagnostics = self.refresh_diagnostics_for(&path);
                 if let Ok(uri) = Url::from_file_path(&path) {
                     let mut client = self.client.clone();
                     tokio::spawn(async move {
-                        client.publish_diagnostics(PublishDiagnosticsParams {
-                            uri,
-                            diagnostics,
-                            version: None,
-                        }).ok();
+                        client
+                            .publish_diagnostics(PublishDiagnosticsParams {
+                                uri,
+                                diagnostics,
+                                version: None,
+                            })
+                            .ok();
                     });
                 }
             }
-            
+
             // Clear the pending list
             self.pending_diagnostics.clear();
         }
-        
+
         ControlFlow::Continue(())
     }
 
@@ -997,27 +1021,27 @@ pub async fn start() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_debouncing_logic() {
         // Test the debouncing counter logic
         let mut counter = 0;
         let mut pending_diagnostics: Vec<PathBuf> = Vec::new();
-        
+
         // Simulate adding a pending diagnostic
         pending_diagnostics.push(PathBuf::from("/test/file.tlk"));
         let last_change_tick = counter;
-        
+
         // At the same tick - should not process
         let should_process = !pending_diagnostics.is_empty() && counter > last_change_tick;
         assert!(!should_process, "Should not process at same tick");
-        
+
         // After one tick - should process
         counter += 1;
         let should_process = !pending_diagnostics.is_empty() && counter > last_change_tick;
         assert!(should_process, "Should process after tick");
     }
-    
+
     #[test]
     fn test_position_conversion() {
         // Test line/column calculation
@@ -1035,27 +1059,27 @@ mod tests {
             pending_diagnostics: Vec::new(),
             last_change_tick: 0,
         };
-        
+
         let source = "line1\nline2\nline3";
-        
+
         // Test beginning of file
         let pos = server.line_col_for(0, source);
         assert_eq!(pos, Some(Position::new(0, 0)));
-        
+
         // Test first character of second line
         let pos = server.line_col_for(6, source);
         assert_eq!(pos, Some(Position::new(1, 0)));
-        
+
         // Test middle of second line
         let pos = server.line_col_for(8, source);
         assert_eq!(pos, Some(Position::new(1, 2)));
     }
-    
+
     #[test]
     fn test_document_highlight_range_creation() {
         // Test that document highlights create correct ranges
         use crate::lexing::span::Span;
-        
+
         let span = Span {
             start: 0,
             end: 5,
@@ -1065,24 +1089,24 @@ mod tests {
             end_col: 5,
             path: PathBuf::from("/test/file.tlk"),
         };
-        
+
         // Verify range creation from span
         let range = Range::new(
             Position::new(span.start_line, span.start_col),
             Position::new(span.end_line, span.end_col),
         );
-        
+
         assert_eq!(range.start.line, 0);
         assert_eq!(range.start.character, 0);
         assert_eq!(range.end.line, 0);
         assert_eq!(range.end.character, 5);
     }
-    
+
     #[test]
     fn test_diagnostic_severity() {
         // Verify diagnostic severity is set correctly
         use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
-        
+
         let diagnostic = Diagnostic::new(
             Range::new(Position::new(0, 0), Position::new(0, 5)),
             Some(DiagnosticSeverity::ERROR),
@@ -1092,11 +1116,11 @@ mod tests {
             None,
             None,
         );
-        
+
         assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(diagnostic.message, "Test error");
     }
-    
+
     #[test]
     fn test_prelude_symbols_have_definitions() {
         // Test that prelude symbols have proper file paths
@@ -1108,26 +1132,38 @@ mod tests {
                 include_comments: true,
             },
         );
-        
+
         // Look for Array type in symbol table
         let all_symbols = driver.symbol_table.all();
-        let array_symbol = all_symbols.iter()
+        let array_symbol = all_symbols
+            .iter()
             .find(|(_, info)| info.name == "Array")
             .map(|(id, _)| *id);
-        
-        assert!(array_symbol.is_some(), "Array symbol should exist in prelude");
-        
+
+        assert!(
+            array_symbol.is_some(),
+            "Array symbol should exist in prelude"
+        );
+
         if let Some(symbol_id) = array_symbol {
             let info = driver.symbol_table.get(&symbol_id).unwrap();
-            assert!(info.definition.is_some(), "Array symbol should have a definition");
-            
+            assert!(
+                info.definition.is_some(),
+                "Array symbol should have a definition"
+            );
+
             let definition = info.definition.as_ref().unwrap();
-            assert!(definition.path.is_absolute(), "Prelude symbols should have absolute paths");
-            assert!(definition.path.to_string_lossy().contains("core/Array.tlk"), 
-                    "Array definition should point to core/Array.tlk");
+            assert!(
+                definition.path.is_absolute(),
+                "Prelude symbols should have absolute paths"
+            );
+            assert!(
+                definition.path.to_string_lossy().contains("core/Array.tlk"),
+                "Array definition should point to core/Array.tlk"
+            );
         }
     }
-    
+
     #[test]
     fn test_array_member_definition_lookup() {
         // Test that we can find definitions for array member accesses
@@ -1139,36 +1175,35 @@ mod tests {
                 include_comments: false,
             },
         );
-        
+
         // Add the test file
         let path = PathBuf::from("/test/array_test.tlk");
         let contents = r#"let a = [1,2,3]
 print(a.count)"#;
         driver.update_file(&path, contents);
-        
+
         // Run type checking to populate semantic index
         driver.check();
-        
-        
+
         // Try to find symbol at position of 'count' (line 1, col 8)
-        let symbol = driver.symbol_at_position(
-            crate::diagnostic::Position { line: 1, col: 8 },
-            &path,
-        );
-        
+        let symbol =
+            driver.symbol_at_position(crate::diagnostic::Position { line: 1, col: 8 }, &path);
+
         assert!(symbol.is_some(), "Should find symbol for 'count' property");
-        
+
         if let Some(symbol_id) = symbol {
             let info = driver.symbol_table.get(&symbol_id);
             assert!(info.is_some(), "Symbol should exist in symbol table");
-            
+
             if let Some(info) = info {
                 assert_eq!(info.name, "count", "Symbol should be named 'count'");
                 assert!(info.definition.is_some(), "Symbol should have a definition");
-                
+
                 if let Some(def) = &info.definition {
-                    assert!(def.path.to_string_lossy().contains("Array.tlk"),
-                           "Definition should point to Array.tlk file");
+                    assert!(
+                        def.path.to_string_lossy().contains("Array.tlk"),
+                        "Definition should point to Array.tlk file"
+                    );
                 }
             }
         }

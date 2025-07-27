@@ -278,19 +278,29 @@ impl Constraint {
             Constraint::Retry(c, retries) => {
                 Constraint::Retry(c.replacing(substitutions, context).clone().into(), *retries)
             }
-            Constraint::Row { expr_id, constraint } => {
+            Constraint::Row {
+                expr_id,
+                constraint,
+            } => {
                 use crate::row::RowConstraint;
                 // Apply substitutions to types within row constraints
                 let new_constraint = match constraint {
-                    RowConstraint::HasField { type_var, label, field_ty, metadata } => {
-                        RowConstraint::HasField {
-                            type_var: type_var.clone(),
-                            label: label.clone(),
-                            field_ty: substitutions.apply(field_ty, 0, context),
-                            metadata: metadata.clone(),
-                        }
-                    }
-                    RowConstraint::HasRow { type_var, row, extension } => {
+                    RowConstraint::HasField {
+                        type_var,
+                        label,
+                        field_ty,
+                        metadata,
+                    } => RowConstraint::HasField {
+                        type_var: type_var.clone(),
+                        label: label.clone(),
+                        field_ty: substitutions.apply(field_ty, 0, context),
+                        metadata: metadata.clone(),
+                    },
+                    RowConstraint::HasRow {
+                        type_var,
+                        row,
+                        extension,
+                    } => {
                         let new_row = row.substitute(substitutions);
                         RowConstraint::HasRow {
                             type_var: type_var.clone(),
