@@ -24,11 +24,11 @@ impl SpanIndex {
         let file_index = self
             .by_file_and_line
             .entry(span.path.clone())
-            .or_insert_with(HashMap::new);
+            .or_default();
 
         // Index by all lines the span covers
         for line in span.start_line..=span.end_line {
-            let line_spans = file_index.entry(line).or_insert_with(Vec::new);
+            let line_spans = file_index.entry(line).or_default();
             line_spans.push((expr_id, span.clone()));
         }
     }
