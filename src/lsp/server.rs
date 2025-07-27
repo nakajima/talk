@@ -1018,6 +1018,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::vec_init_then_push)]
     fn test_debouncing_logic() {
         // Test the debouncing counter logic
         let mut counter = 0;
