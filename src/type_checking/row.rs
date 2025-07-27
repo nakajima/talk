@@ -149,11 +149,18 @@ impl RowSpec {
         self.fields.contains_key(label)
     }
 
-    /// Apply type substitutions to all field types
-    pub fn substitute(&mut self, subs: &Substitutions) {
-        for (_, field) in self.fields.iter_mut() {
-            field.ty = crate::constraint_solver::ConstraintSolver::substitute_ty_with_map(&field.ty, subs);
+    /// Apply type substitutions to all field types, returning a new RowSpec
+    pub fn substitute(&self, subs: &Substitutions) -> RowSpec {
+        let mut new_fields = BTreeMap::new();
+        for (label, field) in &self.fields {
+            let new_field = FieldInfo {
+                ty: crate::constraint_solver::ConstraintSolver::substitute_ty_with_map(&field.ty, subs),
+                expr_id: field.expr_id,
+                metadata: field.metadata.clone(),
+            };
+            new_fields.insert(label.clone(), new_field);
         }
+        RowSpec { fields: new_fields }
     }
 
     /// Concatenate two row specs

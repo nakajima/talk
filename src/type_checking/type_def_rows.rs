@@ -42,11 +42,12 @@ impl RowTypeDef {
         kind: TypeDefKind,
         type_parameters: Vec<TypeParameter>,
         env: &mut Environment,
+        expr_id: ExprID,
     ) -> Self {
         // Create a row type variable for this type's members
         let row_var = env.new_type_variable(
             TypeVarKind::CanonicalTypeParameter(format!("{name}_row")),
-            ExprID(0), // TODO: proper expr_id
+            expr_id,
         );
 
         Self {
@@ -192,8 +193,9 @@ impl<'a> RowTypeDefBuilder<'a> {
         kind: TypeDefKind,
         type_parameters: Vec<TypeParameter>,
         env: &'a mut Environment,
+        expr_id: ExprID,
     ) -> Self {
-        let type_def = RowTypeDef::new(symbol_id, name, kind, type_parameters, env);
+        let type_def = RowTypeDef::new(symbol_id, name, kind, type_parameters, env, expr_id);
         Self { type_def, env }
     }
 

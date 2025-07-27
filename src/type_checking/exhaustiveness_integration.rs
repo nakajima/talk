@@ -174,14 +174,38 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             ]);
         }
         
-        // Collect covered variants
-        let covered_variants: BTreeSet<_> = patterns
-            .iter()
-            .filter_map(|p| match p {
-                Pattern::Variant { variant_name, .. } => Some(variant_name.clone()),
-                _ => None,
-            })
-            .collect();
+        // Collect covered variants, considering whether they have restrictive patterns
+        let mut covered_variants = BTreeSet::new();
+        let mut has_restrictive_patterns = false;
+        
+        for pattern in patterns {
+            match pattern {
+                Pattern::Variant { variant_name, fields, .. } => {
+                    // Check if this variant has restrictive patterns (literals)
+                    // Since fields are ParsedExpr, we need to check if any are literals
+                    for field in fields {
+                        // Check if the field is a literal expression
+                        // Fields in patterns are wrapped in ParsedPattern
+                        if let crate::parsed_expr::Expr::ParsedPattern(inner_pattern) = &field.expr {
+                            match inner_pattern {
+                                Pattern::LiteralInt(_) => {
+                                    has_restrictive_patterns = true;
+                                }
+                                Pattern::LiteralFloat(_) => {
+                                    has_restrictive_patterns = true;
+                                }
+                                Pattern::LiteralTrue | Pattern::LiteralFalse => {
+                                    has_restrictive_patterns = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    covered_variants.insert(variant_name.clone());
+                }
+                _ => {}
+            }
+        }
             
         // Find missing variants
         let all_variant_names: BTreeSet<_> = enum_info.variants.keys().cloned().collect();
@@ -190,8 +214,17 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             .cloned()
             .collect();
             
-        if missing_variants.is_empty() {
+        if missing_variants.is_empty() && !has_restrictive_patterns {
             ExhaustivenessResult::Exhaustive
+        } else if has_restrictive_patterns {
+            // If we have restrictive patterns (like Thing.Ok(123)), the match is not exhaustive
+            // even if all variants are mentioned, because the patterns don't cover all values
+            ExhaustivenessResult::NonExhaustive(vec![
+                MissingPattern::Variants {
+                    enum_name: "Enum".to_string(),
+                    variant_names: vec!["Pattern with literal values is not exhaustive".to_string()],
+                }
+            ])
         } else {
             ExhaustivenessResult::NonExhaustive(vec![
                 MissingPattern::Variants {
@@ -241,8 +274,7 @@ pub fn check_match_exhaustiveness(
     env: &Environment,
     scrutinee_ty: &Ty,
     patterns: &[Pattern],
-) -> Result<(), String> {
-    
+) -> Result<(), String> {    
     let checker = RowAwareExhaustivenessChecker::new(env);
     
     match checker.check_match(scrutinee_ty, patterns) {

@@ -319,7 +319,7 @@ impl<'a> ConstraintSolver<'a> {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
                 let (member_ty, type_params, type_args) =
-                    self.resolve_member_type(&receiver_ty, member_name)?;
+                    self.resolve_member_type(&receiver_ty, member_name, substitutions)?;
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in type_params.iter().zip(type_args) {
@@ -361,7 +361,7 @@ impl<'a> ConstraintSolver<'a> {
                 let scrutinee_ty = substitutions.apply(scrutinee_ty, 0, &mut self.env.context);
                 self.solve_variant_match(&scrutinee_ty, variant_name, field_tys, substitutions)?;
             }
-            Constraint::Row { constraint, expr_id: _ } => {
+            Constraint::Row { constraint, expr_id } => {
                 use crate::row::RowConstraint;
                 tracing::trace!("Solving row constraint: {:?}", constraint);
                 
@@ -381,11 +381,11 @@ impl<'a> ConstraintSolver<'a> {
                 for existing_constraint in &self.row_constraints[..self.row_constraints.len()-1] {
                     // Process all constraints to build up the row solver's state
                     // If any constraint fails, we should propagate the error
-                    row_solver.solve_row_constraint(existing_constraint, substitutions)?;
+                    row_solver.solve_row_constraint(existing_constraint, ExprID(0), substitutions)?;
                 }
                 
                 // Now solve the current constraint
-                row_solver.solve_row_constraint(constraint, substitutions)?;
+                row_solver.solve_row_constraint(constraint, *expr_id, substitutions)?;
                 
                 // Collect new constraints to add after row solver is done
                 let mut new_constraints = Vec::new();
@@ -622,16 +622,17 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         receiver_ty: &Ty,
         member_name: &str,
+        substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         match receiver_ty {
             builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
                 self.resolve_builtin_member(builtin, member_name)
             }
             Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
-                self.resolve_type_member(type_id, member_name, generics)
+                self.resolve_type_member(type_id, member_name, generics, substitutions)
             }
             Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
-            Ty::TypeVar(type_var) => self.resolve_type_var_member(type_var, member_name),
+            Ty::TypeVar(type_var) => self.resolve_type_var_member(type_var, member_name, substitutions),
             _ => Err(TypeError::MemberNotFound(
                 receiver_ty.to_string(),
                 member_name.to_string(),
@@ -672,6 +673,7 @@ impl<'a> ConstraintSolver<'a> {
         type_id: &SymbolID,
         member_name: &str,
         generics: &[Ty],
+        substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         // First get the type def info we need
         let (type_name, type_params) = {
@@ -696,7 +698,7 @@ impl<'a> ConstraintSolver<'a> {
         // Check if this type uses row-based members
         if let Some(row_var) = &type_def.row_var {
             // Try to resolve through row constraints
-            if let Ok((ty, params, assoc)) = self.resolve_type_var_member(row_var, member_name) {
+            if let Ok((ty, params, assoc)) = self.resolve_type_var_member(row_var, member_name, substitutions) {
                 return Ok((ty, params, assoc));
             }
         }
@@ -737,9 +739,10 @@ impl<'a> ConstraintSolver<'a> {
 
     #[allow(clippy::type_complexity)]
     fn resolve_type_var_member(
-        &self,
+        &mut self,
         type_var: &TypeVarID,
         member_name: &str,
+        substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         let matching_constraints = self
             .constraints
@@ -793,14 +796,18 @@ impl<'a> ConstraintSolver<'a> {
                 RowConstraint::HasField { type_var: tv, label, field_ty, .. } 
                     if tv == type_var && label == member_name => {
                     tracing::trace!("Found matching HasField constraint!");
-                    return Ok((field_ty.clone(), vec![], vec![]));
+                    // Apply current substitutions to the field type
+                    let resolved_ty = Self::substitute_ty_with_map(field_ty, substitutions);
+                    return Ok((resolved_ty, vec![], vec![]));
                 }
                 RowConstraint::HasRow { type_var: tv, row, .. } | 
                 RowConstraint::HasExactRow { type_var: tv, row } 
                     if tv == type_var => {
                     if let Some(field) = row.get_field(&member_name.to_string()) {
                         tracing::trace!("Found field in row constraint!");
-                        return Ok((field.ty.clone(), vec![], vec![]));
+                        // Apply current substitutions to the field type
+                        let resolved_ty = Self::substitute_ty_with_map(&field.ty, substitutions);
+                        return Ok((resolved_ty, vec![], vec![]));
                     }
                 }
                 _ => {}

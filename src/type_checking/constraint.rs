@@ -291,8 +291,7 @@ impl Constraint {
                         }
                     }
                     RowConstraint::HasRow { type_var, row, extension } => {
-                        let mut new_row = row.clone();
-                        new_row.substitute(substitutions);
+                        let new_row = row.substitute(substitutions);
                         RowConstraint::HasRow {
                             type_var: type_var.clone(),
                             row: new_row,
@@ -300,8 +299,7 @@ impl Constraint {
                         }
                     }
                     RowConstraint::HasExactRow { type_var, row } => {
-                        let mut new_row = row.clone();
-                        new_row.substitute(substitutions);
+                        let new_row = row.substitute(substitutions);
                         RowConstraint::HasExactRow {
                             type_var: type_var.clone(),
                             row: new_row,
