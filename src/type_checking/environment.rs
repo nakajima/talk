@@ -44,6 +44,10 @@ pub struct Environment {
     pub context: TypeVarContext,
     next_id: i32,
     generation: u32,
+    /// Row constraints collected during type checking
+    pub row_constraints: Vec<crate::row::RowConstraint>,
+    /// Deferred exhaustiveness checks (match_id, scrutinee_type, patterns)
+    pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty, Vec<crate::parsed_expr::Pattern>)>,
 }
 
 impl Default for Environment {
@@ -60,6 +64,8 @@ impl Default for Environment {
             selfs: vec![],
             context,
             generation: 0,
+            row_constraints: vec![],
+            deferred_exhaustiveness_checks: vec![],
         }
     }
 }
@@ -134,6 +140,10 @@ impl Environment {
     pub fn clear_constraints(&mut self) {
         self.constraints.clear()
     }
+    
+    pub fn defer_exhaustiveness_check(&mut self, match_id: ExprID, scrutinee_ty: Ty, patterns: Vec<crate::parsed_expr::Pattern>) {
+        self.deferred_exhaustiveness_checks.push((match_id, scrutinee_ty, patterns));
+    }
 
     #[tracing::instrument(skip(self, meta))]
     pub fn flush_constraints(
@@ -147,6 +157,15 @@ impl Environment {
 
         for constraint in &solution.unsolved_constraints {
             self.constrain(constraint.clone());
+        }
+
+        // Populate TypeDef members from row constraints after solving
+        let type_ids: Vec<SymbolID> = self.types.keys().cloned().collect();
+        for type_id in type_ids {
+            if let Some(mut type_def) = self.types.remove(&type_id) {
+                type_def.populate_from_rows(self);
+                self.types.insert(type_id, type_def);
+            }
         }
 
         Ok(solution)
@@ -304,12 +323,63 @@ impl Environment {
     }
 
     pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
+        self.register_with_mode(def, false)
+    }
+
+    /// Register a type definition with explicit mode
+    /// If `is_extension` is true, only new members are added to existing types
+    pub fn register_with_mode(
+        &mut self,
+        def: &TypeDef,
+        is_extension: bool,
+    ) -> Result<(), TypeError> {
         self.declare(
             def.symbol_id,
             Scheme::new(def.ty(), def.canonical_type_variables(), vec![]),
         )?;
 
-        self.types.insert(def.symbol_id(), def.clone());
+        // If the type already exists (e.g., from a struct definition being extended),
+        // merge the new members instead of replacing the entire definition
+        if let Some(existing_def) = self.types.get_mut(&def.symbol_id()) {
+            tracing::debug!(
+                "Merging type {} - existing has {} members, new has {} members, is_extension: {}",
+                existing_def.name_str,
+                existing_def.members.len(),
+                def.members.len(),
+                is_extension
+            );
+
+            // Always merge new members into existing
+            for (name, member) in &def.members {
+                tracing::trace!("  Adding member: {}", name);
+                existing_def.members.insert(name.clone(), member.clone());
+            }
+
+            // Merge conformances
+            existing_def.conformances.extend(def.conformances.clone());
+
+            // Update row_var if the new definition has one but existing doesn't
+            if existing_def.row_var.is_none() && def.row_var.is_some() {
+                existing_def.row_var = def.row_var.clone();
+            }
+
+            // Merge row_managed_members set
+            existing_def.merge_row_managed_members(def);
+
+            tracing::debug!(
+                "After merge, {} has {} members",
+                existing_def.name_str,
+                existing_def.members.len()
+            );
+        } else {
+            tracing::trace!(
+                "Inserting new type {} with {} members",
+                def.name_str,
+                def.members.len()
+            );
+            // Type doesn't exist yet, insert the whole definition
+            self.types.insert(def.symbol_id(), def.clone());
+        }
         Ok(())
     }
 

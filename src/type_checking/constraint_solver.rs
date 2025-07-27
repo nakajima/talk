@@ -14,6 +14,7 @@ use crate::{
     environment::{Environment, TypeParameter},
     name::Name,
     parsing::expr_id::ExprID,
+    row_constraints::RowConstraintSolver,
     substitutions::Substitutions,
     ty::Ty,
     type_checker::{Scheme, TypeError},
@@ -40,6 +41,8 @@ pub struct ConstraintSolver<'a> {
     constraints: Vec<Constraint>,
     /// Generation counter for type variables
     generation: u32,
+    /// Solved row constraints for member resolution
+    row_constraints: Vec<crate::row::RowConstraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
@@ -49,6 +52,7 @@ impl<'a> ConstraintSolver<'a> {
             env,
             meta,
             generation,
+            row_constraints: Vec::new(),
         }
     }
 
@@ -73,8 +77,71 @@ impl<'a> ConstraintSolver<'a> {
                             );
                             return true;
                         }
-                        _ => {}
+                        _ => {
+                            // Also defer if there are any unprocessed row constraints for this type var
+                            let has_row_constraints = self.constraints.iter().any(|c| {
+                                matches!(c, Constraint::Row { constraint, .. } if {
+                                    use crate::row::RowConstraint;
+                                    match constraint {
+                                        RowConstraint::HasField { type_var, .. } |
+                                        RowConstraint::HasRow { type_var, .. } |
+                                        RowConstraint::HasExactRow { type_var, .. } => type_var == tv,
+                                        RowConstraint::RowConcat { result, .. } => result == tv,
+                                        RowConstraint::RowRestrict { result, .. } => result == tv,
+                                        _ => false,
+                                    }
+                                })
+                            });
+                            
+                            if has_row_constraints {
+                                tracing::trace!(
+                                    "Deferring MemberAccess on TypeVar with pending row constraints: {:?}",
+                                    tv
+                                );
+                                return true;
+                            }
+                        }
                     }
+                }
+                false
+            }
+            Constraint::Row { constraint, .. } => {
+                use crate::row::RowConstraint;
+                match constraint {
+                    RowConstraint::RowConcat { left, right, .. } => {
+                        // Defer RowConcat if we haven't processed HasField constraints for left/right yet
+                        let has_pending_fields = self.constraints.iter().any(|c| {
+                            matches!(c, Constraint::Row { constraint: rc, .. } if {
+                                match rc {
+                                    RowConstraint::HasField { type_var, .. } => 
+                                        type_var == left || type_var == right,
+                                    _ => false,
+                                }
+                            })
+                        });
+                        
+                        if has_pending_fields {
+                            tracing::trace!("Deferring RowConcat until HasField constraints are processed");
+                            return true;
+                        }
+                    }
+                    RowConstraint::RowRestrict { source, .. } => {
+                        // Defer RowRestrict if we haven't processed HasField constraints for source yet
+                        let has_pending_fields = self.constraints.iter().any(|c| {
+                            matches!(c, Constraint::Row { constraint: rc, .. } if {
+                                match rc {
+                                    RowConstraint::HasField { type_var, .. } => type_var == source,
+                                    _ => false,
+                                }
+                            })
+                        });
+                        
+                        if has_pending_fields {
+                            tracing::trace!("Deferring RowRestrict until HasField constraints are processed");
+                            return true;
+                        }
+                    }
+                    _ => {}
                 }
                 false
             }
@@ -107,8 +174,26 @@ impl<'a> ConstraintSolver<'a> {
                 match self.solve_constraint(&constraint, &mut substitutions) {
                     Ok(_) => (),
                     Err(err) => {
-                        // Try deferring on first error
-                        if iterations == 1 {
+                        // Row constraint errors should never be deferred - they are immediate failures
+                        let is_row_constraint = matches!(&constraint, Constraint::Row { .. });
+                        
+                        // For MemberAccess on TypeVars, keep deferring as long as possible
+                        // since the TypeVar might be resolved in a later iteration
+                        let should_defer = if is_row_constraint {
+                            false // Never defer row constraint errors
+                        } else if let Constraint::MemberAccess(_, receiver_ty, member_name, _) = &constraint {
+                            let resolved = substitutions.apply(receiver_ty, 0, &mut self.env.context);
+                            if matches!(resolved, Ty::TypeVar(_)) && iterations < MAX_ITERATIONS - 1 {
+                                tracing::trace!("Deferring MemberAccess({}) on TypeVar in iteration {}", member_name, iterations);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        
+                        if (iterations == 1 && !is_row_constraint) || should_defer {
                             deferred_constraints.push(constraint.clone());
                         } else {
                             unsolved_constraints.push(constraint.clone());
@@ -234,7 +319,7 @@ impl<'a> ConstraintSolver<'a> {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
                 let (member_ty, type_params, type_args) =
-                    self.resolve_member_type(&receiver_ty, member_name)?;
+                    self.resolve_member_type(&receiver_ty, member_name, substitutions)?;
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in type_params.iter().zip(type_args) {
@@ -276,6 +361,79 @@ impl<'a> ConstraintSolver<'a> {
                 let scrutinee_ty = substitutions.apply(scrutinee_ty, 0, &mut self.env.context);
                 self.solve_variant_match(&scrutinee_ty, variant_name, field_tys, substitutions)?;
             }
+            Constraint::Row { constraint, expr_id } => {
+                use crate::row::RowConstraint;
+                tracing::trace!("Solving row constraint: {:?}", constraint);
+                
+                // Store the current constraint for member resolution
+                self.row_constraints.push(constraint.clone());
+                // Also store in the environment for later access
+                self.env.row_constraints.push(constraint.clone());
+                
+                // Use the row constraint solver for all row constraints
+                let mut row_solver = RowConstraintSolver::new(self.env, self.generation);
+                
+                // Pass all row constraints to the solver for exactness checking
+                row_solver.set_all_constraints(&self.row_constraints);
+                
+                // First populate the row solver with existing row constraints
+                // This ensures operations like RowConcat and RowRestrict can see necessary fields
+                for existing_constraint in &self.row_constraints[..self.row_constraints.len()-1] {
+                    // Process all constraints to build up the row solver's state
+                    // If any constraint fails, we should propagate the error
+                    row_solver.solve_row_constraint(existing_constraint, ExprID(0), substitutions)?;
+                }
+                
+                // Now solve the current constraint
+                row_solver.solve_row_constraint(constraint, *expr_id, substitutions)?;
+                
+                // Collect new constraints to add after row solver is done
+                let mut new_constraints = Vec::new();
+                
+                // Update our stored constraints with the result fields
+                match constraint {
+                    RowConstraint::RowConcat { result, .. } => {
+                        if let Some(result_fields) = row_solver.get_resolved_fields(result) {
+                            for (label, field_info) in result_fields {
+                                let new_constraint = RowConstraint::HasField {
+                                    type_var: result.clone(),
+                                    label: label.clone(),
+                                    field_ty: field_info.ty.clone(),
+                                    metadata: field_info.metadata.clone(),
+                                };
+                                if !self.row_constraints.contains(&new_constraint) {
+                                    self.row_constraints.push(new_constraint.clone());
+                                    new_constraints.push(new_constraint);
+                                }
+                            }
+                        }
+                    }
+                    RowConstraint::RowRestrict { result, .. } => {
+                        if let Some(result_fields) = row_solver.get_resolved_fields(result) {
+                            for (label, field_info) in result_fields {
+                                let new_constraint = RowConstraint::HasField {
+                                    type_var: result.clone(),
+                                    label: label.clone(),
+                                    field_ty: field_info.ty.clone(),
+                                    metadata: field_info.metadata.clone(),
+                                };
+                                if !self.row_constraints.contains(&new_constraint) {
+                                    self.row_constraints.push(new_constraint.clone());
+                                    new_constraints.push(new_constraint);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                
+                // Now add the new constraints to the environment
+                for new_constraint in new_constraints {
+                    self.env.row_constraints.push(new_constraint);
+                }
+                
+                tracing::trace!("Row constraint handled");
+            }
         };
 
         Ok(())
@@ -299,7 +457,15 @@ impl<'a> ConstraintSolver<'a> {
             .clone();
 
         // TODO: Support multiple initializers
-        let initializer = &struct_def.initializers()[0];
+        let initializers = struct_def.initializers();
+        if initializers.is_empty() {
+            return Err(TypeError::Unknown(format!(
+                "No initializers found for struct {}",
+                struct_def.name_str
+            )));
+        }
+        
+        let initializer = &initializers[0];
         let Ty::Init(_, params) = &initializer.ty else {
             return Err(TypeError::Unknown("Invalid initializer type".into()));
         };
@@ -456,16 +622,17 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         receiver_ty: &Ty,
         member_name: &str,
+        substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         match receiver_ty {
             builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
                 self.resolve_builtin_member(builtin, member_name)
             }
             Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
-                self.resolve_type_member(type_id, member_name, generics)
+                self.resolve_type_member(type_id, member_name, generics, substitutions)
             }
             Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
-            Ty::TypeVar(type_var) => self.resolve_type_var_member(type_var, member_name),
+            Ty::TypeVar(type_var) => self.resolve_type_var_member(type_var, member_name, substitutions),
             _ => Err(TypeError::MemberNotFound(
                 receiver_ty.to_string(),
                 member_name.to_string(),
@@ -506,6 +673,7 @@ impl<'a> ConstraintSolver<'a> {
         type_id: &SymbolID,
         member_name: &str,
         generics: &[Ty],
+        substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         // First get the type def info we need
         let (type_name, type_params) = {
@@ -527,9 +695,20 @@ impl<'a> ConstraintSolver<'a> {
             })?
             .clone();
 
+        // Check if this type uses row-based members
+        if let Some(row_var) = &type_def.row_var {
+            // Try to resolve through row constraints
+            if let Ok((ty, params, assoc)) = self.resolve_type_var_member(row_var, member_name, substitutions) {
+                return Ok((ty, params, assoc));
+            }
+        }
+
+        // Fall back to traditional member lookup
         let member_ty = type_def
             .member_ty_with_conformances(member_name, self.env)
-            .ok_or_else(|| TypeError::MemberNotFound(type_name, member_name.to_string()))?;
+            .ok_or_else(|| {
+                TypeError::MemberNotFound(type_name, member_name.to_string())
+            })?;
 
         Ok((member_ty, type_params, generics.to_vec()))
     }
@@ -560,9 +739,10 @@ impl<'a> ConstraintSolver<'a> {
 
     #[allow(clippy::type_complexity)]
     fn resolve_type_var_member(
-        &self,
+        &mut self,
         type_var: &TypeVarID,
         member_name: &str,
+        substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         let matching_constraints = self
             .constraints
@@ -606,10 +786,40 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        Err(TypeError::MemberNotFound(
-            Ty::TypeVar(type_var.clone()).to_string(),
-            member_name.to_string(),
-        ))
+        // Check stored row constraints
+        use crate::row::RowConstraint;
+        tracing::trace!("Checking row constraints for type_var {:?}, member {}", type_var, member_name);
+        tracing::trace!("Available row constraints: {:?}", self.row_constraints);
+        
+        for row_constraint in &self.row_constraints {
+            match row_constraint {
+                RowConstraint::HasField { type_var: tv, label, field_ty, .. } 
+                    if tv == type_var && label == member_name => {
+                    tracing::trace!("Found matching HasField constraint!");
+                    // Apply current substitutions to the field type
+                    let resolved_ty = Self::substitute_ty_with_map(field_ty, substitutions);
+                    return Ok((resolved_ty, vec![], vec![]));
+                }
+                RowConstraint::HasRow { type_var: tv, row, .. } | 
+                RowConstraint::HasExactRow { type_var: tv, row } 
+                    if tv == type_var => {
+                    if let Some(field) = row.get_field(&member_name.to_string()) {
+                        tracing::trace!("Found field in row constraint!");
+                        // Apply current substitutions to the field type
+                        let resolved_ty = Self::substitute_ty_with_map(&field.ty, substitutions);
+                        return Ok((resolved_ty, vec![], vec![]));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // For TypeVars that haven't been resolved yet, we should defer rather than
+        // report MemberNotFound, as the TypeVar might be unified with a concrete type
+        // that has the member in a later iteration
+        Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+            format!("TypeVar {} member '{}' not yet resolved", type_var.id, member_name)
+        )))
     }
 
     #[allow(clippy::type_complexity)]

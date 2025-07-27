@@ -270,6 +270,46 @@ impl CompilationUnit<Resolved> {
                     }
                 }
 
+                // Check deferred exhaustiveness checks now that types are resolved
+                use crate::ty::Ty;
+                use crate::type_checking::exhaustiveness_integration::check_match_exhaustiveness;
+
+                let deferred_checks = self.env.deferred_exhaustiveness_checks.clone();
+                for (match_id, scrutinee_ty, patterns) in deferred_checks {
+                    // Apply substitutions to the scrutinee type
+                    let resolved_ty =
+                        solution
+                            .substitutions
+                            .apply(&scrutinee_ty, 0, &mut self.env.context);
+
+                    // For enum variants, we need to check against the enum type, not the variant
+                    let check_ty = match &resolved_ty {
+                        Ty::EnumVariant(enum_id, type_args) => {
+                            Ty::Enum(*enum_id, type_args.clone())
+                        }
+                        other => other.clone(),
+                    };
+
+                    if let Err(msg) = check_match_exhaustiveness(&self.env, &check_ty, &patterns)
+                        && let Ok(session) = &mut self.session.lock()
+                    {
+                        let span = typed
+                            .meta
+                            .borrow()
+                            .get(&match_id)
+                            .map(|m| m.span())
+                            .unwrap_or_default();
+                        session.add_diagnostic(Diagnostic::typing(
+                            path.clone(),
+                            span,
+                            TypeError::Unknown(msg),
+                        ));
+                    }
+                }
+
+                // Clear deferred checks after processing
+                self.env.deferred_exhaustiveness_checks.clear();
+
                 files.push(typed);
             }
         }

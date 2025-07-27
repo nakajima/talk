@@ -11,12 +11,17 @@ use crate::{
     typed_expr::TypedExpr,
 };
 
+pub mod row;
+pub mod row_constraints;
+
 pub mod conformance;
 pub mod conformance_checker;
 pub mod constraint;
 pub mod constraint_solver;
 pub mod environment;
+pub mod exhaustiveness_integration;
 pub mod name_resolver;
+pub mod pattern_exhaustiveness;
 pub mod scope_tree;
 pub mod substitutions;
 pub mod synthesis;
@@ -25,12 +30,16 @@ pub mod type_checker;
 pub mod type_checker_hoisting;
 pub mod type_constraint;
 pub mod type_def;
+pub mod type_def_rows;
 pub mod type_var_context;
 pub mod type_var_id;
 pub mod typed_expr;
 
 #[cfg(test)]
 pub mod dumb_dot;
+
+#[cfg(test)]
+pub mod example_row_usage;
 #[cfg(test)]
 pub mod type_checker_tests;
 

@@ -24,11 +24,13 @@ pub(super) struct TypePlaceholders<'a> {
     properties: Vec<RawProperty<'a>>,
     variants: Vec<RawEnumVariant<'a>>,
     conformances: Vec<ParsedExpr>,
+    is_extension: bool,
 }
 
 #[derive(Debug, PartialEq)]
 pub(super) enum PredeclarationKind {
     Struct,
+    Extension,
     Protocol,
     Enum,
     Builtin(SymbolID),
@@ -66,6 +68,9 @@ impl<'a> TypeChecker<'a> {
 
                 let mut our_type_def = type_def.clone();
                 our_type_def.symbol_id = *our_symbol;
+                // Clear row_managed_members since row management is compilation-unit specific
+                // The imported type's members are already in the members HashMap
+                our_type_def.clear_row_managed_members();
 
                 let mut our_type_parameters = vec![];
                 let mut substitutions = Substitutions::new();
@@ -209,6 +214,12 @@ impl<'a> TypeChecker<'a> {
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
                 PredeclarationKind::Struct => Ty::Struct(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Extension => {
+                    // For extensions, use the existing type
+                    env.lookup_type(symbol_id)
+                        .map(|td| td.ty())
+                        .unwrap_or_else(|| Ty::Struct(*symbol_id, canonical_types.clone()))
+                }
                 PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Protocol => Ty::Protocol(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Builtin(symbol_id) =>
@@ -218,7 +229,7 @@ impl<'a> TypeChecker<'a> {
                 }
             };
 
-            if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_)) {
+            if !matches!(expr_ids.kind, PredeclarationKind::Builtin(_)) && !matches!(expr_ids.kind, PredeclarationKind::Extension) {
                 let scheme = Scheme::new(ty, unbound_vars, vec![]);
                 env.declare(*symbol_id, scheme).map_err(|e| (root.id, e))?;
             }
@@ -229,6 +240,7 @@ impl<'a> TypeChecker<'a> {
 
             let mut ty_placeholders = TypePlaceholders {
                 conformances: expr_ids.conformances.to_vec(),
+                is_extension: matches!(expr_ids.kind, PredeclarationKind::Extension),
                 ..Default::default()
             };
 
@@ -377,6 +389,7 @@ impl<'a> TypeChecker<'a> {
                 let kind = match expr_ids.kind {
                     PredeclarationKind::Enum => TypeDefKind::Enum,
                     PredeclarationKind::Struct => TypeDefKind::Struct,
+                    PredeclarationKind::Extension => TypeDefKind::Struct, // Extensions use the same kind as the base type
                     PredeclarationKind::Protocol => TypeDefKind::Protocol,
                     PredeclarationKind::Builtin(symbol_id) =>
                     {
@@ -385,17 +398,27 @@ impl<'a> TypeChecker<'a> {
                     }
                 };
 
-                TypeDef {
-                    symbol_id: *symbol_id,
-                    name_str: name_str.clone(),
+                // Create new TypeDef, but preserve row_managed_members if type exists
+                let mut new_def = TypeDef::new(
+                    *symbol_id,
+                    name_str.clone(),
                     kind,
-                    type_parameters: type_params,
-                    members: Default::default(),
-                    conformances: Default::default(),
+                    type_params,
+                );
+                
+                // If this type already exists, preserve its row_managed_members
+                if let Some(existing) = env.lookup_type(symbol_id) {
+                    new_def.merge_row_managed_members(existing);
                 }
+                
+                new_def
             });
 
-            env.register(&type_def).map_err(|e| (root.id, e))?;
+            // Only register if this is a new type definition, not an extension
+            // Extensions will register after adding their new members
+            if env.lookup_type(symbol_id).is_none() {
+                env.register(&type_def).map_err(|e| (root.id, e))?;
+            }
 
             placeholders.push((type_def.symbol_id(), ty_placeholders));
         }
@@ -420,12 +443,9 @@ impl<'a> TypeChecker<'a> {
             let ty = if let TypeDefKind::Builtin(ref ty) = def.kind {
                 ty.clone()
             } else {
-                let Ok(scheme) = env.lookup_symbol(&sym).cloned() else {
-                    tracing::warn!("Did not find symbol for inference: {sym:?}");
-                    continue;
-                };
-
-                env.instantiate(&scheme)
+                // Use the canonical type with the type definition's parameters
+                // instead of instantiating to avoid creating instantiation type variables
+                def.ty()
             };
 
             env.selfs.push(ty);
@@ -453,8 +473,8 @@ impl<'a> TypeChecker<'a> {
                     substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());
                 }
 
-                def.add_properties(properties.clone());
-                env.register(&def)
+                def.add_properties_with_rows(properties.clone(), env);
+                env.register_with_mode(&def, placeholders.is_extension)
                     .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
             }
 
@@ -471,8 +491,8 @@ impl<'a> TypeChecker<'a> {
 
                 substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
             }
-            def.add_methods(methods.clone());
-            env.register(&def)
+            def.add_methods_with_rows(methods.clone(), env);
+            env.register_with_mode(&def, placeholders.is_extension)
                 .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
 
             if def.kind == TypeDefKind::Protocol {
@@ -490,7 +510,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 def.add_method_requirements(method_requirements.clone());
-                env.register(&def).map_err(|e| {
+                env.register_with_mode(&def, placeholders.is_extension).map_err(|e| {
                     (
                         method_requirements
                             .last()
@@ -518,8 +538,8 @@ impl<'a> TypeChecker<'a> {
                     });
                 }
 
-                def.add_initializers(initializers.clone());
-                env.register(&def).map_err(|e| {
+                def.add_initializers_with_rows(initializers.clone(), env);
+                env.register_with_mode(&def, placeholders.is_extension).map_err(|e| {
                     (
                         initializers.last().map(|p| p.expr_id).unwrap_or_default(),
                         e,
@@ -540,8 +560,8 @@ impl<'a> TypeChecker<'a> {
                     });
                 }
 
-                def.add_variants(variants);
-                env.register(&def).map_err(|e| (Default::default(), e))?;
+                def.add_variants_with_rows(variants, env);
+                env.register_with_mode(&def, placeholders.is_extension).map_err(|e| (Default::default(), e))?;
             }
 
             let mut conformance_constraints = vec![];
@@ -566,7 +586,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             def.add_conformances(conformances);
-            env.register(&def).map_err(|e| (Default::default(), e))?;
+            env.register_with_mode(&def, placeholders.is_extension).map_err(|e| (Default::default(), e))?;
 
             for constraint in conformance_constraints {
                 env.constrain(constraint);
@@ -702,34 +722,44 @@ impl<'a> TypeChecker<'a> {
     fn predeclarable_type(parsed_expr: &ParsedExpr) -> Option<PredeclarationExprIDs<'_>> {
         let expr = &parsed_expr.expr;
 
-        if let crate::parsed_expr::Expr::Struct {
-            name,
-            generics,
-            conformances,
-            body,
-        }
-        | crate::parsed_expr::Expr::Extend {
-            name,
-            generics,
-            conformances,
-            body,
-        } = expr
-        {
-            let kind = if let Name::Resolved(sym, _) = name
-                && builtin_type(sym).is_some()
-            {
-                PredeclarationKind::Builtin(*sym)
-            } else {
-                PredeclarationKind::Struct
-            };
-
-            return Some(PredeclarationExprIDs {
+        match expr {
+            crate::parsed_expr::Expr::Struct {
                 name,
                 generics,
                 conformances,
                 body,
-                kind,
-            });
+            } => {
+                let kind = if let Name::Resolved(sym, _) = name
+                    && builtin_type(sym).is_some()
+                {
+                    PredeclarationKind::Builtin(*sym)
+                } else {
+                    PredeclarationKind::Struct
+                };
+
+                return Some(PredeclarationExprIDs {
+                    name,
+                    generics,
+                    conformances,
+                    body,
+                    kind,
+                });
+            }
+            crate::parsed_expr::Expr::Extend {
+                name,
+                generics,
+                conformances,
+                body,
+            } => {
+                return Some(PredeclarationExprIDs {
+                    name,
+                    generics,
+                    conformances,
+                    body,
+                    kind: PredeclarationKind::Extension,
+                });
+            }
+            _ => {}
         }
 
         if let crate::parsed_expr::Expr::ProtocolDecl {
