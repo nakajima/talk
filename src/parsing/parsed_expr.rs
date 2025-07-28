@@ -215,6 +215,37 @@ pub enum Expr {
         Vec<ParsedExpr>,             // bindings: ["wrapped"]
     ),
 
+    // Record literal: {x: 1, y: 2}
+    RecordLiteral(Vec<ParsedExpr>), // List of RecordField expressions
+
+    // Single field in a record literal
+    RecordField {
+        #[drive(skip)]
+        label: Name,
+        value: Box<ParsedExpr>,
+    },
+
+    // Record type: {x: Int, y: Int, ..R}
+    RecordTypeRepr {
+        fields: Vec<ParsedExpr>, // List of RecordTypeField expressions
+        row_var: Option<Box<ParsedExpr>>, // Optional row variable after ..
+        #[drive(skip)]
+        introduces_type: bool,
+    },
+
+    // Single field in a record type
+    RecordTypeField {
+        #[drive(skip)]
+        label: Name,
+        ty: Box<ParsedExpr>,
+    },
+
+    // Row variable in type context: ..R
+    RowVariable(#[drive(skip)] Name),
+
+    // Spread in record literal: ...obj
+    Spread(Box<ParsedExpr>),
+
     ProtocolDecl {
         #[drive(skip)]
         name: Name,

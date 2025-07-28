@@ -14,6 +14,7 @@ use crate::{
     environment::{Environment, TypeParameter},
     name::Name,
     parsing::expr_id::ExprID,
+    row::Label,
     row_constraints::RowConstraintSolver,
     semantic_index::ResolvedExpr,
     substitutions::Substitutions,
@@ -677,6 +678,18 @@ impl<'a> ConstraintSolver<'a> {
             Ty::TypeVar(type_var) => {
                 self.resolve_type_var_member(type_var, member_name, substitutions)
             }
+            Ty::Record { fields, .. } => {
+                // For concrete records, look up the field directly
+                for (field_name, field_ty) in fields {
+                    if field_name == member_name {
+                        return Ok((field_ty.clone(), vec![], vec![]));
+                    }
+                }
+                Err(TypeError::MemberNotFound(
+                    receiver_ty.to_string(),
+                    member_name.to_string(),
+                ))
+            }
             _ => Err(TypeError::MemberNotFound(
                 receiver_ty.to_string(),
                 member_name.to_string(),
@@ -788,6 +801,41 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
         substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        // Check if this is a row type variable that needs a field constraint
+        if matches!(type_var.kind, TypeVarKind::Row) {
+            // Check if we already have a field constraint for this member
+            let has_field_constraint = self.row_constraints.iter().any(|rc| {
+                matches!(rc, RowConstraint::HasField { type_var: tv, label, .. } 
+                    if tv == type_var && label == member_name)
+            });
+            
+            if !has_field_constraint {
+                // Generate a new field type variable
+                let field_ty = Ty::TypeVar(self.env.new_type_variable(
+                    TypeVarKind::Member(member_name.to_string()),
+                    ExprID(0), // TODO: Get proper expr_id from MemberAccess constraint
+                ));
+                
+                // Add the HasField constraint
+                let new_constraint = RowConstraint::HasField {
+                    type_var: type_var.clone(),
+                    label: Label::from(member_name.to_string()),
+                    field_ty: field_ty.clone(),
+                    metadata: Default::default(),
+                };
+                
+                self.constraints.push(Constraint::Row {
+                    expr_id: ExprID(0), // TODO: Get proper expr_id
+                    constraint: new_constraint.clone(),
+                });
+                
+                // Also add to row_constraints for immediate lookup
+                self.row_constraints.push(new_constraint);
+                
+                return Ok((field_ty, vec![], vec![]));
+            }
+        }
+        
         let matching_constraints = self
             .constraints
             .iter()
@@ -1100,6 +1148,17 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
                 ty.clone()
             }
+            Ty::Record { fields, row } => {
+                let applied_fields = fields
+                    .iter()
+                    .map(|(name, field_ty)| (name.clone(), Self::substitute_ty_with_map(field_ty, substitutions)))
+                    .collect();
+                let applied_row = row.as_ref().map(|r| Box::new(Self::substitute_ty_with_map(r, substitutions)));
+                Ty::Record {
+                    fields: applied_fields,
+                    row: applied_row,
+                }
+            }
         }
     }
 
@@ -1126,6 +1185,10 @@ impl<'a> ConstraintSolver<'a> {
                     return None;
                 }
 
+                None
+            }
+            Ty::Record { .. } => {
+                // Record fields don't have symbol IDs - they are structural
                 None
             }
             _ => None,

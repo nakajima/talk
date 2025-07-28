@@ -106,6 +106,7 @@ impl std::fmt::Debug for TypeVarID {
                 write!(f, "T{}[{}&{}]", self.id, v1, v2)
             }
             TypeVarKind::Unbound => write!(f, "T{}[?]", self.id),
+            TypeVarKind::Row => write!(f, "T{}[row]", self.id),
         }
     }
 }
@@ -133,4 +134,5 @@ pub enum TypeVarKind {
     BinaryOperand(TokenKind),
     Combined(u32, u32),
     Unbound,
+    Row,
 }

@@ -134,6 +134,11 @@ impl Ty {
                 )
             }
             Ty::Protocol(_, _) => IRType::Void,
+            Ty::Record { .. } => {
+                // TODO: Records need to be lowered to IR types
+                // For now, treat them as void
+                IRType::Void
+            }
         }
     }
 }

@@ -100,7 +100,7 @@ impl<'a> Lexer<'a> {
         };
 
         match ch {
-            '.' => self.make(Dot),
+            '.' => self.dot(),
             ',' => self.make(Comma),
             ':' => self.make(Colon),
             '?' => self.make(QuestionMark),
@@ -314,6 +314,18 @@ impl<'a> Lexer<'a> {
         self.make(Minus)
     }
 
+    fn dot(&mut self) -> Result<Token, LexerError> {
+        if self.peek() == Some('.') {
+            self.advance();
+            if self.peek() == Some('.') {
+                self.advance();
+                return self.make(DotDotDot);
+            }
+            return self.make(DotDot);
+        }
+        self.make(Dot)
+    }
+
     fn number(&mut self, starting_at: u32) -> TokenKind {
         let mut is_float = false;
 
@@ -439,6 +451,22 @@ mod tests {
         assert_eq!(lexer.next().unwrap().kind, Identifier("fizz".to_string()));
         assert_eq!(lexer.next().unwrap().kind, Dot);
         assert_eq!(lexer.next().unwrap().kind, Identifier("buzz".to_string()));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn dot_dot() {
+        let mut lexer = Lexer::new("..R");
+        assert_eq!(lexer.next().unwrap().kind, DotDot);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("R".to_string()));
+        assert_eq!(lexer.next().unwrap().kind, EOF);
+    }
+
+    #[test]
+    fn dot_dot_dot() {
+        let mut lexer = Lexer::new("...obj");
+        assert_eq!(lexer.next().unwrap().kind, DotDotDot);
+        assert_eq!(lexer.next().unwrap().kind, Identifier("obj".to_string()));
         assert_eq!(lexer.next().unwrap().kind, EOF);
     }
 

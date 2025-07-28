@@ -139,6 +139,17 @@ impl Substitutions {
                 func: self.apply(func, depth + 1, context).into(),
             },
             Ty::Void => ty.clone(),
+            Ty::Record { fields, row } => {
+                let applied_fields: Vec<(String, Ty)> = fields
+                    .iter()
+                    .map(|(name, field_ty)| (name.clone(), self.apply(field_ty, depth + 1, context)))
+                    .collect();
+                let applied_row = row.as_ref().map(|r| Box::new(self.apply(r, depth + 1, context)));
+                Ty::Record {
+                    fields: applied_fields,
+                    row: applied_row,
+                }
+            }
         }
     }
 

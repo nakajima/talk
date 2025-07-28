@@ -1761,4 +1761,105 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn parses_record_literal() {
+        let parsed = parse("{x: 1, y: 2}");
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::RecordLiteral(vec![
+                any_expr!(Expr::RecordField {
+                    label: Name::Raw("x".into()),
+                    value: any_expr!(Expr::LiteralInt("1".into())).into()
+                }),
+                any_expr!(Expr::RecordField {
+                    label: Name::Raw("y".into()),
+                    value: any_expr!(Expr::LiteralInt("2".into())).into()
+                })
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_empty_braces_as_block() {
+        let parsed = parse("{}");
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::Block(vec![]))
+        );
+    }
+
+    #[test]
+    fn parses_record_literal_with_spread() {
+        let parsed = parse("{...obj, x: 1}");
+        assert_eq!(
+            parsed.roots()[0],
+            any_expr!(Expr::RecordLiteral(vec![
+                any_expr!(Expr::Spread(
+                    any_expr!(Expr::Variable(Name::Raw("obj".into()))).into()
+                )),
+                any_expr!(Expr::RecordField {
+                    label: Name::Raw("x".into()),
+                    value: any_expr!(Expr::LiteralInt("1".into())).into()
+                })
+            ]))
+        );
+    }
+
+    #[test]
+    fn parses_record_type() {
+        let parsed = parse("let x: {x: Int, y: String}");
+        let Expr::Let(_, Some(type_expr)) = &parsed.roots()[0].expr else {
+            panic!("Expected Let with type annotation");
+        };
+        assert_eq!(
+            **type_expr,
+            any_expr!(Expr::RecordTypeRepr {
+                fields: vec![
+                    any_expr!(Expr::RecordTypeField {
+                        label: Name::Raw("x".into()),
+                        ty: any_expr!(Expr::TypeRepr {
+                            name: Name::Raw("Int".into()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
+                        }).into()
+                    }),
+                    any_expr!(Expr::RecordTypeField {
+                        label: Name::Raw("y".into()),
+                        ty: any_expr!(Expr::TypeRepr {
+                            name: Name::Raw("String".into()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false
+                        }).into()
+                    })
+                ],
+                row_var: None,
+                introduces_type: false
+            })
+        );
+    }
+
+    #[test]
+    fn parses_record_type_with_row_var() {
+        let parsed = parse("let x: {x: Int, ..R}");
+        let Expr::Let(_, Some(type_expr)) = &parsed.roots()[0].expr else {
+            panic!("Expected Let with type annotation");
+        };
+        
+        let Expr::RecordTypeRepr { fields, row_var, .. } = &type_expr.expr else {
+            panic!("Expected RecordTypeRepr");
+        };
+        
+        assert_eq!(fields.len(), 1);
+        assert!(row_var.is_some());
+        
+        if let Some(row) = row_var {
+            assert_eq!(
+                **row,
+                any_expr!(Expr::RowVariable(Name::Raw("R".into())))
+            );
+        }
+    }
 }

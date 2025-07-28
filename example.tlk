@@ -1,9 +1,0 @@
-let client = bluetooth.Client.new();
-
-client.scan { device in
-	print(device)
-}
-
-client.connect(to: device)
-
-

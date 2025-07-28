@@ -105,6 +105,16 @@ pub enum FieldMetadata {
     },
 }
 
+impl Default for FieldMetadata {
+    fn default() -> Self {
+        FieldMetadata::RecordField {
+            index: 0,
+            has_default: false,
+            is_mutable: false,
+        }
+    }
+}
+
 /// Row specification used in constraints
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowSpec {

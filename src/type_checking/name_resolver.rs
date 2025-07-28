@@ -584,6 +584,33 @@ impl<'a> NameResolver<'a> {
                     self.type_symbol_stack.pop();
                 }
             }
+            Expr::RecordLiteral(fields) => {
+                *fields = self.resolve_nodes(fields, meta, symbol_table, false)?;
+            }
+            Expr::RecordField { label: _, value } => {
+                *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
+            }
+            Expr::RecordTypeRepr { fields, row_var, introduces_type: _ } => {
+                *fields = self.resolve_nodes(fields, meta, symbol_table, false)?;
+                if let Some(row) = row_var {
+                    *row = Box::new(self.resolve_node(row, meta, symbol_table)?);
+                }
+            }
+            Expr::RecordTypeField { label: _, ty } => {
+                *ty = Box::new(self.resolve_node(ty, meta, symbol_table)?);
+            }
+            Expr::RowVariable(name) => {
+                if let Name::Raw(name_str) = name {
+                    if let Some((symbol_id, _)) = self.lookup(name_str) {
+                        *name = Name::Resolved(symbol_id, name_str.to_string());
+                    } else {
+                        return Err(NameResolverError::UnresolvedName(name_str.to_string()));
+                    }
+                }
+            }
+            Expr::Spread(expr) => {
+                *expr = Box::new(self.resolve_node(expr, meta, symbol_table)?);
+            }
             _ => (),
         }
 

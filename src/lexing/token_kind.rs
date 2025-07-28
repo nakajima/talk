@@ -75,6 +75,8 @@ pub enum TokenKind {
     Mut,
     EOF,
     Generated,
+    DotDot,
+    DotDotDot,
 }
 
 impl Display for TokenKind {
@@ -150,6 +152,8 @@ impl TokenKind {
             TokenKind::Extend => "extend",
             TokenKind::Import => "import",
             TokenKind::At => "@",
+            TokenKind::DotDot => "..",
+            TokenKind::DotDotDot => "...",
         };
 
         text.to_string()

@@ -44,6 +44,11 @@ pub enum Ty {
     Byte,
     Pointer,
     SelfType,
+    Record {
+        #[drive(skip)]
+        fields: Vec<(String, Ty)>, // field name -> type pairs
+        row: Option<Box<Ty>>, // Optional row variable for extensible records
+    },
 }
 
 impl Display for Ty {
@@ -112,6 +117,20 @@ impl Display for Ty {
             }),
             Ty::Pointer => write!(f, "pointer"),
             Ty::Protocol(sym, _) => write!(f, "{sym:?} (protocol)"),
+            Ty::Record { fields, row } => {
+                let field_strs: Vec<String> = fields
+                    .iter()
+                    .map(|(name, ty)| format!("{}: {}", name, ty))
+                    .collect();
+                let mut result = field_strs.join(", ");
+                if let Some(row_ty) = row {
+                    if !fields.is_empty() {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&format!("..{}", row_ty));
+                }
+                write!(f, "{{{}}}", result)
+            }
             _ => write!(f, "{self:?}"),
         }
     }
@@ -273,6 +292,19 @@ impl Ty {
                             .map(|t| t.replace(replacement.clone(), f))
                             .collect(),
                     )
+                }
+            }
+            Ty::Record { fields, row } => {
+                if f(self) {
+                    replacement
+                } else {
+                    Ty::Record {
+                        fields: fields
+                            .iter()
+                            .map(|(name, ty)| (name.clone(), ty.replace(replacement.clone(), f)))
+                            .collect(),
+                        row: row.as_ref().map(|r| Box::new(r.replace(replacement.clone(), f))),
+                    }
                 }
             }
             _ => {

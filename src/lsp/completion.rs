@@ -52,78 +52,87 @@ impl<'a> CompletionContext<'a> {
             self.position.character.saturating_sub(2),
         );
 
-        let type_sym = self
+        // First, try to get the type of the expression before the dot
+        let expr_type = self
             .driver
             .symbol_at_position(position_before_dot.into(), &self.source_file.path)
             .and_then(|sym| {
                 let info = self.driver.symbol_table.get(&sym)?;
-
-                // Attempt to find type symbol in order of precedence:
-                // 1. From the symbol's definition (e.g., a variable's type).
-                info.definition
-                    .as_ref()
-                    .and_then(|def| def.sym)
-                    // 2. If the symbol itself is a type.
-                    .or_else(|| self.env.lookup_type(&sym).map(|_| sym))
-                    // 3. From the type of the expression the symbol is part of.
-                    .or_else(|| {
-                        self.source_file.typed_expr(info.expr_id).and_then(|typed| {
-                            match &typed.ty {
-                                Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => {
-                                    Some(*id)
-                                }
-                                _ => None,
-                            }
-                        })
-                    })
+                self.source_file.typed_expr(info.expr_id).map(|typed| typed.ty.clone())
             })
-            // 4. Fallback for `self` keyword completion.
-            .or_else(|| {
-                self.env.selfs.last().and_then(|ty| match ty {
-                    Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => Some(*id),
-                    _ => None,
-                })
-            });
-        let type_sym = type_sym.or_else(|| {
-            self.env.selfs.last().and_then(|ty| match ty {
-                Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => Some(*id),
-                _ => None,
-            })
-        });
+            // Fallback for `self` keyword completion
+            .or_else(|| self.env.selfs.last().cloned());
 
-        if let Some(type_def) = type_sym.and_then(|sym| self.env.lookup_type(&sym)) {
-            let mut completions = vec![];
-            for (name, member) in type_def.members.iter() {
-                let item = match member {
-                    TypeMember::Method(_) | TypeMember::MethodRequirement(_) => CompletionItem {
-                        label: name.clone(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        detail: Some(format!("{:?}", member.ty())),
-                        ..Default::default()
-                    },
-                    TypeMember::Property(_) => CompletionItem {
-                        label: name.clone(),
-                        kind: Some(CompletionItemKind::PROPERTY),
-                        detail: Some(format!("{:?}", member.ty())),
-                        ..Default::default()
-                    },
-                    TypeMember::Variant(_) => CompletionItem {
-                        label: name.clone(),
-                        kind: Some(CompletionItemKind::ENUM_MEMBER),
-                        detail: Some(format!("{:?}", member.ty())),
-                        ..Default::default()
-                    },
-                    _ => continue,
-                };
-
-                completions.push(item)
-            }
-
-            completions
+        if let Some(ty) = expr_type {
+            self.get_completions_for_type(&ty)
         } else {
-            tracing::error!("did not get type: {:?}", self.env.types);
-            vec![]
+            // If we couldn't find the type directly, try the old approach
+            let type_sym = self
+                .driver
+                .symbol_at_position(position_before_dot.into(), &self.source_file.path)
+                .and_then(|sym| {
+                    let info = self.driver.symbol_table.get(&sym)?;
+                    info.definition
+                        .as_ref()
+                        .and_then(|def| def.sym)
+                        .or_else(|| self.env.lookup_type(&sym).map(|_| sym))
+                });
+
+            if let Some(type_def) = type_sym.and_then(|sym| self.env.lookup_type(&sym)) {
+                self.get_completions_for_typedef(type_def)
+            } else {
+                tracing::error!("did not get type: {:?}", self.env.types);
+                vec![]
+            }
         }
+    }
+
+    /// Get completions for a specific type (handles both records and typedefs)
+    fn get_completions_for_type(&self, ty: &Ty) -> Vec<CompletionItem> {
+        match ty {
+            // Handle record types directly
+            Ty::Record { fields, .. } => {
+                fields.iter().map(|(field_name, field_ty)| {
+                    CompletionItem {
+                        label: field_name.clone(),
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail: Some(format!("{:?}", field_ty)),
+                        ..Default::default()
+                    }
+                }).collect()
+            }
+            // Handle struct/enum/protocol types via typedef
+            Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => {
+                if let Some(type_def) = self.env.lookup_type(id) {
+                    self.get_completions_for_typedef(type_def)
+                } else {
+                    vec![]
+                }
+            }
+            _ => vec![]
+        }
+    }
+
+    /// Get completions from a typedef's members
+    fn get_completions_for_typedef(&self, type_def: &crate::type_def::TypeDef) -> Vec<CompletionItem> {
+        type_def.members.iter().filter_map(|(name, member)| {
+            let (kind, detail) = match member {
+                TypeMember::Method(_) | TypeMember::MethodRequirement(_) => 
+                    (CompletionItemKind::METHOD, format!("{:?}", member.ty())),
+                TypeMember::Property(_) => 
+                    (CompletionItemKind::PROPERTY, format!("{:?}", member.ty())),
+                TypeMember::Variant(_) => 
+                    (CompletionItemKind::ENUM_MEMBER, format!("{:?}", member.ty())),
+                _ => return None,
+            };
+            
+            Some(CompletionItem {
+                label: name.clone(),
+                kind: Some(kind),
+                detail: Some(detail),
+                ..Default::default()
+            })
+        }).collect()
     }
 
     fn get_keyword_completions(&self) -> Vec<CompletionItem> {
@@ -279,5 +288,24 @@ mod tests {
 
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].label, "bar");
+    }
+
+    #[test]
+    fn test_record_member_completion() {
+        let completions = complete(
+            vec![&formatdoc!(
+                r#"
+            let point = {{x: 10, y: 20}}
+            point.
+            "#
+            )],
+            Position::new(1, 6),
+            true,
+        );
+
+        assert_eq!(completions.len(), 2, "{completions:?}");
+        let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+        assert!(labels.contains(&"x"));
+        assert!(labels.contains(&"y"));
     }
 }

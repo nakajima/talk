@@ -538,6 +538,17 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
         Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
             ty.clone()
         }
+        Ty::Record { fields, row } => {
+            let new_fields = fields
+                .iter()
+                .map(|(name, field_ty)| (name.clone(), walk(field_ty, map)))
+                .collect();
+            let new_row = row.as_ref().map(|r| Box::new(walk(r, map)));
+            Ty::Record {
+                fields: new_fields,
+                row: new_row,
+            }
+        }
     }
 }
 
@@ -599,6 +610,14 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         }
         Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
             // These types contain no nested types, so there's nothing to do.
+        }
+        Ty::Record { fields, row } => {
+            for (_, field_ty) in fields {
+                s.extend(free_type_vars(field_ty));
+            }
+            if let Some(row_ty) = row {
+                s.extend(free_type_vars(row_ty));
+            }
         }
     }
     s

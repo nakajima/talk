@@ -161,6 +161,32 @@ pub enum Expr {
         generics: Vec<TypedExpr>,
         ret: Box<TypedExpr>,
     },
+    
+    RecordLiteral(Vec<TypedExpr>), // List of RecordField expressions
+    
+    RecordField {
+        #[drive(skip)]
+        label: String,
+        value: Box<TypedExpr>,
+    },
+    
+    // These are for type representations, not runtime values
+    RecordTypeRepr {
+        fields: Vec<TypedExpr>,
+        row_var: Option<Box<TypedExpr>>,
+        #[drive(skip)]
+        introduces_type: bool,
+    },
+    
+    RecordTypeField {
+        #[drive(skip)]
+        label: String,
+        ty: Box<TypedExpr>,
+    },
+    
+    RowVariable(#[drive(skip)] String),
+    
+    Spread(Box<TypedExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, DriveMut)]
@@ -354,6 +380,25 @@ impl TypedExpr {
                 Self::apply_mult(params, substitutions, env);
                 Self::apply_mult(generics, substitutions, env);
                 ret.apply(substitutions, env);
+            }
+            Expr::RecordLiteral(fields) => {
+                Self::apply_mult(fields, substitutions, env);
+            }
+            Expr::RecordField { value, .. } => {
+                value.apply(substitutions, env);
+            }
+            Expr::RecordTypeRepr { fields, row_var, .. } => {
+                Self::apply_mult(fields, substitutions, env);
+                if let Some(row) = row_var {
+                    row.apply(substitutions, env);
+                }
+            }
+            Expr::RecordTypeField { ty, .. } => {
+                ty.apply(substitutions, env);
+            }
+            Expr::RowVariable(_) => {}
+            Expr::Spread(expr) => {
+                expr.apply(substitutions, env);
             }
         }
     }
@@ -550,6 +595,18 @@ impl TypedExpr {
                 ret.find(id)?;
                 Ok(())
             }
+            Expr::RecordLiteral(fields) => Self::find_in_err_res(fields, id),
+            Expr::RecordField { value, .. } => value.find(id),
+            Expr::RecordTypeRepr { fields, row_var, .. } => {
+                Self::find_in_err_res(fields, id)?;
+                if let Some(row) = row_var {
+                    row.find(id)?;
+                }
+                Ok(())
+            }
+            Expr::RecordTypeField { ty, .. } => ty.find(id),
+            Expr::RowVariable(_) => Ok(()),
+            Expr::Spread(expr) => expr.find(id),
         }
     }
 

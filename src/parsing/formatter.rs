@@ -252,6 +252,14 @@ impl<'a> Formatter<'a> {
                 &Some(ret),
                 false,
             ),
+            Expr::RecordLiteral(fields) => self.format_record_literal(fields),
+            Expr::RecordField { label, value } => self.format_record_field(label, value),
+            Expr::RecordTypeRepr { fields, row_var, .. } => {
+                self.format_record_type(fields, row_var)
+            }
+            Expr::RecordTypeField { label, ty } => self.format_record_type_field(label, ty),
+            Expr::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
+            Expr::Spread(expr) => join(vec![text("..."), self.format_expr(expr)], text("")),
         }
     }
 
@@ -263,6 +271,81 @@ impl<'a> Formatter<'a> {
         group(concat(
             concat(self.format_name(name), text(": ")),
             self.format_expr(value),
+        ))
+    }
+
+    fn format_record_literal(&self, fields: &[ParsedExpr]) -> Doc {
+        if fields.is_empty() {
+            return text("{}");
+        }
+
+        let formatted_fields = fields
+            .iter()
+            .map(|field| self.format_expr(field))
+            .collect::<Vec<_>>();
+
+        group(concat(
+            text("{"),
+            concat(
+                nest(
+                    1,
+                    concat(
+                        line(),
+                        join(
+                            formatted_fields,
+                            concat(text(","), line()),
+                        ),
+                    ),
+                ),
+                concat(line(), text("}")),
+            ),
+        ))
+    }
+
+    fn format_record_field(&self, label: &Name, value: &ParsedExpr) -> Doc {
+        group(concat(
+            concat(text(label.name_str()), text(": ")),
+            self.format_expr(value),
+        ))
+    }
+
+    fn format_record_type(&self, fields: &[ParsedExpr], row_var: &Option<Box<ParsedExpr>>) -> Doc {
+        let mut all_elements = Vec::new();
+        
+        for field in fields {
+            all_elements.push(self.format_expr(field));
+        }
+        
+        if let Some(row) = row_var {
+            all_elements.push(self.format_expr(row));
+        }
+        
+        if all_elements.is_empty() {
+            return text("{}");
+        }
+
+        group(concat(
+            text("{"),
+            concat(
+                nest(
+                    1,
+                    concat(
+                        softline(),
+                        join(
+                            all_elements,
+                            concat(text(","), line()),
+                        ),
+                    ),
+                ),
+                concat(softline(), text("}")),
+            ),
+        ))
+    }
+
+    fn format_record_type_field(&self, label: &Name, ty: &ParsedExpr) -> Doc {
+        group(concat(
+            concat(text(label.name_str()), text(": ")),
+            self.format_expr(ty),
         ))
     }
 
