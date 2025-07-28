@@ -171,7 +171,10 @@ impl RowTypeDef {
                 // TODO: Extract fields from row constraints
                 Ty::struct_type(self.symbol_id, self.canonical_type_parameters())
             }
-            TypeDefKind::Protocol => Ty::Protocol(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Protocol => {
+                // Use the protocol_type helper
+                Ty::protocol_type(self.symbol_id, self.canonical_type_parameters())
+            }
             TypeDefKind::Builtin(ty) => ty.clone(),
         }
     }

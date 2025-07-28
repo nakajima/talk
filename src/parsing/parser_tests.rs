@@ -1783,10 +1783,7 @@ mod tests {
     #[test]
     fn parses_empty_braces_as_block() {
         let parsed = parse("{}");
-        assert_eq!(
-            parsed.roots()[0],
-            any_expr!(Expr::Block(vec![]))
-        );
+        assert_eq!(parsed.roots()[0], any_expr!(Expr::Block(vec![])));
     }
 
     #[test]
@@ -1823,7 +1820,8 @@ mod tests {
                             generics: vec![],
                             conformances: vec![],
                             introduces_type: false
-                        }).into()
+                        })
+                        .into()
                     }),
                     any_expr!(Expr::RecordTypeField {
                         label: Name::Raw("y".into()),
@@ -1832,7 +1830,8 @@ mod tests {
                             generics: vec![],
                             conformances: vec![],
                             introduces_type: false
-                        }).into()
+                        })
+                        .into()
                     })
                 ],
                 row_var: None,
@@ -1847,19 +1846,19 @@ mod tests {
         let Expr::Let(_, Some(type_expr)) = &parsed.roots()[0].expr else {
             panic!("Expected Let with type annotation");
         };
-        
-        let Expr::RecordTypeRepr { fields, row_var, .. } = &type_expr.expr else {
+
+        let Expr::RecordTypeRepr {
+            fields, row_var, ..
+        } = &type_expr.expr
+        else {
             panic!("Expected RecordTypeRepr");
         };
-        
+
         assert_eq!(fields.len(), 1);
         assert!(row_var.is_some());
-        
+
         if let Some(row) = row_var {
-            assert_eq!(
-                **row,
-                any_expr!(Expr::RowVariable(Name::Raw("R".into())))
-            );
+            assert_eq!(**row, any_expr!(Expr::RowVariable(Name::Raw("R".into()))));
         }
     }
 }

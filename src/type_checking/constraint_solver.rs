@@ -667,13 +667,14 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
         substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
-        tracing::debug!("resolve_member_type: receiver_ty = {:?}, member = {}", receiver_ty, member_name);
+        tracing::debug!(
+            "resolve_member_type: receiver_ty = {:?}, member = {}",
+            receiver_ty,
+            member_name
+        );
         match receiver_ty {
             builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
                 self.resolve_builtin_member(builtin, member_name)
-            }
-            Ty::Protocol(type_id, generics) => {
-                self.resolve_type_member(type_id, member_name, generics, substitutions)
             }
             Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
             Ty::TypeVar(type_var) => {
@@ -682,7 +683,12 @@ impl<'a> ConstraintSolver<'a> {
                 tracing::debug!("TypeVar member resolution result: {:?}", result);
                 result
             }
-            Ty::Row { fields, nominal_id, generics, .. } => {
+            Ty::Row {
+                fields,
+                nominal_id,
+                generics,
+                ..
+            } => {
                 if let Some(type_id) = nominal_id {
                     // Nominal row - use typedef resolution
                     self.resolve_type_member(type_id, member_name, generics, substitutions)
@@ -814,17 +820,17 @@ impl<'a> ConstraintSolver<'a> {
         if matches!(type_var.kind, TypeVarKind::Row) {
             // Check if we already have a field constraint for this member
             let has_field_constraint = self.row_constraints.iter().any(|rc| {
-                matches!(rc, RowConstraint::HasField { type_var: tv, label, .. } 
+                matches!(rc, RowConstraint::HasField { type_var: tv, label, .. }
                     if tv == type_var && label == member_name)
             });
-            
+
             if !has_field_constraint {
                 // Generate a new field type variable
                 let field_ty = Ty::TypeVar(self.env.new_type_variable(
                     TypeVarKind::Member(member_name.to_string()),
                     ExprID(0), // TODO: Get proper expr_id from MemberAccess constraint
                 ));
-                
+
                 // Add the HasField constraint
                 let new_constraint = RowConstraint::HasField {
                     type_var: type_var.clone(),
@@ -832,19 +838,19 @@ impl<'a> ConstraintSolver<'a> {
                     field_ty: field_ty.clone(),
                     metadata: Default::default(),
                 };
-                
+
                 self.constraints.push(Constraint::Row {
                     expr_id: ExprID(0), // TODO: Get proper expr_id
                     constraint: new_constraint.clone(),
                 });
-                
+
                 // Also add to row_constraints for immediate lookup
                 self.row_constraints.push(new_constraint);
-                
+
                 return Ok((field_ty, vec![], vec![]));
             }
         }
-        
+
         let matching_constraints = self
             .constraints
             .iter()
@@ -951,7 +957,12 @@ impl<'a> ConstraintSolver<'a> {
             .clone();
 
         if let Some(ty) = protocol_def.member_ty(member_name) {
-            tracing::debug!("resolve_protocol_member: protocol_id = {:?}, member = {}, ty = {:?}", protocol_id, member_name, ty);
+            tracing::debug!(
+                "resolve_protocol_member: protocol_id = {:?}, member = {}, ty = {:?}",
+                protocol_id,
+                member_name,
+                ty
+            );
             Ok(Some((
                 ty.clone(),
                 protocol_def.type_parameters(),
@@ -1141,22 +1152,28 @@ impl<'a> ConstraintSolver<'a> {
                     .collect(),
             ),
             Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
-            Ty::Protocol(sym, generics) => Ty::Protocol(
-                *sym,
-                generics
-                    .iter()
-                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
-                    .collect(),
-            ),
             Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
                 ty.clone()
             }
-            Ty::Row { fields, row, nominal_id, generics } => {
+            Ty::Row {
+                fields,
+                row,
+                nominal_id,
+                generics,
+                kind,
+            } => {
                 let applied_fields = fields
                     .iter()
-                    .map(|(name, field_ty)| (name.clone(), Self::substitute_ty_with_map(field_ty, substitutions)))
+                    .map(|(name, field_ty)| {
+                        (
+                            name.clone(),
+                            Self::substitute_ty_with_map(field_ty, substitutions),
+                        )
+                    })
                     .collect();
-                let applied_row = row.as_ref().map(|r| Box::new(Self::substitute_ty_with_map(r, substitutions)));
+                let applied_row = row
+                    .as_ref()
+                    .map(|r| Box::new(Self::substitute_ty_with_map(r, substitutions)));
                 Ty::Row {
                     fields: applied_fields,
                     row: applied_row,
@@ -1165,6 +1182,7 @@ impl<'a> ConstraintSolver<'a> {
                         .iter()
                         .map(|g| Self::substitute_ty_with_map(g, substitutions))
                         .collect(),
+                    kind: kind.clone(),
                 }
             }
         }
@@ -1173,7 +1191,11 @@ impl<'a> ConstraintSolver<'a> {
     /// Find the symbol ID for a member of a type
     fn find_member_symbol(&self, receiver_ty: &Ty, member_name: &str) -> Option<SymbolID> {
         match receiver_ty {
-            Ty::Row { nominal_id: Some(type_id), .. } | Ty::Enum(type_id, _) | Ty::Protocol(type_id, _) => {
+            Ty::Row {
+                nominal_id: Some(type_id),
+                ..
+            }
+            | Ty::Enum(type_id, _) => {
                 // Look up the type definition using just the type_id, ignoring type parameters
                 let type_def = self.env.types.get(type_id)?;
 
@@ -1195,7 +1217,9 @@ impl<'a> ConstraintSolver<'a> {
 
                 None
             }
-            Ty::Row { nominal_id: None, .. } => {
+            Ty::Row {
+                nominal_id: None, ..
+            } => {
                 // Structural row fields don't have symbol IDs
                 None
             }

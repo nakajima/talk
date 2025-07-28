@@ -188,30 +188,13 @@ impl TypeDef {
         match &self.kind {
             TypeDefKind::Enum => Ty::Enum(self.symbol_id, self.canonical_type_parameters()),
             TypeDefKind::Struct => {
-                // Extract fields from members HashMap
-                let mut fields: Vec<(String, Ty)> = Vec::new();
-                
-                // Collect properties as fields
-                for (name, member) in &self.members {
-                    if let TypeMember::Property(prop) = member {
-                        fields.push((name.clone(), prop.ty.clone()));
-                    }
-                }
-                
-                // Sort fields canonically by name
-                fields.sort_by(|a, b| a.0.cmp(&b.0));
-                
-                // Return Row type with nominal_id set
-                // TODO: Handle generics properly - for now using empty fields
-                // and relying on TypeDef lookup for actual fields
-                Ty::Row {
-                    fields: vec![], // Empty for now, fields are in TypeDef
-                    row: None, // TODO: Include row var when struct_type can handle it
-                    nominal_id: Some(self.symbol_id),
-                    generics: self.canonical_type_parameters(),
-                }
+                // Use the struct_type helper
+                Ty::struct_type(self.symbol_id, self.canonical_type_parameters())
             }
-            TypeDefKind::Protocol => Ty::Protocol(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Protocol => {
+                // Use the protocol_type helper
+                Ty::protocol_type(self.symbol_id, self.canonical_type_parameters())
+            }
             TypeDefKind::Builtin(ty) => ty.clone(),
         }
     }

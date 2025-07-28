@@ -116,7 +116,11 @@ impl Ty {
             Ty::Array(el) => IRType::TypedBuffer {
                 element: el.to_ir(lowerer).into(),
             },
-            Ty::Row { nominal_id: Some(symbol_id), generics, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                ..
+            } => {
                 let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
                     tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
@@ -133,21 +137,39 @@ impl Ty {
                     generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                 )
             }
-            Ty::Protocol(_, _) => IRType::Void,
-            Ty::Row { nominal_id, generics, .. } => {
+            Ty::Row {
+                nominal_id,
+                generics,
+                kind,
+                ..
+            } => {
+                // Protocols have no runtime representation
+                if matches!(kind, crate::ty::RowKind::Protocol) {
+                    return IRType::Void;
+                }
+
                 match nominal_id {
                     Some(sym) => {
                         // Nominal type - look up the type definition
                         if let Some(type_def) = lowerer.env.lookup_struct(sym) {
-                            let field_types = type_def.properties()
+                            let field_types = type_def
+                                .properties()
                                 .iter()
                                 .sorted_by(|a, b| a.index.cmp(&b.index))
                                 .map(|p| p.ty.to_ir(lowerer))
                                 .collect();
-                            IRType::Struct(*sym, field_types, generics.iter().map(|g| g.to_ir(lowerer)).collect())
+                            IRType::Struct(
+                                *sym,
+                                field_types,
+                                generics.iter().map(|g| g.to_ir(lowerer)).collect(),
+                            )
                         } else {
                             // Fallback for types without full definitions (e.g., builtins)
-                            IRType::Struct(*sym, vec![], generics.iter().map(|g| g.to_ir(lowerer)).collect())
+                            IRType::Struct(
+                                *sym,
+                                vec![],
+                                generics.iter().map(|g| g.to_ir(lowerer)).collect(),
+                            )
                         }
                     }
                     None => {
@@ -1654,7 +1676,10 @@ impl<'a> Lowerer<'a> {
         };
 
         match &receiver.ty {
-            Ty::Row { nominal_id: Some(struct_id), .. } => {
+            Ty::Row {
+                nominal_id: Some(struct_id),
+                ..
+            } => {
                 let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
                     unreachable!("didn't get struct def");
                 };
@@ -1696,7 +1721,9 @@ impl<'a> Lowerer<'a> {
 
                 None
             }
-            Ty::Row { fields, nominal_id, .. } => {
+            Ty::Row {
+                fields, nominal_id, ..
+            } => {
                 match nominal_id {
                     Some(struct_id) => {
                         // Nominal row - look up typedef
@@ -1743,7 +1770,11 @@ impl<'a> Lowerer<'a> {
                     }
                     None => {
                         // Structural row - find field by position
-                        if let Some((index, (_, _field_ty))) = fields.iter().enumerate().find(|(_, (fname, _))| fname == name) {
+                        if let Some((index, (_, _field_ty))) = fields
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (fname, _))| fname == name)
+                        {
                             let member_reg = self.allocate_register();
 
                             self.push_instr(Instr::GetElementPointer {
@@ -2102,7 +2133,11 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        if let Ty::Row { nominal_id: Some(struct_id), .. } = &callee_typed_expr.ty {
+        if let Ty::Row {
+            nominal_id: Some(struct_id),
+            ..
+        } = &callee_typed_expr.ty
+        {
             return self.lower_init_call(struct_id, &callee_typed_expr.ty, arg_registers, &arg_tys);
         }
 
@@ -2424,7 +2459,11 @@ impl<'a> Lowerer<'a> {
         );
 
         let callee_name = match &receiver_ty.ty {
-            Ty::Enum(symbol_id, _) | Ty::Row { nominal_id: Some(symbol_id), .. } => {
+            Ty::Enum(symbol_id, _)
+            | Ty::Row {
+                nominal_id: Some(symbol_id),
+                ..
+            } => {
                 let type_def = self.env.lookup_type(symbol_id)?;
                 let method = type_def.find_method(name)?;
                 Some(type_def.method_fn_name(&method.name))

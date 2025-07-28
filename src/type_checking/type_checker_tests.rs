@@ -7208,7 +7208,7 @@ let r = {x: 42, y: true}
 r.x
         ";
         let checked = check(src).unwrap();
-        
+
         // The result should be Int (type of field x)
         let last_expr = checked.roots().last().unwrap();
         assert_eq!(last_expr.ty, Ty::Int);
@@ -7223,7 +7223,7 @@ let b = point.y
 b
         ";
         let checked = check(src).unwrap();
-        
+
         // The result should be Int (type of field y)
         let last_expr = checked.roots().last().unwrap();
         assert_eq!(last_expr.ty, Ty::Int);
@@ -7258,12 +7258,12 @@ let outer = {inner: {x: 42, y: true}, z: 3.14}
 outer.inner.x
         ";
         let checked = check(src).unwrap();
-        
+
         // The result should be Int (type of inner.x)
         let last_expr = checked.roots().last().unwrap();
         assert_eq!(last_expr.ty, Ty::Int);
     }
-    
+
     #[test]
     fn test_record_literal_function_return() {
         // Test that record literals work as function return values
@@ -7432,7 +7432,7 @@ makePoint()
             }
             ",
         );
-        
+
         assert!(result.is_ok());
     }
 
@@ -7456,7 +7456,7 @@ makePoint()
             }
             ",
         );
-        
+
         // This test should fail because spread syntax is not yet implemented
         assert!(result.is_ok());
         if let Ok(checked) = result {
@@ -7492,7 +7492,7 @@ makePoint()
             }
             ",
         );
-        
+
         assert!(result.is_ok());
     }
 
@@ -7520,7 +7520,7 @@ makePoint()
             }
             ",
         );
-        
+
         assert!(result.is_ok());
     }
 
@@ -7783,23 +7783,17 @@ makePoint()
 
     #[test]
     fn test_record_type_annotation() {
-        let checked = check(
-            "func takesRecord(r: {x: Int, y: Bool}) { r.x }",
-        )
-        .unwrap();
+        let checked = check("func takesRecord(r: {x: Int, y: Bool}) { r.x }").unwrap();
 
         // Should type check successfully with record type parameter
-        assert!(matches!(
-            &checked.roots()[0].expr,
-            Expr::Func { .. }
-        ));
-        
+        assert!(matches!(&checked.roots()[0].expr, Expr::Func { .. }));
+
         // The function should have the expected type
         if let Ty::Func(params, ret_ty, _) = &checked.roots()[0].ty {
             assert_eq!(params.len(), 1);
             assert!(matches!(
                 &params[0],
-                Ty::Row { fields, row: None, nominal_id: None, generics: _ } if fields.len() == 2
+                Ty::Row { fields, row: None, nominal_id: None, generics: _, .. } if fields.len() == 2
             ));
             assert_eq_diff!(ret_ty.as_ref(), &Ty::Int);
         } else {
@@ -7820,15 +7814,32 @@ makePoint()
         let checked = result.unwrap();
         let roots = checked.roots();
         assert_eq!(roots.len(), 2);
-        
+
         // Check that point3d has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
+                Ty::Row {
+                    fields,
+                    nominal_id: None,
+                    generics: _,
+                    ..
+                } => {
                     assert_eq!(fields.len(), 3);
-                    assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
-                    assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Int));
-                    assert!(fields.iter().any(|(name, ty)| name == "z" && *ty == Ty::Int));
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "z" && *ty == Ty::Int)
+                    );
                 }
                 _ => panic!("Expected record type for point3d"),
             }
@@ -7884,7 +7895,7 @@ makePoint()
 
         // All results should be tuples of (Int, Int)
         let tuple_ty = Ty::Tuple(vec![Ty::Int, Ty::Int]);
-        
+
         // Find the let bindings and check their types
         for expr in checked.roots() {
             if let crate::typed_expr::Expr::Let(name, _) = &expr.expr {
@@ -7914,8 +7925,18 @@ makePoint()
 
         // The result should have at least an id field
         if let Some(last) = checked.roots().last() {
-            if let Ty::Row { fields, nominal_id: None, generics: _, .. } = &last.ty {
-                assert!(fields.iter().any(|(name, ty)| name == "id" && *ty == Ty::Int));
+            if let Ty::Row {
+                fields,
+                nominal_id: None,
+                generics: _,
+                ..
+            } = &last.ty
+            {
+                assert!(
+                    fields
+                        .iter()
+                        .any(|(name, ty)| name == "id" && *ty == Ty::Int)
+                );
             }
         }
     }
@@ -7978,18 +7999,35 @@ makePoint()
             ",
         )
         .unwrap();
-        
+
         let roots = checked.roots();
         assert_eq!(roots.len(), 2);
-        
+
         // Check that spread has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
+                Ty::Row {
+                    fields,
+                    nominal_id: None,
+                    generics: _,
+                    ..
+                } => {
                     assert_eq!(fields.len(), 3);
-                    assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
-                    assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Int));
-                    assert!(fields.iter().any(|(name, ty)| name == "z" && *ty == Ty::Int));
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "z" && *ty == Ty::Int)
+                    );
                 }
                 _ => panic!("Expected record type for spread"),
             }
@@ -8005,17 +8043,30 @@ makePoint()
             ",
         )
         .unwrap();
-        
+
         let roots = checked.roots();
         assert_eq!(roots.len(), 2);
-        
+
         // Check that overridden has type {x: String, y: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
+                Ty::Row {
+                    fields,
+                    nominal_id: None,
+                    generics: _,
+                    ..
+                } => {
                     assert_eq!(fields.len(), 2);
-                    assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::string()));
-                    assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Int));
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "x" && *ty == Ty::string())
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                    );
                 }
                 _ => panic!("Expected record type for overridden"),
             }
@@ -8032,19 +8083,40 @@ makePoint()
             ",
         )
         .unwrap();
-        
+
         let roots = checked.roots();
         assert_eq!(roots.len(), 3);
-        
+
         // Check that combined has type {x: Int, y: String, z: Bool, w: Float}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
+                Ty::Row {
+                    fields,
+                    nominal_id: None,
+                    generics: _,
+                    ..
+                } => {
                     assert_eq!(fields.len(), 4);
-                    assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
-                    assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::string()));
-                    assert!(fields.iter().any(|(name, ty)| name == "z" && *ty == Ty::Bool));
-                    assert!(fields.iter().any(|(name, ty)| name == "w" && *ty == Ty::Float));
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "y" && *ty == Ty::string())
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "z" && *ty == Ty::Bool)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "w" && *ty == Ty::Float)
+                    );
                 }
                 _ => panic!("Expected record type for combined"),
             }
@@ -8064,18 +8136,35 @@ makePoint()
             ",
         )
         .unwrap();
-        
+
         let roots = checked.roots();
         assert_eq!(roots.len(), 3);
-        
+
         // Check that extended has type {x: Int, y: Bool, z: String}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
+                Ty::Row {
+                    fields,
+                    nominal_id: None,
+                    generics: _,
+                    ..
+                } => {
                     assert_eq!(fields.len(), 3);
-                    assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
-                    assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Bool));
-                    assert!(fields.iter().any(|(name, ty)| name == "z" && *ty == Ty::string()));
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "y" && *ty == Ty::Bool)
+                    );
+                    assert!(
+                        fields
+                            .iter()
+                            .any(|(name, ty)| name == "z" && *ty == Ty::string())
+                    );
                 }
                 _ => panic!("Expected record type for extended"),
             }

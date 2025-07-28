@@ -590,7 +590,11 @@ impl<'a> NameResolver<'a> {
             Expr::RecordField { label: _, value } => {
                 *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
             }
-            Expr::RecordTypeRepr { fields, row_var, introduces_type: _ } => {
+            Expr::RecordTypeRepr {
+                fields,
+                row_var,
+                introduces_type: _,
+            } => {
                 *fields = self.resolve_nodes(fields, meta, symbol_table, false)?;
                 if let Some(row) = row_var {
                     *row = Box::new(self.resolve_node(row, meta, symbol_table)?);

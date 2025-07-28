@@ -151,7 +151,9 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Init => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Mut => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Protocol => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::DotDot | TokenKind::DotDotDot => self.make(tok, Kind::OPERATOR, &mut tokens),
+                TokenKind::DotDot | TokenKind::DotDotDot => {
+                    self.make(tok, Kind::OPERATOR, &mut tokens)
+                }
             }
         }
 
@@ -382,14 +384,16 @@ impl<'a> Higlighter<'a> {
             }
             Expr::RecordLiteral(fields) => result.extend(self.tokens_from_exprs(fields)),
             Expr::RecordField { value, .. } => result.extend(self.tokens_from_expr(value)),
-            Expr::RecordTypeRepr { fields, row_var, .. } => {
+            Expr::RecordTypeRepr {
+                fields, row_var, ..
+            } => {
                 result.extend(self.tokens_from_exprs(fields));
                 if let Some(row) = row_var {
                     result.extend(self.tokens_from_expr(row));
                 }
             }
             Expr::RecordTypeField { ty, .. } => result.extend(self.tokens_from_expr(ty)),
-            Expr::RowVariable(_) => {},
+            Expr::RowVariable(_) => {}
             Expr::Spread(expr) => result.extend(self.tokens_from_expr(expr)),
         };
 

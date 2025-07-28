@@ -525,16 +525,18 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
             let new_values = values.iter().map(|g| walk(g, map)).collect();
             Ty::EnumVariant(*name, new_values)
         }
-        Ty::Protocol(sym, generics) => {
-            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-            Ty::Protocol(*sym, new_generics)
-        }
         Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
         Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
         Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
             ty.clone()
         }
-        Ty::Row { fields, row, nominal_id, generics } => {
+        Ty::Row {
+            fields,
+            row,
+            nominal_id,
+            generics,
+            kind,
+        } => {
             let new_fields = fields
                 .iter()
                 .map(|(name, field_ty)| (name.clone(), walk(field_ty, map)))
@@ -545,6 +547,7 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
                 row: new_row,
                 nominal_id: *nominal_id,
                 generics: generics.iter().map(|g| walk(g, map)).collect(),
+                kind: kind.clone(),
             }
         }
     }
@@ -596,15 +599,15 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::Array(ty) => {
             s.extend(free_type_vars(ty));
         }
-        Ty::Protocol(_, generics) => {
-            for generic in generics {
-                s.extend(free_type_vars(generic));
-            }
-        }
         Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
             // These types contain no nested types, so there's nothing to do.
         }
-        Ty::Row { fields, row, generics, .. } => {
+        Ty::Row {
+            fields,
+            row,
+            generics,
+            ..
+        } => {
             for (_, field_ty) in fields {
                 s.extend(free_type_vars(field_ty));
             }

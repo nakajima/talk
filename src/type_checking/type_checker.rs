@@ -24,7 +24,7 @@ use crate::{
     substitutions::Substitutions,
     synthesis::synthesize_inits,
     token_kind::TokenKind,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_def::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr,
@@ -490,9 +490,18 @@ impl<'a> TypeChecker<'a> {
             crate::parsed_expr::Expr::RecordField { label, value } => {
                 self.infer_record_field(parsed_expr.id, label, value, expected, env)
             }
-            crate::parsed_expr::Expr::RecordTypeRepr { fields, row_var, introduces_type } => {
-                self.infer_record_type_repr(parsed_expr.id, fields, row_var, *introduces_type, expected, env)
-            }
+            crate::parsed_expr::Expr::RecordTypeRepr {
+                fields,
+                row_var,
+                introduces_type,
+            } => self.infer_record_type_repr(
+                parsed_expr.id,
+                fields,
+                row_var,
+                *introduces_type,
+                expected,
+                env,
+            ),
             crate::parsed_expr::Expr::RecordTypeField { label, ty } => {
                 self.infer_record_type_field(parsed_expr.id, label, ty, expected, env)
             }
@@ -552,7 +561,8 @@ impl<'a> TypeChecker<'a> {
         let Name::Resolved(symbol_id, name_str) = name else {
             return Err(TypeError::Unresolved(name.name_str()));
         };
-        let ty = Ty::Protocol(
+        // Protocols are represented as Row types
+        let ty = Ty::protocol_type(
             *symbol_id,
             inferred_associated_types
                 .iter()
@@ -1189,7 +1199,11 @@ impl<'a> TypeChecker<'a> {
         let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
                 Some(
-                    Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _) | Ty::Row { nominal_id: Some(symbol_id), .. },
+                    Ty::Enum(symbol_id, _)
+                    | Ty::Row {
+                        nominal_id: Some(symbol_id),
+                        ..
+                    },
                 ) => (*symbol_id, "Self".to_string()),
                 _ => {
                     return Err(TypeError::Unresolved(format!(
@@ -1208,11 +1222,25 @@ impl<'a> TypeChecker<'a> {
 
             for conformance in conformances {
                 let typed_conformance = self.infer_node(conformance, env, &None)?;
-                let Ty::Protocol(protocol_id, associated_types) = typed_conformance.ty.clone()
-                else {
-                    return Err(TypeError::Unknown(format!(
-                        "{typed_conformance:?} is not a protocol",
-                    )));
+                // Protocols are now represented as Row types
+                let (protocol_id, associated_types) = match &typed_conformance.ty {
+                    Ty::Row {
+                        nominal_id: Some(id),
+                        generics,
+                        kind: RowKind::Protocol,
+                        ..
+                    } => (*id, generics.clone()),
+                    Ty::Row { kind, .. } => {
+                        return Err(TypeError::Unknown(format!(
+                            "{typed_conformance:?} is not a protocol (kind: {:?})",
+                            kind
+                        )));
+                    }
+                    _ => {
+                        return Err(TypeError::Unknown(format!(
+                            "{typed_conformance:?} is not a protocol",
+                        )));
+                    }
                 };
 
                 unbound_vars.extend(associated_types.iter().filter_map(|t| {
@@ -1527,10 +1555,16 @@ impl<'a> TypeChecker<'a> {
             }
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
-                    if let Ty::Protocol(symbol_id, _) = self_ {
-                        Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id))
-                    } else {
-                        self_.clone()
+                    match self_ {
+                        Ty::Row {
+                            nominal_id: Some(symbol_id),
+                            kind: RowKind::Protocol,
+                            ..
+                        } => {
+                            Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id))
+                        }
+                        Ty::Row { .. } => self_.clone(),
+                        _ => self_.clone(),
                     }
                 } else {
                     return Err(TypeError::Unknown(format!(
@@ -2202,7 +2236,7 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         let mut typed_fields = Vec::new();
         let mut field_map: HashMap<String, Ty> = HashMap::new();
-        
+
         // Process fields in order, with later fields overriding earlier ones
         for field_expr in fields {
             match &field_expr.expr {
@@ -2210,17 +2244,22 @@ impl<'a> TypeChecker<'a> {
                     // Type check the spread expression
                     let typed_spread = self.infer_node(spread_expr, env, &None)?;
                     let spread_ty = typed_spread.ty.clone();
-                    
+
                     // Add the spread expression to typed fields
                     typed_fields.push(TypedExpr {
                         id: field_expr.id,
                         ty: spread_ty.clone(),
                         expr: typed_expr::Expr::Spread(Box::new(typed_spread)),
                     });
-                    
+
                     // Extract fields from the spread expression's type
                     match &spread_ty {
-                        Ty::Row { fields: spread_fields, nominal_id: None, generics: _, .. } => {
+                        Ty::Row {
+                            fields: spread_fields,
+                            nominal_id: None,
+                            generics: _,
+                            ..
+                        } => {
                             // Add all fields from the spread record
                             // These can be overridden by later fields or spreads
                             for (field_name, field_ty) in spread_fields {
@@ -2247,7 +2286,7 @@ impl<'a> TypeChecker<'a> {
                     // Type check the field value
                     let typed_value = self.infer_node(value, env, &None)?;
                     let field_ty = typed_value.ty.clone();
-                    
+
                     // Create typed field
                     let typed_field = TypedExpr {
                         id: field_expr.id,
@@ -2257,7 +2296,7 @@ impl<'a> TypeChecker<'a> {
                             value: Box::new(typed_value),
                         },
                     };
-                    
+
                     typed_fields.push(typed_field);
                     // Later fields override earlier ones (including spread fields)
                     field_map.insert(label.name_str().to_string(), field_ty);
@@ -2269,22 +2308,29 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
-        
+
         // Convert HashMap back to Vec for the record type
         let field_vec: Vec<(String, Ty)> = field_map.into_iter().collect();
-        
+
         // Create the record type using Row representation
         let record_ty = Ty::Row {
             fields: field_vec,
-            row: None, // No row variable for concrete record literals
-            nominal_id: None, // Records are structural types
-            generics: vec![], // Records don't have generics
+            row: None,             // No row variable for concrete record literals
+            nominal_id: None,      // Records are structural types
+            generics: vec![],      // Records don't have generics
+            kind: RowKind::Record, // Records are structural types
         };
-        
+
         // Check against expected type if provided
         if let Some(expected_ty) = expected {
             match expected_ty {
-                Ty::Row { fields: expected_fields, row: expected_row, nominal_id: None, generics: _ } => {
+                Ty::Row {
+                    fields: expected_fields,
+                    row: expected_row,
+                    nominal_id: None,
+                    generics: _,
+                    ..
+                } => {
                     // Check that all expected fields are present with correct types
                     for (expected_name, expected_field_ty) in expected_fields {
                         match typed_fields.iter().find(|f| {
@@ -2312,7 +2358,7 @@ impl<'a> TypeChecker<'a> {
                             }
                         }
                     }
-                    
+
                     // If there's no row variable, check for extra fields
                     if expected_row.is_none() {
                         for typed_field in &typed_fields {
@@ -2329,7 +2375,11 @@ impl<'a> TypeChecker<'a> {
                 }
                 Ty::TypeVar(_) => {
                     // Constrain the type variable to be equal to our record type
-                    env.constrain(Constraint::Equality(id, expected_ty.clone(), record_ty.clone()));
+                    env.constrain(Constraint::Equality(
+                        id,
+                        expected_ty.clone(),
+                        record_ty.clone(),
+                    ));
                 }
                 _ => {
                     return Err(TypeError::UnexpectedType(
@@ -2339,7 +2389,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
-        
+
         Ok(TypedExpr {
             id,
             ty: record_ty,
@@ -2372,14 +2422,14 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         let mut typed_fields = Vec::new();
         let mut field_types = Vec::new();
-        
+
         // Type check each field type
         for field_expr in fields {
             match &field_expr.expr {
                 crate::parsed_expr::Expr::RecordTypeField { label, ty } => {
                     // Type check the field type expression
                     let typed_ty = self.infer_node(ty, env, &None)?;
-                    
+
                     // Create typed field
                     let typed_field = TypedExpr {
                         id: field_expr.id,
@@ -2389,7 +2439,7 @@ impl<'a> TypeChecker<'a> {
                             ty: Box::new(typed_ty.clone()),
                         },
                     };
-                    
+
                     typed_fields.push(typed_field);
                     field_types.push((label.name_str().to_string(), typed_ty.ty));
                 }
@@ -2400,31 +2450,31 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
-        
+
         // Type check row variable if present
         let typed_row_var = if let Some(row_expr) = row_var {
             match &row_expr.expr {
                 crate::parsed_expr::Expr::RowVariable(name) => {
                     // Create a row type variable
-                    let row_type_var = env.new_type_variable(
-                        TypeVarKind::Row,
-                        row_expr.id,
-                    );
-                    
+                    let row_type_var = env.new_type_variable(TypeVarKind::Row, row_expr.id);
+
                     // Generate row constraint for the row variable
                     let row_spec = RowSpec {
-                        fields: field_types.iter()
-                            .map(|(label, ty)| (
-                                Label::from(label.clone()),
-                                FieldInfo {
-                                    ty: ty.clone(),
-                                    expr_id: id,
-                                    metadata: Default::default(),
-                                }
-                            ))
+                        fields: field_types
+                            .iter()
+                            .map(|(label, ty)| {
+                                (
+                                    Label::from(label.clone()),
+                                    FieldInfo {
+                                        ty: ty.clone(),
+                                        expr_id: id,
+                                        metadata: Default::default(),
+                                    },
+                                )
+                            })
                             .collect(),
                     };
-                    
+
                     env.constrain(Constraint::Row {
                         expr_id: id,
                         constraint: RowConstraint::HasRow {
@@ -2433,7 +2483,7 @@ impl<'a> TypeChecker<'a> {
                             extension: Some(row_type_var.clone()),
                         },
                     });
-                    
+
                     Some(Box::new(TypedExpr {
                         id: row_expr.id,
                         ty: Ty::TypeVar(row_type_var.clone()),
@@ -2449,15 +2499,16 @@ impl<'a> TypeChecker<'a> {
         } else {
             None
         };
-        
+
         // Create the record type using Row representation
         let record_ty = Ty::Row {
             fields: field_types,
             row: typed_row_var.as_ref().map(|tv| Box::new(tv.ty.clone())),
-            nominal_id: None, // Records are structural types
-            generics: vec![], // Records don't have generics
+            nominal_id: None,      // Records are structural types
+            generics: vec![],      // Records don't have generics
+            kind: RowKind::Record, // Records are structural types
         };
-        
+
         Ok(TypedExpr {
             id,
             ty: record_ty,
@@ -2479,7 +2530,7 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         // Type check the field type expression
         let typed_ty = self.infer_node(ty, env, &None)?;
-        
+
         Ok(TypedExpr {
             id,
             ty: typed_ty.ty.clone(),
@@ -2498,11 +2549,8 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         // Create a row type variable
-        let row_type_var = env.new_type_variable(
-            TypeVarKind::Row,
-            id,
-        );
-        
+        let row_type_var = env.new_type_variable(TypeVarKind::Row, id);
+
         Ok(TypedExpr {
             id,
             ty: Ty::TypeVar(row_type_var),
@@ -2519,7 +2567,7 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         // Type check the expression being spread
         let typed_expr = self.infer_node(expr, env, &None)?;
-        
+
         // The spread expression itself has the same type as the expression being spread
         Ok(TypedExpr {
             id,

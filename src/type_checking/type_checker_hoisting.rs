@@ -221,7 +221,10 @@ impl<'a> TypeChecker<'a> {
                         .unwrap_or_else(|| Ty::struct_type(*symbol_id, canonical_types.clone()))
                 }
                 PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
-                PredeclarationKind::Protocol => Ty::Protocol(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Protocol => {
+                    // Use the protocol_type helper
+                    Ty::protocol_type(*symbol_id, canonical_types.clone())
+                }
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
                     #[allow(clippy::expect_used)]
@@ -578,12 +581,25 @@ impl<'a> TypeChecker<'a> {
                     .infer_node(conformance_expr, env, &None)
                     .map_err(|e| (conformance_expr.id, e))?;
 
-                let Ty::Protocol(name, associated_types) = &typed_expr.ty else {
-                    tracing::error!("Didn't get protocol for expr: {typed_expr:?}",);
-                    continue;
+                // Protocols are now represented as Row types
+                let (name, associated_types) = match &typed_expr.ty {
+                    Ty::Row {
+                        nominal_id: Some(name),
+                        generics,
+                        kind: crate::ty::RowKind::Protocol,
+                        ..
+                    } => (*name, generics.clone()),
+                    Ty::Row { kind, .. } => {
+                        tracing::error!("Expected protocol but got {:?}: {typed_expr:?}", kind);
+                        continue;
+                    }
+                    _ => {
+                        tracing::error!("Didn't get protocol for expr: {typed_expr:?}");
+                        continue;
+                    }
                 };
 
-                let conformance = Conformance::new(*name, associated_types.to_vec());
+                let conformance = Conformance::new(name, associated_types);
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: conformance_expr.id,

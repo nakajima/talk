@@ -125,9 +125,6 @@ impl Substitutions {
                 }
             }
             Ty::Array(ty) => Ty::Array(self.apply(ty, depth + 1, context).into()),
-            Ty::Protocol(sym, generics) => {
-                Ty::Protocol(*sym, self.apply_multiple(generics, depth + 1, context))
-            }
             Ty::Init(struct_id, params) => {
                 Ty::Init(*struct_id, self.apply_multiple(params, depth + 1, context))
             }
@@ -136,17 +133,28 @@ impl Substitutions {
                 func: self.apply(func, depth + 1, context).into(),
             },
             Ty::Void => ty.clone(),
-            Ty::Row { fields, row, nominal_id, generics } => {
+            Ty::Row {
+                fields,
+                row,
+                nominal_id,
+                generics,
+                kind,
+            } => {
                 let applied_fields: Vec<(String, Ty)> = fields
                     .iter()
-                    .map(|(name, field_ty)| (name.clone(), self.apply(field_ty, depth + 1, context)))
+                    .map(|(name, field_ty)| {
+                        (name.clone(), self.apply(field_ty, depth + 1, context))
+                    })
                     .collect();
-                let applied_row = row.as_ref().map(|r| Box::new(self.apply(r, depth + 1, context)));
+                let applied_row = row
+                    .as_ref()
+                    .map(|r| Box::new(self.apply(r, depth + 1, context)));
                 Ty::Row {
                     fields: applied_fields,
                     row: applied_row,
                     nominal_id: *nominal_id,
                     generics: self.apply_multiple(generics, depth + 1, context),
+                    kind: kind.clone(),
                 }
             }
         }
@@ -275,7 +283,7 @@ impl Substitutions {
                 // The self_ty can be different when dealing with protocol methods
                 // on different concrete types that both conform to the protocol.
                 self.unify(&lhs_func, &rhs_func, context, generation)?;
-                
+
                 // Only unify self_ty if at least one is a TypeVar (for inference)
                 // or if they're the same type (for exact matches)
                 match (lhs_self_ty.as_ref(), rhs_self_ty.as_ref()) {
@@ -325,7 +333,18 @@ impl Substitutions {
                 Ok(())
             }
             // Handle Row types - check nominal_id and unify generics
-            (Ty::Row { nominal_id: Some(id1), generics: gen1, .. }, Ty::Row { nominal_id: Some(id2), generics: gen2, .. }) if id1 == id2 => {
+            (
+                Ty::Row {
+                    nominal_id: Some(id1),
+                    generics: gen1,
+                    ..
+                },
+                Ty::Row {
+                    nominal_id: Some(id2),
+                    generics: gen2,
+                    ..
+                },
+            ) if id1 == id2 => {
                 // Unify generics
                 if gen1.len() != gen2.len() {
                     return Err(TypeError::Mismatch(

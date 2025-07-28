@@ -1110,12 +1110,12 @@ impl<'a> Parser<'a> {
                 return self.add_expr(TupleTypeRepr(sig_args, is_type_parameter), tok);
             }
         }
-        
+
         // Check for record type: {x: Int, y: Int, ..R}
         if self.did_match(TokenKind::LeftBrace)? {
             return self.record_type_repr(is_type_parameter, tok);
         }
-        
+
         // Check for row variable: ..R
         if self.did_match(TokenKind::DotDot)? {
             let name = self.identifier()?;
@@ -1196,7 +1196,7 @@ impl<'a> Parser<'a> {
         self.skip_newlines();
 
         self.consume(TokenKind::LeftBrace)?;
-        
+
         // Check if this might be a record literal by looking ahead
         if self.peek_is_record_literal() {
             return self.record_literal_body(tok);
@@ -1209,30 +1209,45 @@ impl<'a> Parser<'a> {
 
         self.add_expr(Block(items), tok)
     }
-    
+
     fn peek_is_record_literal(&mut self) -> bool {
         // Record literals have the pattern: { identifier: expr, ... }
         // or { ...expr, ... }
         // Look for identifier followed by colon, or DotDotDot
         // Empty braces {} are always blocks, not records
         self.skip_newlines();
-        
+
         match &self.current {
-            Some(Token { kind: TokenKind::Identifier(_), .. }) => {
-                matches!(&self.next, Some(Token { kind: TokenKind::Colon, .. }))
+            Some(Token {
+                kind: TokenKind::Identifier(_),
+                ..
+            }) => {
+                matches!(
+                    &self.next,
+                    Some(Token {
+                        kind: TokenKind::Colon,
+                        ..
+                    })
+                )
             }
-            Some(Token { kind: TokenKind::DotDotDot, .. }) => true,
-            Some(Token { kind: TokenKind::RightBrace, .. }) => false, // Empty braces are blocks
+            Some(Token {
+                kind: TokenKind::DotDotDot,
+                ..
+            }) => true,
+            Some(Token {
+                kind: TokenKind::RightBrace,
+                ..
+            }) => false, // Empty braces are blocks
             _ => false,
         }
     }
-    
+
     fn record_literal_body(&mut self, tok: LocToken) -> Result<ParsedExpr, ParserError> {
         let mut fields: Vec<ParsedExpr> = vec![];
-        
+
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_newlines();
-            
+
             if self.peek_is(TokenKind::DotDotDot) {
                 // Spread syntax: ...expr
                 self.consume(TokenKind::DotDotDot)?;
@@ -1253,7 +1268,7 @@ impl<'a> Parser<'a> {
                     field_tok,
                 )?);
             }
-            
+
             // Handle comma
             if !self.peek_is(TokenKind::RightBrace) {
                 self.consume(TokenKind::Comma)?;
@@ -1262,30 +1277,36 @@ impl<'a> Parser<'a> {
             }
             self.skip_newlines();
         }
-        
+
         self.add_expr(RecordLiteral(fields), tok)
     }
-    
-    fn record_type_repr(&mut self, is_type_parameter: bool, tok: LocToken) -> Result<ParsedExpr, ParserError> {
+
+    fn record_type_repr(
+        &mut self,
+        is_type_parameter: bool,
+        tok: LocToken,
+    ) -> Result<ParsedExpr, ParserError> {
         let mut fields: Vec<ParsedExpr> = vec![];
         let mut row_var: Option<Box<ParsedExpr>> = None;
-        
+
         while !self.did_match(TokenKind::RightBrace)? {
             self.skip_newlines();
-            
+
             // Check for row variable: ..R
             if self.did_match(TokenKind::DotDot)? {
                 let row_tok = self.push_source_location();
                 let name = self.identifier()?;
-                row_var = Some(Box::new(self.add_expr(RowVariable(Name::Raw(name)), row_tok)?));
-                
+                row_var = Some(Box::new(
+                    self.add_expr(RowVariable(Name::Raw(name)), row_tok)?,
+                ));
+
                 // Row variable should be the last element
                 self.consume(TokenKind::Comma).ok();
                 self.skip_newlines();
                 self.consume(TokenKind::RightBrace)?;
                 break;
             }
-            
+
             // Regular field: label: Type
             let field_tok = self.push_source_location();
             let label = self.identifier()?;
@@ -1298,7 +1319,7 @@ impl<'a> Parser<'a> {
                 },
                 field_tok,
             )?);
-            
+
             // Handle comma
             if !self.peek_is(TokenKind::RightBrace) && !self.peek_is(TokenKind::DotDot) {
                 self.consume(TokenKind::Comma)?;
@@ -1307,7 +1328,7 @@ impl<'a> Parser<'a> {
             }
             self.skip_newlines();
         }
-        
+
         self.add_expr(
             RecordTypeRepr {
                 fields,

@@ -21,10 +21,7 @@ impl SpanIndex {
 
     /// Insert a span into the index
     pub fn insert(&mut self, expr_id: ExprID, span: Span) {
-        let file_index = self
-            .by_file_and_line
-            .entry(span.path.clone())
-            .or_default();
+        let file_index = self.by_file_and_line.entry(span.path.clone()).or_default();
 
         // Index by all lines the span covers
         for line in span.start_line..=span.end_line {

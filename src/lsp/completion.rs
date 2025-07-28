@@ -58,7 +58,9 @@ impl<'a> CompletionContext<'a> {
             .symbol_at_position(position_before_dot.into(), &self.source_file.path)
             .and_then(|sym| {
                 let info = self.driver.symbol_table.get(&sym)?;
-                self.source_file.typed_expr(info.expr_id).map(|typed| typed.ty.clone())
+                self.source_file
+                    .typed_expr(info.expr_id)
+                    .map(|typed| typed.ty.clone())
             })
             // Fallback for `self` keyword completion
             .or_else(|| self.env.selfs.last().cloned());
@@ -90,8 +92,8 @@ impl<'a> CompletionContext<'a> {
     /// Get completions for a specific type (handles both records and typedefs)
     fn get_completions_for_type(&self, ty: &Ty) -> Vec<CompletionItem> {
         match ty {
-            // Handle struct/enum/protocol types via typedef
-            Ty::Enum(id, _) | Ty::Protocol(id, _) => {
+            // Handle enum types via typedef
+            Ty::Enum(id, _) => {
                 if let Some(type_def) = self.env.lookup_type(id) {
                     self.get_completions_for_typedef(type_def)
                 } else {
@@ -99,7 +101,9 @@ impl<'a> CompletionContext<'a> {
                 }
             }
             // Handle unified row types
-            Ty::Row { fields, nominal_id, .. } => {
+            Ty::Row {
+                fields, nominal_id, ..
+            } => {
                 if let Some(id) = nominal_id {
                     // Nominal row - use typedef
                     if let Some(type_def) = self.env.lookup_type(id) {
@@ -109,40 +113,52 @@ impl<'a> CompletionContext<'a> {
                     }
                 } else {
                     // Structural row - use fields directly
-                    fields.iter().map(|(field_name, field_ty)| {
-                        CompletionItem {
+                    fields
+                        .iter()
+                        .map(|(field_name, field_ty)| CompletionItem {
                             label: field_name.clone(),
                             kind: Some(CompletionItemKind::FIELD),
                             detail: Some(format!("{:?}", field_ty)),
                             ..Default::default()
-                        }
-                    }).collect()
+                        })
+                        .collect()
                 }
             }
-            _ => vec![]
+            _ => vec![],
         }
     }
 
     /// Get completions from a typedef's members
-    fn get_completions_for_typedef(&self, type_def: &crate::type_def::TypeDef) -> Vec<CompletionItem> {
-        type_def.members.iter().filter_map(|(name, member)| {
-            let (kind, detail) = match member {
-                TypeMember::Method(_) | TypeMember::MethodRequirement(_) => 
-                    (CompletionItemKind::METHOD, format!("{:?}", member.ty())),
-                TypeMember::Property(_) => 
-                    (CompletionItemKind::PROPERTY, format!("{:?}", member.ty())),
-                TypeMember::Variant(_) => 
-                    (CompletionItemKind::ENUM_MEMBER, format!("{:?}", member.ty())),
-                _ => return None,
-            };
-            
-            Some(CompletionItem {
-                label: name.clone(),
-                kind: Some(kind),
-                detail: Some(detail),
-                ..Default::default()
+    fn get_completions_for_typedef(
+        &self,
+        type_def: &crate::type_def::TypeDef,
+    ) -> Vec<CompletionItem> {
+        type_def
+            .members
+            .iter()
+            .filter_map(|(name, member)| {
+                let (kind, detail) = match member {
+                    TypeMember::Method(_) | TypeMember::MethodRequirement(_) => {
+                        (CompletionItemKind::METHOD, format!("{:?}", member.ty()))
+                    }
+                    TypeMember::Property(_) => {
+                        (CompletionItemKind::PROPERTY, format!("{:?}", member.ty()))
+                    }
+                    TypeMember::Variant(_) => (
+                        CompletionItemKind::ENUM_MEMBER,
+                        format!("{:?}", member.ty()),
+                    ),
+                    _ => return None,
+                };
+
+                Some(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(kind),
+                    detail: Some(detail),
+                    ..Default::default()
+                })
             })
-        }).collect()
+            .collect()
     }
 
     fn get_keyword_completions(&self) -> Vec<CompletionItem> {

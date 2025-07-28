@@ -227,7 +227,7 @@ pub enum Expr {
 
     // Record type: {x: Int, y: Int, ..R}
     RecordTypeRepr {
-        fields: Vec<ParsedExpr>, // List of RecordTypeField expressions
+        fields: Vec<ParsedExpr>,          // List of RecordTypeField expressions
         row_var: Option<Box<ParsedExpr>>, // Optional row variable after ..
         #[drive(skip)]
         introduces_type: bool,
