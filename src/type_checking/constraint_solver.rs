@@ -680,7 +680,8 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
             Ty::TypeVar(type_var) => {
                 tracing::debug!("Resolving member {} on TypeVar {:?}", member_name, type_var);
-                let result = self.resolve_type_var_member(type_var, member_name, substitutions, expr_id);
+                let result =
+                    self.resolve_type_var_member(type_var, member_name, substitutions, expr_id);
                 tracing::debug!("TypeVar member resolution result: {:?}", result);
                 result
             }
@@ -829,10 +830,10 @@ impl<'a> ConstraintSolver<'a> {
 
             if !has_field_constraint {
                 // Generate a new field type variable
-                let field_ty = Ty::TypeVar(self.env.new_type_variable(
-                    TypeVarKind::Member(member_name.to_string()),
-                    *expr_id,
-                ));
+                let field_ty = Ty::TypeVar(
+                    self.env
+                        .new_type_variable(TypeVarKind::Member(member_name.to_string()), *expr_id),
+                );
 
                 // Add the HasField constraint
                 let new_constraint = RowConstraint::HasField {
