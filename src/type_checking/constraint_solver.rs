@@ -333,7 +333,7 @@ impl<'a> ConstraintSolver<'a> {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
                 let (member_ty, type_params, type_args) =
-                    self.resolve_member_type(&receiver_ty, member_name, substitutions)?;
+                    self.resolve_member_type(&receiver_ty, member_name, substitutions, node_id)?;
 
                 let mut member_substitutions = substitutions.clone();
                 for (type_param, type_arg) in type_params.iter().zip(type_args) {
@@ -666,6 +666,7 @@ impl<'a> ConstraintSolver<'a> {
         receiver_ty: &Ty,
         member_name: &str,
         substitutions: &Substitutions,
+        expr_id: &ExprID,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         tracing::debug!(
             "resolve_member_type: receiver_ty = {:?}, member = {}",
@@ -679,7 +680,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
             Ty::TypeVar(type_var) => {
                 tracing::debug!("Resolving member {} on TypeVar {:?}", member_name, type_var);
-                let result = self.resolve_type_var_member(type_var, member_name, substitutions);
+                let result = self.resolve_type_var_member(type_var, member_name, substitutions, expr_id);
                 tracing::debug!("TypeVar member resolution result: {:?}", result);
                 result
             }
@@ -691,7 +692,7 @@ impl<'a> ConstraintSolver<'a> {
             } => {
                 if let Some(type_id) = nominal_id {
                     // Nominal row - use typedef resolution
-                    self.resolve_type_member(type_id, member_name, generics, substitutions)
+                    self.resolve_type_member(type_id, member_name, generics, substitutions, expr_id)
                 } else {
                     // Structural row - look up field directly
                     for (field_name, field_ty) in fields {
@@ -746,6 +747,7 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
         generics: &[Ty],
         substitutions: &Substitutions,
+        expr_id: &ExprID,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         // First get the type def info we need
         let (type_name, type_params) = {
@@ -771,7 +773,7 @@ impl<'a> ConstraintSolver<'a> {
         if let Some(row_var) = &type_def.row_var {
             // Try to resolve through row constraints
             if let Ok((ty, params, assoc)) =
-                self.resolve_type_var_member(row_var, member_name, substitutions)
+                self.resolve_type_var_member(row_var, member_name, substitutions, expr_id)
             {
                 return Ok((ty, params, assoc));
             }
@@ -815,6 +817,7 @@ impl<'a> ConstraintSolver<'a> {
         type_var: &TypeVarID,
         member_name: &str,
         substitutions: &Substitutions,
+        expr_id: &ExprID,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         // Check if this is a row type variable that needs a field constraint
         if matches!(type_var.kind, TypeVarKind::Row) {
@@ -828,7 +831,7 @@ impl<'a> ConstraintSolver<'a> {
                 // Generate a new field type variable
                 let field_ty = Ty::TypeVar(self.env.new_type_variable(
                     TypeVarKind::Member(member_name.to_string()),
-                    ExprID(0), // TODO: Get proper expr_id from MemberAccess constraint
+                    *expr_id,
                 ));
 
                 // Add the HasField constraint
@@ -840,7 +843,7 @@ impl<'a> ConstraintSolver<'a> {
                 };
 
                 self.constraints.push(Constraint::Row {
-                    expr_id: ExprID(0), // TODO: Get proper expr_id
+                    expr_id: *expr_id,
                     constraint: new_constraint.clone(),
                 });
 
