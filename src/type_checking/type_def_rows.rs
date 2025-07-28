@@ -166,7 +166,11 @@ impl RowTypeDef {
     pub fn ty(&self) -> Ty {
         match &self.kind {
             TypeDefKind::Enum => Ty::Enum(self.symbol_id, self.canonical_type_parameters()),
-            TypeDefKind::Struct => Ty::Struct(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Struct => {
+                // For now, keep using Struct for RowTypeDef
+                // TODO: Extract fields from row constraints
+                Ty::struct_type(self.symbol_id, self.canonical_type_parameters())
+            }
             TypeDefKind::Protocol => Ty::Protocol(self.symbol_id, self.canonical_type_parameters()),
             TypeDefKind::Builtin(ty) => ty.clone(),
         }

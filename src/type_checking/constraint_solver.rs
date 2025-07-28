@@ -538,7 +538,7 @@ impl<'a> ConstraintSolver<'a> {
         )?;
 
         // Create and unify the specialized struct type
-        let struct_with_generics = Ty::Struct(*initializes_id, type_args.to_vec());
+        let struct_with_generics = Ty::struct_type(*initializes_id, type_args.to_vec());
         let specialized_struct = self.env.instantiate(&Scheme::new(
             struct_with_generics,
             struct_def.canonical_type_variables(),
@@ -667,28 +667,37 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
         substitutions: &Substitutions,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        tracing::debug!("resolve_member_type: receiver_ty = {:?}, member = {}", receiver_ty, member_name);
         match receiver_ty {
             builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
                 self.resolve_builtin_member(builtin, member_name)
             }
-            Ty::Struct(type_id, generics) | Ty::Protocol(type_id, generics) => {
+            Ty::Protocol(type_id, generics) => {
                 self.resolve_type_member(type_id, member_name, generics, substitutions)
             }
             Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
             Ty::TypeVar(type_var) => {
-                self.resolve_type_var_member(type_var, member_name, substitutions)
+                tracing::debug!("Resolving member {} on TypeVar {:?}", member_name, type_var);
+                let result = self.resolve_type_var_member(type_var, member_name, substitutions);
+                tracing::debug!("TypeVar member resolution result: {:?}", result);
+                result
             }
-            Ty::Record { fields, .. } => {
-                // For concrete records, look up the field directly
-                for (field_name, field_ty) in fields {
-                    if field_name == member_name {
-                        return Ok((field_ty.clone(), vec![], vec![]));
+            Ty::Row { fields, nominal_id, generics, .. } => {
+                if let Some(type_id) = nominal_id {
+                    // Nominal row - use typedef resolution
+                    self.resolve_type_member(type_id, member_name, generics, substitutions)
+                } else {
+                    // Structural row - look up field directly
+                    for (field_name, field_ty) in fields {
+                        if field_name == member_name {
+                            return Ok((field_ty.clone(), vec![], vec![]));
+                        }
                     }
+                    Err(TypeError::MemberNotFound(
+                        receiver_ty.to_string(),
+                        member_name.to_string(),
+                    ))
                 }
-                Err(TypeError::MemberNotFound(
-                    receiver_ty.to_string(),
-                    member_name.to_string(),
-                ))
             }
             _ => Err(TypeError::MemberNotFound(
                 receiver_ty.to_string(),
@@ -942,6 +951,7 @@ impl<'a> ConstraintSolver<'a> {
             .clone();
 
         if let Some(ty) = protocol_def.member_ty(member_name) {
+            tracing::debug!("resolve_protocol_member: protocol_id = {:?}, member = {}, ty = {:?}", protocol_id, member_name, ty);
             Ok(Some((
                 ty.clone(),
                 protocol_def.type_parameters(),
@@ -1131,13 +1141,6 @@ impl<'a> ConstraintSolver<'a> {
                     .collect(),
             ),
             Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
-            Ty::Struct(sym, generics) => Ty::Struct(
-                *sym,
-                generics
-                    .iter()
-                    .map(|t| Self::substitute_ty_with_map(t, substitutions))
-                    .collect(),
-            ),
             Ty::Protocol(sym, generics) => Ty::Protocol(
                 *sym,
                 generics
@@ -1148,15 +1151,20 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
                 ty.clone()
             }
-            Ty::Record { fields, row } => {
+            Ty::Row { fields, row, nominal_id, generics } => {
                 let applied_fields = fields
                     .iter()
                     .map(|(name, field_ty)| (name.clone(), Self::substitute_ty_with_map(field_ty, substitutions)))
                     .collect();
                 let applied_row = row.as_ref().map(|r| Box::new(Self::substitute_ty_with_map(r, substitutions)));
-                Ty::Record {
+                Ty::Row {
                     fields: applied_fields,
                     row: applied_row,
+                    nominal_id: *nominal_id,
+                    generics: generics
+                        .iter()
+                        .map(|g| Self::substitute_ty_with_map(g, substitutions))
+                        .collect(),
                 }
             }
         }
@@ -1165,7 +1173,7 @@ impl<'a> ConstraintSolver<'a> {
     /// Find the symbol ID for a member of a type
     fn find_member_symbol(&self, receiver_ty: &Ty, member_name: &str) -> Option<SymbolID> {
         match receiver_ty {
-            Ty::Struct(type_id, _) | Ty::Enum(type_id, _) | Ty::Protocol(type_id, _) => {
+            Ty::Row { nominal_id: Some(type_id), .. } | Ty::Enum(type_id, _) | Ty::Protocol(type_id, _) => {
                 // Look up the type definition using just the type_id, ignoring type parameters
                 let type_def = self.env.types.get(type_id)?;
 
@@ -1187,8 +1195,8 @@ impl<'a> ConstraintSolver<'a> {
 
                 None
             }
-            Ty::Record { .. } => {
-                // Record fields don't have symbol IDs - they are structural
+            Ty::Row { nominal_id: None, .. } => {
+                // Structural row fields don't have symbol IDs
                 None
             }
             _ => None,

@@ -855,7 +855,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unresolved(name.name_str()));
         };
 
-        let ty = Ty::Struct(
+        let ty = Ty::struct_type(
             *symbol_id,
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
@@ -897,7 +897,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unresolved(name.name_str()));
         };
 
-        let ty = Ty::Struct(
+        let ty = Ty::struct_type(
             *symbol_id,
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
@@ -940,7 +940,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: Ty::Struct(SymbolID::ARRAY, vec![ty]),
+            ty: Ty::struct_type(SymbolID::ARRAY, vec![ty]),
             expr: typed_expr::Expr::LiteralArray(typed_items),
         })
     }
@@ -1108,7 +1108,7 @@ impl<'a> TypeChecker<'a> {
                     .collect::<Vec<Constraint>>();
 
                 ret_var = env.instantiate(&Scheme::new(
-                    Ty::Struct(*symbol_id, type_args.clone()),
+                    Ty::struct_type(*symbol_id, type_args.clone()),
                     struct_def.canonical_type_variables(),
                     constraints,
                 ));
@@ -1189,7 +1189,7 @@ impl<'a> TypeChecker<'a> {
         let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
                 Some(
-                    Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _),
+                    Ty::Enum(symbol_id, _) | Ty::Protocol(symbol_id, _) | Ty::Row { nominal_id: Some(symbol_id), .. },
                 ) => (*symbol_id, "Self".to_string()),
                 _ => {
                     return Err(TypeError::Unresolved(format!(
@@ -2220,7 +2220,7 @@ impl<'a> TypeChecker<'a> {
                     
                     // Extract fields from the spread expression's type
                     match &spread_ty {
-                        Ty::Record { fields: spread_fields, .. } => {
+                        Ty::Row { fields: spread_fields, nominal_id: None, generics: _, .. } => {
                             // Add all fields from the spread record
                             // These can be overridden by later fields or spreads
                             for (field_name, field_ty) in spread_fields {
@@ -2273,16 +2273,18 @@ impl<'a> TypeChecker<'a> {
         // Convert HashMap back to Vec for the record type
         let field_vec: Vec<(String, Ty)> = field_map.into_iter().collect();
         
-        // Create the record type
-        let record_ty = Ty::Record {
+        // Create the record type using Row representation
+        let record_ty = Ty::Row {
             fields: field_vec,
             row: None, // No row variable for concrete record literals
+            nominal_id: None, // Records are structural types
+            generics: vec![], // Records don't have generics
         };
         
         // Check against expected type if provided
         if let Some(expected_ty) = expected {
             match expected_ty {
-                Ty::Record { fields: expected_fields, row: expected_row } => {
+                Ty::Row { fields: expected_fields, row: expected_row, nominal_id: None, generics: _ } => {
                     // Check that all expected fields are present with correct types
                     for (expected_name, expected_field_ty) in expected_fields {
                         match typed_fields.iter().find(|f| {
@@ -2448,10 +2450,12 @@ impl<'a> TypeChecker<'a> {
             None
         };
         
-        // Create the record type
-        let record_ty = Ty::Record {
+        // Create the record type using Row representation
+        let record_ty = Ty::Row {
             fields: field_types,
             row: typed_row_var.as_ref().map(|tv| Box::new(tv.ty.clone())),
+            nominal_id: None, // Records are structural types
+            generics: vec![], // Records don't have generics
         };
         
         Ok(TypedExpr {

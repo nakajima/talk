@@ -50,7 +50,7 @@ mod tests {
                 Expr::Call {
                     callee: any_typed!(
                         Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::Struct(SymbolID::typed(1), vec![])
+                        Ty::struct_type(SymbolID::typed(1), vec![])
                     )
                     .into(),
                     type_args: vec![],
@@ -62,7 +62,7 @@ mod tests {
                         Ty::Int
                     )],
                 },
-                Ty::Struct(SymbolID::typed(1), vec![])
+                Ty::struct_type(SymbolID::typed(1), vec![])
             ),
         );
     }
@@ -96,7 +96,7 @@ mod tests {
                                             SymbolID::ANY,
                                             "Person".to_string()
                                         )),
-                                        Ty::Struct(
+                                        Ty::struct_type(
                                             SymbolID::ANY,
                                             vec![Ty::TypeVar(TypeVarID::ANY)]
                                         )
@@ -105,7 +105,7 @@ mod tests {
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::Struct(SymbolID::ANY, vec![Ty::Int])
+                                Ty::struct_type(SymbolID::ANY, vec![Ty::Int])
                             )
                             .into()
                         ),
@@ -138,7 +138,7 @@ mod tests {
                                             SymbolID::ANY,
                                             "Person".to_string()
                                         )),
-                                        Ty::Struct(
+                                        Ty::struct_type(
                                             SymbolID::ANY,
                                             vec![Ty::TypeVar(TypeVarID::ANY)]
                                         )
@@ -147,7 +147,7 @@ mod tests {
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::Struct(SymbolID::ANY, vec![Ty::Float])
+                                Ty::struct_type(SymbolID::ANY, vec![Ty::Float])
                             )
                             .into()
                         ),
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(sym, *person_struct);
         assert_eq!(
             checker.type_for(checker.root_ids()[1]).unwrap(),
-            Ty::Struct(*person_struct, vec![])
+            Ty::struct_type(*person_struct, vec![])
         );
     }
 
@@ -1296,7 +1296,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
         );
     }
 
@@ -1312,7 +1312,7 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
             Ty::Method {
-                self_ty: Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                self_ty: Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
             }
         );
@@ -1332,8 +1332,8 @@ mod tests {
         assert_eq!(
             root.ty,
             Ty::Func(
-                vec![Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])],
-                Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                vec![Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])],
+                Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
                 vec![],
             )
         );
@@ -1371,7 +1371,7 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
             Ty::Method {
-                self_ty: Ty::Struct(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                self_ty: Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
             }
         );
@@ -1391,11 +1391,11 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
         );
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::Struct(SymbolID::ARRAY, vec![Ty::Float])
+            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Float])
         );
     }
 
@@ -1878,7 +1878,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(2).unwrap(),
-            Ty::Struct(SymbolID::typed(4), vec![])
+            Ty::struct_type(SymbolID::typed(4), vec![])
         );
     }
 
@@ -2096,7 +2096,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(2).unwrap(),
-            Ty::Struct(SymbolID::resolved(1), vec![])
+            Ty::struct_type(SymbolID::resolved(1), vec![])
         );
         assert_eq!(checked.nth(3).unwrap(), Ty::Int);
         assert_eq!(checked.nth(4).unwrap(), Ty::Float);
@@ -2188,7 +2188,7 @@ mod tests {
 
         // Test that member access works
         let meta = ExprMetaStorage::default();
-        let point_ty = Ty::Struct(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(4));
 
         env.constrain(Constraint::MemberAccess(
@@ -2272,7 +2272,7 @@ mod tests {
 
         // Create a Point struct type
         let point_id = SymbolID(1000);
-        let point_ty = Ty::Struct(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, vec![]);
 
         // In a real implementation, when we define a struct, we would:
         // 1. Create a canonical row variable for it
@@ -6251,7 +6251,7 @@ mod tests {
         let _conformance_result = env.new_type_variable(TypeVarKind::Blank, ExprID(120));
         env.constrain(Constraint::ConformsTo {
             expr_id: ExprID(121),
-            ty: Ty::Struct(circle_id, vec![]),
+            ty: Ty::struct_type(circle_id, vec![]),
             conformance: Conformance {
                 protocol_id: drawable_id,
                 associated_types: vec![],
@@ -6425,7 +6425,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "host".to_string(),
-                field_ty: Ty::Struct(SymbolID(100), vec![]), // String type
+                field_ty: Ty::struct_type(SymbolID(100), vec![]), // String type
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6879,7 +6879,7 @@ mod tests {
         env.register(&circle_def).unwrap();
 
         // Step 3: Test member access on Circle
-        let circle_ty = Ty::Struct(circle_id, vec![]);
+        let circle_ty = Ty::struct_type(circle_id, vec![]);
         let radius_result = env.new_type_variable(TypeVarKind::Blank, ExprID(8));
 
         env.constrain(Constraint::MemberAccess(
@@ -7086,7 +7086,7 @@ mod tests {
         });
 
         // Now test member access
-        let point_ty = Ty::Struct(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(4));
 
         env.constrain(Constraint::MemberAccess(
@@ -7161,7 +7161,7 @@ mod tests {
             },
         });
 
-        let rect_ty = Ty::Struct(rect_id, vec![]);
+        let rect_ty = Ty::struct_type(rect_id, vec![]);
 
         // Test accessing traditional member
         let width_result = env.new_type_variable(TypeVarKind::Blank, ExprID(13));
@@ -7799,7 +7799,7 @@ makePoint()
             assert_eq!(params.len(), 1);
             assert!(matches!(
                 &params[0],
-                Ty::Record { fields, row: None } if fields.len() == 2
+                Ty::Row { fields, row: None, nominal_id: None, generics: _ } if fields.len() == 2
             ));
             assert_eq_diff!(ret_ty.as_ref(), &Ty::Int);
         } else {
@@ -7824,7 +7824,7 @@ makePoint()
         // Check that point3d has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Record { fields, .. } => {
+                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
                     assert_eq!(fields.len(), 3);
                     assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
                     assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Int));
@@ -7914,7 +7914,7 @@ makePoint()
 
         // The result should have at least an id field
         if let Some(last) = checked.roots().last() {
-            if let Ty::Record { fields, .. } = &last.ty {
+            if let Ty::Row { fields, nominal_id: None, generics: _, .. } = &last.ty {
                 assert!(fields.iter().any(|(name, ty)| name == "id" && *ty == Ty::Int));
             }
         }
@@ -7985,7 +7985,7 @@ makePoint()
         // Check that spread has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Record { fields, .. } => {
+                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
                     assert_eq!(fields.len(), 3);
                     assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
                     assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Int));
@@ -8012,7 +8012,7 @@ makePoint()
         // Check that overridden has type {x: String, y: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Record { fields, .. } => {
+                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
                     assert_eq!(fields.len(), 2);
                     assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::string()));
                     assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Int));
@@ -8039,7 +8039,7 @@ makePoint()
         // Check that combined has type {x: Int, y: String, z: Bool, w: Float}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Record { fields, .. } => {
+                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
                     assert_eq!(fields.len(), 4);
                     assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
                     assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::string()));
@@ -8071,7 +8071,7 @@ makePoint()
         // Check that extended has type {x: Int, y: Bool, z: String}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Record { fields, .. } => {
+                Ty::Row { fields, nominal_id: None, generics: _, .. } => {
                     assert_eq!(fields.len(), 3);
                     assert!(fields.iter().any(|(name, ty)| name == "x" && *ty == Ty::Int));
                     assert!(fields.iter().any(|(name, ty)| name == "y" && *ty == Ty::Bool));

@@ -116,7 +116,7 @@ impl Ty {
             Ty::Array(el) => IRType::TypedBuffer {
                 element: el.to_ir(lowerer).into(),
             },
-            Ty::Struct(symbol_id, generics) => {
+            Ty::Row { nominal_id: Some(symbol_id), generics, .. } => {
                 let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
                     tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
                     return IRType::Void;
@@ -134,10 +134,28 @@ impl Ty {
                 )
             }
             Ty::Protocol(_, _) => IRType::Void,
-            Ty::Record { .. } => {
-                // TODO: Records need to be lowered to IR types
-                // For now, treat them as void
-                IRType::Void
+            Ty::Row { nominal_id, generics, .. } => {
+                match nominal_id {
+                    Some(sym) => {
+                        // Nominal type - look up the type definition
+                        if let Some(type_def) = lowerer.env.lookup_struct(sym) {
+                            let field_types = type_def.properties()
+                                .iter()
+                                .sorted_by(|a, b| a.index.cmp(&b.index))
+                                .map(|p| p.ty.to_ir(lowerer))
+                                .collect();
+                            IRType::Struct(*sym, field_types, generics.iter().map(|g| g.to_ir(lowerer)).collect())
+                        } else {
+                            // Fallback for types without full definitions (e.g., builtins)
+                            IRType::Struct(*sym, vec![], generics.iter().map(|g| g.to_ir(lowerer)).collect())
+                        }
+                    }
+                    None => {
+                        // Structural type - we need to generate a deterministic symbol ID
+                        // For now, treat as void until we implement proper structural typing
+                        IRType::Void
+                    }
+                }
             }
         }
     }
@@ -750,7 +768,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_array(&mut self, typed_expr: &TypedExpr, items: &[TypedExpr]) -> Option<Register> {
-        let Ty::Struct(_sym, els) = &typed_expr.ty else {
+        let Ty::Row { generics: els, .. } = &typed_expr.ty else {
             self.push_err("Invalid array type", typed_expr);
             return None;
         };
@@ -1636,7 +1654,7 @@ impl<'a> Lowerer<'a> {
         };
 
         match &receiver.ty {
-            Ty::Struct(struct_id, _) => {
+            Ty::Row { nominal_id: Some(struct_id), .. } => {
                 let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
                     unreachable!("didn't get struct def");
                 };
@@ -1677,6 +1695,81 @@ impl<'a> Lowerer<'a> {
                 }
 
                 None
+            }
+            Ty::Row { fields, nominal_id, .. } => {
+                match nominal_id {
+                    Some(struct_id) => {
+                        // Nominal row - look up typedef
+                        let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
+                            unreachable!("didn't get struct def for nominal row");
+                        };
+
+                        if let Some(property) = type_def.find_property(name) {
+                            let member_reg = self.allocate_register();
+
+                            self.push_instr(Instr::GetElementPointer {
+                                dest: member_reg,
+                                base: receiver_reg,
+                                ty: receiver.ty.to_ir(self).clone(),
+                                index: IRValue::ImmediateInt(property.index as i64),
+                            });
+
+                            if is_lvalue {
+                                return Some(member_reg);
+                            } else {
+                                let member_loaded_reg = self.allocate_register();
+                                self.push_instr(Instr::Load {
+                                    dest: member_loaded_reg,
+                                    addr: member_reg,
+                                    ty: typed_expr.ty.to_ir(self),
+                                });
+
+                                return Some(member_loaded_reg);
+                            }
+                        }
+
+                        if let Some(method) = type_def.methods().iter().find(|m| m.name == name) {
+                            let func = self.allocate_register();
+                            let name = type_def.method_fn_name(&method.name);
+                            self.push_instr(Instr::Ref(
+                                func,
+                                typed_expr.ty.to_ir(self),
+                                RefKind::Func(name),
+                            ));
+                            return Some(func);
+                        }
+
+                        None
+                    }
+                    None => {
+                        // Structural row - find field by position
+                        if let Some((index, (_, _field_ty))) = fields.iter().enumerate().find(|(_, (fname, _))| fname == name) {
+                            let member_reg = self.allocate_register();
+
+                            self.push_instr(Instr::GetElementPointer {
+                                dest: member_reg,
+                                base: receiver_reg,
+                                ty: receiver.ty.to_ir(self).clone(),
+                                index: IRValue::ImmediateInt(index as i64),
+                            });
+
+                            if is_lvalue {
+                                return Some(member_reg);
+                            } else {
+                                let member_loaded_reg = self.allocate_register();
+                                self.push_instr(Instr::Load {
+                                    dest: member_loaded_reg,
+                                    addr: member_reg,
+                                    ty: typed_expr.ty.to_ir(self),
+                                });
+
+                                return Some(member_loaded_reg);
+                            }
+                        }
+
+                        None
+                    }
+                }
             }
             _ => {
                 self.push_err(format!("Member not lowered {name}").as_str(), typed_expr);
@@ -2009,7 +2102,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        if let Ty::Struct(struct_id, _params) = &callee_typed_expr.ty {
+        if let Ty::Row { nominal_id: Some(struct_id), .. } = &callee_typed_expr.ty {
             return self.lower_init_call(struct_id, &callee_typed_expr.ty, arg_registers, &arg_tys);
         }
 
@@ -2331,7 +2424,7 @@ impl<'a> Lowerer<'a> {
         );
 
         let callee_name = match &receiver_ty.ty {
-            Ty::Struct(symbol_id, _) | Ty::Enum(symbol_id, _) => {
+            Ty::Enum(symbol_id, _) | Ty::Row { nominal_id: Some(symbol_id), .. } => {
                 let type_def = self.env.lookup_type(symbol_id)?;
                 let method = type_def.find_method(name)?;
                 Some(type_def.method_fn_name(&method.name))

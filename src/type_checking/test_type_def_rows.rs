@@ -33,7 +33,7 @@ mod tests {
         .build();
 
         // Simulate accessing point.x
-        let _point_ty = Ty::Struct(point_id, vec![]);
+        let _point_ty = Ty::struct_type(point_id, vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(3));
 
         // For member access on a struct, we need to:

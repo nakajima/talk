@@ -125,9 +125,6 @@ impl Substitutions {
                 }
             }
             Ty::Array(ty) => Ty::Array(self.apply(ty, depth + 1, context).into()),
-            Ty::Struct(sym, generics) => {
-                Ty::Struct(*sym, self.apply_multiple(generics, depth + 1, context))
-            }
             Ty::Protocol(sym, generics) => {
                 Ty::Protocol(*sym, self.apply_multiple(generics, depth + 1, context))
             }
@@ -139,15 +136,17 @@ impl Substitutions {
                 func: self.apply(func, depth + 1, context).into(),
             },
             Ty::Void => ty.clone(),
-            Ty::Record { fields, row } => {
+            Ty::Row { fields, row, nominal_id, generics } => {
                 let applied_fields: Vec<(String, Ty)> = fields
                     .iter()
                     .map(|(name, field_ty)| (name.clone(), self.apply(field_ty, depth + 1, context)))
                     .collect();
                 let applied_row = row.as_ref().map(|r| Box::new(self.apply(r, depth + 1, context)));
-                Ty::Record {
+                Ty::Row {
                     fields: applied_fields,
                     row: applied_row,
+                    nominal_id: *nominal_id,
+                    generics: self.apply_multiple(generics, depth + 1, context),
                 }
             }
         }
@@ -272,8 +271,25 @@ impl Substitutions {
                     self_ty: rhs_self_ty,
                 },
             ) => {
+                // When unifying methods, we only need to unify the function types.
+                // The self_ty can be different when dealing with protocol methods
+                // on different concrete types that both conform to the protocol.
                 self.unify(&lhs_func, &rhs_func, context, generation)?;
-                self.unify(&lhs_self_ty, &rhs_self_ty, context, generation)?;
+                
+                // Only unify self_ty if at least one is a TypeVar (for inference)
+                // or if they're the same type (for exact matches)
+                match (lhs_self_ty.as_ref(), rhs_self_ty.as_ref()) {
+                    (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => {
+                        self.unify(&lhs_self_ty, &rhs_self_ty, context, generation)?;
+                    }
+                    (lhs, rhs) if lhs == rhs => {
+                        // Already the same, no need to unify
+                    }
+                    _ => {
+                        // Different concrete types - that's OK for protocol methods
+                        // as long as the function signatures match
+                    }
+                }
 
                 Ok(())
             }
@@ -308,11 +324,18 @@ impl Substitutions {
 
                 Ok(())
             }
-            (Ty::Struct(_, lhs), Ty::Struct(_, rhs)) if lhs.len() == rhs.len() => {
-                for (lhs, rhs) in lhs.iter().zip(rhs) {
-                    self.unify(lhs, &rhs, context, generation)?;
+            // Handle Row types - check nominal_id and unify generics
+            (Ty::Row { nominal_id: Some(id1), generics: gen1, .. }, Ty::Row { nominal_id: Some(id2), generics: gen2, .. }) if id1 == id2 => {
+                // Unify generics
+                if gen1.len() != gen2.len() {
+                    return Err(TypeError::Mismatch(
+                        format!("{} generics", gen1.len()),
+                        format!("{} generics", gen2.len()),
+                    ));
                 }
-
+                for (g1, g2) in gen1.iter().zip(gen2) {
+                    self.unify(g1, &g2, context, generation)?;
+                }
                 Ok(())
             }
             (Ty::Func(func_args, ret, generics), Ty::EnumVariant(enum_id, variant_args))

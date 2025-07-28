@@ -213,12 +213,12 @@ impl<'a> TypeChecker<'a> {
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::Struct(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Struct => Ty::struct_type(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Extension => {
                     // For extensions, use the existing type
                     env.lookup_type(symbol_id)
                         .map(|td| td.ty())
-                        .unwrap_or_else(|| Ty::Struct(*symbol_id, canonical_types.clone()))
+                        .unwrap_or_else(|| Ty::struct_type(*symbol_id, canonical_types.clone()))
                 }
                 PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Protocol => Ty::Protocol(*symbol_id, canonical_types.clone()),

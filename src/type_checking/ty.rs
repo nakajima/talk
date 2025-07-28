@@ -39,15 +39,18 @@ pub enum Ty {
     ),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
-    Struct(#[drive(skip)] SymbolID, Vec<Ty> /* generics */),
     Protocol(#[drive(skip)] SymbolID, Vec<Ty> /* generics */),
     Byte,
     Pointer,
     SelfType,
-    Record {
+    // Unified row type that can represent both structs and records
+    Row {
         #[drive(skip)]
-        fields: Vec<(String, Ty)>, // field name -> type pairs
-        row: Option<Box<Ty>>, // Optional row variable for extensible records
+        fields: Vec<(String, Ty)>, // field name -> type pairs, in canonical order
+        row: Option<Box<Ty>>, // Optional row variable for extensible rows
+        #[drive(skip)]
+        nominal_id: Option<SymbolID>, // Some for nominal types (structs), None for structural (records)
+        generics: Vec<Ty>, // Generic type arguments (for nominal types like Array<T>)
     },
 }
 
@@ -104,32 +107,37 @@ impl Display for Ty {
                     .join(", ")
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
-            Ty::Struct(sym, _) => write!(f, "{}", {
-                if let Some(builtin) = builtin_type_def(sym) {
-                    builtin.name().to_string()
-                } else if sym == &SymbolID::ARRAY {
-                    "Array".to_string()
-                } else if sym == &SymbolID::STRING {
-                    "String".to_string()
-                } else {
-                    format!("Struct({sym:?})")
-                }
-            }),
             Ty::Pointer => write!(f, "pointer"),
             Ty::Protocol(sym, _) => write!(f, "{sym:?} (protocol)"),
-            Ty::Record { fields, row } => {
-                let field_strs: Vec<String> = fields
-                    .iter()
-                    .map(|(name, ty)| format!("{}: {}", name, ty))
-                    .collect();
-                let mut result = field_strs.join(", ");
-                if let Some(row_ty) = row {
-                    if !fields.is_empty() {
-                        result.push_str(", ");
+            Ty::Row { fields, row, nominal_id, generics: _ } => {
+                if let Some(sym) = nominal_id {
+                    // Nominal type - display as struct name
+                    write!(f, "{}", {
+                        if let Some(builtin) = builtin_type_def(sym) {
+                            builtin.name().to_string()
+                        } else if sym == &SymbolID::ARRAY {
+                            "Array".to_string()
+                        } else if sym == &SymbolID::STRING {
+                            "String".to_string()
+                        } else {
+                            format!("Row({sym:?})")
+                        }
+                    })
+                } else {
+                    // Structural type - display as record
+                    let field_strs: Vec<String> = fields
+                        .iter()
+                        .map(|(name, ty)| format!("{}: {}", name, ty))
+                        .collect();
+                    let mut result = field_strs.join(", ");
+                    if let Some(row_ty) = row {
+                        if !fields.is_empty() {
+                            result.push_str(", ");
+                        }
+                        result.push_str(&format!("..{}", row_ty));
                     }
-                    result.push_str(&format!("..{}", row_ty));
+                    write!(f, "{{{}}}", result)
                 }
-                write!(f, "{{{}}}", result)
             }
             _ => write!(f, "{self:?}"),
         }
@@ -146,7 +154,24 @@ impl Eq for Ty {}
 
 impl Ty {
     pub fn string() -> Ty {
-        Ty::Struct(SymbolID::STRING, vec![])
+        // String is a builtin type without fields
+        Ty::Row {
+            fields: vec![], // String has no exposed fields
+            row: None,
+            nominal_id: Some(SymbolID::STRING),
+            generics: vec![],
+        }
+    }
+
+    /// Create a struct type using Row representation
+    pub fn struct_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
+        // Create Row type for structs
+        Ty::Row {
+            fields: vec![], // Fields are stored in TypeDef
+            row: None, // TODO: Get row var from TypeDef
+            nominal_id: Some(symbol_id),
+            generics,
+        }
     }
 
     pub fn optional(&self) -> Ty {
@@ -163,7 +188,8 @@ impl Ty {
 
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
         let sym = match self {
-            Ty::Struct(sym, _) | Ty::Enum(sym, _) | Ty::Protocol(sym, _) => *sym,
+            Ty::Enum(sym, _) | Ty::Protocol(sym, _) => *sym,
+            Ty::Row { nominal_id: Some(sym), .. } => *sym,
             Ty::Int => SymbolID::INT,
             Ty::Float => SymbolID::FLOAT,
             Ty::Bool => SymbolID::BOOL,
@@ -268,19 +294,6 @@ impl Ty {
                     Ty::Array(ty.replace(replacement.clone(), f).into())
                 }
             }
-            Ty::Struct(symbol_id, items) => {
-                if f(self) {
-                    replacement
-                } else {
-                    Ty::Struct(
-                        *symbol_id,
-                        items
-                            .iter()
-                            .map(|t| t.replace(replacement.clone(), f))
-                            .collect(),
-                    )
-                }
-            }
             Ty::Protocol(symbol_id, items) => {
                 if f(self) {
                     replacement
@@ -294,16 +307,22 @@ impl Ty {
                     )
                 }
             }
-            Ty::Record { fields, row } => {
+            // Record types are now handled by Row with nominal_id = None
+            Ty::Row { fields, row, nominal_id, generics } => {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Record {
+                    Ty::Row {
                         fields: fields
                             .iter()
                             .map(|(name, ty)| (name.clone(), ty.replace(replacement.clone(), f)))
                             .collect(),
                         row: row.as_ref().map(|r| Box::new(r.replace(replacement.clone(), f))),
+                        nominal_id: *nominal_id,
+                        generics: generics
+                            .iter()
+                            .map(|g| g.replace(replacement.clone(), f))
+                            .collect(),
                     }
                 }
             }

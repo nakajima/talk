@@ -90,23 +90,33 @@ impl<'a> CompletionContext<'a> {
     /// Get completions for a specific type (handles both records and typedefs)
     fn get_completions_for_type(&self, ty: &Ty) -> Vec<CompletionItem> {
         match ty {
-            // Handle record types directly
-            Ty::Record { fields, .. } => {
-                fields.iter().map(|(field_name, field_ty)| {
-                    CompletionItem {
-                        label: field_name.clone(),
-                        kind: Some(CompletionItemKind::FIELD),
-                        detail: Some(format!("{:?}", field_ty)),
-                        ..Default::default()
-                    }
-                }).collect()
-            }
             // Handle struct/enum/protocol types via typedef
-            Ty::Struct(id, _) | Ty::Enum(id, _) | Ty::Protocol(id, _) => {
+            Ty::Enum(id, _) | Ty::Protocol(id, _) => {
                 if let Some(type_def) = self.env.lookup_type(id) {
                     self.get_completions_for_typedef(type_def)
                 } else {
                     vec![]
+                }
+            }
+            // Handle unified row types
+            Ty::Row { fields, nominal_id, .. } => {
+                if let Some(id) = nominal_id {
+                    // Nominal row - use typedef
+                    if let Some(type_def) = self.env.lookup_type(id) {
+                        self.get_completions_for_typedef(type_def)
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    // Structural row - use fields directly
+                    fields.iter().map(|(field_name, field_ty)| {
+                        CompletionItem {
+                            label: field_name.clone(),
+                            kind: Some(CompletionItemKind::FIELD),
+                            detail: Some(format!("{:?}", field_ty)),
+                            ..Default::default()
+                        }
+                    }).collect()
                 }
             }
             _ => vec![]

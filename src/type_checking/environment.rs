@@ -525,10 +525,6 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
             let new_values = values.iter().map(|g| walk(g, map)).collect();
             Ty::EnumVariant(*name, new_values)
         }
-        Ty::Struct(sym, generics) => {
-            let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-            Ty::Struct(*sym, new_generics)
-        }
         Ty::Protocol(sym, generics) => {
             let new_generics = generics.iter().map(|g| walk(g, map)).collect();
             Ty::Protocol(*sym, new_generics)
@@ -538,15 +534,17 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
         Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
             ty.clone()
         }
-        Ty::Record { fields, row } => {
+        Ty::Row { fields, row, nominal_id, generics } => {
             let new_fields = fields
                 .iter()
                 .map(|(name, field_ty)| (name.clone(), walk(field_ty, map)))
                 .collect();
             let new_row = row.as_ref().map(|r| Box::new(walk(r, map)));
-            Ty::Record {
+            Ty::Row {
                 fields: new_fields,
                 row: new_row,
+                nominal_id: *nominal_id,
+                generics: generics.iter().map(|g| walk(g, map)).collect(),
             }
         }
     }
@@ -598,11 +596,6 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::Array(ty) => {
             s.extend(free_type_vars(ty));
         }
-        Ty::Struct(_, generics) => {
-            for generic in generics {
-                s.extend(free_type_vars(generic));
-            }
-        }
         Ty::Protocol(_, generics) => {
             for generic in generics {
                 s.extend(free_type_vars(generic));
@@ -611,12 +604,15 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
             // These types contain no nested types, so there's nothing to do.
         }
-        Ty::Record { fields, row } => {
+        Ty::Row { fields, row, generics, .. } => {
             for (_, field_ty) in fields {
                 s.extend(free_type_vars(field_ty));
             }
             if let Some(row_ty) = row {
                 s.extend(free_type_vars(row_ty));
+            }
+            for generic in generics {
+                s.extend(free_type_vars(generic));
             }
         }
     }
@@ -803,7 +799,7 @@ mod generalize_tests {
     fn test_generalize_struct_type() {
         // generalize(Struct<a, b>) -> forall a, b. Struct<a, b>
         let mut env = Environment::default();
-        let ty_to_generalize = Ty::Struct(SymbolID(100), vec![ty_var(1), ty_var(2)]);
+        let ty_to_generalize = Ty::struct_type(SymbolID(100), vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
