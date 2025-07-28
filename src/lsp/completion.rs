@@ -118,7 +118,7 @@ impl<'a> CompletionContext<'a> {
                         .map(|(field_name, field_ty)| CompletionItem {
                             label: field_name.clone(),
                             kind: Some(CompletionItemKind::FIELD),
-                            detail: Some(format!("{:?}", field_ty)),
+                            detail: Some(format!("{field_ty:?}")),
                             ..Default::default()
                         })
                         .collect()

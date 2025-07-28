@@ -1232,8 +1232,7 @@ impl<'a> TypeChecker<'a> {
                     } => (*id, generics.clone()),
                     Ty::Row { kind, .. } => {
                         return Err(TypeError::Unknown(format!(
-                            "{typed_conformance:?} is not a protocol (kind: {:?})",
-                            kind
+                            "{typed_conformance:?} is not a protocol (kind: {kind:?})"
                         )));
                     }
                     _ => {
@@ -2276,8 +2275,7 @@ impl<'a> TypeChecker<'a> {
                         }
                         _ => {
                             return Err(TypeError::Unknown(format!(
-                                "Cannot spread non-record type: {:?}",
-                                spread_ty
+                                "Cannot spread non-record type: {spread_ty:?}"
                             )));
                         }
                     }
@@ -2341,19 +2339,17 @@ impl<'a> TypeChecker<'a> {
                             }
                         }) {
                             Some(field) => {
-                                if let typed_expr::Expr::RecordField { value, .. } = &field.expr {
-                                    if &value.ty != expected_field_ty {
+                                if let typed_expr::Expr::RecordField { value, .. } = &field.expr
+                                    && &value.ty != expected_field_ty {
                                         return Err(TypeError::UnexpectedType(
                                             expected_field_ty.to_string(),
                                             value.ty.to_string(),
                                         ));
                                     }
-                                }
                             }
                             None => {
                                 return Err(TypeError::Unknown(format!(
-                                    "Missing required field '{}' in record literal",
-                                    expected_name
+                                    "Missing required field '{expected_name}' in record literal"
                                 )));
                             }
                         }
@@ -2362,14 +2358,12 @@ impl<'a> TypeChecker<'a> {
                     // If there's no row variable, check for extra fields
                     if expected_row.is_none() {
                         for typed_field in &typed_fields {
-                            if let typed_expr::Expr::RecordField { label, .. } = &typed_field.expr {
-                                if !expected_fields.iter().any(|(name, _)| name == label) {
+                            if let typed_expr::Expr::RecordField { label, .. } = &typed_field.expr
+                                && !expected_fields.iter().any(|(name, _)| name == label) {
                                     return Err(TypeError::Unknown(format!(
-                                        "Unexpected field '{}' in record literal",
-                                        label
+                                        "Unexpected field '{label}' in record literal"
                                     )));
                                 }
-                            }
                         }
                     }
                 }

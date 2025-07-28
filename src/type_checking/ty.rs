@@ -139,23 +139,23 @@ impl Display for Ty {
                         format!("Row({sym:?})")
                     };
                     match kind {
-                        RowKind::Protocol => write!(f, "{} (protocol)", base_name),
-                        _ => write!(f, "{}", base_name),
+                        RowKind::Protocol => write!(f, "{base_name} (protocol)"),
+                        _ => write!(f, "{base_name}"),
                     }
                 } else {
                     // Structural type - display as record
                     let field_strs: Vec<String> = fields
                         .iter()
-                        .map(|(name, ty)| format!("{}: {}", name, ty))
+                        .map(|(name, ty)| format!("{name}: {ty}"))
                         .collect();
                     let mut result = field_strs.join(", ");
                     if let Some(row_ty) = row {
                         if !fields.is_empty() {
                             result.push_str(", ");
                         }
-                        result.push_str(&format!("..{}", row_ty));
+                        result.push_str(&format!("..{row_ty}"));
                     }
-                    write!(f, "{{{}}}", result)
+                    write!(f, "{{{result}}}")
                 }
             }
             _ => write!(f, "{self:?}"),
