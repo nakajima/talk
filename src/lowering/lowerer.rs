@@ -1645,6 +1645,36 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn generate_field_access(
+        &mut self,
+        receiver_reg: Register,
+        receiver_ty: &Ty,
+        field_index: usize,
+        typed_expr: &TypedExpr,
+        is_lvalue: bool,
+    ) -> Option<Register> {
+        let member_reg = self.allocate_register();
+
+        self.push_instr(Instr::GetElementPointer {
+            dest: member_reg,
+            base: receiver_reg,
+            ty: receiver_ty.to_ir(self).clone(),
+            index: IRValue::ImmediateInt(field_index as i64),
+        });
+
+        if is_lvalue {
+            Some(member_reg)
+        } else {
+            let member_loaded_reg = self.allocate_register();
+            self.push_instr(Instr::Load {
+                dest: member_loaded_reg,
+                addr: member_reg,
+                ty: typed_expr.ty.to_ir(self),
+            });
+            Some(member_loaded_reg)
+        }
+    }
+
     fn lower_member(
         &mut self,
         receiver: &Option<&TypedExpr>,
@@ -1677,130 +1707,51 @@ impl<'a> Lowerer<'a> {
 
         match &receiver.ty {
             Ty::Row {
-                nominal_id: Some(struct_id),
-                ..
-            } => {
-                let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
-                    unreachable!("didn't get struct def");
-                };
-
-                if let Some(property) = type_def.find_property(name) {
-                    let member_reg = self.allocate_register();
-
-                    self.push_instr(Instr::GetElementPointer {
-                        dest: member_reg,
-                        base: receiver_reg,
-                        ty: receiver.ty.to_ir(self).clone(),
-                        index: IRValue::ImmediateInt(property.index as i64),
-                    });
-
-                    if is_lvalue {
-                        return Some(member_reg);
-                    } else {
-                        let member_loaded_reg = self.allocate_register();
-                        self.push_instr(Instr::Load {
-                            dest: member_loaded_reg,
-                            addr: member_reg,
-                            ty: typed_expr.ty.to_ir(self),
-                        });
-
-                        return Some(member_loaded_reg);
-                    }
-                }
-
-                if let Some(method) = type_def.methods().iter().find(|m| m.name == name) {
-                    let func = self.allocate_register();
-                    let name = type_def.method_fn_name(&method.name);
-                    self.push_instr(Instr::Ref(
-                        func,
-                        typed_expr.ty.to_ir(self),
-                        RefKind::Func(name),
-                    ));
-                    return Some(func);
-                }
-
-                None
-            }
-            Ty::Row {
                 fields, nominal_id, ..
             } => {
-                match nominal_id {
-                    Some(struct_id) => {
-                        // Nominal row - look up typedef
-                        let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
-                            unreachable!("didn't get struct def for nominal row");
-                        };
+                // Handle nominal rows (structs/protocols)
+                if let Some(struct_id) = nominal_id {
+                    let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
+                        unreachable!("didn't get struct def for nominal row");
+                    };
 
-                        if let Some(property) = type_def.find_property(name) {
-                            let member_reg = self.allocate_register();
-
-                            self.push_instr(Instr::GetElementPointer {
-                                dest: member_reg,
-                                base: receiver_reg,
-                                ty: receiver.ty.to_ir(self).clone(),
-                                index: IRValue::ImmediateInt(property.index as i64),
-                            });
-
-                            if is_lvalue {
-                                return Some(member_reg);
-                            } else {
-                                let member_loaded_reg = self.allocate_register();
-                                self.push_instr(Instr::Load {
-                                    dest: member_loaded_reg,
-                                    addr: member_reg,
-                                    ty: typed_expr.ty.to_ir(self),
-                                });
-
-                                return Some(member_loaded_reg);
-                            }
-                        }
-
-                        if let Some(method) = type_def.methods().iter().find(|m| m.name == name) {
-                            let func = self.allocate_register();
-                            let name = type_def.method_fn_name(&method.name);
-                            self.push_instr(Instr::Ref(
-                                func,
-                                typed_expr.ty.to_ir(self),
-                                RefKind::Func(name),
-                            ));
-                            return Some(func);
-                        }
-
-                        None
+                    // Check for properties first
+                    if let Some(property) = type_def.find_property(name) {
+                        let field_index = property.index;
+                        return self.generate_field_access(
+                            receiver_reg,
+                            &receiver.ty,
+                            field_index,
+                            typed_expr,
+                            is_lvalue,
+                        );
                     }
-                    None => {
-                        // Structural row - find field by position
-                        if let Some((index, (_, _field_ty))) = fields
-                            .iter()
-                            .enumerate()
-                            .find(|(_, (fname, _))| fname == name)
-                        {
-                            let member_reg = self.allocate_register();
 
-                            self.push_instr(Instr::GetElementPointer {
-                                dest: member_reg,
-                                base: receiver_reg,
-                                ty: receiver.ty.to_ir(self).clone(),
-                                index: IRValue::ImmediateInt(index as i64),
-                            });
-
-                            if is_lvalue {
-                                return Some(member_reg);
-                            } else {
-                                let member_loaded_reg = self.allocate_register();
-                                self.push_instr(Instr::Load {
-                                    dest: member_loaded_reg,
-                                    addr: member_reg,
-                                    ty: typed_expr.ty.to_ir(self),
-                                });
-
-                                return Some(member_loaded_reg);
-                            }
-                        }
-
-                        None
+                    // Check for methods
+                    if let Some(method) = type_def.methods().iter().find(|m| m.name == name) {
+                        let func = self.allocate_register();
+                        let method_name = type_def.method_fn_name(&method.name);
+                        self.push_instr(Instr::Ref(
+                            func,
+                            typed_expr.ty.to_ir(self),
+                            RefKind::Func(method_name),
+                        ));
+                        return Some(func);
                     }
+
+                    // Not found in typedef
+                    return None;
                 }
+
+                // Handle structural rows (records) - find field by position
+                let field_index = fields.iter().position(|(fname, _)| fname == name)?;
+                self.generate_field_access(
+                    receiver_reg,
+                    &receiver.ty,
+                    field_index,
+                    typed_expr,
+                    is_lvalue,
+                )
             }
             _ => {
                 self.push_err(format!("Member not lowered {name}").as_str(), typed_expr);
