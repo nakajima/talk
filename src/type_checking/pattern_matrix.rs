@@ -1,5 +1,5 @@
 //! Pattern exhaustiveness checking using pattern matrices
-//! 
+//!
 //! Based on the algorithm described in "Warnings for pattern matching" by Luc Maranget (2007)
 //! and used by Rust's exhaustiveness checker.
 
@@ -9,8 +9,8 @@ use crate::{
     SymbolID,
     environment::Environment,
     name::Name,
-    ty::{Ty, RowKind},
     parsed_expr::Pattern,
+    ty::{RowKind, Ty},
 };
 
 /// A constructor in a pattern - represents the "head" of a pattern
@@ -23,9 +23,16 @@ pub enum Constructor {
     /// Boolean literal
     Bool(bool),
     /// Enum variant
-    Variant { enum_id: SymbolID, variant_name: String, arity: usize },
+    Variant {
+        enum_id: SymbolID,
+        variant_name: String,
+        arity: usize,
+    },
     /// Struct constructor
-    Struct { struct_id: Option<SymbolID>, fields: Vec<String> },
+    Struct {
+        struct_id: Option<SymbolID>,
+        fields: Vec<String>,
+    },
     /// Wildcard - matches anything
     Wildcard,
 }
@@ -81,13 +88,19 @@ impl PatternMatrix {
 
     /// Specialize the matrix with respect to a constructor
     /// This filters rows that match the constructor and expands their sub-patterns
-    pub fn specialize(&self, ctor: &Constructor, arity: usize, env: &Environment, ty: &Ty) -> PatternMatrix {
+    pub fn specialize(
+        &self,
+        ctor: &Constructor,
+        arity: usize,
+        env: &Environment,
+        ty: &Ty,
+    ) -> PatternMatrix {
         let mut new_rows = Vec::new();
 
         for row in &self.rows {
             if let Some(first) = row.first() {
                 let deconstructed = first.to_deconstructed(env, ty);
-                
+
                 if constructors_match(&deconstructed.ctor, ctor) {
                     // This row matches - expand it
                     let mut new_row = deconstructed.fields;
@@ -121,7 +134,14 @@ pub fn constructors_match(ctor1: &Constructor, ctor2: &Constructor) -> bool {
         (Constructor::Int(a), Constructor::Int(b)) => a == b,
         (Constructor::Float(a), Constructor::Float(b)) => a == b,
         (Constructor::Bool(a), Constructor::Bool(b)) => a == b,
-        (Constructor::Variant { variant_name: a, .. }, Constructor::Variant { variant_name: b, .. }) => a == b,
+        (
+            Constructor::Variant {
+                variant_name: a, ..
+            },
+            Constructor::Variant {
+                variant_name: b, ..
+            },
+        ) => a == b,
         (Constructor::Struct { fields: a, .. }, Constructor::Struct { fields: b, .. }) => a == b,
         _ => false,
     }
@@ -137,55 +157,62 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
                 fields: vec![],
             }
         }
-        Pattern::LiteralFloat(s) => {
-            DeconstructedPat {
-                ctor: Constructor::Float(s.clone()),
-                fields: vec![],
-            }
-        }
-        Pattern::LiteralTrue => {
-            DeconstructedPat {
-                ctor: Constructor::Bool(true),
-                fields: vec![],
-            }
-        }
-        Pattern::LiteralFalse => {
-            DeconstructedPat {
-                ctor: Constructor::Bool(false),
-                fields: vec![],
-            }
-        }
-        Pattern::Wildcard | Pattern::Bind(_) => {
-            DeconstructedPat {
-                ctor: Constructor::Wildcard,
-                fields: vec![],
-            }
-        }
-        Pattern::Variant { variant_name, fields, .. } => {
+        Pattern::LiteralFloat(s) => DeconstructedPat {
+            ctor: Constructor::Float(s.clone()),
+            fields: vec![],
+        },
+        Pattern::LiteralTrue => DeconstructedPat {
+            ctor: Constructor::Bool(true),
+            fields: vec![],
+        },
+        Pattern::LiteralFalse => DeconstructedPat {
+            ctor: Constructor::Bool(false),
+            fields: vec![],
+        },
+        Pattern::Wildcard | Pattern::Bind(_) => DeconstructedPat {
+            ctor: Constructor::Wildcard,
+            fields: vec![],
+        },
+        Pattern::Variant {
+            variant_name,
+            fields,
+            ..
+        } => {
             // Look up enum info from type
             let (enum_id, arity) = match ty {
-                Ty::Row { nominal_id: Some(id), kind: RowKind::Enum, .. } => {
-                    (*id, fields.len())
-                }
+                Ty::Row {
+                    nominal_id: Some(id),
+                    kind: RowKind::Enum,
+                    ..
+                } => (*id, fields.len()),
                 _ => (SymbolID(0), fields.len()), // Fallback
             };
-            
+
             DeconstructedPat {
                 ctor: Constructor::Variant {
                     enum_id,
                     variant_name: variant_name.clone(),
                     arity,
                 },
-                fields: fields.iter().map(|f| {
-                    // Extract pattern from ParsedExpr
-                    match &f.expr {
-                        crate::parsed_expr::Expr::ParsedPattern(p) => PatternColumn::Pattern(p.clone()),
-                        _ => PatternColumn::Pattern(Pattern::Wildcard),
-                    }
-                }).collect(),
+                fields: fields
+                    .iter()
+                    .map(|f| {
+                        // Extract pattern from ParsedExpr
+                        match &f.expr {
+                            crate::parsed_expr::Expr::ParsedPattern(p) => {
+                                PatternColumn::Pattern(p.clone())
+                            }
+                            _ => PatternColumn::Pattern(Pattern::Wildcard),
+                        }
+                    })
+                    .collect(),
             }
         }
-        Pattern::Struct { field_names, fields, .. } => {
+        Pattern::Struct {
+            field_names,
+            fields,
+            ..
+        } => {
             let field_map: HashMap<_, _> = field_names
                 .iter()
                 .zip(fields.iter())
@@ -207,27 +234,26 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
 
             // Get all field names from the type
             let all_fields = match ty {
-                Ty::Row { fields, .. } => {
-                    fields.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>()
-                }
-                _ => field_names.iter().map(|n| match n {
-                    Name::Raw(s) => s.clone(),
-                    Name::Resolved(_, s) => s.clone(),
-                    Name::_Self(_) => "self".to_string(),
-                    Name::SelfType => "Self".to_string(),
-                    Name::Imported(_, _) => "_".to_string(),
-                }).collect(),
+                Ty::Row { fields, .. } => fields
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>(),
+                _ => field_names
+                    .iter()
+                    .map(|n| match n {
+                        Name::Raw(s) => s.clone(),
+                        Name::Resolved(_, s) => s.clone(),
+                        Name::_Self(_) => "self".to_string(),
+                        Name::SelfType => "Self".to_string(),
+                        Name::Imported(_, _) => "_".to_string(),
+                    })
+                    .collect(),
             };
 
             // Create pattern columns for all fields (wildcard for missing ones)
             let field_patterns = all_fields
                 .iter()
-                .map(|name| {
-                    field_map
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(Pattern::Wildcard)
-                })
+                .map(|name| field_map.get(name).cloned().unwrap_or(Pattern::Wildcard))
                 .map(PatternColumn::Pattern)
                 .collect();
 
@@ -248,14 +274,16 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
 /// Get all possible constructors for a type
 pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
     match ty {
-        Ty::Bool => vec![
-            Constructor::Bool(true),
-            Constructor::Bool(false),
-        ],
-        Ty::Row { nominal_id: Some(id), kind: RowKind::Enum, .. } => {
+        Ty::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
+        Ty::Row {
+            nominal_id: Some(id),
+            kind: RowKind::Enum,
+            ..
+        } => {
             // Get enum variants from environment
             if let Some(enum_def) = env.lookup_enum(id) {
-                enum_def.variants()
+                enum_def
+                    .variants()
                     .iter()
                     .map(|v| Constructor::Variant {
                         enum_id: *id,
@@ -267,7 +295,12 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
                 vec![Constructor::Wildcard]
             }
         }
-        Ty::Row { fields, nominal_id, kind: RowKind::Struct, .. } => {
+        Ty::Row {
+            fields,
+            nominal_id,
+            kind: RowKind::Struct | RowKind::Record,
+            ..
+        } => {
             // For structs, there's only one constructor
             vec![Constructor::Struct {
                 struct_id: *nominal_id,
@@ -288,7 +321,11 @@ pub fn is_exhaustive(matrix: &PatternMatrix, ty: &Ty, env: &Environment) -> bool
 }
 
 /// Check if a pattern matrix is exhaustive with multiple column types
-fn is_exhaustive_with_types(matrix: &PatternMatrix, column_types: &[&Ty], env: &Environment) -> bool {
+fn is_exhaustive_with_types(
+    matrix: &PatternMatrix,
+    column_types: &[&Ty],
+    env: &Environment,
+) -> bool {
     // Base case: empty matrix means nothing is covered
     if matrix.is_empty() {
         return false;
@@ -300,13 +337,13 @@ fn is_exhaustive_with_types(matrix: &PatternMatrix, column_types: &[&Ty], env: &
     }
 
     let first_ty = column_types[0];
-    
+
     // If any pattern starts with wildcard or bind, we need to check the rest
     let has_wildcard = matrix.first_column().iter().any(|p| {
         let deconstructed = p.to_deconstructed(env, first_ty);
         matches!(deconstructed.ctor, Constructor::Wildcard)
     });
-    
+
     if has_wildcard {
         // Create a matrix with the remaining columns for wildcard rows
         let mut remaining_matrix_rows = Vec::new();
@@ -318,13 +355,15 @@ fn is_exhaustive_with_types(matrix: &PatternMatrix, column_types: &[&Ty], env: &
                 }
             }
         }
-        let remaining_matrix = PatternMatrix { rows: remaining_matrix_rows };
+        let remaining_matrix = PatternMatrix {
+            rows: remaining_matrix_rows,
+        };
         return is_exhaustive_with_types(&remaining_matrix, &column_types[1..], env);
     }
 
     // Get all constructors that need to be covered
     let all_ctors = all_constructors(first_ty, env);
-    
+
     // If we can't enumerate all constructors (e.g., integers),
     // we need a wildcard to be exhaustive
     if all_ctors.is_empty() {
@@ -333,24 +372,28 @@ fn is_exhaustive_with_types(matrix: &PatternMatrix, column_types: &[&Ty], env: &
 
     // Get constructors that appear in the patterns
     let covered_ctors = matrix.column_constructors(env, first_ty);
-    
+
     // Check if all constructors are covered
     for ctor in &all_ctors {
         // Check if this constructor is covered
         let is_covered = covered_ctors.iter().any(|c| constructors_match(c, ctor));
-        
+
         if !is_covered {
             return false;
         }
-        
+
         // For covered constructors, check that the specialized matrix is exhaustive
         let arity = constructor_arity(ctor);
         let specialized = matrix.specialize(ctor, arity, env, first_ty);
-        
+
         // Construct types for the subpatterns - collect into owned values first
         let mut sub_types_owned: Vec<Ty> = vec![];
         match ctor {
-            Constructor::Variant { enum_id, variant_name, .. } => {
+            Constructor::Variant {
+                enum_id,
+                variant_name,
+                ..
+            } => {
                 // Look up variant payload type
                 if let Some(enum_def) = env.lookup_enum(enum_id) {
                     let variants = enum_def.variants();
@@ -375,11 +418,11 @@ fn is_exhaustive_with_types(matrix: &PatternMatrix, column_types: &[&Ty], env: &
             }
             _ => {} // No sub-patterns for literals
         }
-        
+
         // Convert to references and add remaining column types
         let mut sub_types: Vec<&Ty> = sub_types_owned.iter().collect();
         sub_types.extend_from_slice(&column_types[1..]);
-        
+
         // Recursively check exhaustiveness
         if !is_exhaustive_with_types(&specialized, &sub_types, env) {
             return false;
@@ -392,7 +435,10 @@ fn is_exhaustive_with_types(matrix: &PatternMatrix, column_types: &[&Ty], env: &
 /// Get the arity (number of fields) of a constructor
 fn constructor_arity(ctor: &Constructor) -> usize {
     match ctor {
-        Constructor::Int(_) | Constructor::Float(_) | Constructor::Bool(_) | Constructor::Wildcard => 0,
+        Constructor::Int(_)
+        | Constructor::Float(_)
+        | Constructor::Bool(_)
+        | Constructor::Wildcard => 0,
         Constructor::Variant { arity, .. } => *arity,
         Constructor::Struct { fields, .. } => fields.len(),
     }
@@ -424,13 +470,16 @@ pub fn generate_witness(matrix: &PatternMatrix, ty: &Ty, env: &Environment) -> O
 
 /// Format a constructor as a pattern for error messages
 pub fn format_constructor_witness(ctor: &Constructor) -> Option<String> {
-    Some(
-    match ctor {
+    Some(match ctor {
         Constructor::Int(n) => n.to_string(),
         Constructor::Float(s) => s.clone(),
         Constructor::Bool(true) => "true".to_string(),
         Constructor::Bool(false) => "false".to_string(),
-        Constructor::Variant { variant_name, arity, .. } => {
+        Constructor::Variant {
+            variant_name,
+            arity,
+            ..
+        } => {
             if *arity == 0 {
                 format!(".{}", variant_name)
             } else {

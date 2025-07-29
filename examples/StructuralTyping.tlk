@@ -1,8 +1,5 @@
-func foo<T>(t: T) {
-	print(t)
-}
-
 let a = {x: 123, y: 456}
+
 let result = match a {
 	{ x, y: 123 } -> false,
 	{ x, y: 456 } -> true,
