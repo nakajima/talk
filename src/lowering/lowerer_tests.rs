@@ -985,6 +985,116 @@ pub mod lowering_tests {
     }
 
     #[test]
+    fn lowers_struct_bind() {
+        let lowered = lower(
+            "
+            struct Person {
+                let age: Int
+                let count: Int
+            }
+
+            match Person(age: 123) {
+                Person { age: x, count: 0 } -> -x,
+                Person { age: x, .. } -> x,
+            }
+            ",
+        )
+        .unwrap();
+
+        assert_lowered_function!(
+            lowered,
+            "@main",
+            IRFunction {
+                debug_info: Default::default(),
+                ty: IRType::Func(vec![], IRType::Void.into()),
+                name: "@main".into(),
+                blocks: vec![
+                    // Block 0: Dispatch
+                    BasicBlock {
+                        id: BasicBlockID::ENTRY,
+                        instructions: vec![
+                            // Scrutinee: Optional.some(123)
+                            Instr::ConstantInt(Register(0), 123),
+                            Instr::TagVariant(
+                                Register(1),
+                                IRType::Enum(SymbolID::OPTIONAL, vec![IRType::Int]),
+                                0,
+                                RegisterList(vec![TypedRegister::new(IRType::Int, Register(0))])
+                            ),
+                            Instr::Jump(BasicBlockID(2)),
+                        ],
+                    },
+                    // Block 1: Merge Point
+                    BasicBlock {
+                        id: BasicBlockID(1),
+                        instructions: vec![
+                            Instr::Phi(
+                                Register(10),
+                                IRType::Int,
+                                PhiPredecessors(vec![
+                                    (Register(5), BasicBlockID(5)), // from .some arm
+                                    (Register(9), BasicBlockID(6)), // from .none arm
+                                ])
+                            ),
+                            Instr::Ret(IRType::Int, Some(Register(10).into())),
+                        ]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(2),
+                        instructions: vec![
+                            Instr::GetEnumTag(Register(2), Register(1)),
+                            Instr::ConstantInt(Register(3), 0), // Tag for .some
+                            Instr::Eq(Register(4), IRType::Int, Register(2), Register(3)),
+                            Instr::Branch {
+                                cond: Register(4),
+                                true_target: BasicBlockID(5),
+                                false_target: BasicBlockID(3)
+                            },
+                        ]
+                    },
+                    // Pattern 2
+                    BasicBlock {
+                        id: BasicBlockID(3),
+                        instructions: vec![
+                            Instr::GetEnumTag(Register(6), Register(1)),
+                            Instr::ConstantInt(Register(7), 1), // Tag for .none
+                            Instr::Eq(Register(8), IRType::Int, Register(6), Register(7)),
+                            Instr::Branch {
+                                cond: Register(8),
+                                true_target: BasicBlockID(6),
+                                false_target: BasicBlockID(4)
+                            },
+                        ]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(4),
+                        instructions: vec![Instr::Unreachable]
+                    },
+                    BasicBlock {
+                        id: BasicBlockID(5),
+                        instructions: vec![
+                            // This is the binding: get value at index 0 and put it in register 8
+                            Instr::GetEnumValue(Register(5), IRType::Int, Register(1), 0, 0),
+                            Instr::Jump(BasicBlockID(1)),
+                        ]
+                    },
+                    // Block 2: Body for .some(x) -> x
+                    BasicBlock {
+                        id: BasicBlockID(6),
+                        instructions: vec![
+                            Instr::ConstantInt(Register(9), 456),
+                            Instr::Jump(BasicBlockID(1)),
+                        ]
+                    },
+                ],
+                env_ty: None,
+                env_reg: None,
+                size: 11
+            }
+        )
+    }
+
+    #[test]
     fn lowers_enum_match() {
         let lowered = lower_without_prelude(
             "

@@ -625,6 +625,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } => self.lower_protocol(name, items),
             Expr::Tuple(items) => self.lower_tuple(typed_expr, items),
+            Expr::RecordLiteral(fields) => self.lower_record_literal(typed_expr, fields),
             Expr::LiteralString(string) => self.lower_string(typed_expr, string.to_string()),
             expr => {
                 self.add_diagnostic(Diagnostic::lowering(
@@ -675,6 +676,44 @@ impl<'a> Lowerer<'a> {
                 member_types.push(ir_type);
             } else {
                 self.push_err("Could not lower tuple element", item);
+                return None;
+            }
+        }
+
+        // we represent tuples as structs for now
+        let dest = self.allocate_register();
+        self.push_instr(Instr::MakeStruct {
+            dest,
+            ty: typed_expr.ty.to_ir(self),
+            values: RegisterList(member_registers),
+        });
+
+        Some(dest)
+    }
+
+    fn lower_record_literal(
+        &mut self,
+        typed_expr: &TypedExpr,
+        fields: &[TypedExpr],
+    ) -> Option<Register> {
+        let mut member_registers = vec![];
+        let mut member_types = vec![];
+
+        for field in fields {
+            let Expr::RecordField { label: _, value } = &field.expr else {
+                self.push_err("Didn't get record field", field);
+                return None;
+            };
+
+            if let Some(reg) = self.lower_expr(value) {
+                let ir_type = value.ty.to_ir(self);
+                member_registers.push(TypedRegister::new(ir_type.clone(), reg));
+                member_types.push(ir_type);
+            } else {
+                self.push_err(
+                    &format!("Could not lower record literal field: {field:?}"),
+                    field,
+                );
                 return None;
             }
         }
@@ -1593,12 +1632,17 @@ impl<'a> Lowerer<'a> {
 
                 match struct_ty {
                     Ty::Row {
-                        nominal_id: Some(struct_id),
+                        nominal_id,
                         fields: field_types,
-                        kind: RowKind::Struct,
+                        kind: RowKind::Struct | RowKind::Record,
                         ..
                     } => {
-                        let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
+                        let type_def = if let Some(struct_id) = nominal_id
+                            && let Some(type_def) = self.env.lookup_type(struct_id).cloned()
+                        {
+                            type_def
+                        } else {
+                            // TODO: How do we handle this for records
                             self.push_err("Couldn't find struct definition", pattern_typed_expr);
                             return None;
                         };

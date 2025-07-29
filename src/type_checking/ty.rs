@@ -253,35 +253,22 @@ impl Ty {
                 },
             ) => {
                 if lhs_kind != rhs_kind {
-                    println!("bad kind: {lhs_kind:?} != {rhs_kind:?}");
                     return false;
                 }
 
                 if lhs_row != rhs_row {
-                    println!("bad row: {lhs_row:?} != {rhs_row:?}");
                     return false;
                 }
 
                 if lhs_nominal_id != rhs_nominal_id {
-                    println!("bad id: {lhs_kind:?} != {rhs_kind:?}");
                     return false;
                 }
 
                 if lhs_fields.len() != rhs_fields.len() {
-                    println!(
-                        "bad fields: {:?} != {:?}",
-                        lhs_fields.len(),
-                        rhs_fields.len()
-                    );
                     return false;
                 }
 
                 if lhs_generics.len() != rhs_generics.len() {
-                    println!(
-                        "bad generics: {:?} != {:?}",
-                        lhs_generics.len(),
-                        rhs_generics.len()
-                    );
                     return false;
                 }
 
@@ -290,7 +277,6 @@ impl Ty {
                     .enumerate()
                     .all(|(i, g)| g.equal_to(&rhs_generics[i]))
                 {
-                    println!("bad generics: {:?} != {:?}", lhs_generics, rhs_generics);
                     return false;
                 }
 
@@ -299,12 +285,10 @@ impl Ty {
 
                 for (field, ty) in &lhs_fields {
                     let Some(rhs_ty) = rhs_fields.get(field) else {
-                        println!("bad fields: {:?} != {:?}", lhs_fields, rhs_fields);
                         return false;
                     };
 
                     if !ty.equal_to(rhs_ty) {
-                        println!("bad fields: {:?} != {:?}", lhs_fields, rhs_fields);
                         return false;
                     }
                 }

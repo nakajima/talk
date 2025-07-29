@@ -6718,26 +6718,41 @@ mod tests {
     }
 
     #[test]
-    fn test_pattern_matching_with_rows() {
+    fn test_pattern_matching_with_struct_rows() {
         // From test_row_pattern_matching.rs
         let src = r#"
             struct Point {
                 let x: Int
                 let y: Int
             }
-            
-            func extractX(p: Point) -> Int {
-                match p {
-                    Point(x, _) => x
-                }
+
+            match Point(x: 1, y: 2) {
+                Point { x: 1, y } -> y,
+                Point { x, .. } -> x
             }
-            
-            let p = Point(x: 10, y: 20)
-            extractX(p)
         "#;
 
-        let result = check(src);
-        assert!(result.is_ok());
+        let result = check(src).unwrap();
+        assert_eq!(result.nth(1).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn test_pattern_matching_with_record_rows() {
+        // From test_row_pattern_matching.rs
+        let src = r#"
+        let a = {x: 123, y: 456}
+
+        let result = match a {
+            { x, y: 123 } -> false,
+            { x, y: 456 } -> true,
+            { x, y: _ } -> true
+        }
+
+        result
+        "#;
+
+        let result = check(src).unwrap();
+        assert_eq!(result.nth(2).unwrap(), Ty::Bool);
     }
 
     #[test]

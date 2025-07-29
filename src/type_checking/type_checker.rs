@@ -2068,7 +2068,7 @@ impl<'a> TypeChecker<'a> {
                                 .map(|(_, ty)| ty.clone())
                                 .ok_or_else(|| {
                                     TypeError::Unknown(format!(
-                                        "Field '{field_name_str}' not found in struct"
+                                        "Field '{field_name_str}' not found in struct: {fields:?}"
                                     ))
                                 })?;
 
@@ -2294,7 +2294,6 @@ impl<'a> TypeChecker<'a> {
                 }
                 crate::parsed_expr::Expr::RecordField { label, value } => {
                     // Type check the field value
-                    println!("inferring record field: {:?}", value);
                     let typed_value = self.infer_node(value, env, &None)?;
                     let field_ty = typed_value.ty.clone();
 
@@ -2537,8 +2536,6 @@ impl<'a> TypeChecker<'a> {
         _expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        println!("--record type field: \n{label:?}\n--");
-
         // Type check the field type expression
         let typed_ty = self.infer_node(ty, env, &None)?;
 
