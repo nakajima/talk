@@ -584,7 +584,7 @@ impl<'a> Formatter<'a> {
                 
                 result.push(text("}"));
                 
-                result.into_iter().fold(empty(), |acc, doc| concat(acc, doc))
+                result.into_iter().fold(empty(), concat)
             }
         }
     }

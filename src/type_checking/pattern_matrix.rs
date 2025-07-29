@@ -397,24 +397,22 @@ fn is_exhaustive_with_types(
                 // Look up variant payload type
                 if let Some(enum_def) = env.lookup_enum(enum_id) {
                     let variants = enum_def.variants();
-                    if let Some(variant) = variants.iter().find(|v| &v.name == variant_name) {
-                        if !matches!(variant.ty, Ty::Void) {
+                    if let Some(variant) = variants.iter().find(|v| &v.name == variant_name)
+                        && !matches!(variant.ty, Ty::Void) {
                             sub_types_owned.push(variant.ty.clone());
                         }
-                    }
                 }
             }
             Constructor::Struct { struct_id, fields } => {
                 // Look up struct field types
-                if let Some(struct_id) = struct_id {
-                    if let Some(struct_def) = env.lookup_struct(struct_id) {
+                if let Some(struct_id) = struct_id
+                    && let Some(struct_def) = env.lookup_struct(struct_id) {
                         for field_name in fields {
                             if let Some(member) = struct_def.members.get(field_name) {
                                 sub_types_owned.push(member.ty().clone());
                             }
                         }
                     }
-                }
             }
             _ => {} // No sub-patterns for literals
         }
@@ -481,19 +479,19 @@ pub fn format_constructor_witness(ctor: &Constructor) -> Option<String> {
             ..
         } => {
             if *arity == 0 {
-                format!(".{}", variant_name)
+                format!(".{variant_name}")
             } else {
                 let fields = vec!["_"; *arity].join(", ");
-                format!(".{}({})", variant_name, fields)
+                format!(".{variant_name}({fields})")
             }
         }
         Constructor::Struct { fields, .. } => {
             let field_patterns = fields
                 .iter()
-                .map(|f| format!("{}: _", f))
+                .map(|f| format!("{f}: _"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{{ {} }}", field_patterns)
+            format!("{{ {field_patterns} }}")
         }
         Constructor::Wildcard => "_".to_string(),
     })

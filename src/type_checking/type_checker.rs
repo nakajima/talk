@@ -2063,8 +2063,7 @@ impl<'a> TypeChecker<'a> {
                                 .map(|(_, ty)| ty.clone())
                                 .ok_or_else(|| {
                                     TypeError::Unknown(format!(
-                                        "Field '{}' not found in struct",
-                                        field_name_str
+                                        "Field '{field_name_str}' not found in struct"
                                     ))
                                 })?;
 

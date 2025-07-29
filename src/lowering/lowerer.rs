@@ -1612,7 +1612,7 @@ impl<'a> Lowerer<'a> {
                                 // For structural types, find by position
                                 field_types.iter().position(|(fname, _)| fname == field_name_str)
                                     .unwrap_or_else(|| {
-                                        self.push_err(&format!("Field {} not found", field_name_str), pattern_typed_expr);
+                                        self.push_err(&format!("Field {field_name_str} not found"), pattern_typed_expr);
                                         0
                                     })
                             };
