@@ -2025,6 +2025,84 @@ impl<'a> TypeChecker<'a> {
                 typed_expr::Pattern::Bind(name.resolved()?)
             }
             Pattern::Wildcard => typed_expr::Pattern::Wildcard,
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                // For struct patterns, we need to check if the expected type is a struct
+                match expected {
+                    Ty::Row { 
+                        nominal_id: Some(_struct_id), 
+                        fields: field_types, 
+                        row: row_variable,
+                        kind: RowKind::Struct,
+                        .. 
+                    } => {
+                        let mut typed_fields = vec![];
+                        let mut typed_field_names = vec![];
+                        let mut matched_fields = std::collections::HashSet::new();
+                        
+                        // Type check each field pattern
+                        for (field_name, field_pattern_expr) in field_names.iter().zip(fields.iter()) {
+                            let field_name_str = match field_name {
+                                Name::Raw(s) => s.clone(),
+                                Name::Resolved(_, s) => s.clone(),
+                                _ => {
+                                    return Err(TypeError::Unknown("Unsupported name type in struct pattern".to_string()));
+                                }
+                            };
+                            
+                            // Find the expected type for this field
+                            let field_ty = field_types.iter()
+                                .find(|(name, _)| name == &field_name_str)
+                                .map(|(_, ty)| ty.clone())
+                                .ok_or_else(|| TypeError::Unknown(format!(
+                                    "Field '{}' not found in struct",
+                                    field_name_str
+                                )))?;
+                            
+                            matched_fields.insert(field_name_str.clone());
+                            
+                            // Type check the field pattern
+                            let typed_field = self.infer_node(field_pattern_expr, env, &Some(field_ty.clone()))?;
+                            typed_fields.push(typed_field);
+                            typed_field_names.push(field_name.resolved()?);
+                        }
+                        
+                        // Check if all required fields are matched (unless rest is used)
+                        if !*rest && row_variable.is_none() {
+                            let unmatched_fields: Vec<_> = field_types.iter()
+                                .filter(|(name, _)| !matched_fields.contains(name))
+                                .map(|(name, _)| name.clone())
+                                .collect();
+                                
+                            if !unmatched_fields.is_empty() {
+                                return Err(TypeError::Unknown(format!(
+                                    "Missing fields in pattern: {}",
+                                    unmatched_fields.join(", ")
+                                )));
+                            }
+                        }
+                        
+                        typed_expr::Pattern::Struct {
+                            struct_name: struct_name.as_ref()
+                                .map(|n| n.resolved())
+                                .transpose()?,
+                            fields: typed_fields,
+                            field_names: typed_field_names,
+                            rest: *rest,
+                        }
+                    }
+                    _ => {
+                        return Err(TypeError::Unknown(format!(
+                            "Cannot match struct pattern against non-struct type: {:?}",
+                            expected
+                        )));
+                    }
+                }
+            }
             Pattern::Variant {
                 enum_name,
                 variant_name,
@@ -2225,11 +2303,40 @@ impl<'a> TypeChecker<'a> {
                         parsed_fields.push(parsed_expr);
                     }
                 }
-
+                
                 Some(Pattern::Variant {
                     enum_name,
                     variant_name: variant_name.clone(),
                     fields: parsed_fields,
+                })
+            }
+            typed_expr::Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                let struct_name = struct_name.as_ref().map(|rn| Name::Raw(rn.1.clone()));
+                
+                // Convert typed field patterns
+                let mut parsed_fields = vec![];
+                let mut parsed_field_names = vec![];
+                for (field_name, field_expr) in field_names.iter().zip(fields.iter()) {
+                    if let Some(pattern) = self.extract_pattern_from_typed_expr(field_expr) {
+                        let parsed_expr = ParsedExpr {
+                            id: field_expr.id,
+                            expr: crate::parsed_expr::Expr::ParsedPattern(pattern),
+                        };
+                        parsed_fields.push(parsed_expr);
+                        parsed_field_names.push(Name::Raw(field_name.1.clone()));
+                    }
+                }
+
+                Some(Pattern::Struct {
+                    struct_name,
+                    fields: parsed_fields,
+                    field_names: parsed_field_names,
+                    rest: *rest,
                 })
             }
         }

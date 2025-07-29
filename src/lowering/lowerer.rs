@@ -1572,6 +1572,91 @@ impl<'a> Lowerer<'a> {
             Pattern::LiteralFalse => (),
             Pattern::Bind(_name) => (),
             Pattern::Wildcard => (),
+            Pattern::Struct {
+                fields,
+                field_names,
+                rest: _,
+                ..
+            } => {
+                // For struct patterns, we always match (since type checking ensures correctness)
+                // Jump directly to the then block
+                self.push_instr(Instr::Jump(then_block_id));
+                self.set_current_block(then_block_id);
+                
+                // Get struct type info from the pattern's type
+                let struct_ty = &pattern_typed_expr.ty;
+                
+                match struct_ty {
+                    Ty::Row { 
+                        nominal_id: Some(struct_id), 
+                        fields: field_types,
+                        kind: RowKind::Struct,
+                        .. 
+                    } => {
+                        let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
+                            self.push_err("Couldn't find struct definition", pattern_typed_expr);
+                            return None;
+                        };
+                        
+                        // Extract and bind each field
+                        for (field_name, field_pattern) in field_names.iter().zip(fields.iter()) {
+                            let field_name_str = match field_name {
+                                ResolvedName(_, name) => name,
+                            };
+                            
+                            // Find the field index
+                            let field_index = if let Some(property) = type_def.find_property(field_name_str) {
+                                property.index
+                            } else {
+                                // For structural types, find by position
+                                field_types.iter().position(|(fname, _)| fname == field_name_str)
+                                    .unwrap_or_else(|| {
+                                        self.push_err(&format!("Field {} not found", field_name_str), pattern_typed_expr);
+                                        0
+                                    })
+                            };
+                            
+                            // Get the field value using GetElementPointer + Load
+                            let field_ptr = self.allocate_register();
+                            self.push_instr(Instr::GetElementPointer {
+                                dest: field_ptr,
+                                base: *scrutinee_reg,
+                                ty: struct_ty.to_ir(self),
+                                index: IRValue::ImmediateInt(field_index as i64),
+                            });
+                            
+                            let field_value_reg = self.allocate_register();
+                            let field_ty = field_types.iter()
+                                .find(|(fname, _)| fname == field_name_str)
+                                .map(|(_, ty)| ty)
+                                .unwrap_or(&Ty::Void);
+                            
+                            self.push_instr(Instr::Load {
+                                dest: field_value_reg,
+                                addr: field_ptr,
+                                ty: field_ty.to_ir(self),
+                            });
+                            
+                            // Handle the field pattern (could be a binding or nested pattern)
+                            if let Expr::ParsedPattern(Pattern::Bind(ResolvedName(symbol_id, _))) =
+                                &field_pattern.expr
+                            {
+                                // Simple binding - register the field value with this symbol
+                                self.current_func_mut()?
+                                    .register_symbol(*symbol_id, SymbolValue::Register(field_value_reg));
+                            } else {
+                                // Nested pattern - recursively match
+                                // For now, we'll skip this case as it would require more complex handling
+                                self.push_err("Nested patterns in struct patterns not yet supported", field_pattern);
+                            }
+                        }
+                    }
+                    _ => {
+                        self.push_err("Expected struct type for struct pattern", pattern_typed_expr);
+                        return None;
+                    }
+                }
+            }
         }
 
         Some(())
@@ -1609,6 +1694,13 @@ impl<'a> Lowerer<'a> {
                 Some(reg)
             }
             Pattern::Wildcard => None,
+            Pattern::Struct {
+                ..
+            } => {
+                // Struct patterns in this context don't produce a value
+                // They're used for matching and binding, not constructing
+                None
+            }
             Pattern::Variant {
                 variant_name,
                 fields,

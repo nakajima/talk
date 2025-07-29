@@ -40,6 +40,17 @@ pub enum Pattern {
         variant_name: String,
         fields: Vec<ParsedExpr>, // Recursive patterns for fields
     },
+    
+    // Struct/Record destructuring
+    Struct {
+        #[drive(skip)]
+        struct_name: Option<Name>, // The struct type name
+        fields: Vec<ParsedExpr>, // Field patterns (we'll store field names separately)
+        #[drive(skip)]
+        field_names: Vec<Name>, // Field names corresponding to patterns
+        #[drive(skip)]
+        rest: bool, // Whether there's a .. pattern to ignore remaining fields
+    },
     // // Tuple destructuring
     // PatternTuple(Vec<Pattern>),
 

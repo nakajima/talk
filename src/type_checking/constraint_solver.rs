@@ -1210,8 +1210,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Row {
                 nominal_id: Some(type_id),
                 ..
-            }
-            | Ty::Row { nominal_id: Some(type_id), kind: RowKind::Enum, .. } => {
+            } => {
                 // Look up the type definition using just the type_id, ignoring type parameters
                 let type_def = self.env.types.get(type_id)?;
 

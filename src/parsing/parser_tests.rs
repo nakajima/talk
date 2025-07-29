@@ -1861,4 +1861,244 @@ mod tests {
             assert_eq!(**row, any_expr!(Expr::RowVariable(Name::Raw("R".into()))));
         }
     }
+
+
+    #[test]
+    fn parses_struct_pattern_with_named_type() {
+        let parsed = parse(
+            "
+            match point {
+                Point { x, y } -> x,
+            }
+            ",
+        );
+
+        let Match(_, arms) = &parsed.roots()[0].expr else {
+            panic!("Expected match expression");
+        };
+
+        
+        let MatchArm(pattern_expr, _) = &arms[0].expr else {
+            panic!("Expected match arm");
+        };
+
+        let ParsedPattern(pattern) = &pattern_expr.expr else {
+            panic!("Expected parsed pattern");
+        };
+
+        match pattern {
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                assert_eq!(struct_name, &Some(Name::Raw("Point".into())));
+                assert_eq!(fields.len(), 2);
+                assert_eq!(field_names.len(), 2);
+                assert_eq!(*rest, false);
+
+                // Check field patterns
+                assert_eq!(&field_names[0], &Name::Raw("x".into()));
+                let ParsedPattern(Pattern::Bind(bind_name)) = &fields[0].expr else {
+                    panic!("Expected bind pattern for field x");
+                };
+                assert_eq!(bind_name, &Name::Raw("x".into()));
+
+                assert_eq!(&field_names[1], &Name::Raw("y".into()));
+                let ParsedPattern(Pattern::Bind(bind_name)) = &fields[1].expr else {
+                    panic!("Expected bind pattern for field y");
+                };
+                assert_eq!(bind_name, &Name::Raw("y".into()));
+            }
+            _ => panic!("Expected struct pattern"),
+        }
+    }
+
+    #[test]
+    fn parses_struct_pattern_with_explicit_bindings() {
+        let parsed = parse(
+            "
+            match point {
+                Point { x: px, y: py } -> px,
+            }
+            ",
+        );
+
+        let Match(_, arms) = &parsed.roots()[0].expr else {
+            panic!("Expected match expression");
+        };
+
+        let MatchArm(pattern_expr, _) = &arms[0].expr else {
+            panic!("Expected match arm");
+        };
+
+        let ParsedPattern(pattern) = &pattern_expr.expr else {
+            panic!("Expected parsed pattern");
+        };
+
+        match pattern {
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                assert_eq!(struct_name, &Some(Name::Raw("Point".into())));
+                assert_eq!(fields.len(), 2);
+                assert_eq!(field_names.len(), 2);
+                assert_eq!(*rest, false);
+
+                // Check field patterns with explicit bindings
+                assert_eq!(&field_names[0], &Name::Raw("x".into()));
+                let ParsedPattern(Pattern::Bind(bind_name)) = &fields[0].expr else {
+                    panic!("Expected bind pattern for field x");
+                };
+                assert_eq!(bind_name, &Name::Raw("px".into()));
+
+                assert_eq!(&field_names[1], &Name::Raw("y".into()));
+                let ParsedPattern(Pattern::Bind(bind_name)) = &fields[1].expr else {
+                    panic!("Expected bind pattern for field y");
+                };
+                assert_eq!(bind_name, &Name::Raw("py".into()));
+            }
+            _ => panic!("Expected struct pattern"),
+        }
+    }
+
+    #[test]
+    fn parses_struct_pattern_with_rest() {
+        let parsed = parse(
+            "
+            match person {
+                Person { name, .. } -> name
+            }
+            ",
+        );
+
+        let Match(_, arms) = &parsed.roots()[0].expr else {
+            panic!("Expected match expression");
+        };
+
+        let MatchArm(pattern_expr, _) = &arms[0].expr else {
+            panic!("Expected match arm");
+        };
+
+        let ParsedPattern(pattern) = &pattern_expr.expr else {
+            panic!("Expected parsed pattern");
+        };
+
+        match pattern {
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                assert_eq!(struct_name, &Some(Name::Raw("Person".into())));
+                assert_eq!(fields.len(), 1);
+                assert_eq!(field_names.len(), 1);
+                assert_eq!(*rest, true);
+
+                assert_eq!(&field_names[0], &Name::Raw("name".into()));
+                let ParsedPattern(Pattern::Bind(bind_name)) = &fields[0].expr else {
+                    panic!("Expected bind pattern for field name");
+                };
+                assert_eq!(bind_name, &Name::Raw("name".into()));
+            }
+            _ => panic!("Expected struct pattern"),
+        }
+    }
+
+    #[test]
+    fn parses_unqualified_struct_pattern() {
+        let parsed = parse(
+            "
+            match value {
+                { x, y } -> x,
+            }
+            ",
+        );
+
+        let Match(_, arms) = &parsed.roots()[0].expr else {
+            panic!("Expected match expression");
+        };
+
+        let MatchArm(pattern_expr, _) = &arms[0].expr else {
+            panic!("Expected match arm");
+        };
+
+        let ParsedPattern(pattern) = &pattern_expr.expr else {
+            panic!("Expected parsed pattern");
+        };
+
+        match pattern {
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                assert_eq!(struct_name, &None);
+                assert_eq!(fields.len(), 2);
+                assert_eq!(field_names.len(), 2);
+                assert_eq!(*rest, false);
+            }
+            _ => panic!("Expected struct pattern"),
+        }
+    }
+
+    #[test]
+    fn parses_struct_pattern_with_nested_patterns() {
+        let parsed = parse(
+            "
+            match rect {
+                Rectangle { topLeft: Point { x: 0, y: 0 }, bottomRight } -> bottomRight
+            }
+            ",
+        );
+
+        let Match(_, arms) = &parsed.roots()[0].expr else {
+            panic!("Expected match expression");
+        };
+
+        let MatchArm(pattern_expr, _) = &arms[0].expr else {
+            panic!("Expected match arm");
+        };
+
+        let ParsedPattern(pattern) = &pattern_expr.expr else {
+            panic!("Expected parsed pattern");
+        };
+
+        match pattern {
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                assert_eq!(struct_name, &Some(Name::Raw("Rectangle".into())));
+                assert_eq!(fields.len(), 2);
+                assert_eq!(field_names.len(), 2);
+                assert_eq!(*rest, false);
+
+                // Check nested pattern
+                assert_eq!(&field_names[0], &Name::Raw("topLeft".into()));
+                
+                let ParsedPattern(nested_pattern) = &fields[0].expr else {
+                    panic!("Expected parsed pattern for topLeft");
+                };
+                
+                match nested_pattern {
+                    Pattern::Struct { struct_name: nested_struct_name, fields: nested_fields, field_names: nested_field_names, .. } => {
+                        assert_eq!(nested_struct_name, &Some(Name::Raw("Point".into())));
+                        assert_eq!(nested_fields.len(), 2);
+                        assert_eq!(nested_field_names.len(), 2);
+                    }
+                    _ => panic!("Expected nested struct pattern"),
+                }
+            }
+            _ => panic!("Expected struct pattern"),
+        }
+    }
 }

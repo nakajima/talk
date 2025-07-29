@@ -230,6 +230,11 @@ impl<'a> Higlighter<'a> {
                 Pattern::Bind(_name) => {}
                 Pattern::Wildcard => {}
                 Pattern::Variant { fields, .. } => result.extend(self.tokens_from_exprs(fields)),
+                Pattern::Struct { fields, .. } => {
+                    for field_pattern in fields {
+                        result.extend(self.tokens_from_expr(field_pattern));
+                    }
+                }
             },
             Expr::Return(rhs) => {
                 if let Some(rhs) = rhs {

@@ -530,6 +530,62 @@ impl<'a> Formatter<'a> {
 
                 result
             }
+            Pattern::Struct { struct_name, fields, field_names, rest } => {
+                let mut result = Vec::new();
+                
+                if let Some(name) = struct_name {
+                    result.push(self.format_name(name));
+                    result.push(text(" "));
+                }
+                
+                result.push(text("{"));
+                
+                let mut field_docs = Vec::new();
+                for (field_name, field_pattern) in field_names.iter().zip(fields.iter()) {
+                    let mut field_doc = self.format_name(field_name);
+                    
+                    // Check if the field pattern is a simple binding with the same name
+                    let is_shorthand = if let Expr::ParsedPattern(Pattern::Bind(bind_name)) = &field_pattern.expr {
+                        match (field_name, bind_name) {
+                            (Name::Raw(f), Name::Raw(b)) => f == b,
+                            (Name::Resolved(_, f), Name::Resolved(_, b)) => f == b,
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    };
+                    
+                    if !is_shorthand {
+                        field_doc = concat(
+                            field_doc,
+                            concat(
+                                text(": "),
+                                self.format_expr(field_pattern)
+                            )
+                        );
+                    }
+                    
+                    field_docs.push(field_doc);
+                }
+                
+                if *rest {
+                    field_docs.push(text(".."));
+                }
+                
+                if !field_docs.is_empty() {
+                    result.push(concat(
+                        text(" "),
+                        concat(
+                            join(field_docs, concat(text(","), text(" "))),
+                            text(" ")
+                        )
+                    ));
+                }
+                
+                result.push(text("}"));
+                
+                result.into_iter().fold(empty(), |acc, doc| concat(acc, doc))
+            }
         }
     }
 
