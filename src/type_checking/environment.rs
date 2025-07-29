@@ -48,7 +48,7 @@ pub struct Environment {
     /// Row constraints collected during type checking
     pub row_constraints: Vec<crate::row::RowConstraint>,
     /// Deferred exhaustiveness checks (match_id, scrutinee_type, patterns)
-    pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty, Vec<crate::parsed_expr::Pattern>)>,
+    pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty, Vec<crate::typed_expr::Pattern>)>,
     /// Semantic index for query-based lookups
     pub semantic_index: SemanticIndex,
 }
@@ -149,10 +149,10 @@ impl Environment {
         &mut self,
         match_id: ExprID,
         scrutinee_ty: Ty,
-        patterns: Vec<crate::parsed_expr::Pattern>,
+        patterns: &[crate::typed_expr::Pattern],
     ) {
         self.deferred_exhaustiveness_checks
-            .push((match_id, scrutinee_ty, patterns));
+            .push((match_id, scrutinee_ty, patterns.to_vec()));
     }
 
     #[tracing::instrument(skip(self, meta))]

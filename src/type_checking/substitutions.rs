@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use tracing::Level;
 
@@ -324,6 +324,42 @@ impl Substitutions {
                 }
                 for (g1, g2) in gen1.iter().zip(gen2) {
                     self.unify(g1, &g2, context, generation)?;
+                }
+                Ok(())
+            }
+            // Handle records
+            (
+                Ty::Row {
+                    nominal_id: None,
+                    generics: lhs_generics,
+                    fields: lhs_fields,
+                    ..
+                },
+                Ty::Row {
+                    nominal_id: None,
+                    generics: rhs_generics,
+                    fields: rhs_fields,
+                    ..
+                },
+            ) if lhs_generics.len() == rhs_generics.len()
+                && lhs_fields.len() == rhs_fields.len() =>
+            {
+                for (g1, g2) in lhs_generics.iter().zip(rhs_generics) {
+                    self.unify(g1, &g2, context, generation)?;
+                }
+
+                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
+                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
+
+                for (label, ty) in lhs_fields.iter() {
+                    let Some(rhs_ty) = rhs_fields.get(label) else {
+                        return Err(TypeError::Mismatch(
+                            self.apply(&lhs, 0, context).to_string(),
+                            self.apply(&rhs, 0, context).to_string(),
+                        ));
+                    };
+
+                    self.unify(ty, rhs_ty, context, generation)?;
                 }
                 Ok(())
             }

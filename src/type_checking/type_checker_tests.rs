@@ -770,7 +770,11 @@ mod tests {
                                         Ty::Int
                                     )]
                                 ),
-                                Ty::Func(vec![Ty::Int], Box::new(Ty::enum_type(SymbolID::typed(1), vec![])), vec![])
+                                Ty::Func(
+                                    vec![Ty::Int],
+                                    Box::new(Ty::enum_type(SymbolID::typed(1), vec![])),
+                                    vec![]
+                                )
                             ),
                             any_typed!(
                                 Expr::EnumVariant(
@@ -802,7 +806,12 @@ mod tests {
 
         let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         match enum_ty {
-            Ty::Row { nominal_id: Some(symbol_id), generics, kind: RowKind::Enum, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                kind: RowKind::Enum,
+                ..
+            } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics.len(), 1);
                 // Should be a type variable for T
@@ -827,10 +836,7 @@ mod tests {
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(checker.root_ids()[1]).unwrap();
-        assert_eq!(
-            call_result,
-            Ty::enum_type(SymbolID::typed(1), vec![])
-        );
+        assert_eq!(call_result, Ty::enum_type(SymbolID::typed(1), vec![]));
     }
 
     #[test]
@@ -849,7 +855,12 @@ mod tests {
         // First call should be Option<Int>
         let call1 = checker.type_for(checker.root_ids()[1]).unwrap();
         match call1 {
-            Ty::Row { nominal_id: Some(symbol_id), generics, kind: RowKind::Enum, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                kind: RowKind::Enum,
+                ..
+            } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics, vec![Ty::Int]);
             }
@@ -859,7 +870,12 @@ mod tests {
         // Second call should be Option<Float>
         let call2 = checker.type_for(checker.root_ids()[2]).unwrap();
         match call2 {
-            Ty::Row { nominal_id: Some(symbol_id), generics, kind: RowKind::Enum, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                kind: RowKind::Enum,
+                ..
+            } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics, vec![Ty::Float]);
             }
@@ -886,13 +902,23 @@ mod tests {
         // Should be Result<Option<Int>, _>
         let result_ty = checker.type_for(checker.root_ids()[2]).unwrap();
         match result_ty {
-            Ty::Row { nominal_id: Some(symbol_id), generics, kind: RowKind::Enum, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                kind: RowKind::Enum,
+                ..
+            } => {
                 assert_eq!(symbol_id, SymbolID::typed(5)); // Result enum
                 assert_eq!(generics.len(), 2); // Result<T, E>
 
                 // First generic should be Option<Int>
                 match &generics[0] {
-                    Ty::Row { nominal_id: Some(opt_id), generics: opt_generics, kind: RowKind::Enum, .. } => {
+                    Ty::Row {
+                        nominal_id: Some(opt_id),
+                        generics: opt_generics,
+                        kind: RowKind::Enum,
+                        ..
+                    } => {
                         assert_eq!(*opt_id, SymbolID::typed(1)); // Option enum
                         assert_eq!(opt_generics, &vec![Ty::Int]);
                     }
@@ -975,7 +1001,12 @@ mod tests {
 
         let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         match enum_ty {
-            Ty::Row { nominal_id: Some(symbol_id), generics, kind: RowKind::Enum, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                kind: RowKind::Enum,
+                ..
+            } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics.len(), 1);
             }
@@ -998,12 +1029,20 @@ mod tests {
                 assert_eq!(field_types.len(), 2);
                 // Return type should be List<T>
                 match ret_ty.as_ref() {
-                    Ty::Row { nominal_id: Some(enum_id), kind: RowKind::Enum, .. } => assert_eq!(*enum_id, SymbolID::typed(1)),
+                    Ty::Row {
+                        nominal_id: Some(enum_id),
+                        kind: RowKind::Enum,
+                        ..
+                    } => assert_eq!(*enum_id, SymbolID::typed(1)),
                     _ => panic!("Expected List return type"),
                 }
                 // Second field should be List<T> (recursive reference)
                 match &field_types[1] {
-                    Ty::Row { nominal_id: Some(list_id), kind: RowKind::Enum, .. } => assert_eq!(*list_id, SymbolID::typed(1)),
+                    Ty::Row {
+                        nominal_id: Some(list_id),
+                        kind: RowKind::Enum,
+                        ..
+                    } => assert_eq!(*list_id, SymbolID::typed(1)),
                     _ => panic!("Expected recursive List type"),
                 }
             }
@@ -1095,7 +1134,10 @@ mod tests {
         .unwrap();
 
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::enum_type(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
+        assert_eq!(
+            call_result,
+            Ty::enum_type(SymbolID::typed(1), vec![Ty::Int])
+        ); // Option<Int>
     }
 
     #[test]
@@ -1124,7 +1166,10 @@ mod tests {
                     Ty::enum_type(SymbolID::typed(1), vec![Ty::Int, Ty::Float])
                 );
                 // Output: Either<Float, Int>
-                assert_eq!(*ret, Ty::enum_type(SymbolID::typed(1), vec![Ty::Float, Ty::Int]));
+                assert_eq!(
+                    *ret,
+                    Ty::enum_type(SymbolID::typed(1), vec![Ty::Float, Ty::Int])
+                );
             }
             _ => panic!("Expected function type"),
         }
@@ -1151,7 +1196,12 @@ mod tests {
         let x_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         assert_eq!(x_ty, Ty::enum_type(SymbolID::OPTIONAL, vec![Ty::Int]));
         match x_ty {
-            Ty::Row { nominal_id: Some(symbol_id), generics, kind: RowKind::Enum, .. } => {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                generics,
+                kind: RowKind::Enum,
+                ..
+            } => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
                 assert_eq!(generics, vec![Ty::Int]);
             }
@@ -1196,12 +1246,12 @@ mod tests {
             }
             ",
         );
-        
+
         if let Err(e) = result {
             panic!("Failed to type check: {:?}", e);
         }
     }
-    
+
     #[test]
     fn checks_polymorphic_match() {
         let checker = check(
@@ -1226,7 +1276,7 @@ mod tests {
             Ok(c) => c,
             Err(e) => panic!("Type error in polymorphic match test: {:?}", e),
         };
-        
+
         // Since the test passed type checking, qualified enum syntax works!
         // The original test structure was assuming wrong indices for root expressions
     }
@@ -2250,7 +2300,11 @@ mod tests {
             crate::type_def::EnumVariant {
                 tag: 1,
                 name: "Some".to_string(),
-                ty: Ty::Func(vec![Ty::Int], Box::new(Ty::enum_type(option_id, vec![])), vec![]),
+                ty: Ty::Func(
+                    vec![Ty::Int],
+                    Box::new(Ty::enum_type(option_id, vec![])),
+                    vec![],
+                ),
             },
         ];
 

@@ -587,7 +587,20 @@ impl<'a> NameResolver<'a> {
             Expr::RecordLiteral(fields) => {
                 *fields = self.resolve_nodes(fields, meta, symbol_table, false)?;
             }
-            Expr::RecordField { label: _, value } => {
+            Expr::RecordField { label, value } => {
+                let symbol_id = self
+                    .lookup(&label.name_str())
+                    .map(|s| s.0)
+                    .unwrap_or_else(|| {
+                        self.declare(
+                            label.name_str(),
+                            SymbolKind::RecordLabel,
+                            parsed_expr.id,
+                            meta,
+                            symbol_table,
+                        )
+                    });
+                *label = Name::Resolved(symbol_id, label.name_str());
                 *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
             }
             Expr::RecordTypeRepr {
@@ -600,7 +613,15 @@ impl<'a> NameResolver<'a> {
                     *row = Box::new(self.resolve_node(row, meta, symbol_table)?);
                 }
             }
-            Expr::RecordTypeField { label: _, ty } => {
+            Expr::RecordTypeField { label, ty } => {
+                let symbol_id = self.declare(
+                    label.name_str(),
+                    SymbolKind::RecordLabel,
+                    parsed_expr.id,
+                    meta,
+                    symbol_table,
+                );
+                *label = Name::Resolved(symbol_id, label.name_str());
                 *ty = Box::new(self.resolve_node(ty, meta, symbol_table)?);
             }
             Expr::RowVariable(name) => {
@@ -970,6 +991,36 @@ impl<'a> NameResolver<'a> {
                     enum_name,
                     variant_name: variant_name.clone(),
                     fields: fields.to_vec(),
+                }
+            }
+            Pattern::Struct {
+                struct_name,
+                fields,
+                field_names,
+                rest,
+            } => {
+                // We want to declare field names
+                let new_field_names = field_names
+                    .iter()
+                    .map(|label| {
+                        let symbol_id = self.declare(
+                            label.name_str(),
+                            SymbolKind::RecordLabel,
+                            *expr_id,
+                            meta,
+                            symbol_table,
+                        );
+                        Name::Resolved(symbol_id, label.name_str())
+                    })
+                    .collect();
+
+                let new_fields = self.resolve_nodes(fields, meta, symbol_table, false)?;
+
+                Pattern::Struct {
+                    struct_name: struct_name.clone(),
+                    fields: new_fields,
+                    field_names: new_field_names,
+                    rest: *rest,
                 }
             }
             _ => pattern.clone(),

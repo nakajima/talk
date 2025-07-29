@@ -1,4 +1,5 @@
 use derive_visitor::{Drive, Visitor};
+use indexmap::Equivalent;
 
 use crate::{
     SymbolID,
@@ -184,7 +185,7 @@ impl Constraint {
                     return false;
                 }
 
-                lhs != rhs
+                lhs.equal_to(rhs)
             }
             _ => false, // TODO
         }

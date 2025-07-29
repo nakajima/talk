@@ -560,7 +560,11 @@ impl<'a> TypeChecker<'a> {
                 let mut variants = vec![];
                 for variant in placeholders.variants.iter() {
                     let typed_expr = self
-                        .infer_node(variant.expr, env, &Some(Ty::enum_type(def.symbol_id(), vec![])))
+                        .infer_node(
+                            variant.expr,
+                            env,
+                            &Some(Ty::enum_type(def.symbol_id(), vec![])),
+                        )
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
                         tag: variant.tag,

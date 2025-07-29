@@ -691,13 +691,13 @@ impl<'a> Parser<'a> {
                 _ => (),
             }
         }
-        
+
         // Check for unqualified struct pattern: { field1, field2 }
         if self.peek_is(TokenKind::LeftBrace) {
             self.consume(TokenKind::LeftBrace)?;
             let mut fields: Vec<(Name, ParsedExpr)> = vec![];
             let mut rest = false;
-            
+
             while !self.did_match(TokenKind::RightBrace)? {
                 // Check for .. pattern
                 if self.did_match(TokenKind::DotDot)? {
@@ -706,14 +706,16 @@ impl<'a> Parser<'a> {
                     self.did_match(TokenKind::Comma)?;
                     // .. should be the last thing in the pattern
                     if !self.peek_is(TokenKind::RightBrace) {
-                        return Err(ParserError::UnknownError(".. must be the last element in struct pattern".into()));
+                        return Err(ParserError::UnknownError(
+                            ".. must be the last element in struct pattern".into(),
+                        ));
                     }
                     break;
                 }
-                
+
                 // Parse field name
                 let field_name = self.identifier()?;
-                
+
                 // Check if there's an explicit pattern after colon
                 let pattern = if self.did_match(TokenKind::Colon)? {
                     // Field: pattern
@@ -726,14 +728,14 @@ impl<'a> Parser<'a> {
                     let pattern = Pattern::Bind(Name::Raw(field_name.clone()));
                     self.add_expr(ParsedPattern(pattern), tok)?
                 };
-                
+
                 fields.push((Name::Raw(field_name), pattern));
-                
+
                 // Skip comma if present
                 self.did_match(TokenKind::Comma)?;
                 self.skip_semicolons_and_newlines();
             }
-            
+
             // We already consume the right brace in the while loop condition
             let (field_names, field_patterns): (Vec<_>, Vec<_>) = fields.into_iter().unzip();
             return Ok(Pattern::Struct {
@@ -750,7 +752,7 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::LeftBrace)?;
                 let mut fields: Vec<(Name, ParsedExpr)> = vec![];
                 let mut rest = false;
-                
+
                 while !self.did_match(TokenKind::RightBrace)? {
                     // Check for .. pattern
                     if self.did_match(TokenKind::DotDot)? {
@@ -759,15 +761,17 @@ impl<'a> Parser<'a> {
                         self.did_match(TokenKind::Comma)?;
                         // .. should be the last thing in the pattern
                         if !self.peek_is(TokenKind::RightBrace) {
-                            return Err(ParserError::UnknownError(".. must be the last element in struct pattern".into()));
+                            return Err(ParserError::UnknownError(
+                                ".. must be the last element in struct pattern".into(),
+                            ));
                         }
                         // Continue to consume the right brace
                         continue;
                     }
-                    
+
                     // Parse field name
                     let field_name = self.identifier()?;
-                    
+
                     // Check if there's an explicit pattern after colon
                     let pattern = if self.did_match(TokenKind::Colon)? {
                         // Field: pattern
@@ -780,14 +784,14 @@ impl<'a> Parser<'a> {
                         let pattern = Pattern::Bind(Name::Raw(field_name.clone()));
                         self.add_expr(ParsedPattern(pattern), tok)?
                     };
-                    
+
                     fields.push((Name::Raw(field_name), pattern));
-                    
+
                     // Skip comma if present
                     self.did_match(TokenKind::Comma)?;
                     self.skip_semicolons_and_newlines();
                 }
-                
+
                 let (field_names, field_patterns): (Vec<_>, Vec<_>) = fields.into_iter().unzip();
                 return Ok(Pattern::Struct {
                     struct_name: Some(Name::Raw(name)),
@@ -796,7 +800,7 @@ impl<'a> Parser<'a> {
                     rest,
                 });
             }
-            
+
             // Check for enum variant pattern
             if !self.did_match(TokenKind::Dot)? {
                 return Ok(Pattern::Bind(Name::Raw(name)));

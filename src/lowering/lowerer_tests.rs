@@ -837,35 +837,45 @@ pub mod lowering_tests {
         .unwrap();
 
         // Find the main function
-        let main_func = lowered.functions.iter()
+        let main_func = lowered
+            .functions
+            .iter()
             .find(|f| f.name == "@main")
             .expect("Should have @main function");
 
         // Verify basic structure
         assert_eq!(main_func.ty, IRType::Func(vec![], IRType::Void.into()));
-        
+
         // Should have blocks for: entry, merge, two comparisons, wildcard jump, unreachable, and three value blocks
         assert_eq!(main_func.blocks.len(), 9);
-        
+
         // Check that we have the expected instructions without being too specific about registers/blocks
-        let has_comparisons = main_func.blocks.iter().any(|b| 
-            b.instructions.iter().any(|i| matches!(i, Instr::Eq(_, IRType::Int, _, _)))
-        );
+        let has_comparisons = main_func.blocks.iter().any(|b| {
+            b.instructions
+                .iter()
+                .any(|i| matches!(i, Instr::Eq(_, IRType::Int, _, _)))
+        });
         assert!(has_comparisons, "Should have integer comparisons");
-        
-        let has_float_constants = main_func.blocks.iter().any(|b|
-            b.instructions.iter().any(|i| matches!(i, Instr::ConstantFloat(_, _)))
-        );
+
+        let has_float_constants = main_func.blocks.iter().any(|b| {
+            b.instructions
+                .iter()
+                .any(|i| matches!(i, Instr::ConstantFloat(_, _)))
+        });
         assert!(has_float_constants, "Should have float constants");
-        
-        let has_phi = main_func.blocks.iter().any(|b|
-            b.instructions.iter().any(|i| matches!(i, Instr::Phi(_, IRType::Float, _)))
-        );
+
+        let has_phi = main_func.blocks.iter().any(|b| {
+            b.instructions
+                .iter()
+                .any(|i| matches!(i, Instr::Phi(_, IRType::Float, _)))
+        });
         assert!(has_phi, "Should have phi node for float result");
-        
-        let has_ret = main_func.blocks.iter().any(|b|
-            b.instructions.iter().any(|i| matches!(i, Instr::Ret(IRType::Float, Some(_))))
-        );
+
+        let has_ret = main_func.blocks.iter().any(|b| {
+            b.instructions
+                .iter()
+                .any(|i| matches!(i, Instr::Ret(IRType::Float, Some(_))))
+        });
         assert!(has_ret, "Should return float value");
     }
 

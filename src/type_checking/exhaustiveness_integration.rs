@@ -6,15 +6,18 @@ use crate::{
     SymbolID,
     environment::Environment,
     expr_id::ExprID,
-    parsed_expr::Pattern,
     row::{FieldMetadata, RowConstraint},
     ty::{RowKind, Ty},
     type_var_id::{TypeVarID, TypeVarKind},
+    typed_expr::{self, Pattern},
 };
 
 use super::{
     pattern_exhaustiveness::{ExhaustivenessResult, MissingPattern},
-    pattern_matrix::{PatternMatrix, is_exhaustive, all_constructors, constructors_match, format_constructor_witness, Constructor},
+    pattern_matrix::{
+        Constructor, PatternMatrix, all_constructors, constructors_match,
+        format_constructor_witness, is_exhaustive,
+    },
 };
 
 /// Information about enum variants gathered from row constraints
@@ -42,7 +45,11 @@ impl<'a> RowEnumAnalyzer<'a> {
     pub fn analyze_type(&self, ty: &Ty) -> Option<RowEnumInfo> {
         match ty {
             Ty::TypeVar(type_var) => self.analyze_type_var(type_var),
-            Ty::Row { nominal_id: Some(enum_id), kind: RowKind::Enum, .. } => self.analyze_traditional_enum(enum_id),
+            Ty::Row {
+                nominal_id: Some(enum_id),
+                kind: RowKind::Enum,
+                ..
+            } => self.analyze_traditional_enum(enum_id),
             _ => None,
         }
     }
@@ -136,40 +143,50 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
     }
 
     /// Check if a match expression is exhaustive
-    pub fn check_match(&self, scrutinee_ty: &Ty, patterns: &[Pattern]) -> ExhaustivenessResult {
+    pub fn check_match(
+        &self,
+        scrutinee_ty: &Ty,
+        patterns: &[typed_expr::Pattern],
+    ) -> ExhaustivenessResult {
         // Special handling for boolean types to match expected format
         if matches!(scrutinee_ty, Ty::Bool) {
             return self.check_bool_exhaustiveness(patterns);
         }
-        
+
         // Create a pattern matrix from the patterns
         let matrix = PatternMatrix::new(patterns.to_vec());
-        
+
         // Check if the matrix is exhaustive
         if is_exhaustive(&matrix, scrutinee_ty, self.analyzer.env) {
             ExhaustivenessResult::Exhaustive
         } else {
             // Generate witnesses for missing patterns
             let all_missing = self.collect_missing_patterns(&matrix, scrutinee_ty);
-            
+
             if !all_missing.is_empty() {
                 // For enums, return Variants with all missing variant names
-                if let Ty::Row { kind: RowKind::Enum, nominal_id: Some(id), .. } = scrutinee_ty
-                    && let Some(enum_def) = self.analyzer.env.lookup_enum(id) {
-                        return ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
-                            enum_name: enum_def.name_str.clone(),
-                            variant_names: all_missing,
-                        }]);
-                    }
-                
+                if let Ty::Row {
+                    kind: RowKind::Enum,
+                    nominal_id: Some(id),
+                    ..
+                } = scrutinee_ty
+                    && let Some(enum_def) = self.analyzer.env.lookup_enum(id)
+                {
+                    return ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
+                        enum_name: enum_def.name_str.clone(),
+                        variant_names: all_missing,
+                    }]);
+                }
+
                 // For other types, return individual missing patterns
                 ExhaustivenessResult::NonExhaustive(
-                    all_missing.into_iter()
+                    all_missing
+                        .into_iter()
                         .map(|witness| MissingPattern::Variant {
                             enum_name: format!("{scrutinee_ty:?}"),
                             variant_name: witness,
                         })
-                        .collect()
+                        .collect(),
                 )
             } else {
                 // Fallback for cases where we can't generate a witness
@@ -180,27 +197,28 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             }
         }
     }
-    
+
     /// Collect all missing patterns
     fn collect_missing_patterns(&self, matrix: &PatternMatrix, ty: &Ty) -> Vec<String> {
         let mut missing = Vec::new();
-        
+
         // Get all constructors that need to be covered
         let all_ctors = all_constructors(ty, self.analyzer.env);
         let covered_ctors = matrix.column_constructors(self.analyzer.env, ty);
-        
+
         for ctor in &all_ctors {
             if !covered_ctors.iter().any(|c| constructors_match(c, ctor))
-                && let Some(witness) = format_constructor_witness(ctor) {
-                    missing.push(witness);
-                }
+                && let Some(witness) = format_constructor_witness(ctor)
+            {
+                missing.push(witness);
+            }
         }
-        
+
         // If we can't enumerate constructors and there's no wildcard, we need one
         if all_ctors.is_empty() && !covered_ctors.contains(&Constructor::Wildcard) {
             missing.push("_".to_string());
         }
-        
+
         missing
     }
 
@@ -233,7 +251,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
                 for field in fields {
                     // Check if the field is a literal expression
                     // Fields in patterns are wrapped in ParsedPattern
-                    if let crate::parsed_expr::Expr::ParsedPattern(inner_pattern) = &field.expr {
+                    if let crate::typed_expr::Expr::ParsedPattern(inner_pattern) = &field.expr {
                         match inner_pattern {
                             Pattern::LiteralInt(_) => {
                                 has_restrictive_patterns = true;
@@ -312,7 +330,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
 pub fn check_match_exhaustiveness(
     env: &Environment,
     scrutinee_ty: &Ty,
-    patterns: &[Pattern],
+    patterns: &[typed_expr::Pattern],
 ) -> Result<(), String> {
     let checker = RowAwareExhaustivenessChecker::new(env);
 

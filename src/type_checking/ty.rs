@@ -1,10 +1,11 @@
-use std::fmt::Display;
+use std::{collections::BTreeMap, fmt::Display};
 
 use derive_visitor::Drive;
 
 use crate::{
     SymbolID, builtin_type_def,
     environment::Environment,
+    impl_option_eq,
     type_checker::{FuncParams, FuncReturning},
     type_def::TypeDef,
     type_var_id::TypeVarID,
@@ -22,6 +23,8 @@ pub enum RowKind {
     /// An enum - sum type with variants
     Enum,
 }
+
+impl_option_eq!(Ty);
 
 #[derive(Clone, PartialEq, Debug, Drive)]
 pub enum Ty {
@@ -229,6 +232,87 @@ impl Ty {
 
     pub fn is_concrete(&self) -> bool {
         !matches!(self, Ty::TypeVar(_))
+    }
+
+    pub fn equal_to(&self, other: &Ty) -> bool {
+        match (self, other) {
+            (
+                Ty::Row {
+                    fields: lhs_fields,
+                    row: lhs_row,
+                    nominal_id: lhs_nominal_id,
+                    generics: lhs_generics,
+                    kind: lhs_kind,
+                },
+                Ty::Row {
+                    fields: rhs_fields,
+                    row: rhs_row,
+                    nominal_id: rhs_nominal_id,
+                    generics: rhs_generics,
+                    kind: rhs_kind,
+                },
+            ) => {
+                if lhs_kind != rhs_kind {
+                    println!("bad kind: {lhs_kind:?} != {rhs_kind:?}");
+                    return false;
+                }
+
+                if lhs_row != rhs_row {
+                    println!("bad row: {lhs_row:?} != {rhs_row:?}");
+                    return false;
+                }
+
+                if lhs_nominal_id != rhs_nominal_id {
+                    println!("bad id: {lhs_kind:?} != {rhs_kind:?}");
+                    return false;
+                }
+
+                if lhs_fields.len() != rhs_fields.len() {
+                    println!(
+                        "bad fields: {:?} != {:?}",
+                        lhs_fields.len(),
+                        rhs_fields.len()
+                    );
+                    return false;
+                }
+
+                if lhs_generics.len() != rhs_generics.len() {
+                    println!(
+                        "bad generics: {:?} != {:?}",
+                        lhs_generics.len(),
+                        rhs_generics.len()
+                    );
+                    return false;
+                }
+
+                if !lhs_generics
+                    .iter()
+                    .enumerate()
+                    .all(|(i, g)| g.equal_to(&rhs_generics[i]))
+                {
+                    println!("bad generics: {:?} != {:?}", lhs_generics, rhs_generics);
+                    return false;
+                }
+
+                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
+                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
+
+                for (field, ty) in &lhs_fields {
+                    let Some(rhs_ty) = rhs_fields.get(field) else {
+                        println!("bad fields: {:?} != {:?}", lhs_fields, rhs_fields);
+                        return false;
+                    };
+
+                    if !ty.equal_to(rhs_ty) {
+                        println!("bad fields: {:?} != {:?}", lhs_fields, rhs_fields);
+                        return false;
+                    }
+                }
+
+                true
+            }
+            (_, _) => self == other,
+        }
     }
 
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {

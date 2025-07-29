@@ -8,9 +8,8 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     SymbolID,
     environment::Environment,
-    name::Name,
-    parsed_expr::Pattern,
     ty::{RowKind, Ty},
+    typed_expr::Pattern,
 };
 
 /// A constructor in a pattern - represents the "head" of a pattern
@@ -199,7 +198,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
                     .map(|f| {
                         // Extract pattern from ParsedExpr
                         match &f.expr {
-                            crate::parsed_expr::Expr::ParsedPattern(p) => {
+                            crate::typed_expr::Expr::ParsedPattern(p) => {
                                 PatternColumn::Pattern(p.clone())
                             }
                             _ => PatternColumn::Pattern(Pattern::Wildcard),
@@ -218,17 +217,10 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
                 .zip(fields.iter())
                 .map(|(name, field)| {
                     let pattern = match &field.expr {
-                        crate::parsed_expr::Expr::ParsedPattern(p) => p.clone(),
+                        crate::typed_expr::Expr::ParsedPattern(p) => p.clone(),
                         _ => Pattern::Wildcard,
                     };
-                    let name_str = match name {
-                        Name::Raw(s) => s.clone(),
-                        Name::Resolved(_, s) => s.clone(),
-                        Name::_Self(_) => "self".to_string(),
-                        Name::SelfType => "Self".to_string(),
-                        Name::Imported(_, _) => "_".to_string(),
-                    };
-                    (name_str, pattern)
+                    (name.name_str(), pattern)
                 })
                 .collect();
 
@@ -238,16 +230,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
                     .iter()
                     .map(|(name, _)| name.clone())
                     .collect::<Vec<_>>(),
-                _ => field_names
-                    .iter()
-                    .map(|n| match n {
-                        Name::Raw(s) => s.clone(),
-                        Name::Resolved(_, s) => s.clone(),
-                        Name::_Self(_) => "self".to_string(),
-                        Name::SelfType => "Self".to_string(),
-                        Name::Imported(_, _) => "_".to_string(),
-                    })
-                    .collect(),
+                _ => field_names.iter().map(|n| n.name_str()).collect(),
             };
 
             // Create pattern columns for all fields (wildcard for missing ones)
@@ -398,21 +381,23 @@ fn is_exhaustive_with_types(
                 if let Some(enum_def) = env.lookup_enum(enum_id) {
                     let variants = enum_def.variants();
                     if let Some(variant) = variants.iter().find(|v| &v.name == variant_name)
-                        && !matches!(variant.ty, Ty::Void) {
-                            sub_types_owned.push(variant.ty.clone());
-                        }
+                        && !matches!(variant.ty, Ty::Void)
+                    {
+                        sub_types_owned.push(variant.ty.clone());
+                    }
                 }
             }
             Constructor::Struct { struct_id, fields } => {
                 // Look up struct field types
                 if let Some(struct_id) = struct_id
-                    && let Some(struct_def) = env.lookup_struct(struct_id) {
-                        for field_name in fields {
-                            if let Some(member) = struct_def.members.get(field_name) {
-                                sub_types_owned.push(member.ty().clone());
-                            }
+                    && let Some(struct_def) = env.lookup_struct(struct_id)
+                {
+                    for field_name in fields {
+                        if let Some(member) = struct_def.members.get(field_name) {
+                            sub_types_owned.push(member.ty().clone());
                         }
                     }
+                }
             }
             _ => {} // No sub-patterns for literals
         }

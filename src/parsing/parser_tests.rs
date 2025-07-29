@@ -1862,7 +1862,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn parses_struct_pattern_with_named_type() {
         let parsed = parse(
@@ -1877,7 +1876,6 @@ mod tests {
             panic!("Expected match expression");
         };
 
-        
         let MatchArm(pattern_expr, _) = &arms[0].expr else {
             panic!("Expected match arm");
         };
@@ -2084,13 +2082,18 @@ mod tests {
 
                 // Check nested pattern
                 assert_eq!(&field_names[0], &Name::Raw("topLeft".into()));
-                
+
                 let ParsedPattern(nested_pattern) = &fields[0].expr else {
                     panic!("Expected parsed pattern for topLeft");
                 };
-                
+
                 match nested_pattern {
-                    Pattern::Struct { struct_name: nested_struct_name, fields: nested_fields, field_names: nested_field_names, .. } => {
+                    Pattern::Struct {
+                        struct_name: nested_struct_name,
+                        fields: nested_fields,
+                        field_names: nested_field_names,
+                        ..
+                    } => {
                         assert_eq!(nested_struct_name, &Some(Name::Raw("Point".into())));
                         assert_eq!(nested_fields.len(), 2);
                         assert_eq!(nested_field_names.len(), 2);

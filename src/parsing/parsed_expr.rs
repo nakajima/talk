@@ -40,7 +40,7 @@ pub enum Pattern {
         variant_name: String,
         fields: Vec<ParsedExpr>, // Recursive patterns for fields
     },
-    
+
     // Struct/Record destructuring
     Struct {
         #[drive(skip)]

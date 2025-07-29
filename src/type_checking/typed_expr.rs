@@ -26,7 +26,7 @@ pub enum Pattern {
         variant_name: String,
         fields: Vec<TypedExpr>,
     },
-    
+
     Struct {
         #[drive(skip)]
         struct_name: Option<ResolvedName>,

@@ -139,7 +139,7 @@ impl Ty {
                     tracing::error!("Unsupported nominal row kind: {:?}", kind);
                     IRType::Void
                 }
-            }
+            },
             Ty::Row {
                 nominal_id,
                 generics,
@@ -1448,11 +1448,11 @@ impl<'a> Lowerer<'a> {
                         generics: params,
                         kind: RowKind::Enum,
                         ..
-                    } = &pattern_typed_expr.ty {
+                    } = &pattern_typed_expr.ty
+                    {
                         id = Some(enum_id);
                         generics = Some(params);
                     }
-
 
                     (id, generics)
                 };
@@ -1504,13 +1504,17 @@ impl<'a> Lowerer<'a> {
                         // Extract parameter types from the variant's function type
                         let values = match &variant_def.ty {
                             Ty::Func(params, _, _) => params.clone(),
-                            Ty::Row { kind: RowKind::Enum, .. } => {
+                            Ty::Row {
+                                kind: RowKind::Enum,
+                                ..
+                            } => {
                                 // Variant with no parameters
                                 vec![]
                             }
                             _ => {
                                 self.push_err(
-                                    format!("unexpected variant type: {:?}", variant_def.ty).as_str(),
+                                    format!("unexpected variant type: {:?}", variant_def.ty)
+                                        .as_str(),
                                     field_pattern,
                                 );
                                 return None;
@@ -1583,40 +1587,46 @@ impl<'a> Lowerer<'a> {
                 // Jump directly to the then block
                 self.push_instr(Instr::Jump(then_block_id));
                 self.set_current_block(then_block_id);
-                
+
                 // Get struct type info from the pattern's type
                 let struct_ty = &pattern_typed_expr.ty;
-                
+
                 match struct_ty {
-                    Ty::Row { 
-                        nominal_id: Some(struct_id), 
+                    Ty::Row {
+                        nominal_id: Some(struct_id),
                         fields: field_types,
                         kind: RowKind::Struct,
-                        .. 
+                        ..
                     } => {
                         let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
                             self.push_err("Couldn't find struct definition", pattern_typed_expr);
                             return None;
                         };
-                        
+
                         // Extract and bind each field
                         for (field_name, field_pattern) in field_names.iter().zip(fields.iter()) {
                             let field_name_str = match field_name {
                                 ResolvedName(_, name) => name,
                             };
-                            
+
                             // Find the field index
-                            let field_index = if let Some(property) = type_def.find_property(field_name_str) {
-                                property.index
-                            } else {
-                                // For structural types, find by position
-                                field_types.iter().position(|(fname, _)| fname == field_name_str)
-                                    .unwrap_or_else(|| {
-                                        self.push_err(&format!("Field {field_name_str} not found"), pattern_typed_expr);
-                                        0
-                                    })
-                            };
-                            
+                            let field_index =
+                                if let Some(property) = type_def.find_property(field_name_str) {
+                                    property.index
+                                } else {
+                                    // For structural types, find by position
+                                    field_types
+                                        .iter()
+                                        .position(|(fname, _)| fname == field_name_str)
+                                        .unwrap_or_else(|| {
+                                            self.push_err(
+                                                &format!("Field {field_name_str} not found"),
+                                                pattern_typed_expr,
+                                            );
+                                            0
+                                        })
+                                };
+
                             // Get the field value using GetElementPointer + Load
                             let field_ptr = self.allocate_register();
                             self.push_instr(Instr::GetElementPointer {
@@ -1625,35 +1635,44 @@ impl<'a> Lowerer<'a> {
                                 ty: struct_ty.to_ir(self),
                                 index: IRValue::ImmediateInt(field_index as i64),
                             });
-                            
+
                             let field_value_reg = self.allocate_register();
-                            let field_ty = field_types.iter()
+                            let field_ty = field_types
+                                .iter()
                                 .find(|(fname, _)| fname == field_name_str)
                                 .map(|(_, ty)| ty)
                                 .unwrap_or(&Ty::Void);
-                            
+
                             self.push_instr(Instr::Load {
                                 dest: field_value_reg,
                                 addr: field_ptr,
                                 ty: field_ty.to_ir(self),
                             });
-                            
+
                             // Handle the field pattern (could be a binding or nested pattern)
                             if let Expr::ParsedPattern(Pattern::Bind(ResolvedName(symbol_id, _))) =
                                 &field_pattern.expr
                             {
                                 // Simple binding - register the field value with this symbol
-                                self.current_func_mut()?
-                                    .register_symbol(*symbol_id, SymbolValue::Register(field_value_reg));
+                                self.current_func_mut()?.register_symbol(
+                                    *symbol_id,
+                                    SymbolValue::Register(field_value_reg),
+                                );
                             } else {
                                 // Nested pattern - recursively match
                                 // For now, we'll skip this case as it would require more complex handling
-                                self.push_err("Nested patterns in struct patterns not yet supported", field_pattern);
+                                self.push_err(
+                                    "Nested patterns in struct patterns not yet supported",
+                                    field_pattern,
+                                );
                             }
                         }
                     }
                     _ => {
-                        self.push_err("Expected struct type for struct pattern", pattern_typed_expr);
+                        self.push_err(
+                            "Expected struct type for struct pattern",
+                            pattern_typed_expr,
+                        );
                         return None;
                     }
                 }
@@ -1695,9 +1714,7 @@ impl<'a> Lowerer<'a> {
                 Some(reg)
             }
             Pattern::Wildcard => None,
-            Pattern::Struct {
-                ..
-            } => {
+            Pattern::Struct { .. } => {
                 // Struct patterns in this context don't produce a value
                 // They're used for matching and binding, not constructing
                 None
@@ -1711,9 +1728,11 @@ impl<'a> Lowerer<'a> {
                     nominal_id: Some(enum_id),
                     kind: RowKind::Enum,
                     ..
-                } = pattern_typed_expr.ty else {
+                } = pattern_typed_expr.ty
+                else {
                     self.push_err(
-                        format!("didn't get enum pattern type: {:?}", pattern_typed_expr.ty).as_str(),
+                        format!("didn't get enum pattern type: {:?}", pattern_typed_expr.ty)
+                            .as_str(),
                         pattern_typed_expr,
                     );
                     return None;
@@ -1731,7 +1750,10 @@ impl<'a> Lowerer<'a> {
                 let dest = self.allocate_register();
                 let values = match &variant.ty {
                     Ty::Func(params, _, _) => params,
-                    Ty::Row { kind: RowKind::Enum, .. } => {
+                    Ty::Row {
+                        kind: RowKind::Enum,
+                        ..
+                    } => {
                         // Variant with no parameters
                         &vec![]
                     }
@@ -1808,10 +1830,10 @@ impl<'a> Lowerer<'a> {
             nominal_id: Some(sym),
             kind: RowKind::Enum,
             ..
-        } = &typed_expr.ty {
+        } = &typed_expr.ty
+        {
             return self.lower_enum_construction(typed_expr, *sym, name, &typed_expr.ty, &[]);
         }
-
 
         let Some(receiver) = receiver else {
             unreachable!("we should have a receiver since it's not an enum");
@@ -2250,7 +2272,8 @@ impl<'a> Lowerer<'a> {
             nominal_id: Some(enum_id),
             kind: RowKind::Enum,
             ..
-        } = &ret_ty {
+        } = &ret_ty
+        {
             let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
                 self.push_err("didn't get member expr for enum call", callee_typed_expr);
                 return None;
