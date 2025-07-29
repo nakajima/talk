@@ -723,50 +723,6 @@ mod stdlib_tests {
     }
 
     #[test]
-    #[ignore = "this isn't being used anywhere yet"]
-    fn lowers_realloc() {
-        let mut driver = Driver::with_str(
-            "
-        let ptr = __alloc<Int>(2)
-        __realloc<Int>(ptr, 4)
-        ",
-        );
-        let lowered = driver.lower().into_iter().next().unwrap().module();
-        assert_lowered_function!(
-            lowered,
-            "@main",
-            IRFunction {
-                debug_info: Default::default(),
-                ty: IRType::Func(vec![], IRType::Void.into()),
-                name: "@main".into(),
-                blocks: vec![BasicBlock {
-                    id: BasicBlockID(0),
-                    instructions: vec![
-                        // First alloc
-                        Instr::ConstantInt(Register(1), 2),
-                        Instr::Alloc {
-                            dest: Register(0),
-                            ty: IRType::Int,
-                            count: Some(IRValue::Register(Register(1))),
-                        },
-                        // Realloc
-                        Instr::ConstantInt(Register(3), 4),
-                        Instr::Alloc {
-                            dest: Register(2),
-                            ty: IRType::Int,
-                            count: Some(IRValue::Register(Register(3))),
-                        },
-                        Instr::Ret(IRType::POINTER, Some(Register(2).into()))
-                    ],
-                }],
-                env_ty: None,
-                env_reg: None,
-                size: 4,
-            },
-        )
-    }
-
-    #[test]
     fn lowers_store() {
         let mut driver = Driver::with_str(
             "

@@ -1364,13 +1364,14 @@ impl<'a> Lowerer<'a> {
 
         let mut predecessors = vec![];
         for (i, arm) in arms.iter().enumerate() {
-            predecessors.push(self.lower_match_arm(
+            let predecessor = self.lower_match_arm(
                 arm,
                 &scrutinee_reg,
                 merge_block_id,
                 arm_cond_blocks[i],
                 arm_cond_blocks.get(i + 1).cloned().unwrap_or(fail_block_id),
-            ));
+            );
+            predecessors.push(predecessor);
         }
 
         self.set_current_block(merge_block_id);

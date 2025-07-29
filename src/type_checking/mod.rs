@@ -22,6 +22,7 @@ pub mod environment;
 pub mod exhaustiveness_integration;
 pub mod name_resolver;
 pub mod pattern_exhaustiveness;
+pub mod pattern_matrix;
 pub mod scope_tree;
 pub mod substitutions;
 pub mod synthesis;

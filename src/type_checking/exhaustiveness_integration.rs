@@ -12,7 +12,10 @@ use crate::{
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
-use super::pattern_exhaustiveness::{ExhaustivenessResult, MissingPattern};
+use super::{
+    pattern_exhaustiveness::{ExhaustivenessResult, MissingPattern},
+    pattern_matrix::{PatternMatrix, is_exhaustive, all_constructors, constructors_match, format_constructor_witness, Constructor},
+};
 
 /// Information about enum variants gathered from row constraints
 #[derive(Debug, Clone)]
@@ -134,27 +137,73 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
 
     /// Check if a match expression is exhaustive
     pub fn check_match(&self, scrutinee_ty: &Ty, patterns: &[Pattern]) -> ExhaustivenessResult {
-        // First check if there's a wildcard or catch-all variable pattern
-        if patterns
-            .iter()
-            .any(|p| matches!(p, Pattern::Wildcard | Pattern::Bind(_)))
-        {
-            return ExhaustivenessResult::Exhaustive;
+        // Special handling for boolean types to match expected format
+        if matches!(scrutinee_ty, Ty::Bool) {
+            return self.check_bool_exhaustiveness(patterns);
         }
-
-        // Try to get enum information from the type
-        if let Some(enum_info) = self.analyzer.analyze_type(scrutinee_ty) {
-            self.check_enum_exhaustiveness(enum_info, patterns)
+        
+        // Create a pattern matrix from the patterns
+        let matrix = PatternMatrix::new(patterns.to_vec());
+        
+        // Check if the matrix is exhaustive
+        if is_exhaustive(&matrix, scrutinee_ty, &self.analyzer.env) {
+            ExhaustivenessResult::Exhaustive
         } else {
-            // For non-enum types, check other cases
-            match scrutinee_ty {
-                Ty::Bool => self.check_bool_exhaustiveness(patterns),
-                // For other types (Int, String, etc.), we can't determine exhaustiveness
-                // without a wildcard, but we don't report it as an error - just return
-                // that it's exhaustive since we can't enumerate all possible values
-                _ => ExhaustivenessResult::Exhaustive,
+            // Generate witnesses for missing patterns
+            let all_missing = self.collect_missing_patterns(&matrix, scrutinee_ty);
+            
+            if !all_missing.is_empty() {
+                // For enums, return Variants with all missing variant names
+                if let Ty::Row { kind: RowKind::Enum, nominal_id: Some(id), .. } = scrutinee_ty {
+                    if let Some(enum_def) = self.analyzer.env.lookup_enum(id) {
+                        return ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
+                            enum_name: enum_def.name_str.clone(),
+                            variant_names: all_missing,
+                        }]);
+                    }
+                }
+                
+                // For other types, return individual missing patterns
+                ExhaustivenessResult::NonExhaustive(
+                    all_missing.into_iter()
+                        .map(|witness| MissingPattern::Variant {
+                            enum_name: format!("{:?}", scrutinee_ty),
+                            variant_name: witness,
+                        })
+                        .collect()
+                )
+            } else {
+                // Fallback for cases where we can't generate a witness
+                ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variant {
+                    enum_name: "pattern".to_string(),
+                    variant_name: "_".to_string(),
+                }])
             }
         }
+    }
+    
+    /// Collect all missing patterns
+    fn collect_missing_patterns(&self, matrix: &PatternMatrix, ty: &Ty) -> Vec<String> {
+        let mut missing = Vec::new();
+        
+        // Get all constructors that need to be covered
+        let all_ctors = all_constructors(ty, &self.analyzer.env);
+        let covered_ctors = matrix.column_constructors(&self.analyzer.env, ty);
+        
+        for ctor in &all_ctors {
+            if !covered_ctors.iter().any(|c| constructors_match(c, ctor)) {
+                if let Some(witness) = format_constructor_witness(ctor) {
+                    missing.push(witness);
+                }
+            }
+        }
+        
+        // If we can't enumerate constructors and there's no wildcard, we need one
+        if all_ctors.is_empty() && !covered_ctors.contains(&Constructor::Wildcard) {
+            missing.push("_".to_string());
+        }
+        
+        missing
     }
 
     /// Check exhaustiveness for enums (both traditional and row-based)
