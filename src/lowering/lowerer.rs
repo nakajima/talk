@@ -37,7 +37,7 @@ use crate::{
     source_file,
     token::Token,
     token_kind::TokenKind,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_checker::Scheme,
     type_def::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
@@ -99,10 +99,6 @@ impl Ty {
             ),
             Ty::Method { func, .. } => func.to_ir(lowerer),
             Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.id)),
-            Ty::Enum(symbol_id, generics) => IRType::Enum(
-                *symbol_id,
-                generics.iter().map(|i| i.to_ir(lowerer)).collect(),
-            ),
             Ty::Closure { func, .. } => func.to_ir(lowerer),
             Ty::Tuple(items) => IRType::Struct(
                 SymbolID::TUPLE,
@@ -115,23 +111,34 @@ impl Ty {
             Ty::Row {
                 nominal_id: Some(symbol_id),
                 generics,
+                kind,
                 ..
-            } => {
-                let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
-                    tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
-                    return IRType::Void;
-                };
-
-                IRType::Struct(
+            } => match kind {
+                RowKind::Enum => IRType::Enum(
                     *symbol_id,
-                    struct_def
-                        .properties()
-                        .iter()
-                        .sorted_by(|a, b| a.index.cmp(&b.index))
-                        .map(|p| p.ty.to_ir(lowerer))
-                        .collect(),
-                    generics.iter().map(|g| g.to_ir(lowerer)).collect(),
-                )
+                    generics.iter().map(|i| i.to_ir(lowerer)).collect(),
+                ),
+                RowKind::Struct => {
+                    let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
+                        tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
+                        return IRType::Void;
+                    };
+
+                    IRType::Struct(
+                        *symbol_id,
+                        struct_def
+                            .properties()
+                            .iter()
+                            .sorted_by(|a, b| a.index.cmp(&b.index))
+                            .map(|p| p.ty.to_ir(lowerer))
+                            .collect(),
+                        generics.iter().map(|g| g.to_ir(lowerer)).collect(),
+                    )
+                }
+                _ => {
+                    tracing::error!("Unsupported nominal row kind: {:?}", kind);
+                    IRType::Void
+                }
             }
             Ty::Row {
                 nominal_id,
@@ -1435,7 +1442,12 @@ impl<'a> Lowerer<'a> {
                     let mut id = None;
                     let mut generics = None;
 
-                    if let Ty::Enum(enum_id, params) = &pattern_typed_expr.ty {
+                    if let Ty::Row {
+                        nominal_id: Some(enum_id),
+                        generics: params,
+                        kind: RowKind::Enum,
+                        ..
+                    } = &pattern_typed_expr.ty {
                         id = Some(enum_id);
                         generics = Some(params);
                     }
@@ -1491,7 +1503,7 @@ impl<'a> Lowerer<'a> {
                         // Extract parameter types from the variant's function type
                         let values = match &variant_def.ty {
                             Ty::Func(params, _, _) => params.clone(),
-                            Ty::Enum(_, _) => {
+                            Ty::Row { kind: RowKind::Enum, .. } => {
                                 // Variant with no parameters
                                 vec![]
                             }
@@ -1602,9 +1614,13 @@ impl<'a> Lowerer<'a> {
                 fields,
                 ..
             } => {
-                let Ty::Enum(enum_id, _) = pattern_typed_expr.ty else {
+                let Ty::Row {
+                    nominal_id: Some(enum_id),
+                    kind: RowKind::Enum,
+                    ..
+                } = pattern_typed_expr.ty else {
                     self.push_err(
-                        format!("didn't get pattern type: {:?}", pattern_typed_expr.ty).as_str(),
+                        format!("didn't get enum pattern type: {:?}", pattern_typed_expr.ty).as_str(),
                         pattern_typed_expr,
                     );
                     return None;
@@ -1622,7 +1638,7 @@ impl<'a> Lowerer<'a> {
                 let dest = self.allocate_register();
                 let values = match &variant.ty {
                     Ty::Func(params, _, _) => params,
-                    Ty::Enum(_, _) => {
+                    Ty::Row { kind: RowKind::Enum, .. } => {
                         // Variant with no parameters
                         &vec![]
                     }
@@ -1695,7 +1711,11 @@ impl<'a> Lowerer<'a> {
         name: &str,
         is_lvalue: bool,
     ) -> Option<Register> {
-        if let Ty::Enum(sym, _generics) = &typed_expr.ty {
+        if let Ty::Row {
+            nominal_id: Some(sym),
+            kind: RowKind::Enum,
+            ..
+        } = &typed_expr.ty {
             return self.lower_enum_construction(typed_expr, *sym, name, &typed_expr.ty, &[]);
         }
 
@@ -2133,7 +2153,11 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle enum variant construction
-        if let Ty::Enum(enum_id, _) = &ret_ty {
+        if let Ty::Row {
+            nominal_id: Some(enum_id),
+            kind: RowKind::Enum,
+            ..
+        } = &ret_ty {
             let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
                 self.push_err("didn't get member expr for enum call", callee_typed_expr);
                 return None;
@@ -2406,8 +2430,7 @@ impl<'a> Lowerer<'a> {
         );
 
         let callee_name = match &receiver_ty.ty {
-            Ty::Enum(symbol_id, _)
-            | Ty::Row {
+            Ty::Row {
                 nominal_id: Some(symbol_id),
                 ..
             } => {

@@ -207,8 +207,7 @@ impl<'a> ConformanceChecker<'a> {
 
     fn type_def(&self) -> Option<&TypeDef> {
         match self.ty {
-            Ty::Enum(symbol_id, _)
-            | Ty::Row {
+            Ty::Row {
                 nominal_id: Some(symbol_id),
                 ..
             } => self.env.lookup_type(symbol_id),

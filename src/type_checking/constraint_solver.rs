@@ -18,7 +18,7 @@ use crate::{
     row_constraints::RowConstraintSolver,
     semantic_index::ResolvedExpr,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_checker::{Scheme, TypeError},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -562,7 +562,12 @@ impl<'a> ConstraintSolver<'a> {
         field_tys: &[Ty],
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
-        let Ty::Enum(enum_id, concrete_type_args) = scrutinee_ty else {
+        let Ty::Row {
+            nominal_id: Some(enum_id),
+            generics: concrete_type_args,
+            kind: RowKind::Enum,
+            ..
+        } = scrutinee_ty else {
             return Err(TypeError::Unknown(format!(
                 "VariantMatch expected an enum, but got {scrutinee_ty:?}"
             )));
@@ -580,7 +585,7 @@ impl<'a> ConstraintSolver<'a> {
         // Extract the generic field types from the variant's definition
         let generic_field_tys = match &variant_def.ty {
             Ty::Func(params, _, _) => params.clone(),
-            Ty::Enum(_, _) => vec![], // Variant with no parameters
+            Ty::Row { kind: RowKind::Enum, .. } => vec![], // Variant with no parameters
             _ => return Err(TypeError::Unknown("Invalid variant type".into())),
         };
 
@@ -624,7 +629,7 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         match result_ty {
             // A variant with no values
-            Ty::Enum(enum_id, _) => {
+            Ty::Row { nominal_id: Some(enum_id), kind: RowKind::Enum, .. } => {
                 let enum_def = self.env.lookup_enum(enum_id).ok_or_else(|| {
                     TypeError::Unknown(format!("Unable to resolve enum with id: {enum_id:?}"))
                 })?;
@@ -641,7 +646,7 @@ impl<'a> ConstraintSolver<'a> {
             // A variant with values (function type returning enum)
             Ty::Func(_, ret, _) => {
                 let ret_ty = substitutions.apply(ret, 0, &mut self.env.context);
-                if let Ty::Enum(enum_id, _) = ret_ty {
+                if let Ty::Row { nominal_id: Some(enum_id), kind: RowKind::Enum, .. } = ret_ty {
                     let enum_def = self.env.lookup_enum(&enum_id).ok_or_else(|| {
                         TypeError::Unknown(format!("Unable to resolve enum with id: {enum_id:?}"))
                     })?;
@@ -679,7 +684,7 @@ impl<'a> ConstraintSolver<'a> {
             builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
                 self.resolve_builtin_member(builtin, member_name)
             }
-            Ty::Enum(enum_id, generics) => self.resolve_enum_member(enum_id, member_name, generics),
+            Ty::Row { nominal_id: Some(enum_id), generics, kind: RowKind::Enum, .. } => self.resolve_enum_member(enum_id, member_name, generics),
             Ty::TypeVar(type_var) => {
                 tracing::debug!("Resolving member {} on TypeVar {:?}", member_name, type_var);
                 let result =
@@ -1137,12 +1142,24 @@ impl<'a> ConstraintSolver<'a> {
                     captures: captures.clone(),
                 }
             }
-            Ty::Enum(name, generics) => {
+            Ty::Row {
+                fields,
+                row,
+                nominal_id,
+                generics,
+                kind: RowKind::Enum,
+            } => {
                 let applied_generics = generics
                     .iter()
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
                     .collect();
-                Ty::Enum(*name, applied_generics)
+                Ty::Row {
+                    fields: fields.clone(),
+                    row: row.clone(),
+                    nominal_id: *nominal_id,
+                    generics: applied_generics,
+                    kind: RowKind::Enum,
+                }
             }
             Ty::Tuple(types) => Ty::Tuple(
                 types
@@ -1194,7 +1211,7 @@ impl<'a> ConstraintSolver<'a> {
                 nominal_id: Some(type_id),
                 ..
             }
-            | Ty::Enum(type_id, _) => {
+            | Ty::Row { nominal_id: Some(type_id), kind: RowKind::Enum, .. } => {
                 // Look up the type definition using just the type_id, ignoring type parameters
                 let type_def = self.env.types.get(type_id)?;
 

@@ -673,7 +673,12 @@ impl<'a> TypeChecker<'a> {
         expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let Some(Ty::Enum(enum_id, generics)) = env.selfs.last().cloned() else {
+        let Some(Ty::Row {
+            nominal_id: Some(enum_id),
+            generics,
+            kind: RowKind::Enum,
+            ..
+        }) = env.selfs.last().cloned() else {
             unreachable!(
                 "should always be called with expected = Enum, got: {expected:?}, self: {:?}",
                 env.selfs.last()
@@ -685,11 +690,11 @@ impl<'a> TypeChecker<'a> {
         // - A function from the variant's parameters to the enum type (if it has parameters)
         // - The enum type itself (if it has no parameters)
         let ty = if values.is_empty() {
-            Ty::Enum(enum_id, generics)
+            Ty::enum_type(enum_id, generics)
         } else {
             Ty::Func(
                 values.iter().map(|v| v.ty.clone()).collect(),
-                Box::new(Ty::Enum(enum_id, generics)),
+                Box::new(Ty::enum_type(enum_id, generics)),
                 vec![], // No generic parameters on the function itself
             )
         };
@@ -1211,8 +1216,7 @@ impl<'a> TypeChecker<'a> {
         let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
                 Some(
-                    Ty::Enum(symbol_id, _)
-                    | Ty::Row {
+                    Ty::Row {
                         nominal_id: Some(symbol_id),
                         ..
                     },
@@ -2033,7 +2037,12 @@ impl<'a> TypeChecker<'a> {
                 };
                 // The expected type should be an Enum type
                 match expected {
-                    Ty::Enum(enum_id, type_args) => {
+                    Ty::Row {
+                        nominal_id: Some(enum_id),
+                        generics: type_args,
+                        kind: RowKind::Enum,
+                        ..
+                    } => {
                         let Some(enum_def) = env.lookup_enum(enum_id).cloned() else {
                             return Err(TypeError::Unknown(format!(
                                 "Could not resolve enum with symbol: {enum_id:?}"
@@ -2047,7 +2056,7 @@ impl<'a> TypeChecker<'a> {
                         };
                         let values = match &variant.ty {
                             Ty::Func(params, _, _) => params,
-                            Ty::Enum(_, _) => {
+                            Ty::Row { kind: RowKind::Enum, .. } => {
                                 // Variant with no parameters
                                 &vec![]
                             }

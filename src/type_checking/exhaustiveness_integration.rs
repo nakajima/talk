@@ -8,7 +8,7 @@ use crate::{
     expr_id::ExprID,
     parsed_expr::Pattern,
     row::{FieldMetadata, RowConstraint},
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -39,7 +39,7 @@ impl<'a> RowEnumAnalyzer<'a> {
     pub fn analyze_type(&self, ty: &Ty) -> Option<RowEnumInfo> {
         match ty {
             Ty::TypeVar(type_var) => self.analyze_type_var(type_var),
-            Ty::Enum(enum_id, _) => self.analyze_traditional_enum(enum_id),
+            Ty::Row { nominal_id: Some(enum_id), kind: RowKind::Enum, .. } => self.analyze_traditional_enum(enum_id),
             _ => None,
         }
     }

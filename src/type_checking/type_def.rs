@@ -186,7 +186,7 @@ impl TypeDef {
 
     pub fn ty(&self) -> Ty {
         match &self.kind {
-            TypeDefKind::Enum => Ty::Enum(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Enum => Ty::enum_type(self.symbol_id, self.canonical_type_parameters()),
             TypeDefKind::Struct => {
                 // Use the struct_type helper
                 Ty::struct_type(self.symbol_id, self.canonical_type_parameters())

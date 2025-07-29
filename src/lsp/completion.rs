@@ -92,14 +92,7 @@ impl<'a> CompletionContext<'a> {
     /// Get completions for a specific type (handles both records and typedefs)
     fn get_completions_for_type(&self, ty: &Ty) -> Vec<CompletionItem> {
         match ty {
-            // Handle enum types via typedef
-            Ty::Enum(id, _) => {
-                if let Some(type_def) = self.env.lookup_type(id) {
-                    self.get_completions_for_typedef(type_def)
-                } else {
-                    vec![]
-                }
-            }
+            // Enums are now represented as Row types
             // Handle unified row types
             Ty::Row {
                 fields, nominal_id, ..

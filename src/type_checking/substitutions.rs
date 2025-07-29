@@ -98,11 +98,6 @@ impl Substitutions {
                     Ty::TypeVar(type_var)
                 }
             }
-            Ty::Enum(name, generics) => {
-                let applied_generics = self.apply_multiple(generics, depth + 1, context);
-
-                Ty::Enum(*name, applied_generics)
-            }
             Ty::Tuple(types) => Ty::Tuple(
                 types
                     .iter()
@@ -307,15 +302,6 @@ impl Substitutions {
 
                 Ok(())
             }
-            (Ty::Enum(_, lhs_types), Ty::Enum(_, rhs_types))
-                if lhs_types.len() == rhs_types.len() =>
-            {
-                for (lhs, rhs) in lhs_types.iter().zip(rhs_types) {
-                    self.unify(lhs, &rhs, context, generation)?;
-                }
-
-                Ok(())
-            }
             // Handle Row types - check nominal_id and unify generics
             (
                 Ty::Row {
@@ -382,9 +368,6 @@ impl Substitutions {
 
                 oh
             }
-            Ty::Enum(_name, generics) => generics
-                .iter()
-                .any(|generic| self.occurs_check(v, generic, context)),
             _ => false,
         }
     }

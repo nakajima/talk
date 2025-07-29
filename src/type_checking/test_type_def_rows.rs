@@ -9,7 +9,7 @@ mod tests {
         environment::Environment,
         expr_id::ExprID,
         row::{FieldMetadata, RowConstraint},
-        ty::Ty,
+        ty::{RowKind, Ty},
         type_def_rows::{RowTypeDefBuilder, TypeDefKind},
         type_var_id::TypeVarKind,
     };
@@ -153,7 +153,7 @@ mod tests {
         option_def.add_variant(
             &mut env,
             "None".to_string(),
-            Ty::Enum(option_id, vec![Ty::TypeVar(t_param.clone())]),
+            Ty::enum_type(option_id, vec![Ty::TypeVar(t_param.clone())]),
             0,
             ExprID(21),
         );
@@ -163,7 +163,7 @@ mod tests {
             "Some".to_string(),
             Ty::Func(
                 vec![Ty::TypeVar(t_param.clone())],
-                Box::new(Ty::Enum(option_id, vec![Ty::TypeVar(t_param)])),
+                Box::new(Ty::enum_type(option_id, vec![Ty::TypeVar(t_param)])),
                 vec![],
             ),
             1,
@@ -189,7 +189,7 @@ mod tests {
             .substitutions
             .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
         match resolved {
-            Ty::Enum(id, _) => assert_eq!(id, option_id),
+            Ty::Row { nominal_id: Some(id), kind: RowKind::Enum, .. } => assert_eq!(id, option_id),
             _ => panic!("Expected enum type"),
         }
     }

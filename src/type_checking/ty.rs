@@ -45,7 +45,6 @@ pub enum Ty {
         captures: Vec<SymbolID>,
     },
     TypeVar(#[drive(skip)] TypeVarID),
-    Enum(#[drive(skip)] SymbolID, Vec<Ty>), // enum name + type arguments
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
     Byte,
@@ -105,7 +104,6 @@ impl Display for Ty {
             ),
             Ty::Closure { func, .. } => write!(f, "{func}"),
             Ty::TypeVar(type_var_id) => write!(f, "{type_var_id:?}"),
-            Ty::Enum(_, _) => write!(f, "enum"),
             Ty::Tuple(items) => write!(
                 f,
                 "({})",
@@ -226,7 +224,7 @@ impl Ty {
     }
 
     pub fn optional(&self) -> Ty {
-        Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
+        Ty::enum_type(SymbolID::OPTIONAL, vec![self.clone()])
     }
 
     pub fn is_concrete(&self) -> bool {
@@ -235,8 +233,7 @@ impl Ty {
 
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
         let sym = match self {
-            Ty::Enum(sym, _)
-            | Ty::Row {
+            Ty::Row {
                 nominal_id: Some(sym),
                 ..
             } => *sym,
@@ -297,19 +294,6 @@ impl Ty {
                     replacement
                 } else {
                     self.clone()
-                }
-            }
-            Ty::Enum(symbol_id, items) => {
-                if f(self) {
-                    replacement
-                } else {
-                    Ty::Enum(
-                        *symbol_id,
-                        items
-                            .iter()
-                            .map(|t| t.replace(replacement.clone(), f))
-                            .collect(),
-                    )
                 }
             }
             Ty::Tuple(items) => {

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{environment::Environment, parsed_expr::Pattern, ty::Ty, type_var_id::TypeVarID};
+use crate::{environment::Environment, parsed_expr::Pattern, ty::{RowKind, Ty}, type_var_id::TypeVarID};
 
 /// Result of exhaustiveness checking
 #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +51,7 @@ impl<'a> ExhaustivenessChecker<'a> {
         }
 
         match scrutinee_ty {
-            Ty::Enum(enum_id, _type_args) => self.check_enum_exhaustiveness(enum_id, patterns),
+            Ty::Row { nominal_id: Some(enum_id), kind: RowKind::Enum, .. } => self.check_enum_exhaustiveness(enum_id, patterns),
             Ty::TypeVar(type_var) => self.check_type_var_exhaustiveness(type_var, patterns),
             Ty::Bool => self.check_bool_exhaustiveness(patterns),
             _ => {

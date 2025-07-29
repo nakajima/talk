@@ -220,7 +220,7 @@ impl<'a> TypeChecker<'a> {
                         .map(|td| td.ty())
                         .unwrap_or_else(|| Ty::struct_type(*symbol_id, canonical_types.clone()))
                 }
-                PredeclarationKind::Enum => Ty::Enum(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty::enum_type(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Protocol => {
                     // Use the protocol_type helper
                     Ty::protocol_type(*symbol_id, canonical_types.clone())
@@ -560,7 +560,7 @@ impl<'a> TypeChecker<'a> {
                 let mut variants = vec![];
                 for variant in placeholders.variants.iter() {
                     let typed_expr = self
-                        .infer_node(variant.expr, env, &Some(Ty::Enum(def.symbol_id(), vec![])))
+                        .infer_node(variant.expr, env, &Some(Ty::enum_type(def.symbol_id(), vec![])))
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
                         tag: variant.tag,
