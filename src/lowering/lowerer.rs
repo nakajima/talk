@@ -103,10 +103,6 @@ impl Ty {
                 *symbol_id,
                 generics.iter().map(|i| i.to_ir(lowerer)).collect(),
             ),
-            Ty::EnumVariant(enum_id, items) => {
-                // let enum_def = lowerer.env.lookup_enum(enum_id).unwrap();
-                IRType::Enum(*enum_id, items.iter().map(|t| t.to_ir(lowerer)).collect())
-            }
             Ty::Closure { func, .. } => func.to_ir(lowerer),
             Ty::Tuple(items) => IRType::Struct(
                 SymbolID::TUPLE,
@@ -1444,10 +1440,6 @@ impl<'a> Lowerer<'a> {
                         generics = Some(params);
                     }
 
-                    if let Ty::EnumVariant(enum_id, params) = &pattern_typed_expr.ty {
-                        id = Some(enum_id);
-                        generics = Some(params);
-                    }
 
                     (id, generics)
                 };
@@ -1496,9 +1488,20 @@ impl<'a> Lowerer<'a> {
                     {
                         let value_reg = self.allocate_register();
 
-                        // We need to figure out the type of the value. This feels clumsy.
-                        let Ty::EnumVariant(_, values) = variant_def.ty.clone() else {
-                            unreachable!();
+                        // Extract parameter types from the variant's function type
+                        let values = match &variant_def.ty {
+                            Ty::Func(params, _, _) => params.clone(),
+                            Ty::Enum(_, _) => {
+                                // Variant with no parameters
+                                vec![]
+                            }
+                            _ => {
+                                self.push_err(
+                                    format!("unexpected variant type: {:?}", variant_def.ty).as_str(),
+                                    field_pattern,
+                                );
+                                return None;
+                            }
                         };
                         let ty = match values[i].clone() {
                             Ty::TypeVar(var) => {
@@ -1617,9 +1620,19 @@ impl<'a> Lowerer<'a> {
                 let variant = type_def.find_variant(variant_name)?;
 
                 let dest = self.allocate_register();
-                let Ty::EnumVariant(_, values) = &variant.ty else {
-                    self.push_err("did not get enum variant values", pattern_typed_expr);
-                    return Some(dest);
+                let values = match &variant.ty {
+                    Ty::Func(params, _, _) => params,
+                    Ty::Enum(_, _) => {
+                        // Variant with no parameters
+                        &vec![]
+                    }
+                    _ => {
+                        self.push_err(
+                            format!("unexpected variant type: {:?}", variant.ty).as_str(),
+                            pattern_typed_expr,
+                        );
+                        return Some(dest);
+                    }
                 };
                 let args = RegisterList(
                     fields
@@ -1686,9 +1699,6 @@ impl<'a> Lowerer<'a> {
             return self.lower_enum_construction(typed_expr, *sym, name, &typed_expr.ty, &[]);
         }
 
-        if let Ty::EnumVariant(sym, _generics) = &typed_expr.ty {
-            return self.lower_enum_construction(typed_expr, *sym, name, &typed_expr.ty, &[]);
-        }
 
         let Some(receiver) = receiver else {
             unreachable!("we should have a receiver since it's not an enum");
@@ -2138,21 +2148,7 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        // Handle enum variant construction
-        if let Ty::EnumVariant(enum_id, _) = &ret_ty {
-            let Expr::Member(_, variant_name) = &callee_typed_expr.expr else {
-                self.push_err("didn't get member expr for enum call", callee_typed_expr);
-                return None;
-            };
-
-            return self.lower_enum_construction(
-                callee_typed_expr,
-                *enum_id,
-                variant_name,
-                ret_ty,
-                &arg_registers,
-            );
-        }
+        // Note: Enum variant construction is already handled above when ret_ty is Ty::Enum
 
         // Handle method calls
         if let Expr::Member(receiver, name) = &callee_typed_expr.expr {

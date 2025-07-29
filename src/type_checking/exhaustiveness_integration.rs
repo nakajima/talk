@@ -40,10 +40,6 @@ impl<'a> RowEnumAnalyzer<'a> {
         match ty {
             Ty::TypeVar(type_var) => self.analyze_type_var(type_var),
             Ty::Enum(enum_id, _) => self.analyze_traditional_enum(enum_id),
-            Ty::EnumVariant(enum_id, _) => {
-                // When matching on an enum variant value, we need info about the enum
-                self.analyze_traditional_enum(enum_id)
-            }
             _ => None,
         }
     }

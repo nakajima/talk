@@ -655,6 +655,7 @@ impl<'a> Parser<'a> {
             let body = Box::new(self.parse_with_precedence(Precedence::Primary)?);
             items.push(self.add_expr(MatchArm(pattern_id, body), tok)?);
             self.consume(TokenKind::Comma).ok();
+            self.skip_semicolons_and_newlines();
         }
 
         Ok(items)

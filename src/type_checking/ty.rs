@@ -19,6 +19,8 @@ pub enum RowKind {
     Protocol,
     /// A record - structural type (anonymous)
     Record,
+    /// An enum - sum type with variants
+    Enum,
 }
 
 #[derive(Clone, PartialEq, Debug, Drive)]
@@ -44,10 +46,6 @@ pub enum Ty {
     },
     TypeVar(#[drive(skip)] TypeVarID),
     Enum(#[drive(skip)] SymbolID, Vec<Ty>), // enum name + type arguments
-    EnumVariant(
-        #[drive(skip)] SymbolID, /* Enum */
-        Vec<Ty>,                 /* Values */
-    ),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
     Byte,
@@ -108,7 +106,6 @@ impl Display for Ty {
             Ty::Closure { func, .. } => write!(f, "{func}"),
             Ty::TypeVar(type_var_id) => write!(f, "{type_var_id:?}"),
             Ty::Enum(_, _) => write!(f, "enum"),
-            Ty::EnumVariant(_, _) => write!(f, "enum variant"),
             Ty::Tuple(items) => write!(
                 f,
                 "({})",
@@ -217,12 +214,19 @@ impl Ty {
         }
     }
 
-    pub fn optional(&self) -> Ty {
-        Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
+    /// Create an enum type using Row representation
+    pub fn enum_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
+        Ty::Row {
+            fields: vec![], // Enum variants are stored in TypeDef
+            row: None,
+            nominal_id: Some(symbol_id),
+            generics,
+            kind: RowKind::Enum,
+        }
     }
 
-    pub fn some(&self) -> Ty {
-        Ty::EnumVariant(SymbolID::OPTIONAL, vec![self.clone()])
+    pub fn optional(&self) -> Ty {
+        Ty::Enum(SymbolID::OPTIONAL, vec![self.clone()])
     }
 
     pub fn is_concrete(&self) -> bool {
@@ -300,19 +304,6 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Enum(
-                        *symbol_id,
-                        items
-                            .iter()
-                            .map(|t| t.replace(replacement.clone(), f))
-                            .collect(),
-                    )
-                }
-            }
-            Ty::EnumVariant(symbol_id, items) => {
-                if f(self) {
-                    replacement
-                } else {
-                    Ty::EnumVariant(
                         *symbol_id,
                         items
                             .iter()

@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use tracing::Level;
 
 use crate::{
-    constraint_solver::ConstraintSolver,
     ty::Ty,
     type_checker::TypeError,
     type_var_context::{TypeVarContext, UnificationEntry},
@@ -103,13 +102,6 @@ impl Substitutions {
                 let applied_generics = self.apply_multiple(generics, depth + 1, context);
 
                 Ty::Enum(*name, applied_generics)
-            }
-            Ty::EnumVariant(enum_id, values) => {
-                let applied_values = values
-                    .iter()
-                    .map(|variant| self.apply(variant, depth + 1, context))
-                    .collect();
-                Ty::EnumVariant(*enum_id, applied_values)
             }
             Ty::Tuple(types) => Ty::Tuple(
                 types
@@ -324,14 +316,6 @@ impl Substitutions {
 
                 Ok(())
             }
-            (Ty::Enum(_, enum_types), Ty::EnumVariant(_, variant_types))
-            | (Ty::EnumVariant(_, variant_types), Ty::Enum(_, enum_types)) => {
-                for (e_ty, v_ty) in enum_types.iter().zip(variant_types) {
-                    self.unify(e_ty, &v_ty, context, generation)?;
-                }
-
-                Ok(())
-            }
             // Handle Row types - check nominal_id and unify generics
             (
                 Ty::Row {
@@ -355,26 +339,6 @@ impl Substitutions {
                 for (g1, g2) in gen1.iter().zip(gen2) {
                     self.unify(g1, &g2, context, generation)?;
                 }
-                Ok(())
-            }
-            (Ty::Func(func_args, ret, generics), Ty::EnumVariant(enum_id, variant_args))
-            | (Ty::EnumVariant(enum_id, variant_args), Ty::Func(func_args, ret, generics))
-                if func_args.len() == variant_args.len() =>
-            {
-                let mut member_substitutions = self.clone();
-                for (type_param, type_arg) in variant_args.iter().zip(generics) {
-                    tracing::trace!("Member substitution: {type_param:?} -> {type_arg:?}");
-                    if let Ty::TypeVar(type_var) = type_param {
-                        member_substitutions.insert(type_var.clone(), type_arg.clone());
-                    }
-                }
-                let specialized_ty = ConstraintSolver::substitute_ty_with_map(
-                    &Ty::EnumVariant(enum_id, func_args),
-                    self,
-                );
-
-                self.unify(&ret, &specialized_ty, context, generation)?;
-
                 Ok(())
             }
             _ => Err(TypeError::Mismatch(
@@ -421,9 +385,6 @@ impl Substitutions {
             Ty::Enum(_name, generics) => generics
                 .iter()
                 .any(|generic| self.occurs_check(v, generic, context)),
-            Ty::EnumVariant(_enum_id, values) => values
-                .iter()
-                .any(|value| self.occurs_check(v, value, context)),
             _ => false,
         }
     }

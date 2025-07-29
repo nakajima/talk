@@ -578,8 +578,10 @@ impl<'a> ConstraintSolver<'a> {
             .ok_or_else(|| TypeError::UnknownVariant(Name::Raw(variant_name.to_string())))?;
 
         // Extract the generic field types from the variant's definition
-        let Ty::EnumVariant(_, generic_field_tys) = &variant_def.ty else {
-            return Err(TypeError::Unknown("Invalid variant type".into()));
+        let generic_field_tys = match &variant_def.ty {
+            Ty::Func(params, _, _) => params.clone(),
+            Ty::Enum(_, _) => vec![], // Variant with no parameters
+            _ => return Err(TypeError::Unknown("Invalid variant type".into())),
         };
 
         // Create substitutions for the enum's type parameters
@@ -1141,13 +1143,6 @@ impl<'a> ConstraintSolver<'a> {
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
                     .collect();
                 Ty::Enum(*name, applied_generics)
-            }
-            Ty::EnumVariant(enum_id, values) => {
-                let applied_values = values
-                    .iter()
-                    .map(|v| Self::substitute_ty_with_map(v, substitutions))
-                    .collect();
-                Ty::EnumVariant(*enum_id, applied_values)
             }
             Ty::Tuple(types) => Ty::Tuple(
                 types

@@ -521,10 +521,6 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
             let new_generics = generics.iter().map(|g| walk(g, map)).collect();
             Ty::Enum(*name, new_generics)
         }
-        Ty::EnumVariant(name, values) => {
-            let new_values = values.iter().map(|g| walk(g, map)).collect();
-            Ty::EnumVariant(*name, new_values)
-        }
         Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
         Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
         Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
@@ -584,11 +580,6 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::Enum(_, generics) => {
             for generic in generics {
                 s.extend(free_type_vars(generic));
-            }
-        }
-        Ty::EnumVariant(_, values) => {
-            for value in values {
-                s.extend(free_type_vars(value));
             }
         }
         Ty::Tuple(items) => {

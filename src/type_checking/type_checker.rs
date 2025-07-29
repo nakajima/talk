@@ -673,14 +673,26 @@ impl<'a> TypeChecker<'a> {
         expected: &Option<Ty>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let Some(Ty::Enum(enum_id, _)) = env.selfs.last().cloned() else {
+        let Some(Ty::Enum(enum_id, generics)) = env.selfs.last().cloned() else {
             unreachable!(
                 "should always be called with expected = Enum, got: {expected:?}, self: {:?}",
                 env.selfs.last()
             );
         };
         let values = self.infer_nodes(values, env)?;
-        let ty = Ty::EnumVariant(enum_id, values.iter().map(|v| v.ty.clone()).collect());
+        
+        // The type of a variant declaration is either:
+        // - A function from the variant's parameters to the enum type (if it has parameters)
+        // - The enum type itself (if it has no parameters)
+        let ty = if values.is_empty() {
+            Ty::Enum(enum_id, generics)
+        } else {
+            Ty::Func(
+                values.iter().map(|v| v.ty.clone()).collect(),
+                Box::new(Ty::Enum(enum_id, generics)),
+                vec![], // No generic parameters on the function itself
+            )
+        };
 
         Ok(TypedExpr {
             id,
@@ -1799,11 +1811,7 @@ impl<'a> TypeChecker<'a> {
         // Check exhaustiveness
         use crate::type_checking::exhaustiveness_integration::check_match_exhaustiveness;
 
-        // For enum variants, we need to check against the enum type, not the variant
-        let check_ty = match &pattern_ty.ty {
-            Ty::EnumVariant(enum_id, type_args) => Ty::Enum(*enum_id, type_args.clone()),
-            other => other.clone(),
-        };
+        let check_ty = pattern_ty.ty.clone();
 
         // Store match information for deferred exhaustiveness checking
         env.defer_exhaustiveness_check(id, pattern_ty.ty.clone(), patterns.clone());
@@ -2037,8 +2045,18 @@ impl<'a> TypeChecker<'a> {
                                 variant_name.to_string(),
                             )));
                         };
-                        let Ty::EnumVariant(_, values) = &variant.ty else {
-                            unreachable!()
+                        let values = match &variant.ty {
+                            Ty::Func(params, _, _) => params,
+                            Ty::Enum(_, _) => {
+                                // Variant with no parameters
+                                &vec![]
+                            }
+                            _ => {
+                                return Err(TypeError::Unknown(format!(
+                                    "Unexpected variant type: {:?}",
+                                    variant.ty
+                                )));
+                            }
                         };
                         // Now we have the variant definition and the concrete type arguments
                         // We need to substitute the enum's type parameters with the actual type args
@@ -2067,24 +2085,6 @@ impl<'a> TypeChecker<'a> {
                             let typed =
                                 self.infer_node(field_pattern, env, &Some(field_ty.clone()))?;
                             typed_fields.push(typed);
-                        }
-
-                        typed_expr::Pattern::Variant {
-                            enum_name: resolved_name,
-                            variant_name: variant_name.clone(),
-                            fields: typed_fields,
-                        }
-                    }
-                    Ty::EnumVariant(_enum_id, values_types) => {
-                        let mut typed_fields = vec![];
-
-                        // Now match field patterns with their concrete types
-                        for (field_pattern, field_ty) in fields.iter().zip(values_types.iter()) {
-                            typed_fields.push(self.infer_node(
-                                field_pattern,
-                                env,
-                                &Some(field_ty.clone()),
-                            )?)
                         }
 
                         typed_expr::Pattern::Variant {
