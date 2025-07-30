@@ -1,5 +1,4 @@
 use derive_visitor::{Drive, Visitor};
-use indexmap::Equivalent;
 
 use crate::{
     SymbolID,

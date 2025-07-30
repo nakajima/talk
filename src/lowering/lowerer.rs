@@ -821,7 +821,7 @@ impl<'a> Lowerer<'a> {
                 member_types.push(ir_type);
             } else {
                 self.push_err(
-                    &format!("Missing field '{}' in record literal", field_name),
+                    &format!("Missing field '{field_name}' in record literal"),
                     typed_expr,
                 );
                 return None;
@@ -1729,9 +1729,8 @@ impl<'a> Lowerer<'a> {
                     kind: RowKind::Enum,
                     ..
                 } = &pattern_typed_expr.ty
-                {
-                    if let Some(enum_def) = self.env.lookup_enum(enum_id).cloned() {
-                        if let Some(variant) = enum_def.find_variant(variant_name) {
+                    && let Some(enum_def) = self.env.lookup_enum(enum_id).cloned()
+                        && let Some(variant) = enum_def.find_variant(variant_name) {
                             // Check tag
                             let variant_tag = variant.tag as u16;
                             tests.push(PatternTest::CheckTag { tag: variant_tag });
@@ -1754,11 +1753,9 @@ impl<'a> Lowerer<'a> {
                                         .type_parameters
                                         .iter()
                                         .position(|t| t.type_var == *var)
-                                    {
-                                        if let Some(concrete_ty) = enum_generics.get(generic_pos) {
+                                        && let Some(concrete_ty) = enum_generics.get(generic_pos) {
                                             field_ty = concrete_ty.clone();
                                         }
-                                    }
                                 }
 
                                 let field_ty_ir = field_ty.to_ir(self);
@@ -1778,8 +1775,6 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                         }
-                    }
-                }
             }
         }
 
@@ -1877,20 +1872,17 @@ impl<'a> Lowerer<'a> {
         // This ensures all field values are available before we start checking
         // Note: We don't extract enum values here because we need to check the tag first
         for test in &compiled.tests {
-            match test {
-                PatternTest::ExtractField {
+            if let PatternTest::ExtractField {
                     index,
                     ty,
                     into_reg,
-                } => {
-                    self.push_instr(Instr::GetValueOf {
-                        dest: *into_reg,
-                        ty: ty.clone(),
-                        structure: compiled.scrutinee,
-                        index: *index,
-                    });
-                }
-                _ => {}
+                } = test {
+                self.push_instr(Instr::GetValueOf {
+                    dest: *into_reg,
+                    ty: ty.clone(),
+                    structure: compiled.scrutinee,
+                    index: *index,
+                });
             }
         }
 
@@ -2009,8 +2001,7 @@ impl<'a> Lowerer<'a> {
                             ty,
                             into_reg,
                         } = test
-                        {
-                            if *enum_tag == *tag {
+                            && *enum_tag == *tag {
                                 self.push_instr(Instr::GetEnumValue(
                                     *into_reg,
                                     ty.clone(),
@@ -2019,7 +2010,6 @@ impl<'a> Lowerer<'a> {
                                     *index as u16,
                                 ));
                             }
-                        }
                     }
 
                     // Create bindings

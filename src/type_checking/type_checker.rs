@@ -2063,8 +2063,7 @@ impl<'a> TypeChecker<'a> {
                                     .collect()
                             } else {
                                 return Err(TypeError::Unknown(format!(
-                                    "Struct definition not found for {:?}",
-                                    symbol_id
+                                    "Struct definition not found for {symbol_id:?}"
                                 )));
                             }
                         } else {

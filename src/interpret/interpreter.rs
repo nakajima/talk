@@ -522,15 +522,13 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                             self.set_register_value(&dest, field_val.clone());
                         } else {
                             return Err(InterpreterError::Unknown(format!(
-                                "Field index {} out of bounds for struct",
-                                index
+                                "Field index {index} out of bounds for struct"
                             )));
                         }
                     }
                     _ => {
                         return Err(InterpreterError::Unknown(format!(
-                            "GetValueOf expects a struct, got {:?}",
-                            struct_val
+                            "GetValueOf expects a struct, got {struct_val:?}"
                         )));
                     }
                 }
