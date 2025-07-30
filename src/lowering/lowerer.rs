@@ -176,9 +176,19 @@ impl Ty {
                         }
                     }
                     None => {
-                        // Structural type - we need to generate a deterministic symbol ID
-                        // For now, treat as void until we implement proper structural typing
-                        IRType::Void
+                        // Structural type (record) - use a special symbol ID and include field types
+                        let Ty::Row { fields, .. } = self else {
+                            return IRType::Void;
+                        };
+
+                        let field_types: Vec<IRType> =
+                            fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
+
+                        IRType::Struct(
+                            SymbolID::RECORD,
+                            field_types,
+                            vec![], // Records don't have generics
+                        )
                     }
                 }
             }
@@ -410,7 +420,13 @@ impl CurrentFunction {
         let mut blocks = vec![];
         let mut debug_info = DebugInfo::default();
 
+        tracing::debug!("Exporting {} blocks", self.blocks.len());
         for block in self.blocks.into_iter() {
+            tracing::debug!(
+                "Exporting block {:?} with {} instructions",
+                block.id,
+                block.instructions.len()
+            );
             let mut instr_expr_ids = HashMap::default();
             let mut instructions = vec![];
             for (i, instruction) in block.instructions.into_iter().enumerate() {
@@ -423,10 +439,12 @@ impl CurrentFunction {
 
             debug_info.insert(block.id, instr_expr_ids);
 
-            blocks.push(BasicBlock {
+            let basic_block = BasicBlock {
                 id: block.id,
                 instructions,
-            });
+            };
+
+            blocks.push(basic_block);
         }
 
         tracing::trace!("EXPORING FUNC: {} {:?}", name, self.registers);
@@ -461,6 +479,52 @@ impl RegisterAllocator {
         self.next_id += 1;
         Register(id)
     }
+}
+
+// Pattern compilation infrastructure
+#[derive(Debug, Clone)]
+enum PatternTest {
+    // Check if value equals a constant
+    CheckConstant {
+        value: IRValue,
+        ty: IRType,
+        check_reg: Register,
+    },
+
+    // Check if enum has a specific tag
+    CheckTag {
+        tag: u16,
+    },
+
+    // Extract a field from a struct/record
+    ExtractField {
+        index: usize,
+        ty: IRType,
+        into_reg: Register,
+    },
+
+    // Extract value from enum variant
+    ExtractEnumValue {
+        tag: u16,
+        index: usize,
+        ty: IRType,
+        into_reg: Register,
+    },
+
+    // Always succeeds - used for wildcards and bindings
+    AlwaysMatch,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledPattern {
+    // Register being matched against
+    scrutinee: Register,
+
+    // Tests to perform (in order)
+    tests: Vec<PatternTest>,
+
+    // Bindings to create if pattern matches
+    bindings: Vec<(SymbolID, Register)>,
 }
 
 pub struct Lowerer<'a> {
@@ -696,19 +760,41 @@ impl<'a> Lowerer<'a> {
         typed_expr: &TypedExpr,
         fields: &[TypedExpr],
     ) -> Option<Register> {
-        let mut member_registers = vec![];
-        let mut member_types = vec![];
+        // For records, we need to ensure a consistent field order
+        // The type's field order might be non-deterministic, so we'll sort by field name
+        let Ty::Row {
+            fields: type_fields,
+            ..
+        } = &typed_expr.ty
+        else {
+            self.push_err("Record literal doesn't have Row type", typed_expr);
+            return None;
+        };
 
+        // Create a sorted list of field names for consistent ordering
+        let mut sorted_field_names: Vec<String> =
+            type_fields.iter().map(|(name, _)| name.clone()).collect();
+        sorted_field_names.sort();
+
+        tracing::debug!(
+            "Record literal has fields in sorted order: {:?}",
+            sorted_field_names
+        );
+
+        // Create a map from field names to their values and types
+        let mut field_map = std::collections::HashMap::new();
+        let mut type_map = std::collections::HashMap::new();
+
+        // Map from literal
         for field in fields {
-            let Expr::RecordField { label: _, value } = &field.expr else {
+            let Expr::RecordField { label, value } = &field.expr else {
                 self.push_err("Didn't get record field", field);
                 return None;
             };
 
             if let Some(reg) = self.lower_expr(value) {
                 let ir_type = value.ty.to_ir(self);
-                member_registers.push(TypedRegister::new(ir_type.clone(), reg));
-                member_types.push(ir_type);
+                field_map.insert(label.clone(), (reg, ir_type));
             } else {
                 self.push_err(
                     &format!("Could not lower record literal field: {field:?}"),
@@ -718,7 +804,30 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        // we represent tuples as structs for now
+        // Map types from the Row type
+        for (name, ty) in type_fields {
+            type_map.insert(name.clone(), ty.to_ir(self));
+        }
+
+        // Build the struct with fields in sorted order
+        let mut member_registers = vec![];
+        let mut member_types = vec![];
+
+        for field_name in &sorted_field_names {
+            if let Some((reg, _)) = field_map.get(field_name) {
+                let ir_type = type_map.get(field_name).cloned().unwrap_or(IRType::Void);
+                tracing::debug!("Field {} -> register {:?}", field_name, reg);
+                member_registers.push(TypedRegister::new(ir_type.clone(), *reg));
+                member_types.push(ir_type);
+            } else {
+                self.push_err(
+                    &format!("Missing field '{}' in record literal", field_name),
+                    typed_expr,
+                );
+                return None;
+            }
+        }
+
         let dest = self.allocate_register();
         self.push_instr(Instr::MakeStruct {
             dest,
@@ -1398,6 +1507,7 @@ impl<'a> Lowerer<'a> {
         self.push_instr(Instr::Jump(arm_cond_blocks[0]));
 
         let fail_block_id = self.new_basic_block();
+        tracing::debug!("Created fail block {:?}", fail_block_id);
         self.set_current_block(fail_block_id);
         self.push_instr(Instr::Unreachable);
 
@@ -1410,12 +1520,14 @@ impl<'a> Lowerer<'a> {
                 arm_cond_blocks[i],
                 arm_cond_blocks.get(i + 1).cloned().unwrap_or(fail_block_id),
             );
+            tracing::debug!("Arm {} returned predecessor {:?}", i, predecessor);
             predecessors.push(predecessor);
         }
 
         self.set_current_block(merge_block_id);
 
         let phi_reg = self.allocate_register();
+        tracing::debug!("Creating phi with predecessors: {:?}", predecessors);
         self.push_instr(Instr::Phi(
             phi_reg,
             ty.to_ir(self),
@@ -1439,6 +1551,7 @@ impl<'a> Lowerer<'a> {
         };
 
         let then_block_id = self.new_basic_block();
+        tracing::debug!("Created then_block {:?} for pattern", then_block_id);
 
         self.lower_pattern_and_bind(
             pattern_id,
@@ -1447,16 +1560,236 @@ impl<'a> Lowerer<'a> {
             then_block_id,
             else_block_id,
         );
+
         self.set_current_block(then_block_id);
+        tracing::debug!("Set current block to then_block {:?}", then_block_id);
+        tracing::debug!("About to lower match arm body");
         let Some(body_ret_reg) = self.lower_expr(body_id) else {
             tracing::error!("Did not get body return: {:?}", body_id);
             return (Register(0), BasicBlockID(u32::MAX));
         };
 
+        // Get the current block before jumping (this is where the value is defined)
+        let value_block = self
+            .current_block_mut()
+            .map(|b| b.id)
+            .unwrap_or(then_block_id);
+
         // After evaluating body, jump to the merge
         self.push_instr(Instr::Jump(merge_block_id));
 
-        (body_ret_reg, then_block_id)
+        tracing::debug!(
+            "Match arm body returns {:?} from block {:?} (then_block was {:?})",
+            body_ret_reg,
+            value_block,
+            then_block_id
+        );
+        (body_ret_reg, value_block)
+    }
+
+    // Compile a pattern into a uniform representation
+    fn compile_pattern(
+        &mut self,
+        pattern_typed_expr: &TypedExpr,
+        scrutinee_reg: Register,
+    ) -> Option<CompiledPattern> {
+        let Expr::ParsedPattern(pattern) = &pattern_typed_expr.expr else {
+            return None;
+        };
+
+        let mut tests = vec![];
+        let mut bindings = vec![];
+
+        match pattern {
+            Pattern::LiteralInt(val) => {
+                tests.push(PatternTest::CheckConstant {
+                    value: IRValue::ImmediateInt(str::parse(val).ok()?),
+                    ty: IRType::Int,
+                    check_reg: scrutinee_reg,
+                });
+            }
+            Pattern::LiteralFloat(_val) => {
+                // Floats need to be handled differently - we'll need to load them as constants
+                // For now, skip float patterns
+                return None;
+            }
+            Pattern::LiteralTrue => {
+                tests.push(PatternTest::CheckConstant {
+                    value: IRValue::ImmediateInt(1), // true = 1
+                    ty: IRType::Bool,
+                    check_reg: scrutinee_reg,
+                });
+            }
+            Pattern::LiteralFalse => {
+                tests.push(PatternTest::CheckConstant {
+                    value: IRValue::ImmediateInt(0), // false = 0
+                    ty: IRType::Bool,
+                    check_reg: scrutinee_reg,
+                });
+            }
+            Pattern::Bind(ResolvedName(symbol_id, _)) => {
+                tests.push(PatternTest::AlwaysMatch);
+                bindings.push((*symbol_id, scrutinee_reg));
+            }
+            Pattern::Wildcard => {
+                tests.push(PatternTest::AlwaysMatch);
+            }
+            Pattern::Struct {
+                fields,
+                field_names,
+                rest: _,
+                ..
+            } => {
+                // Get struct type info
+                let struct_ty = &pattern_typed_expr.ty;
+                match struct_ty {
+                    Ty::Row {
+                        nominal_id,
+                        kind: RowKind::Struct | RowKind::Record,
+                        ..
+                    } => {
+                        let type_def = if let Some(struct_id) = nominal_id {
+                            self.env.lookup_type(struct_id).cloned()
+                        } else {
+                            None
+                        };
+
+                        // Process each field pattern
+                        for (field_name, field_pattern) in field_names.iter().zip(fields.iter()) {
+                            let field_name_str = match field_name {
+                                ResolvedName(_, name) => name,
+                            };
+
+                            // Find field index and type
+                            let (field_index, field_ty) = if let Some(ref type_def) = type_def {
+                                // Named struct - look up by property name
+                                if let Some(property) = type_def.find_property(field_name_str) {
+                                    (property.index, property.ty.to_ir(self))
+                                } else {
+                                    continue;
+                                }
+                            } else {
+                                // Record - fields are in sorted order
+                                if let Ty::Row {
+                                    fields: row_fields, ..
+                                } = struct_ty
+                                {
+                                    // Create sorted field list
+                                    let mut sorted_fields: Vec<_> = row_fields
+                                        .iter()
+                                        .map(|(name, ty)| (name.clone(), ty))
+                                        .collect();
+                                    sorted_fields.sort_by_key(|(name, _)| name.clone());
+
+                                    if let Some((idx, (_, field_ty))) = sorted_fields
+                                        .iter()
+                                        .enumerate()
+                                        .find(|(_, (fname, _))| fname == field_name_str)
+                                    {
+                                        (idx, field_ty.to_ir(self))
+                                    } else {
+                                        continue;
+                                    }
+                                } else {
+                                    continue;
+                                }
+                            };
+
+                            // Allocate register for extracted field
+                            let field_reg = self.allocate_register();
+
+                            // Add field extraction test
+                            tests.push(PatternTest::ExtractField {
+                                index: field_index,
+                                ty: field_ty,
+                                into_reg: field_reg,
+                            });
+
+                            // Recursively compile field pattern
+                            if let Some(field_compiled) =
+                                self.compile_pattern(field_pattern, field_reg)
+                            {
+                                tests.extend(field_compiled.tests);
+                                bindings.extend(field_compiled.bindings);
+                            }
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            Pattern::Variant {
+                variant_name,
+                fields,
+                ..
+            } => {
+                // Get enum info
+                if let Ty::Row {
+                    nominal_id: Some(enum_id),
+                    generics: enum_generics,
+                    kind: RowKind::Enum,
+                    ..
+                } = &pattern_typed_expr.ty
+                {
+                    if let Some(enum_def) = self.env.lookup_enum(enum_id).cloned() {
+                        if let Some(variant) = enum_def.find_variant(variant_name) {
+                            // Check tag
+                            let variant_tag = variant.tag as u16;
+                            tests.push(PatternTest::CheckTag { tag: variant_tag });
+
+                            // Handle variant fields
+                            let variant_field_types = match &variant.ty {
+                                Ty::Func(params, _, _) => params.clone(),
+                                _ => vec![],
+                            };
+
+                            for (i, field_pattern) in fields.iter().enumerate() {
+                                let field_reg = self.allocate_register();
+                                let mut field_ty =
+                                    variant_field_types.get(i).cloned().unwrap_or(Ty::Void);
+
+                                // Substitute type variables with concrete types from the enum generics
+                                if let Ty::TypeVar(var) = &field_ty {
+                                    // Find the position of this type variable in the enum's type parameters
+                                    if let Some(generic_pos) = enum_def
+                                        .type_parameters
+                                        .iter()
+                                        .position(|t| t.type_var == *var)
+                                    {
+                                        if let Some(concrete_ty) = enum_generics.get(generic_pos) {
+                                            field_ty = concrete_ty.clone();
+                                        }
+                                    }
+                                }
+
+                                let field_ty_ir = field_ty.to_ir(self);
+
+                                tests.push(PatternTest::ExtractEnumValue {
+                                    tag: variant_tag,
+                                    index: i,
+                                    ty: field_ty_ir,
+                                    into_reg: field_reg,
+                                });
+
+                                if let Some(field_compiled) =
+                                    self.compile_pattern(field_pattern, field_reg)
+                                {
+                                    tests.extend(field_compiled.tests);
+                                    bindings.extend(field_compiled.bindings);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let compiled = CompiledPattern {
+            scrutinee: scrutinee_reg,
+            tests,
+            bindings,
+        };
+
+        Some(compiled)
     }
 
     fn lower_pattern_and_bind(
@@ -1467,261 +1800,254 @@ impl<'a> Lowerer<'a> {
         then_block_id: BasicBlockID,
         else_block_id: BasicBlockID,
     ) -> Option<()> {
-        let Expr::ParsedPattern(pattern) = &pattern_typed_expr.expr else {
-            return None;
-        };
+        // Compile the pattern
+        let compiled = self.compile_pattern(pattern_typed_expr, *scrutinee_reg)?;
 
         self.set_current_block(cond_block_id);
-        match pattern {
-            Pattern::Variant {
-                variant_name,
-                fields,
-                ..
-            } => {
-                let (enum_id, enum_generics) = {
-                    let mut id = None;
-                    let mut generics = None;
 
-                    if let Ty::Row {
-                        nominal_id: Some(enum_id),
-                        generics: params,
-                        kind: RowKind::Enum,
-                        ..
-                    } = &pattern_typed_expr.ty
-                    {
-                        id = Some(enum_id);
-                        generics = Some(params);
+        // Generate code for the compiled pattern
+        self.generate_pattern_code(&compiled, then_block_id, else_block_id)
+    }
+
+    fn generate_pattern_code(
+        &mut self,
+        compiled: &CompiledPattern,
+        success_block: BasicBlockID,
+        failure_block: BasicBlockID,
+    ) -> Option<()> {
+        // Check if we have any tests that need branching
+        let has_checks = compiled.tests.iter().any(|t| {
+            matches!(
+                t,
+                PatternTest::CheckConstant { .. } | PatternTest::CheckTag { .. }
+            )
+        });
+
+        if !has_checks {
+            // No checks needed - just extract fields and create bindings
+            for test in &compiled.tests {
+                match test {
+                    PatternTest::ExtractField {
+                        index,
+                        ty,
+                        into_reg,
+                    } => {
+                        self.push_instr(Instr::GetValueOf {
+                            dest: *into_reg,
+                            ty: ty.clone(),
+                            structure: compiled.scrutinee,
+                            index: *index,
+                        });
                     }
-
-                    (id, generics)
-                };
-
-                let (Some(enum_id), Some(enum_generics)) = (enum_id, enum_generics) else {
-                    self.push_err("Could not determine enum generics", pattern_typed_expr);
-                    return None;
-                };
-
-                let Some(type_def) = self.env.lookup_enum(enum_id).cloned() else {
-                    self.push_err("Could not determine enum", pattern_typed_expr);
-                    return None;
-                };
-
-                /* ... find variant by name in type_def ... */
-                let Some(variant_def) = type_def.find_variant(variant_name) else {
-                    self.push_err("message", pattern_typed_expr);
-                    return None;
-                };
-
-                // 2. Get the tag of the scrutinee.
-                let tag_reg = self.allocate_register();
-                self.push_instr(Instr::GetEnumTag(tag_reg, *scrutinee_reg));
-
-                let expected_tag_reg = self.allocate_register();
-                self.push_instr(Instr::ConstantInt(expected_tag_reg, variant_def.tag as i64));
-                let tags_match_reg = self.allocate_register();
-                self.push_instr(Instr::Eq(
-                    tags_match_reg,
-                    IRType::Int,
-                    tag_reg,
-                    expected_tag_reg,
-                ));
-
-                self.push_instr(Instr::Branch {
-                    cond: tags_match_reg,
-                    true_target: then_block_id,
-                    false_target: else_block_id,
-                });
-
-                self.set_current_block(then_block_id);
-
-                for (i, field_pattern) in fields.iter().enumerate() {
-                    if let Expr::ParsedPattern(Pattern::Bind(ResolvedName(symbol_id, _))) =
-                        &field_pattern.expr
-                    {
-                        let value_reg = self.allocate_register();
-
-                        // Extract parameter types from the variant's function type
-                        let values = match &variant_def.ty {
-                            Ty::Func(params, _, _) => params.clone(),
-                            Ty::Row {
-                                kind: RowKind::Enum,
-                                ..
-                            } => {
-                                // Variant with no parameters
-                                vec![]
-                            }
-                            _ => {
-                                self.push_err(
-                                    format!("unexpected variant type: {:?}", variant_def.ty)
-                                        .as_str(),
-                                    field_pattern,
-                                );
-                                return None;
-                            }
-                        };
-                        let ty = match values[i].clone() {
-                            Ty::TypeVar(var) => {
-                                let Some(generic_pos) = type_def
-                                    .type_parameters
-                                    .iter()
-                                    .position(|t| t.type_var == var)
-                                // t == var.0)
-                                else {
-                                    self.push_err(
-                                        format!("unable to determine enum generic: {var:?}")
-                                            .as_str(),
-                                        field_pattern,
-                                    );
-
-                                    return None;
-                                };
-
-                                enum_generics[generic_pos].clone()
-                            }
-                            other => other,
-                        };
-
+                    PatternTest::ExtractEnumValue {
+                        tag,
+                        index,
+                        ty,
+                        into_reg,
+                    } => {
                         self.push_instr(Instr::GetEnumValue(
-                            value_reg,
-                            ty.to_ir(self),
-                            *scrutinee_reg,
-                            variant_def.tag as u16,
-                            i as u16,
+                            *into_reg,
+                            ty.clone(),
+                            compiled.scrutinee,
+                            *tag,
+                            *index as u16,
                         ));
-                        self.current_func_mut()?
-                            .register_symbol(*symbol_id, SymbolValue::Register(value_reg));
                     }
-                    // Handle nested patterns recursively here.
+                    _ => {}
                 }
             }
-            Pattern::LiteralInt(val) => {
-                let literal_reg = self.allocate_register();
-                self.push_instr(Instr::ConstantInt(literal_reg, val.parse().unwrap_or(0)));
-                let is_eq_reg = self.allocate_register();
-                self.push_instr(Instr::Eq(
-                    is_eq_reg,
-                    IRType::Int,
-                    *scrutinee_reg,
-                    literal_reg,
-                ));
 
-                self.push_instr(Instr::Branch {
-                    cond: is_eq_reg,
-                    true_target: then_block_id,
-                    false_target: else_block_id,
-                });
+            // Create bindings
+            for (symbol_id, reg) in &compiled.bindings {
+                self.current_func_mut()?
+                    .register_symbol(*symbol_id, SymbolValue::Register(*reg));
             }
-            Pattern::LiteralFloat(_) => (),
-            Pattern::LiteralTrue => (),
-            Pattern::LiteralFalse => (),
-            Pattern::Bind(_name) => (),
-            Pattern::Wildcard => (),
-            Pattern::Struct {
-                fields,
-                field_names,
-                rest: _,
-                ..
-            } => {
-                // For struct patterns, we always match (since type checking ensures correctness)
-                // Jump directly to the then block
-                self.push_instr(Instr::Jump(then_block_id));
-                self.set_current_block(then_block_id);
 
-                // Get struct type info from the pattern's type
-                let struct_ty = &pattern_typed_expr.ty;
+            // Jump to success
+            tracing::debug!(
+                "Pattern without checks jumping from block {:?} to success block {:?}",
+                self.current_block_mut().map(|b| b.id),
+                success_block
+            );
+            self.push_instr(Instr::Jump(success_block));
+            return Some(());
+        }
 
-                match struct_ty {
-                    Ty::Row {
-                        nominal_id,
-                        fields: field_types,
-                        kind: RowKind::Struct | RowKind::Record,
-                        ..
-                    } => {
-                        let type_def = if let Some(struct_id) = nominal_id
-                            && let Some(type_def) = self.env.lookup_type(struct_id).cloned()
-                        {
-                            type_def
-                        } else {
-                            // TODO: How do we handle this for records
-                            self.push_err("Couldn't find struct definition", pattern_typed_expr);
-                            return None;
-                        };
+        // First, extract all struct/record fields that need to be extracted
+        // This ensures all field values are available before we start checking
+        // Note: We don't extract enum values here because we need to check the tag first
+        for test in &compiled.tests {
+            match test {
+                PatternTest::ExtractField {
+                    index,
+                    ty,
+                    into_reg,
+                } => {
+                    self.push_instr(Instr::GetValueOf {
+                        dest: *into_reg,
+                        ty: ty.clone(),
+                        structure: compiled.scrutinee,
+                        index: *index,
+                    });
+                }
+                _ => {}
+            }
+        }
 
-                        // Extract and bind each field
-                        for (field_name, field_pattern) in field_names.iter().zip(fields.iter()) {
-                            let field_name_str = match field_name {
-                                ResolvedName(_, name) => name,
-                            };
+        // Generate tests that require branching
+        for (i, test) in compiled.tests.iter().enumerate() {
+            match test {
+                PatternTest::CheckConstant {
+                    value,
+                    ty,
+                    check_reg,
+                } => {
+                    // Use the register specified in the test
+                    let compare_reg = *check_reg;
 
-                            // Find the field index
-                            let field_index =
-                                if let Some(property) = type_def.find_property(field_name_str) {
-                                    property.index
-                                } else {
-                                    // For structural types, find by position
-                                    field_types
-                                        .iter()
-                                        .position(|(fname, _)| fname == field_name_str)
-                                        .unwrap_or_else(|| {
-                                            self.push_err(
-                                                &format!("Field {field_name_str} not found"),
-                                                pattern_typed_expr,
-                                            );
-                                            0
-                                        })
-                                };
+                    // Load the constant
+                    let const_reg = self.allocate_register();
+                    match (value, ty) {
+                        (IRValue::ImmediateInt(n), IRType::Int) => {
+                            self.push_instr(Instr::ConstantInt(const_reg, *n));
+                        }
+                        (IRValue::ImmediateInt(n), IRType::Bool) => {
+                            // For bools, 0 = false, 1 = true
+                            self.push_instr(Instr::ConstantBool(const_reg, *n != 0));
+                        }
+                        _ => return None,
+                    }
 
-                            // Get the field value using GetElementPointer + Load
-                            let field_ptr = self.allocate_register();
-                            self.push_instr(Instr::GetElementPointer {
-                                dest: field_ptr,
-                                base: *scrutinee_reg,
-                                ty: struct_ty.to_ir(self),
-                                index: IRValue::ImmediateInt(field_index as i64),
-                            });
+                    // Compare
+                    let eq_reg = self.allocate_register();
+                    self.push_instr(Instr::Eq(eq_reg, ty.clone(), compare_reg, const_reg));
 
-                            let field_value_reg = self.allocate_register();
-                            let field_ty = field_types
-                                .iter()
-                                .find(|(fname, _)| fname == field_name_str)
-                                .map(|(_, ty)| ty)
-                                .unwrap_or(&Ty::Void);
+                    // Check if there are more checks after this one
+                    let has_more_checks = compiled.tests[i + 1..].iter().any(|t| {
+                        matches!(
+                            t,
+                            PatternTest::CheckConstant { .. } | PatternTest::CheckTag { .. }
+                        )
+                    });
 
-                            self.push_instr(Instr::Load {
-                                dest: field_value_reg,
-                                addr: field_ptr,
-                                ty: field_ty.to_ir(self),
-                            });
+                    if has_more_checks {
+                        // Create a new block for the next check
+                        let next_check_block = self.new_basic_block();
+                        self.push_instr(Instr::Branch {
+                            cond: eq_reg,
+                            true_target: next_check_block,
+                            false_target: failure_block,
+                        });
+                        self.set_current_block(next_check_block);
+                    } else {
+                        // This is the last check - branch to success/failure
+                        self.push_instr(Instr::Branch {
+                            cond: eq_reg,
+                            true_target: success_block,
+                            false_target: failure_block,
+                        });
 
-                            // Handle the field pattern (could be a binding or nested pattern)
-                            if let Expr::ParsedPattern(Pattern::Bind(ResolvedName(symbol_id, _))) =
-                                &field_pattern.expr
+                        // Set up success block with bindings
+                        self.set_current_block(success_block);
+
+                        // Extract any enum values (they weren't extracted upfront)
+                        for test in &compiled.tests {
+                            if let PatternTest::ExtractEnumValue {
+                                tag,
+                                index,
+                                ty,
+                                into_reg,
+                            } = test
                             {
-                                // Simple binding - register the field value with this symbol
-                                self.current_func_mut()?.register_symbol(
-                                    *symbol_id,
-                                    SymbolValue::Register(field_value_reg),
-                                );
-                            } else {
-                                // Nested pattern - recursively match
-                                // For now, we'll skip this case as it would require more complex handling
-                                self.push_err(
-                                    "Nested patterns in struct patterns not yet supported",
-                                    field_pattern,
-                                );
+                                self.push_instr(Instr::GetEnumValue(
+                                    *into_reg,
+                                    ty.clone(),
+                                    compiled.scrutinee,
+                                    *tag,
+                                    *index as u16,
+                                ));
+                            }
+                        }
+
+                        // Create bindings
+                        for (symbol_id, reg) in &compiled.bindings {
+                            self.current_func_mut()?
+                                .register_symbol(*symbol_id, SymbolValue::Register(*reg));
+                        }
+
+                        return Some(());
+                    }
+                }
+
+                PatternTest::CheckTag { tag } => {
+                    // Get enum tag
+                    let tag_reg = self.allocate_register();
+                    self.push_instr(Instr::GetEnumTag(tag_reg, compiled.scrutinee));
+
+                    // Compare with expected tag
+                    let expected_tag_reg = self.allocate_register();
+                    self.push_instr(Instr::ConstantInt(expected_tag_reg, *tag as i64));
+
+                    let eq_reg = self.allocate_register();
+                    self.push_instr(Instr::Eq(eq_reg, IRType::Int, tag_reg, expected_tag_reg));
+
+                    // Branch on result
+                    self.push_instr(Instr::Branch {
+                        cond: eq_reg,
+                        true_target: success_block,
+                        false_target: failure_block,
+                    });
+
+                    // Set up success block with bindings
+                    self.set_current_block(success_block);
+
+                    // Extract enum values now that we've confirmed the tag matches
+                    for test in &compiled.tests {
+                        if let PatternTest::ExtractEnumValue {
+                            tag: enum_tag,
+                            index,
+                            ty,
+                            into_reg,
+                        } = test
+                        {
+                            if *enum_tag == *tag {
+                                self.push_instr(Instr::GetEnumValue(
+                                    *into_reg,
+                                    ty.clone(),
+                                    compiled.scrutinee,
+                                    *enum_tag,
+                                    *index as u16,
+                                ));
                             }
                         }
                     }
-                    _ => {
-                        self.push_err(
-                            "Expected struct type for struct pattern",
-                            pattern_typed_expr,
-                        );
-                        return None;
+
+                    // Create bindings
+                    for (symbol_id, reg) in &compiled.bindings {
+                        self.current_func_mut()?
+                            .register_symbol(*symbol_id, SymbolValue::Register(*reg));
                     }
+
+                    return Some(());
+                }
+
+                PatternTest::ExtractField { .. } | PatternTest::ExtractEnumValue { .. } => {
+                    // Skip - will be handled when needed
+                }
+
+                PatternTest::AlwaysMatch => {
+                    // Nothing to check
                 }
             }
         }
+
+        // If we get here, all tests passed - create bindings
+        for (symbol_id, reg) in &compiled.bindings {
+            self.current_func_mut()?
+                .register_symbol(*symbol_id, SymbolValue::Register(*reg));
+        }
+
+        self.push_instr(Instr::Jump(success_block));
 
         Some(())
     }

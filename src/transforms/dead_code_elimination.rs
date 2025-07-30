@@ -120,6 +120,11 @@ impl DeadCodeEliminator {
                         *true_target = map[true_target];
                         *false_target = map[false_target];
                     }
+                    Instr::Phi(_, _, predecessors) => {
+                        for (_, block_id) in &mut predecessors.0 {
+                            *block_id = map[block_id];
+                        }
+                    }
                     _ => {}
                 }
             }

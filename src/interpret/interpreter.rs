@@ -509,7 +509,32 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                 self.io
                     .write_all(format!("{}\n", val.to_string(self)).as_bytes());
             }
-            Instr::GetValueOf { .. } => (),
+            Instr::GetValueOf {
+                dest,
+                ty: _,
+                structure,
+                index,
+            } => {
+                let struct_val = self.register_value(&structure);
+                match struct_val {
+                    Value::Struct(_, fields) => {
+                        if let Some(field_val) = fields.get(index) {
+                            self.set_register_value(&dest, field_val.clone());
+                        } else {
+                            return Err(InterpreterError::Unknown(format!(
+                                "Field index {} out of bounds for struct",
+                                index
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(InterpreterError::Unknown(format!(
+                            "GetValueOf expects a struct, got {:?}",
+                            struct_val
+                        )));
+                    }
+                }
+            }
         }
 
         self.call_stack.last_mut().unwrap().pc += 1;
@@ -553,9 +578,12 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             frame.sp,
             self.program.functions[frame.function].size as usize,
         );
-        stack[register.0 as usize]
-            .clone()
-            .expect("null pointer lol")
+        stack[register.0 as usize].clone().unwrap_or_else(|| {
+            panic!(
+                "null pointer lol: register {:?} in function {}",
+                register, self.program.functions[frame.function].name
+            )
+        })
     }
 
     fn dump(&self) {
@@ -1007,5 +1035,25 @@ mod tests {
         ",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn interprets_record_pattern_match() {
+        let result = interpret(
+            "
+            let a = {x: 123, y: 456}
+
+            let result = match a {
+                { x, y: 123 } -> false,
+                { x, y: 456 } -> true,
+                { x, y: _ } -> true
+            }
+
+            result
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(result, Value::Bool(true));
     }
 }

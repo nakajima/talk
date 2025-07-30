@@ -25,7 +25,7 @@ use crate::{
     synthesis::synthesize_inits,
     token_kind::TokenKind,
     ty::{RowKind, Ty},
-    type_def::TypeDef,
+    type_def::{TypeDef, TypeMember},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr,
 };
@@ -2030,19 +2030,48 @@ impl<'a> TypeChecker<'a> {
             }
             Pattern::Wildcard => typed_expr::Pattern::Wildcard,
             Pattern::Struct {
-                struct_name,
+                struct_name: _,
                 fields,
                 field_names,
                 rest,
             } => {
                 // For struct patterns, we need to check if the expected type is a struct
+                tracing::debug!("Struct pattern matching with expected type: {expected:?}");
                 match expected {
                     Ty::Row {
                         fields: field_types,
                         row: row_variable,
+                        nominal_id,
                         kind: RowKind::Struct | RowKind::Record,
                         ..
                     } => {
+                        tracing::debug!("field_types: {field_types:?}, nominal_id: {nominal_id:?}");
+
+                        // For nominal struct types, get fields from the TypeDef
+                        let actual_field_types = if let Some(symbol_id) = nominal_id {
+                            // Look up the struct definition to get its fields
+                            if let Some(struct_def) = env.lookup_struct(symbol_id) {
+                                struct_def
+                                    .members
+                                    .iter()
+                                    .filter_map(|(name, member)| match member {
+                                        TypeMember::Property(property) => {
+                                            Some((name.clone(), property.ty.clone()))
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            } else {
+                                return Err(TypeError::Unknown(format!(
+                                    "Struct definition not found for {:?}",
+                                    symbol_id
+                                )));
+                            }
+                        } else {
+                            // For record types, use the fields directly
+                            field_types.clone()
+                        };
+
                         let mut typed_fields = vec![];
                         let mut typed_field_names = vec![];
                         let mut matched_fields = std::collections::HashSet::new();
@@ -2062,7 +2091,7 @@ impl<'a> TypeChecker<'a> {
                             };
 
                             // Find the expected type for this field
-                            let field_ty = field_types
+                            let field_ty = actual_field_types
                                 .iter()
                                 .find(|(name, _)| name == &field_name_str)
                                 .map(|(_, ty)| ty.clone())
@@ -2083,7 +2112,7 @@ impl<'a> TypeChecker<'a> {
 
                         // Check if all required fields are matched (unless rest is used)
                         if !*rest && row_variable.is_none() {
-                            let unmatched_fields: Vec<_> = field_types
+                            let unmatched_fields: Vec<_> = actual_field_types
                                 .iter()
                                 .filter(|(name, _)| !matched_fields.contains(name))
                                 .map(|(name, _)| name.clone())
@@ -2098,7 +2127,7 @@ impl<'a> TypeChecker<'a> {
                         }
 
                         typed_expr::Pattern::Struct {
-                            struct_name: struct_name.as_ref().map(|n| n.resolved()).transpose()?,
+                            struct_name: None, // TODO: Fix name resolution for struct patterns
                             fields: typed_fields,
                             field_names: typed_field_names,
                             rest: *rest,

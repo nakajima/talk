@@ -922,7 +922,7 @@ pub mod lowering_tests {
                                 Register(10),
                                 IRType::Int,
                                 PhiPredecessors(vec![
-                                    (Register(5), BasicBlockID(5)), // from .some arm
+                                    (Register(2), BasicBlockID(5)), // from .some arm
                                     (Register(9), BasicBlockID(6)), // from .none arm
                                 ])
                             ),
@@ -932,11 +932,11 @@ pub mod lowering_tests {
                     BasicBlock {
                         id: BasicBlockID(2),
                         instructions: vec![
-                            Instr::GetEnumTag(Register(2), Register(1)),
-                            Instr::ConstantInt(Register(3), 0), // Tag for .some
-                            Instr::Eq(Register(4), IRType::Int, Register(2), Register(3)),
+                            Instr::GetEnumTag(Register(3), Register(1)),
+                            Instr::ConstantInt(Register(4), 0), // Tag for .some
+                            Instr::Eq(Register(5), IRType::Int, Register(3), Register(4)),
                             Instr::Branch {
-                                cond: Register(4),
+                                cond: Register(5),
                                 true_target: BasicBlockID(5),
                                 false_target: BasicBlockID(3)
                             },
@@ -963,8 +963,8 @@ pub mod lowering_tests {
                     BasicBlock {
                         id: BasicBlockID(5),
                         instructions: vec![
-                            // This is the binding: get value at index 0 and put it in register 8
-                            Instr::GetEnumValue(Register(5), IRType::Int, Register(1), 0, 0),
+                            // This is the binding: get value at index 0 and put it in register 2
+                            Instr::GetEnumValue(Register(2), IRType::Int, Register(1), 0, 0),
                             Instr::Jump(BasicBlockID(1)),
                         ]
                     },
@@ -993,14 +993,15 @@ pub mod lowering_tests {
                 let count: Int
             }
 
-            match Person(age: 123) {
-                Person { age: x, count: 0 } -> -x,
-                Person { age: x, .. } -> x,
+            match Person(age: 123, count: 0) {
+                Person { age: x, count: 0 } -> x,
+                Person { age: x, .. } -> 999,
             }
             ",
         )
         .unwrap();
 
+        use Instr::*;
         assert_lowered_function!(
             lowered,
             "@main",
@@ -1009,82 +1010,127 @@ pub mod lowering_tests {
                 ty: IRType::Func(vec![], IRType::Void.into()),
                 name: "@main".into(),
                 blocks: vec![
-                    // Block 0: Dispatch
                     BasicBlock {
-                        id: BasicBlockID::ENTRY,
+                        id: BasicBlockID(0),
                         instructions: vec![
-                            // Scrutinee: Optional.some(123)
-                            Instr::ConstantInt(Register(0), 123),
-                            Instr::TagVariant(
-                                Register(1),
-                                IRType::Enum(SymbolID::OPTIONAL, vec![IRType::Int]),
-                                0,
-                                RegisterList(vec![TypedRegister::new(IRType::Int, Register(0))])
-                            ),
-                            Instr::Jump(BasicBlockID(2)),
+                            // Create Person struct with age: 123, count: 0
+                            ConstantInt(Register(0), 123), // age value
+                            ConstantInt(Register(1), 0),   // count value
+                            // Allocate space for struct
+                            Alloc {
+                                dest: Register(2),
+                                ty: IRType::Struct(
+                                    SymbolID(71),
+                                    vec![IRType::Int, IRType::Int],
+                                    vec![]
+                                ),
+                                count: None,
+                            },
+                            // Call init function
+                            Call {
+                                dest_reg: Register(3),
+                                ty: IRType::Struct(
+                                    SymbolID(71),
+                                    vec![IRType::Int, IRType::Int],
+                                    vec![]
+                                ),
+                                callee: Callee::Name("@_71_Person_init".into()),
+                                args: RegisterList(vec![
+                                    TypedRegister {
+                                        register: Register(2),
+                                        ty: IRType::Pointer { hint: None }
+                                    },
+                                    TypedRegister {
+                                        register: Register(0),
+                                        ty: IRType::Int
+                                    },
+                                    TypedRegister {
+                                        register: Register(1),
+                                        ty: IRType::Int
+                                    },
+                                ]),
+                            },
+                            Jump(BasicBlockID(2)),
                         ],
                     },
-                    // Block 1: Merge Point
                     BasicBlock {
                         id: BasicBlockID(1),
                         instructions: vec![
-                            Instr::Phi(
+                            // Phi node for match result
+                            Phi(
                                 Register(10),
                                 IRType::Int,
                                 PhiPredecessors(vec![
-                                    (Register(5), BasicBlockID(5)), // from .some arm
-                                    (Register(9), BasicBlockID(6)), // from .none arm
-                                ])
+                                    (Register(4), BasicBlockID(5)), // result from first pattern (x)
+                                    (Register(9), BasicBlockID(6)), // result from second pattern (999)
+                                ]),
                             ),
-                            Instr::Ret(IRType::Int, Some(Register(10).into())),
-                        ]
+                            Ret(IRType::Int, Some(Register(10).into())),
+                        ],
                     },
                     BasicBlock {
                         id: BasicBlockID(2),
                         instructions: vec![
-                            Instr::GetEnumTag(Register(2), Register(1)),
-                            Instr::ConstantInt(Register(3), 0), // Tag for .some
-                            Instr::Eq(Register(4), IRType::Int, Register(2), Register(3)),
-                            Instr::Branch {
-                                cond: Register(4),
-                                true_target: BasicBlockID(5),
-                                false_target: BasicBlockID(3)
+                            // First pattern: Person { age: x, count: 0 }
+                            // Get age field (index 0)
+                            GetValueOf {
+                                dest: Register(4),
+                                ty: IRType::Int,
+                                structure: Register(2),
+                                index: 0,
                             },
-                        ]
+                            // Get count field (index 1)
+                            GetValueOf {
+                                dest: Register(5),
+                                ty: IRType::Int,
+                                structure: Register(2),
+                                index: 1,
+                            },
+                            // Check if count == 0
+                            ConstantInt(Register(6), 0),
+                            Eq(Register(7), IRType::Int, Register(5), Register(6)),
+                            Branch {
+                                cond: Register(7),
+                                true_target: BasicBlockID(5),
+                                false_target: BasicBlockID(3),
+                            },
+                        ],
                     },
-                    // Pattern 2
                     BasicBlock {
                         id: BasicBlockID(3),
                         instructions: vec![
-                            Instr::GetEnumTag(Register(6), Register(1)),
-                            Instr::ConstantInt(Register(7), 1), // Tag for .none
-                            Instr::Eq(Register(8), IRType::Int, Register(6), Register(7)),
-                            Instr::Branch {
-                                cond: Register(8),
-                                true_target: BasicBlockID(6),
-                                false_target: BasicBlockID(4)
+                            // Second pattern: Person { age: x, .. }
+                            // Get age field
+                            GetValueOf {
+                                dest: Register(8),
+                                ty: IRType::Int,
+                                structure: Register(2),
+                                index: 0,
                             },
-                        ]
+                            Jump(BasicBlockID(6)),
+                        ],
                     },
                     BasicBlock {
                         id: BasicBlockID(4),
-                        instructions: vec![Instr::Unreachable]
+                        instructions: vec![
+                            // Unreachable - all patterns exhausted
+                            Unreachable,
+                        ],
                     },
                     BasicBlock {
                         id: BasicBlockID(5),
                         instructions: vec![
-                            // This is the binding: get value at index 0 and put it in register 8
-                            Instr::GetEnumValue(Register(5), IRType::Int, Register(1), 0, 0),
-                            Instr::Jump(BasicBlockID(1)),
-                        ]
+                            // First pattern matched: return x (age field in Register(4))
+                            Jump(BasicBlockID(1)),
+                        ],
                     },
-                    // Block 2: Body for .some(x) -> x
                     BasicBlock {
                         id: BasicBlockID(6),
                         instructions: vec![
-                            Instr::ConstantInt(Register(9), 456),
-                            Instr::Jump(BasicBlockID(1)),
-                        ]
+                            // Second pattern: Return 999
+                            ConstantInt(Register(9), 999),
+                            Jump(BasicBlockID(1)),
+                        ],
                     },
                 ],
                 env_ty: None,

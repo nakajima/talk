@@ -42,6 +42,7 @@ impl SymbolID {
     pub const BOOL: SymbolID = SymbolID(-3);
     pub const POINTER: SymbolID = SymbolID(-4);
     pub const TUPLE: SymbolID = SymbolID(-10);
+    pub const RECORD: SymbolID = SymbolID(-11);
 
     // These are special because they have syntactic sugar that gets handled
     // by the compiler. If we change the prelude, we may need to change some of them.

@@ -6727,7 +6727,7 @@ mod tests {
             }
 
             match Point(x: 1, y: 2) {
-                Point { x: 1, y } -> y,
+                Point { y, x: 1 } -> y,
                 Point { x, .. } -> x
             }
         "#;
