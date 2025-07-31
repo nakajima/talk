@@ -1894,7 +1894,7 @@ mod tests {
                 assert_eq!(struct_name, &Some(Name::Raw("Point".into())));
                 assert_eq!(fields.len(), 2);
                 assert_eq!(field_names.len(), 2);
-                assert_eq!(*rest, false);
+                assert!(!(*rest));
 
                 // Check field patterns
                 assert_eq!(&field_names[0], &Name::Raw("x".into()));
@@ -1945,7 +1945,7 @@ mod tests {
                 assert_eq!(struct_name, &Some(Name::Raw("Point".into())));
                 assert_eq!(fields.len(), 2);
                 assert_eq!(field_names.len(), 2);
-                assert_eq!(*rest, false);
+                assert!(!(*rest));
 
                 // Check field patterns with explicit bindings
                 assert_eq!(&field_names[0], &Name::Raw("x".into()));
@@ -1996,7 +1996,7 @@ mod tests {
                 assert_eq!(struct_name, &Some(Name::Raw("Person".into())));
                 assert_eq!(fields.len(), 1);
                 assert_eq!(field_names.len(), 1);
-                assert_eq!(*rest, true);
+                assert!(*rest);
 
                 assert_eq!(&field_names[0], &Name::Raw("name".into()));
                 let ParsedPattern(Pattern::Bind(bind_name)) = &fields[0].expr else {
@@ -2040,7 +2040,7 @@ mod tests {
                 assert_eq!(struct_name, &None);
                 assert_eq!(fields.len(), 2);
                 assert_eq!(field_names.len(), 2);
-                assert_eq!(*rest, false);
+                assert!(!*rest);
             }
             _ => panic!("Expected struct pattern"),
         }
@@ -2078,7 +2078,7 @@ mod tests {
                 assert_eq!(struct_name, &Some(Name::Raw("Rectangle".into())));
                 assert_eq!(fields.len(), 2);
                 assert_eq!(field_names.len(), 2);
-                assert_eq!(*rest, false);
+                assert!(!*rest);
 
                 // Check nested pattern
                 assert_eq!(&field_names[0], &Name::Raw("topLeft".into()));
