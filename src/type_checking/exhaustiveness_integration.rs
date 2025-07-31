@@ -1,6 +1,6 @@
 //! Integration of exhaustiveness checking with row-based enums
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use crate::{
     SymbolID,
@@ -220,78 +220,6 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
         }
 
         missing
-    }
-
-    /// Check exhaustiveness for enums (both traditional and row-based)
-    fn check_enum_exhaustiveness(
-        &self,
-        enum_info: RowEnumInfo,
-        patterns: &[Pattern],
-    ) -> ExhaustivenessResult {
-        // If it's an open enum (not exact), it can't be exhaustive without wildcard
-        if !enum_info.is_exact {
-            return ExhaustivenessResult::NonExhaustive(vec![MissingPattern::OpenEnum {
-                enum_name: format!("TypeVar({})", enum_info.type_var.id),
-            }]);
-        }
-
-        // Collect covered variants, considering whether they have restrictive patterns
-        let mut covered_variants = BTreeSet::new();
-        let mut has_restrictive_patterns = false;
-
-        for pattern in patterns {
-            if let Pattern::Variant {
-                variant_name,
-                fields,
-                ..
-            } = pattern
-            {
-                // Check if this variant has restrictive patterns (literals)
-                // Since fields are ParsedExpr, we need to check if any are literals
-                for field in fields {
-                    // Check if the field is a literal expression
-                    // Fields in patterns are wrapped in ParsedPattern
-                    if let crate::typed_expr::Expr::ParsedPattern(inner_pattern) = &field.expr {
-                        match inner_pattern {
-                            Pattern::LiteralInt(_) => {
-                                has_restrictive_patterns = true;
-                            }
-                            Pattern::LiteralFloat(_) => {
-                                has_restrictive_patterns = true;
-                            }
-                            Pattern::LiteralTrue | Pattern::LiteralFalse => {
-                                has_restrictive_patterns = true;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                covered_variants.insert(variant_name.clone());
-            }
-        }
-
-        // Find missing variants
-        let all_variant_names: BTreeSet<_> = enum_info.variants.keys().cloned().collect();
-        let missing_variants: Vec<_> = all_variant_names
-            .difference(&covered_variants)
-            .cloned()
-            .collect();
-
-        if missing_variants.is_empty() && !has_restrictive_patterns {
-            ExhaustivenessResult::Exhaustive
-        } else if has_restrictive_patterns {
-            // If we have restrictive patterns (like Thing.Ok(123)), the match is not exhaustive
-            // even if all variants are mentioned, because the patterns don't cover all values
-            ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
-                enum_name: "Enum".to_string(),
-                variant_names: vec!["Pattern with literal values is not exhaustive".to_string()],
-            }])
-        } else {
-            ExhaustivenessResult::NonExhaustive(vec![MissingPattern::Variants {
-                enum_name: "Enum".to_string(),
-                variant_names: missing_variants,
-            }])
-        }
     }
 
     /// Check exhaustiveness for boolean patterns

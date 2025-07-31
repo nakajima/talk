@@ -1248,7 +1248,7 @@ mod tests {
         );
 
         if let Err(e) = result {
-            panic!("Failed to type check: {:?}", e);
+            panic!("Failed to type check: {e:?}");
         }
     }
 
@@ -1272,13 +1272,10 @@ mod tests {
         );
 
         // Check for errors
-        let checker = match checker {
+        match checker {
             Ok(c) => c,
-            Err(e) => panic!("Type error in polymorphic match test: {:?}", e),
+            Err(e) => panic!("Type error in polymorphic match test: {e:?}"),
         };
-
-        // Since the test passed type checking, qualified enum syntax works!
-        // The original test structure was assuming wrong indices for root expressions
     }
 
     #[test]
@@ -7976,10 +7973,10 @@ makePoint()
 
         // Find the let bindings and check their types
         for expr in checked.roots() {
-            if let crate::typed_expr::Expr::Let(name, _) = &expr.expr {
-                if name.name_str().starts_with("coords") {
-                    assert_eq_diff!(expr.ty, tuple_ty);
-                }
+            if let crate::typed_expr::Expr::Let(name, _) = &expr.expr
+                && name.name_str().starts_with("coords")
+            {
+                assert_eq_diff!(expr.ty, tuple_ty);
             }
         }
     }
@@ -8002,20 +7999,19 @@ makePoint()
         .unwrap();
 
         // The result should have at least an id field
-        if let Some(last) = checked.roots().last() {
-            if let Ty::Row {
+        if let Some(last) = checked.roots().last()
+            && let Ty::Row {
                 fields,
                 nominal_id: None,
                 generics: _,
                 ..
             } = &last.ty
-            {
-                assert!(
-                    fields
-                        .iter()
-                        .any(|(name, ty)| name == "id" && *ty == Ty::Int)
-                );
-            }
+        {
+            assert!(
+                fields
+                    .iter()
+                    .any(|(name, ty)| name == "id" && *ty == Ty::Int)
+            );
         }
     }
 

@@ -140,57 +140,25 @@ impl Ty {
                     IRType::Void
                 }
             },
-            Ty::Row {
-                nominal_id,
-                generics,
-                kind,
-                ..
-            } => {
+            Ty::Row { kind, .. } => {
                 // Protocols have no runtime representation
                 if matches!(kind, crate::ty::RowKind::Protocol) {
                     return IRType::Void;
                 }
 
-                match nominal_id {
-                    Some(sym) => {
-                        // Nominal type - look up the type definition
-                        if let Some(type_def) = lowerer.env.lookup_struct(sym) {
-                            let field_types = type_def
-                                .properties()
-                                .iter()
-                                .sorted_by(|a, b| a.index.cmp(&b.index))
-                                .map(|p| p.ty.to_ir(lowerer))
-                                .collect();
-                            IRType::Struct(
-                                *sym,
-                                field_types,
-                                generics.iter().map(|g| g.to_ir(lowerer)).collect(),
-                            )
-                        } else {
-                            // Fallback for types without full definitions (e.g., builtins)
-                            IRType::Struct(
-                                *sym,
-                                vec![],
-                                generics.iter().map(|g| g.to_ir(lowerer)).collect(),
-                            )
-                        }
-                    }
-                    None => {
-                        // Structural type (record) - use a special symbol ID and include field types
-                        let Ty::Row { fields, .. } = self else {
-                            return IRType::Void;
-                        };
+                // Structural type (record) - use a special symbol ID and include field types
+                let Ty::Row { fields, .. } = self else {
+                    return IRType::Void;
+                };
 
-                        let field_types: Vec<IRType> =
-                            fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
+                let field_types: Vec<IRType> =
+                    fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
 
-                        IRType::Struct(
-                            SymbolID::RECORD,
-                            field_types,
-                            vec![], // Records don't have generics
-                        )
-                    }
-                }
+                IRType::Struct(
+                    SymbolID::RECORD,
+                    field_types,
+                    vec![], // Records don't have generics
+                )
             }
         }
     }
@@ -1730,51 +1698,51 @@ impl<'a> Lowerer<'a> {
                     ..
                 } = &pattern_typed_expr.ty
                     && let Some(enum_def) = self.env.lookup_enum(enum_id).cloned()
-                        && let Some(variant) = enum_def.find_variant(variant_name) {
-                            // Check tag
-                            let variant_tag = variant.tag as u16;
-                            tests.push(PatternTest::CheckTag { tag: variant_tag });
+                    && let Some(variant) = enum_def.find_variant(variant_name)
+                {
+                    // Check tag
+                    let variant_tag = variant.tag as u16;
+                    tests.push(PatternTest::CheckTag { tag: variant_tag });
 
-                            // Handle variant fields
-                            let variant_field_types = match &variant.ty {
-                                Ty::Func(params, _, _) => params.clone(),
-                                _ => vec![],
-                            };
+                    // Handle variant fields
+                    let variant_field_types = match &variant.ty {
+                        Ty::Func(params, _, _) => params.clone(),
+                        _ => vec![],
+                    };
 
-                            for (i, field_pattern) in fields.iter().enumerate() {
-                                let field_reg = self.allocate_register();
-                                let mut field_ty =
-                                    variant_field_types.get(i).cloned().unwrap_or(Ty::Void);
+                    for (i, field_pattern) in fields.iter().enumerate() {
+                        let field_reg = self.allocate_register();
+                        let mut field_ty = variant_field_types.get(i).cloned().unwrap_or(Ty::Void);
 
-                                // Substitute type variables with concrete types from the enum generics
-                                if let Ty::TypeVar(var) = &field_ty {
-                                    // Find the position of this type variable in the enum's type parameters
-                                    if let Some(generic_pos) = enum_def
-                                        .type_parameters
-                                        .iter()
-                                        .position(|t| t.type_var == *var)
-                                        && let Some(concrete_ty) = enum_generics.get(generic_pos) {
-                                            field_ty = concrete_ty.clone();
-                                        }
-                                }
-
-                                let field_ty_ir = field_ty.to_ir(self);
-
-                                tests.push(PatternTest::ExtractEnumValue {
-                                    tag: variant_tag,
-                                    index: i,
-                                    ty: field_ty_ir,
-                                    into_reg: field_reg,
-                                });
-
-                                if let Some(field_compiled) =
-                                    self.compile_pattern(field_pattern, field_reg)
-                                {
-                                    tests.extend(field_compiled.tests);
-                                    bindings.extend(field_compiled.bindings);
-                                }
+                        // Substitute type variables with concrete types from the enum generics
+                        if let Ty::TypeVar(var) = &field_ty {
+                            // Find the position of this type variable in the enum's type parameters
+                            if let Some(generic_pos) = enum_def
+                                .type_parameters
+                                .iter()
+                                .position(|t| t.type_var == *var)
+                                && let Some(concrete_ty) = enum_generics.get(generic_pos)
+                            {
+                                field_ty = concrete_ty.clone();
                             }
                         }
+
+                        let field_ty_ir = field_ty.to_ir(self);
+
+                        tests.push(PatternTest::ExtractEnumValue {
+                            tag: variant_tag,
+                            index: i,
+                            ty: field_ty_ir,
+                            into_reg: field_reg,
+                        });
+
+                        if let Some(field_compiled) = self.compile_pattern(field_pattern, field_reg)
+                        {
+                            tests.extend(field_compiled.tests);
+                            bindings.extend(field_compiled.bindings);
+                        }
+                    }
+                }
             }
         }
 
@@ -1873,10 +1841,11 @@ impl<'a> Lowerer<'a> {
         // Note: We don't extract enum values here because we need to check the tag first
         for test in &compiled.tests {
             if let PatternTest::ExtractField {
-                    index,
-                    ty,
-                    into_reg,
-                } = test {
+                index,
+                ty,
+                into_reg,
+            } = test
+            {
                 self.push_instr(Instr::GetValueOf {
                     dest: *into_reg,
                     ty: ty.clone(),
@@ -2001,15 +1970,16 @@ impl<'a> Lowerer<'a> {
                             ty,
                             into_reg,
                         } = test
-                            && *enum_tag == *tag {
-                                self.push_instr(Instr::GetEnumValue(
-                                    *into_reg,
-                                    ty.clone(),
-                                    compiled.scrutinee,
-                                    *enum_tag,
-                                    *index as u16,
-                                ));
-                            }
+                            && *enum_tag == *tag
+                        {
+                            self.push_instr(Instr::GetEnumValue(
+                                *into_reg,
+                                ty.clone(),
+                                compiled.scrutinee,
+                                *enum_tag,
+                                *index as u16,
+                            ));
+                        }
                     }
 
                     // Create bindings
