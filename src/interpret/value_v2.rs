@@ -52,19 +52,37 @@ impl Value {
             (MemValue::Float(f), IRType::Float) => Ok(Value::Float(*f)),
             (MemValue::Bool(b), IRType::Bool) => Ok(Value::Bool(*b)),
             (MemValue::Immediate(addr), IRType::Pointer { .. }) => {
+                // Determine location based on address range
+                // Static memory starts at 0
+                // Stack memory starts at a much higher address
+                // For now, assume very low addresses (< 1MB) are static
+                let location = if (*addr as usize) < 1024 * 1024 {
+                    crate::interpret::memory_v2::MemoryLocation::Static
+                } else {
+                    crate::interpret::memory_v2::MemoryLocation::Heap
+                };
                 Ok(Value::Pointer(Pointer {
                     addr: *addr as usize,
                     ty: ty.clone(),
-                    // We can't determine location from the value alone
-                    // This is a limitation - we assume heap for now
-                    location: crate::interpret::memory_v2::MemoryLocation::Heap,
+                    location,
                 }))
             }
-            (MemValue::HeapPtr(ptr, _), IRType::Pointer { .. }) => Ok(Value::Pointer(Pointer {
-                addr: ptr.as_ptr() as usize,
-                ty: ty.clone(),
-                location: crate::interpret::memory_v2::MemoryLocation::Heap,
-            })),
+            (MemValue::HeapPtr(ptr, _), IRType::Pointer { .. }) => {
+                let addr = ptr.as_ptr() as usize;
+                // Determine location based on address range
+                // Static memory starts at 0
+                // For now, assume very low addresses (< 1MB) are static
+                let location = if addr < 1024 * 1024 {
+                    crate::interpret::memory_v2::MemoryLocation::Static
+                } else {
+                    crate::interpret::memory_v2::MemoryLocation::Heap
+                };
+                Ok(Value::Pointer(Pointer {
+                    addr,
+                    ty: ty.clone(),
+                    location,
+                }))
+            }
             _ => Err(InterpreterError::Unknown(format!(
                 "Type mismatch converting from memory: {:?} vs {:?}",
                 mem_val, ty
@@ -190,9 +208,39 @@ impl Value {
 
                 Ok(Value::Struct(*sym, fields))
             }
+            IRType::RawBuffer => {
+                // For RawBuffer, we need to load bytes from memory
+                // The size should be determined by the allocation
+                // For now, we'll read until we hit a null byte or a reasonable limit
+                let mut bytes = Vec::new();
+                let mut offset = 0;
+                const MAX_BUFFER_SIZE: usize = 65536; // 64KB limit for safety
+
+                while offset < MAX_BUFFER_SIZE {
+                    let byte_ptr = Pointer {
+                        addr: pointer.addr + offset,
+                        ty: IRType::Byte,
+                        location: pointer.location,
+                    };
+
+                    match memory.load(&byte_ptr) {
+                        Ok(crate::interpret::memory_v2::Value::Immediate(val)) => {
+                            let byte = val as u8;
+                            if byte == 0 {
+                                break; // Null terminator
+                            }
+                            bytes.push(byte);
+                            offset += 1;
+                        }
+                        _ => break, // End of allocated memory or error
+                    }
+                }
+
+                Ok(Value::RawBuffer(bytes))
+            }
             _ => Err(InterpreterError::Unknown(format!(
-                "Cannot load type: {:?}",
-                pointer.ty
+                "Cannot load type: {:?} at address 0x{:x}",
+                pointer.ty, pointer.addr
             ))),
         }
     }

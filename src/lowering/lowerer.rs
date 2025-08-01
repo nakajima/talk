@@ -849,7 +849,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_string(&mut self, _expr_id: &TypedExpr, string: String) -> Option<Register> {
-        // Allocate the storage
+        // For now, create strings with static storage
+        // The string append segfault issue needs to be fixed in String.append
+        // by ensuring it handles static memory properly
         let chars_bytes = string.as_bytes();
         let static_addr = self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
 
@@ -1353,11 +1355,16 @@ impl<'a> Lowerer<'a> {
                         SymbolValue::Register(reg) => reg,
                         SymbolValue::Capture(idx, ty) => {
                             // Load the capture from the outer environment into a register
+                            let outer_env_ty =
+                                self.current_func()?.env_ty.clone().unwrap_or_else(|| {
+                                    IRType::Struct(SymbolID::ENV, vec![], vec![])
+                                });
+
                             let env_ptr = self.allocate_register();
                             self.push_instr(Instr::GetElementPointer {
                                 dest: env_ptr,
                                 base: Register(0),
-                                ty: IRType::closure(),
+                                ty: outer_env_ty,
                                 index: IRValue::ImmediateInt(idx as i64),
                             });
                             let loaded_reg = self.allocate_register();
@@ -2488,11 +2495,17 @@ impl<'a> Lowerer<'a> {
         match value.clone() {
             SymbolValue::Register(reg) => Some(reg),
             SymbolValue::Capture(idx, ty) => {
+                // Register 0 contains the environment pointer
+                let env_ty = self.current_func()?.env_ty.clone().unwrap_or_else(|| {
+                    // Fallback - shouldn't happen
+                    IRType::Struct(SymbolID::ENV, vec![], vec![])
+                });
+
                 let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
                     dest: env_ptr,
                     base: Register(0),
-                    ty: IRType::closure(),
+                    ty: env_ty,
                     index: IRValue::ImmediateInt(idx as i64),
                 });
 
@@ -2853,7 +2866,7 @@ impl<'a> Lowerer<'a> {
         struct_id: &SymbolID,
         ty: &Ty,
         mut arg_registers: Vec<TypedRegister>,
-        _arg_tys: &[Ty],
+        arg_tys: &[Ty],
     ) -> Option<Register> {
         let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
             unreachable!()
@@ -2867,6 +2880,30 @@ impl<'a> Lowerer<'a> {
             ty: struct_ty.clone(),
             count: None,
         });
+
+        // Check if we need to dereference any struct arguments
+        // Init functions expect struct parameters by value, but string literals
+        // and other init calls return pointers
+        for (i, arg_ty) in arg_tys.iter().enumerate() {
+            if matches!(
+                arg_ty,
+                Ty::Row {
+                    kind: RowKind::Struct,
+                    ..
+                }
+            ) {
+                // This parameter expects a struct by value
+                // Load the value from the pointer
+                let loaded_reg = self.allocate_register();
+                let struct_ty = arg_ty.to_ir(self);
+                self.push_instr(Instr::Load {
+                    dest: loaded_reg,
+                    ty: struct_ty.clone(),
+                    addr: arg_registers[i].register,
+                });
+                arg_registers[i].register = loaded_reg;
+            }
+        }
 
         // Add the instance address as the first arg
         arg_registers.insert(

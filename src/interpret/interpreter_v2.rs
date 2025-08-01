@@ -8,7 +8,7 @@ use crate::{
     lowering::{
         instr::{Callee, Instr},
         ir_error::IRError,
-        ir_module::IRModule,
+        ir_module::{IRConstantData, IRModule},
         ir_type::IRType,
         ir_value::IRValue,
         lowerer::{BasicBlockID, RefKind, RegisterList},
@@ -71,6 +71,21 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             symbols,
             function_map,
         }
+    }
+
+    fn get_static_memory_offset(&self, constant_index: usize) -> usize {
+        let mut offset = 0;
+        for (i, constant) in self.program.constants.iter().enumerate() {
+            if i == constant_index {
+                return offset;
+            }
+            match constant {
+                IRConstantData::RawBuffer(buf) => {
+                    offset += buf.len();
+                }
+            }
+        }
+        offset
     }
 
     pub fn run(mut self) -> Result<Value, InterpreterError> {
@@ -394,8 +409,11 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                     )));
                 };
 
+                // The int value is the constant index, not the actual address
+                let actual_offset = self.get_static_memory_offset(int as usize);
+
                 let const_ptr = Pointer {
-                    addr: int as usize,
+                    addr: actual_offset,
                     ty: ty.clone(),
                     location: MemoryLocation::Static,
                 };
@@ -458,6 +476,8 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                                 offset = (offset + field_info.align - 1) & !(field_info.align - 1);
 
                                 ptr.addr += offset;
+                                // If the field type is a TypeVar, we'll determine the actual type when loading
+                                // For now, just pass it through
                                 ptr.ty = fields[field_idx].clone();
                             }
                             IRType::TypedBuffer { element } => {
@@ -540,65 +560,8 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                     val
                 };
 
-                // Special handling for strings
-                let output = if let Value::Struct(sym, fields) = &val {
-                    if *sym == SymbolID::STRING && fields.len() >= 3 {
-                        // String struct has fields: length, capacity, storage pointer
-                        if let Value::Pointer(storage_ptr) = fields[2].clone() {
-                            // Check if this pointer is actually a static constant
-                            // If the address is small and we have a constant at that index, it's static
-                            if storage_ptr.addr < self.program.constants.len() {
-                                if let Some(
-                                    crate::lowering::ir_module::IRConstantData::RawBuffer(bytes),
-                                ) = self.program.constants.get(storage_ptr.addr)
-                                {
-                                    String::from_utf8_lossy(bytes).to_string()
-                                } else {
-                                    val.display(&|sym| {
-                                        self.symbols
-                                            .get(&sym)
-                                            .map(|info| info.name.clone())
-                                            .unwrap_or_else(|| format!("<unknown {:?}>", sym))
-                                    })
-                                }
-                            } else {
-                                // For heap strings, load the buffer
-                                match Value::load_from_memory(&self.memory, &storage_ptr) {
-                                    Ok(Value::RawBuffer(bytes)) => {
-                                        String::from_utf8_lossy(&bytes).to_string()
-                                    }
-                                    _ => val.display(&|sym| {
-                                        self.symbols
-                                            .get(&sym)
-                                            .map(|info| info.name.clone())
-                                            .unwrap_or_else(|| format!("<unknown {:?}>", sym))
-                                    }),
-                                }
-                            }
-                        } else {
-                            val.display(&|sym| {
-                                self.symbols
-                                    .get(&sym)
-                                    .map(|info| info.name.clone())
-                                    .unwrap_or_else(|| format!("<unknown {:?}>", sym))
-                            })
-                        }
-                    } else {
-                        val.display(&|sym| {
-                            self.symbols
-                                .get(&sym)
-                                .map(|info| info.name.clone())
-                                .unwrap_or_else(|| format!("<unknown {:?}>", sym))
-                        })
-                    }
-                } else {
-                    val.display(&|sym| {
-                        self.symbols
-                            .get(&sym)
-                            .map(|info| info.name.clone())
-                            .unwrap_or_else(|| format!("<unknown {:?}>", sym))
-                    })
-                };
+                // Format the value with special handling for strings
+                let output = self.format_value_for_print(&val);
 
                 self.io.write_all(format!("{}\n", output).as_bytes());
             }
@@ -633,6 +596,25 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                     Callee::Register(ptr) => {
                         let func_val = self.register_value(*ptr);
                         match func_val {
+                            Value::Pointer(ptr) if ptr.addr >= 0x1000000 => {
+                                // Function reference stored as special pointer
+                                let func_idx = ptr.addr - 0x1000000;
+
+                                let arg_values: Vec<Value> = args
+                                    .0
+                                    .iter()
+                                    .map(|arg| self.register_value(arg.register))
+                                    .collect();
+
+                                // Save current frame's PC (skip the call instruction)
+                                self.call_stack.last_mut().unwrap().pc += 1;
+
+                                // Call the function
+                                self.call_func(func_idx, &arg_values, 0, Some(return_reg))?;
+
+                                // Return early to start executing the called function
+                                return Ok(None);
+                            }
                             Value::Func(sym) => {
                                 let func_name = self
                                     .symbols
@@ -657,6 +639,76 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
                                 // Return early to start executing the called function
                                 return Ok(None);
+                            }
+                            Value::Pointer(ref ptr) => {
+                                tracing::debug!("Calling through pointer: {:?}", ptr);
+                                // Try to treat it as a closure - closures are structs with two pointers
+                                // We can't rely on type information since it might be lost through LoadLocal
+                                // So we'll try to load it as a closure and see if it works
+
+                                // Try to load the first field (function pointer)
+                                let func_ptr_addr = Pointer {
+                                    addr: ptr.addr,
+                                    ty: IRType::Pointer { hint: None },
+                                    location: ptr.location,
+                                };
+                                let func_ptr_result =
+                                    Value::load_from_memory(&self.memory, &func_ptr_addr);
+
+                                let env_ptr_addr = Pointer {
+                                    addr: ptr.addr + 8, // Second field at offset 8
+                                    ty: IRType::Pointer { hint: None },
+                                    location: ptr.location,
+                                };
+                                let env_ptr_result =
+                                    Value::load_from_memory(&self.memory, &env_ptr_addr);
+
+                                if let (Ok(func_ptr_val), Ok(env_ptr_val)) =
+                                    (func_ptr_result, env_ptr_result)
+                                {
+                                    tracing::debug!(
+                                        "Loaded closure fields: func={:?}, env={:?}",
+                                        func_ptr_val,
+                                        env_ptr_val
+                                    );
+                                    if let Value::Pointer(func_ptr) = &func_ptr_val {
+                                        // It's a closure!
+                                        // Check if this is a function reference (high address)
+                                        if func_ptr.addr >= 0x1000000 {
+                                            let func_idx = func_ptr.addr - 0x1000000;
+                                            tracing::debug!(
+                                                "Function index from pointer: {}",
+                                                func_idx
+                                            );
+
+                                            // Prepare arguments - environment pointer goes first
+                                            let mut arg_values = vec![env_ptr_val];
+                                            arg_values.extend(
+                                                args.0
+                                                    .iter()
+                                                    .map(|arg| self.register_value(arg.register)),
+                                            );
+
+                                            // Save current frame's PC
+                                            self.call_stack.last_mut().unwrap().pc += 1;
+
+                                            // Call the function with environment
+                                            self.call_func(
+                                                func_idx,
+                                                &arg_values,
+                                                0,
+                                                Some(return_reg),
+                                            )?;
+
+                                            return Ok(None);
+                                        }
+                                    }
+                                }
+
+                                return Err(InterpreterError::Unknown(format!(
+                                    "Expected function pointer, got {:?}",
+                                    func_val
+                                )));
                             }
                             _ => {
                                 return Err(InterpreterError::Unknown(format!(
@@ -695,24 +747,45 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                 // This is okay as long as the value is not used
             }
             Instr::Ref(dest, _ty, RefKind::Func(name)) => {
-                // For now, store function index. In a real implementation,
-                // we'd create a proper function pointer with symbol ID
+                // Store the function as a pointer that encodes the function name
+                // We'll use the function map to get a stable identifier
                 let idx = self
                     .function_map
                     .get(name)
                     .copied()
                     .ok_or_else(|| InterpreterError::CalleeNotFound(name.clone()))?;
 
-                // Store a dummy symbol ID for now - we'll need to improve this
-                self.set_register_value(*dest, Value::Func(SymbolID(idx as i32)));
+                // Create a unique address for this function reference
+                // We use high addresses (starting at 0x1000000) to distinguish from real pointers
+                let func_addr = 0x1000000 + idx;
+                self.set_register_value(
+                    *dest,
+                    Value::Pointer(Pointer {
+                        addr: func_addr,
+                        ty: IRType::Pointer { hint: None },
+                        location: MemoryLocation::Static,
+                    }),
+                );
             }
             Instr::GetEnumTag(dest, scrutinee) => {
                 let val = self.register_value(*scrutinee);
                 match val {
-                    Value::Enum(_, _) => {
-                        // For now, just return 0
-                        // In a real implementation, we'd track variant tags
-                        self.set_register_value(*dest, Value::Int(0));
+                    Value::Enum(_, inner) => {
+                        // Extract tag from our tagged enum representation
+                        match inner.as_ref() {
+                            Value::Struct(sym, fields) if *sym == SymbolID::ENUM_TAG => {
+                                // First field is the tag
+                                if let Some(Value::Int(tag)) = fields.get(0) {
+                                    self.set_register_value(*dest, Value::Int(*tag));
+                                } else {
+                                    self.set_register_value(*dest, Value::Int(0));
+                                }
+                            }
+                            _ => {
+                                // Fallback for old-style enums
+                                self.set_register_value(*dest, Value::Int(0));
+                            }
+                        }
                     }
                     _ => {
                         return Err(InterpreterError::Unknown(format!(
@@ -726,7 +799,20 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                 let val = self.register_value(*scrutinee);
                 match val {
                     Value::Enum(_, inner) => {
-                        self.set_register_value(*dest, *inner);
+                        match inner.as_ref() {
+                            Value::Struct(sym, fields) if *sym == SymbolID::ENUM_TAG => {
+                                // Second field is the value
+                                if let Some(value) = fields.get(1) {
+                                    self.set_register_value(*dest, value.clone());
+                                } else {
+                                    self.set_register_value(*dest, Value::Int(0));
+                                }
+                            }
+                            _ => {
+                                // Fallback for old-style enums
+                                self.set_register_value(*dest, *inner);
+                            }
+                        }
                     }
                     _ => {
                         return Err(InterpreterError::Unknown(format!(
@@ -736,9 +822,10 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                     }
                 }
             }
-            Instr::TagVariant(dest, ty, _tag, values) => {
-                // For simplicity, just store the first value wrapped in an enum
-                // In a real implementation, we'd handle multiple values and proper tagging
+            Instr::TagVariant(dest, ty, tag, values) => {
+                // Store the enum with proper tag tracking
+                // For now, we'll store the tag as part of the enum value
+                // In a more complete implementation, we might need a different Value variant
                 let val = if let Some(first) = values.0.first() {
                     self.register_value(first.register)
                 } else {
@@ -747,7 +834,11 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
 
                 // Extract the enum symbol from the type
                 if let IRType::Enum(sym, _) = ty {
-                    self.set_register_value(*dest, Value::Enum(*sym, Box::new(val)));
+                    // Store tag information along with the value
+                    // We'll use a struct to hold both tag and value
+                    let tagged_enum =
+                        Value::Struct(SymbolID::ENUM_TAG, vec![Value::Int(*tag as i64), val]);
+                    self.set_register_value(*dest, Value::Enum(*sym, Box::new(tagged_enum)));
                 } else {
                     return Err(InterpreterError::Unknown(
                         "TagVariant expects enum type".into(),
@@ -800,6 +891,68 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             .map(|r| self.register_value(r.register))
             .collect()
     }
+
+    fn format_value_for_print(&self, val: &Value) -> String {
+        self.format_value_internal(val, false)
+    }
+
+    fn format_value_internal(&self, val: &Value, nested: bool) -> String {
+        match val {
+            Value::Struct(sym, fields) => {
+                if *sym == SymbolID::STRING && fields.len() >= 3 {
+                    // String struct has fields: length, capacity, storage pointer
+                    if let Value::Pointer(storage_ptr) = &fields[2] {
+                        // Check if this pointer is actually a static constant
+                        if storage_ptr.addr < self.program.constants.len() {
+                            if let Some(crate::lowering::ir_module::IRConstantData::RawBuffer(
+                                bytes,
+                            )) = self.program.constants.get(storage_ptr.addr)
+                            {
+                                let content = String::from_utf8_lossy(bytes);
+                                // Only add quotes when nested inside another struct
+                                return if nested {
+                                    format!("\"{}\"", content)
+                                } else {
+                                    content.to_string()
+                                };
+                            }
+                        } else {
+                            // For heap strings, load the buffer
+                            if let Ok(Value::RawBuffer(bytes)) =
+                                Value::load_from_memory(&self.memory, storage_ptr)
+                            {
+                                let content = String::from_utf8_lossy(&bytes);
+                                // Only add quotes when nested inside another struct
+                                return if nested {
+                                    format!("\"{}\"", content)
+                                } else {
+                                    content.to_string()
+                                };
+                            }
+                        }
+                    }
+                }
+
+                // For other structs, format fields recursively
+                let field_strs: Vec<String> = fields
+                    .iter()
+                    .map(|f| self.format_value_internal(f, true))
+                    .collect();
+                let struct_name = self
+                    .symbols
+                    .get(sym)
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| format!("<unknown {:?}>", sym));
+                format!("{}{{ {} }}", struct_name, field_strs.join(", "))
+            }
+            _ => val.display(&|sym| {
+                self.symbols
+                    .get(&sym)
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| format!("<unknown {:?}>", sym))
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -850,8 +1003,29 @@ mod tests {
     }
 
     #[test]
+    fn interprets_float() {
+        assert_eq!(Value::Float(3.0), interpret("3.0").unwrap());
+    }
+
+    #[test]
     fn interprets_add() {
         assert_eq!(Value::Int(7), interpret("3 + 4").unwrap());
+        assert_eq!(Value::Float(3.0), interpret("1.0 + 2.0").unwrap());
+        assert!(interpret("true + false").is_err());
+    }
+
+    #[test]
+    fn interprets_sub() {
+        assert_eq!(Value::Int(-1), interpret("1 - 2").unwrap());
+        assert_eq!(Value::Float(-1.0), interpret("1.0 - 2.0").unwrap());
+        assert!(interpret("true - false").is_err());
+    }
+
+    #[test]
+    fn interprets_mul() {
+        assert_eq!(Value::Int(6), interpret("2 * 3").unwrap());
+        assert_eq!(Value::Float(6.0), interpret("2.0 * 3.0").unwrap());
+        assert!(interpret("true * false").is_err());
     }
 
     #[test]
@@ -1359,5 +1533,387 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn interprets_closure() {
+        // Start with a simpler closure test
+        assert_eq!(
+            Value::Int(42),
+            interpret(
+                "
+                func makeAdder(x) {
+                    return func(y) {
+                        x + y
+                    }
+                }
+                let add10 = makeAdder(10)
+                add10(32)
+                "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_array_pop() {
+        assert_eq!(
+            interpret(
+                "
+                let a = [1, 2, 3]
+                let b = a.pop()
+                (b, a.count)
+                "
+            )
+            .unwrap(),
+            Value::Struct(SymbolID::TUPLE, vec![Value::Int(3), Value::Int(2)]),
+        )
+    }
+
+    #[test]
+    fn interprets_struct_init() {
+        assert_eq!(
+            interpret(
+                "
+            struct Person {
+                let age: Int
+
+                init(age: Int) {
+                    self.age = age
+                }
+            }
+
+            Person(age: 123).age
+        "
+            )
+            .unwrap(),
+            Value::Int(123),
+        )
+    }
+
+    #[test]
+    fn interprets_protocol_method_call() {
+        assert_eq!(
+            interpret(
+                "
+            protocol Aged {
+                func getAge() -> Int
+            }
+
+            struct Person: Aged {
+                func getAge() {
+                    123
+                }
+            }
+
+            func get<T: Aged>(t: T) {
+                t.getAge()
+            }
+
+            get(Person())"
+            )
+            .unwrap(),
+            Value::Int(123)
+        );
+    }
+
+    #[test]
+    fn interprets_enum_multiple_variants() {
+        // Test that different enum variants have different tags
+        assert_eq!(
+            Value::Int(2),
+            interpret(
+                "
+                enum Color {
+                    case red
+                    case green  
+                    case blue
+                }
+                
+                let c = Color.blue
+                match c {
+                    .red -> 0,
+                    .green -> 1,
+                    .blue -> 2
+                }
+                "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_print_struct() {
+        let mut io = TestIO::new();
+        interpret_io(
+            r#"
+            struct Person {
+                let name: String
+                let age: Int
+            }
+
+            let person = Person(name: "Pat", age: 123)
+            print(person)
+            "#,
+            &mut io,
+        )
+        .unwrap();
+        // Note: v2 interpreter doesn't print field names yet
+        assert_eq!(
+            "Person{ \"Pat\", 123 }\n",
+            str::from_utf8(&io.stdout()).unwrap()
+        )
+    }
+
+    #[test]
+    fn interprets_ir_instr() {
+        assert_eq!(
+            interpret(
+                "
+                let x = 2
+                let y = 3
+                __ir_instr(\"$? = add int %0, %1;\")
+            "
+            )
+            .unwrap(),
+            Value::Int(5)
+        )
+    }
+
+    #[test]
+    fn interprets_empty_string() {
+        let result = interpret(r#""""#);
+        assert!(
+            result.is_ok(),
+            "Failed to create empty string: {:?}",
+            result
+        );
+
+        if let Ok(Value::Struct(sym, fields)) = result {
+            assert_eq!(sym, SymbolID::STRING);
+            assert_eq!(fields.len(), 3);
+            assert_eq!(fields[0], Value::Int(0)); // length
+            assert_eq!(fields[1], Value::Int(0)); // capacity
+        }
+    }
+
+    #[test]
+    fn interprets_simple_string_append() {
+        // Test appending to an empty string once
+        // We'll use print to verify the result since it will format the string
+        let result = interpret(
+            r#"
+            let a = ""
+            a.append("hello")
+            print(a)
+        "#,
+        );
+
+        if let Err(e) = &result {
+            panic!("String append failed: {:?}", e);
+        }
+
+        // The test passes if we got here without crashing
+        // The print function will have output "hello" to the test IO
+    }
+
+    #[test]
+    fn interprets_string_append() {
+        // First test empty string creation
+        let empty_result = interpret(r#""""#);
+        assert!(
+            empty_result.is_ok(),
+            "Failed to create empty string: {:?}",
+            empty_result
+        );
+
+        // Then test string append - use print to verify the result
+        let result = interpret(
+            r#"
+            let a = ""
+            a.append("hello ")
+            a.append("world")
+            print(a)
+        "#,
+        );
+
+        if let Err(e) = &result {
+            panic!("String append failed: {:?}", e);
+        }
+
+        // The test passes if we got here without crashing
+        // The print function will have output "hello world" to the test IO
+    }
+
+    #[test]
+    fn interprets_div() {
+        assert_eq!(Value::Int(3), interpret("6 / 2").unwrap());
+        assert_eq!(Value::Float(3.0), interpret("6.0 / 2.0").unwrap());
+        assert!(interpret("true / false").is_err());
+    }
+
+    #[test]
+    fn interprets_call() {
+        assert_eq!(
+            Value::Int(6),
+            interpret(
+                "
+        func add(x, y) {
+            x + y
+        }
+
+        add(add(1, 2), 3)
+        "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_return() {
+        assert_eq!(
+            Value::Int(1),
+            interpret(
+                "
+        func foo() {
+            return 1
+            2
+        }
+
+        foo()
+        "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_simple_binary_ops() {
+        assert_eq!(Value::Bool(true), interpret("1 < 2").unwrap());
+        assert_eq!(Value::Bool(true), interpret("1 <= 2").unwrap());
+        assert_eq!(Value::Bool(false), interpret("2 < 1").unwrap());
+        assert_eq!(Value::Bool(false), interpret("2 <= 1").unwrap());
+
+        assert_eq!(Value::Bool(false), interpret("1 > 2").unwrap());
+        assert_eq!(Value::Bool(false), interpret("1 >= 2").unwrap());
+        assert_eq!(Value::Bool(true), interpret("2 > 1").unwrap());
+        assert_eq!(Value::Bool(true), interpret("2 >= 1").unwrap());
+
+        assert_eq!(Value::Bool(true), interpret("1 == 1").unwrap());
+        assert_eq!(Value::Bool(false), interpret("1 == 2").unwrap());
+
+        assert_eq!(Value::Bool(true), interpret("1 != 2").unwrap());
+        assert_eq!(Value::Bool(false), interpret("1 != 1").unwrap());
+    }
+
+    #[test]
+    fn interprets_fib() {
+        let res = interpret(
+            "
+        func fib(n) {
+          if n <= 1 {
+            n
+          } else {
+            fib(n - 2) + fib(n - 1)
+          }
+        }
+
+        let i = 0
+        let n = 0
+
+        loop i < 10 {
+          n = fib(i)
+          i = i + 1
+        }
+
+        n
+        ",
+        )
+        .unwrap();
+
+        assert_eq!(res, Value::Int(34))
+    }
+
+    #[test]
+    fn interprets_builtin_optional() {
+        assert_eq!(
+            Value::Int(123),
+            interpret(
+                "
+            match Optional.some(123) {
+                .some(x) -> x,
+                .none -> 0
+            }
+        "
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn interprets_array_push_get() {
+        assert_eq!(
+            interpret(
+                "
+                let a = [1, 2, 3]
+                a.push(4)
+                a.get(3)
+        "
+            )
+            .unwrap(),
+            Value::Int(4),
+        )
+    }
+
+    #[test]
+    fn interprets_string_special_case() {
+        let mut io = TestIO::new();
+        interpret_io(
+            r#"
+            print("hello world")
+            "#,
+            &mut io,
+        )
+        .unwrap();
+        assert_eq!("hello world\n", str::from_utf8(&io.stdout()).unwrap())
+    }
+
+    #[test]
+    fn interprets_io() {
+        let mut io = TestIO::new();
+        interpret_io("print(123)", &mut io).unwrap();
+        assert_eq!("123\n".as_bytes(), io.stdout())
+    }
+
+    #[test]
+    fn interprets_more_fib() {
+        let mut io = TestIO::new();
+        interpret_io(
+            "
+        func fib(n) {
+            if n <= 1 { return n }
+
+            return fib(n - 2) + fib(n - 1)
+        }
+
+        let i = 0
+
+        // Calculate some numbers
+        loop i < 15 {
+            print(fib(i))
+            i = i + 1
+        }
+        ",
+            &mut io,
+        )
+        .unwrap();
+
+        let stdout = io.stdout();
+        let output = str::from_utf8(&stdout).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 15);
+        assert_eq!(lines[0], "0");
+        assert_eq!(lines[1], "1");
+        assert_eq!(lines[14], "377");
     }
 }

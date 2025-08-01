@@ -83,70 +83,121 @@ impl<'a> Monomorphizer<'a> {
 
         for block in function.blocks.iter_mut() {
             for instruction in block.instructions.iter_mut() {
-                if let Instr::Call {
-                    callee: Callee::Name(callee),
-                    args,
-                    ty,
-                    ..
-                } = instruction
-                {
-                    let Some(callee_function) = self
-                        .generic_functions
-                        .iter()
-                        .find(|f| f.name == *callee)
-                        .cloned()
-                    else {
-                        continue;
-                    };
-
-                    if Some(&*callee) == self.currently_monomorphizing_stack.last() {
-                        continue;
-                    }
-
-                    if callee_function.blocks.is_empty()
-                        && let Some(first_arg) = &args.0.first()
-                    {
-                        // it's a protocol method, we need to specialize it
-                        tracing::info!("Detected protocol method, specializing: {args:?}");
-                        let Some(concrete) =
-                            Self::find_concrete_type(first_arg, substitutions, self.env)
+                match instruction {
+                    Instr::Call {
+                        callee: Callee::Name(callee),
+                        args,
+                        ty,
+                        ..
+                    } => {
+                        let Some(callee_function) = self
+                            .generic_functions
+                            .iter()
+                            .find(|f| f.name == *callee)
+                            .cloned()
                         else {
                             continue;
                         };
 
-                        let name_parts = callee.clone();
-                        let Some(member_name) = name_parts.split("_").nth(3) else {
+                        if Some(&*callee) == self.currently_monomorphizing_stack.last() {
                             continue;
-                        };
+                        }
 
-                        let monomorphized_name = format!(
-                            "@_{}_{}_{}",
-                            concrete.symbol_id().0,
-                            concrete.name(),
-                            member_name
-                        );
+                        if callee_function.blocks.is_empty()
+                            && let Some(first_arg) = &args.0.first()
+                        {
+                            // it's a protocol method, we need to specialize it
+                            tracing::info!("Detected protocol method, specializing: {args:?}");
+                            let Some(concrete) =
+                                Self::find_concrete_type(first_arg, substitutions, self.env)
+                            else {
+                                continue;
+                            };
 
-                        renames.insert(callee.clone(), monomorphized_name.clone());
+                            let name_parts = callee.clone();
+                            let Some(member_name) = name_parts.split("_").nth(3) else {
+                                continue;
+                            };
 
-                        let Some(callee_function) =
-                            module.functions.iter().find(|f| &f.name == callee).cloned()
+                            let monomorphized_name = format!(
+                                "@_{}_{}_{}",
+                                concrete.symbol_id().0,
+                                concrete.name(),
+                                member_name
+                            );
+
+                            renames.insert(callee.clone(), monomorphized_name.clone());
+
+                            let Some(callee_function) =
+                                module.functions.iter().find(|f| &f.name == callee).cloned()
+                            else {
+                                continue;
+                            };
+
+                            self.detect_monomorphizations_in(
+                                callee_function,
+                                module,
+                                substitutions,
+                            );
+                        } else if Self::is_generic(&callee_function) {
+                            let monomorphized_name = self.monomorphize_function(
+                                &callee_function,
+                                args.0.iter().map(|a| a.ty.clone()).collect(),
+                                ty,
+                                substitutions,
+                                module,
+                            );
+
+                            *callee = monomorphized_name.clone();
+                            renames.insert(callee.clone(), monomorphized_name.clone());
+                        }
+                    }
+                    Instr::Ref(_, ty, RefKind::Func(name)) => {
+                        // Check if this is a reference to a generic function
+                        let Some(ref_function) = self
+                            .generic_functions
+                            .iter()
+                            .find(|f| f.name == *name)
+                            .cloned()
                         else {
                             continue;
                         };
 
-                        self.detect_monomorphizations_in(callee_function, module, substitutions);
-                    } else if Self::is_generic(&callee_function) {
-                        let monomorphized_name = self.monomorphize_function(
-                            &callee_function,
-                            args.0.iter().map(|a| a.ty.clone()).collect(),
-                            ty,
-                            substitutions,
-                            module,
-                        );
+                        if Self::is_generic(&ref_function) {
+                            // Extract argument and return types from the Ref instruction's type
+                            if let IRType::Func(arg_types, ret_type) = ty {
+                                // Apply current substitutions to the types
+                                let substituted_args: Vec<IRType> = arg_types
+                                    .iter()
+                                    .map(|t| Self::apply_type(t, substitutions))
+                                    .collect();
+                                let substituted_ret = Self::apply_type(ret_type, substitutions);
 
-                        *callee = monomorphized_name.clone();
-                        renames.insert(callee.clone(), monomorphized_name.clone());
+                                // Only monomorphize if we have substitutions or all types are concrete
+                                let has_unresolved_type_vars = substituted_args
+                                    .iter()
+                                    .any(|t| matches!(t, IRType::TypeVar(_)))
+                                    || matches!(&substituted_ret, IRType::TypeVar(_));
+
+                                if !substitutions.is_empty() || !has_unresolved_type_vars {
+                                    let monomorphized_name = self.monomorphize_function(
+                                        &ref_function,
+                                        substituted_args.clone(),
+                                        &substituted_ret,
+                                        substitutions,
+                                        module,
+                                    );
+
+                                    *name = monomorphized_name.clone();
+                                    renames.insert(name.clone(), monomorphized_name);
+
+                                    // Update the type with substituted types
+                                    *ty = IRType::Func(substituted_args, Box::new(substituted_ret));
+                                }
+                            }
+                        }
                     }
+                    _ => {}
                 }
             }
         }

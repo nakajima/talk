@@ -60,6 +60,7 @@ impl SymbolID {
     // These are special for the lowering phase
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
     pub const ENV: SymbolID = SymbolID(i32::MIN + 1);
+    pub const ENUM_TAG: SymbolID = SymbolID(i32::MIN + 2);
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {

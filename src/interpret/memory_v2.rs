@@ -150,9 +150,8 @@ impl Memory {
         let info = Self::type_info(ty);
         let total_size = info.size * count;
 
-        if total_size == 0 {
-            return Err(InterpreterError::Unknown("Cannot allocate 0 bytes".into()));
-        }
+        // Allow 0-byte allocations for empty structs
+        // We still need a valid pointer, just with size 0
 
         let ptr = self.heap.alloc(total_size, info.align);
 
