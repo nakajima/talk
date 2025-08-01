@@ -190,7 +190,15 @@ impl Substitutions {
 
         tracing::trace!("lhs = {lhs:?}, rhs = {rhs:?}");
 
-        let res = match (lhs.clone(), rhs.clone()) {
+        //tracing::trace!(
+        //    "{:?} <> {:?} = {:?} <> {:?}",
+        //    lhs,
+        //    rhs,
+        //    self.apply(&lhs, 0, context),
+        //    self.apply(&rhs, 0, context)
+        //);
+
+        match (lhs.clone(), rhs.clone()) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
 
@@ -367,17 +375,7 @@ impl Substitutions {
                 self.apply(&lhs, 0, context).to_string(),
                 self.apply(&rhs, 0, context).to_string(),
             )),
-        };
-
-        tracing::trace!(
-            "∪ {:?} <> {:?} = {:?} <> {:?}",
-            lhs,
-            rhs,
-            self.apply(&lhs, 0, context),
-            self.apply(&rhs, 0, context)
-        );
-
-        res
+        }
     }
 
     /// Returns true if `v` occurs inside `ty`

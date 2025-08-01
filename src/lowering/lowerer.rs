@@ -1303,6 +1303,12 @@ impl<'a> Lowerer<'a> {
 
         // If the only capture is the func itself, we don't need to allocate a closure
 
+        // Register the function symbol so it can be captured by other functions
+        self.current_func_mut()?.register_symbol(
+            name.symbol_id(),
+            SymbolValue::FuncRef(name.mangled(&typed_expr.ty)),
+        );
+
         let ret = if captures.is_empty() {
             let fn_ptr = self.allocate_register();
             self.push_instr(Instr::Ref(
@@ -1339,12 +1345,45 @@ impl<'a> Lowerer<'a> {
                 let mut capture_registers = vec![];
                 let mut captured_ir_types = vec![];
                 for (i, capture) in captures.iter().enumerate() {
-                    let Some(SymbolValue::Register(register)) = self.lookup_register(capture)
-                    else {
-                        self.push_err("don't know how to handle captured captures yet", typed_expr);
+                    let Some(symbol_value) = self.lookup_register(capture) else {
                         return None;
                     };
-                    capture_registers.push(*register);
+                    let symbol_value = symbol_value.clone();
+                    let register = match symbol_value {
+                        SymbolValue::Register(reg) => reg,
+                        SymbolValue::Capture(idx, ty) => {
+                            // Load the capture from the outer environment into a register
+                            let env_ptr = self.allocate_register();
+                            self.push_instr(Instr::GetElementPointer {
+                                dest: env_ptr,
+                                base: Register(0),
+                                ty: IRType::closure(),
+                                index: IRValue::ImmediateInt(idx as i64),
+                            });
+                            let loaded_reg = self.allocate_register();
+                            self.push_instr(Instr::Load {
+                                dest: loaded_reg,
+                                ty: ty.clone(),
+                                addr: env_ptr,
+                            });
+                            loaded_reg
+                        }
+                        SymbolValue::FuncRef(func_name) => {
+                            // For function references, create a Ref instruction
+                            let func_reg = self.allocate_register();
+                            self.push_instr(Instr::Ref(
+                                func_reg,
+                                IRType::POINTER,
+                                RefKind::Func(func_name.clone()),
+                            ));
+                            func_reg
+                        }
+                        _ => {
+                            self.push_err("unexpected symbol type for capture", typed_expr);
+                            return None;
+                        }
+                    };
+                    capture_registers.push(register);
 
                     if *capture == self_symbol {
                         captured_ir_types.push(IRType::POINTER);
@@ -1367,7 +1406,14 @@ impl<'a> Lowerer<'a> {
                                 Scheme::new(typed_expr.ty.clone(), vec![], vec![])
                             })
                             .ty();
-                        captured_ir_types.push(capture_ty.to_ir(self));
+                        let ir_ty = capture_ty.to_ir(self);
+                        // Functions are stored as pointers in closures
+                        let ir_ty = if matches!(ir_ty, IRType::Func(_, _)) {
+                            IRType::POINTER
+                        } else {
+                            ir_ty
+                        };
+                        captured_ir_types.push(ir_ty);
                     }
                 }
 

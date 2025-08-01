@@ -1,14 +1,13 @@
-
 use crate::{
+    SymbolID,
     interpret::{
         interpreter_v2::InterpreterError,
         memory_v2::{Memory, Pointer, Value as MemValue},
     },
     lowering::ir_type::IRType,
-    SymbolID,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
@@ -28,40 +27,56 @@ impl Value {
             Value::Float(f) => Ok(MemValue::Float(*f)),
             Value::Bool(b) => Ok(MemValue::Bool(*b)),
             Value::Pointer(p) => {
-                // For now, we'll store pointers as immediates
-                Ok(MemValue::Immediate(p.addr as i64))
+                // For static pointers (like string constants), just store as immediate
+                if p.location == crate::interpret::memory_v2::MemoryLocation::Static {
+                    Ok(MemValue::Immediate(p.addr as i64))
+                } else if p.addr == 0 {
+                    // Handle null pointers as immediate 0
+                    Ok(MemValue::Immediate(0))
+                } else {
+                    // Convert to HeapPtr for storage
+                    let ptr = std::ptr::NonNull::new(p.addr as *mut u8)
+                        .ok_or_else(|| InterpreterError::Unknown("Null pointer".into()))?;
+                    Ok(MemValue::HeapPtr(ptr, Memory::type_info(&p.ty)))
+                }
             }
             _ => Err(InterpreterError::Unknown(
-                "Cannot convert complex value to memory value directly".into()
+                "Cannot convert complex value to memory value directly".into(),
             )),
         }
     }
-    
+
     pub fn from_memory_value(mem_val: MemValue, ty: &IRType) -> Result<Self, InterpreterError> {
         match (&mem_val, ty) {
-            (MemValue::Immediate(i), IRType::Int | IRType::Byte) => {
-                Ok(Value::Int(*i))
-            }
-            (MemValue::Float(f), IRType::Float) => {
-                Ok(Value::Float(*f))
-            }
-            (MemValue::Bool(b), IRType::Bool) => {
-                Ok(Value::Bool(*b))
-            }
+            (MemValue::Immediate(i), IRType::Int | IRType::Byte) => Ok(Value::Int(*i)),
+            (MemValue::Float(f), IRType::Float) => Ok(Value::Float(*f)),
+            (MemValue::Bool(b), IRType::Bool) => Ok(Value::Bool(*b)),
             (MemValue::Immediate(addr), IRType::Pointer { .. }) => {
                 Ok(Value::Pointer(Pointer {
                     addr: *addr as usize,
                     ty: ty.clone(),
+                    // We can't determine location from the value alone
+                    // This is a limitation - we assume heap for now
                     location: crate::interpret::memory_v2::MemoryLocation::Heap,
                 }))
             }
-            _ => Err(InterpreterError::Unknown(
-                format!("Type mismatch converting from memory: {:?} vs {:?}", mem_val, ty)
-            )),
+            (MemValue::HeapPtr(ptr, _), IRType::Pointer { .. }) => Ok(Value::Pointer(Pointer {
+                addr: ptr.as_ptr() as usize,
+                ty: ty.clone(),
+                location: crate::interpret::memory_v2::MemoryLocation::Heap,
+            })),
+            _ => Err(InterpreterError::Unknown(format!(
+                "Type mismatch converting from memory: {:?} vs {:?}",
+                mem_val, ty
+            ))),
         }
     }
-    
-    pub fn store_to_memory(&self, memory: &mut Memory, pointer: &Pointer) -> Result<(), InterpreterError> {
+
+    pub fn store_to_memory(
+        &self,
+        memory: &mut Memory,
+        pointer: &Pointer,
+    ) -> Result<(), InterpreterError> {
         match self {
             Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Pointer(_) => {
                 let mem_val = self.to_memory_value()?;
@@ -72,20 +87,20 @@ impl Value {
                 let IRType::Struct(_, field_types, _) = &pointer.ty else {
                     return Err(InterpreterError::Unknown("Expected struct type".into()));
                 };
-                
+
                 let mut offset = 0;
                 for (field, field_ty) in fields.iter().zip(field_types.iter()) {
                     let info = Memory::type_info(field_ty);
-                    
+
                     // Align offset
                     offset = (offset + info.align - 1) & !(info.align - 1);
-                    
+
                     let field_ptr = Pointer {
                         addr: pointer.addr + offset,
                         ty: field_ty.clone(),
                         location: pointer.location,
                     };
-                    
+
                     field.store_to_memory(memory, &field_ptr)?;
                     offset += info.size;
                 }
@@ -95,16 +110,16 @@ impl Value {
                 let IRType::TypedBuffer { element } = &pointer.ty else {
                     return Err(InterpreterError::Unknown("Expected array type".into()));
                 };
-                
+
                 let elem_info = Memory::type_info(element);
-                
+
                 for (i, elem) in elements.iter().enumerate() {
                     let elem_ptr = Pointer {
                         addr: pointer.addr + i * elem_info.size,
                         ty: element.as_ref().clone(),
                         location: pointer.location,
                     };
-                    
+
                     elem.store_to_memory(memory, &elem_ptr)?;
                 }
                 Ok(())
@@ -117,18 +132,24 @@ impl Value {
                         ty: IRType::Byte,
                         location: pointer.location,
                     };
-                    
+
                     let byte_val = Value::Int(byte as i64);
                     byte_val.store_to_memory(memory, &byte_ptr)?;
                 }
                 Ok(())
             }
-            _ => Err(InterpreterError::Unknown(
-                format!("Cannot store value type: {:?}", self)
-            )),
+            Value::Func(sym) => {
+                // Store function symbol ID as an integer
+                let func_val = Value::Int(sym.0 as i64);
+                func_val.store_to_memory(memory, pointer)
+            }
+            _ => Err(InterpreterError::Unknown(format!(
+                "Cannot store value type: {:?}",
+                self
+            ))),
         }
     }
-    
+
     pub fn load_from_memory(memory: &Memory, pointer: &Pointer) -> Result<Self, InterpreterError> {
         match &pointer.ty {
             IRType::Int | IRType::Byte => {
@@ -150,50 +171,52 @@ impl Value {
             IRType::Struct(sym, field_types, _) => {
                 let mut fields = Vec::new();
                 let mut offset = 0;
-                
+
                 for field_ty in field_types {
                     let info = Memory::type_info(field_ty);
-                    
+
                     // Align offset
                     offset = (offset + info.align - 1) & !(info.align - 1);
-                    
+
                     let field_ptr = Pointer {
                         addr: pointer.addr + offset,
                         ty: field_ty.clone(),
                         location: pointer.location,
                     };
-                    
+
                     fields.push(Self::load_from_memory(memory, &field_ptr)?);
                     offset += info.size;
                 }
-                
+
                 Ok(Value::Struct(*sym, fields))
             }
-            _ => Err(InterpreterError::Unknown(
-                format!("Cannot load type: {:?}", pointer.ty)
-            )),
+            _ => Err(InterpreterError::Unknown(format!(
+                "Cannot load type: {:?}",
+                pointer.ty
+            ))),
         }
     }
-    
-    pub fn display(&self, symbol_name: impl Fn(SymbolID) -> String) -> String {
+
+    pub fn display<F>(&self, symbol_name: &F) -> String
+    where
+        F: Fn(SymbolID) -> String,
+    {
         match self {
             Value::Int(i) => i.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Pointer(p) => format!("0x{:x}", p.addr),
             Value::Struct(sym, fields) => {
-                let field_strs: Vec<String> = fields.iter()
-                    .map(|f| f.display(&symbol_name))
-                    .collect();
+                let field_strs: Vec<String> =
+                    fields.iter().map(|f| f.display(symbol_name)).collect();
                 format!("{}{{ {} }}", symbol_name(*sym), field_strs.join(", "))
             }
             Value::Enum(sym, val) => {
-                format!("{}({})", symbol_name(*sym), val.display(&symbol_name))
+                format!("{}({})", symbol_name(*sym), val.display(symbol_name))
             }
             Value::Array(elements) => {
-                let elem_strs: Vec<String> = elements.iter()
-                    .map(|e| e.display(&symbol_name))
-                    .collect();
+                let elem_strs: Vec<String> =
+                    elements.iter().map(|e| e.display(symbol_name)).collect();
                 format!("[{}]", elem_strs.join(", "))
             }
             Value::RawBuffer(bytes) => {
@@ -221,7 +244,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn sub(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
@@ -232,7 +255,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn mul(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
@@ -243,7 +266,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn div(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => {
@@ -260,7 +283,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn rem(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => {
@@ -276,7 +299,7 @@ impl Value {
             )),
         }
     }
-    
+
     // Comparison operations
     pub fn eq(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
@@ -286,14 +309,14 @@ impl Value {
             _ => Ok(Value::Bool(false)),
         }
     }
-    
+
     pub fn neq(&self, other: &Value) -> Result<Value, InterpreterError> {
         self.eq(other).map(|v| match v {
             Value::Bool(b) => Value::Bool(!b),
             _ => unreachable!(),
         })
     }
-    
+
     pub fn lt(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
@@ -304,7 +327,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn lte(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
@@ -315,7 +338,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn gt(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
@@ -326,7 +349,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn gte(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
@@ -337,7 +360,7 @@ impl Value {
             )),
         }
     }
-    
+
     // Logical operations
     pub fn and(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
@@ -348,7 +371,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn or(&self, other: &Value) -> Result<Value, InterpreterError> {
         match (self, other) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
@@ -358,7 +381,7 @@ impl Value {
             )),
         }
     }
-    
+
     pub fn not(&self) -> Result<Value, InterpreterError> {
         match self {
             Value::Bool(b) => Ok(Value::Bool(!b)),
