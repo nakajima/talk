@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use tracing::debug_span;
 
 use crate::{
-    ExprMetaStorage, SymbolID, SymbolTable,
+    ExprMetaStorage, SymbolID,
     constraint::Constraint,
     constraint_solver::{ConstraintSolver, ConstraintSolverSolution},
     parsing::expr_id::ExprID,
@@ -525,7 +525,6 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
         Ty::Row {
             fields,
             row,
-            nominal_id,
             generics,
             kind,
         } => {
@@ -537,7 +536,6 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
             Ty::Row {
                 fields: new_fields,
                 row: new_row,
-                nominal_id: *nominal_id,
                 generics: generics.iter().map(|g| walk(g, map)).collect(),
                 kind: kind.clone(),
             }
@@ -784,7 +782,11 @@ mod generalize_tests {
     fn test_generalize_struct_type() {
         // generalize(Struct<a, b>) -> forall a, b. Struct<a, b>
         let mut env = Environment::default();
-        let ty_to_generalize = Ty::struct_type(SymbolID(100), vec![ty_var(1), ty_var(2)]);
+        let ty_to_generalize = Ty::struct_type(
+            SymbolID(100),
+            "SomeStruct".to_string(),
+            vec![ty_var(1), ty_var(2)],
+        );
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 

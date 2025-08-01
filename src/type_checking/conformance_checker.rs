@@ -5,7 +5,7 @@ use crate::{
     conformance::Conformance,
     environment::{Environment, free_type_vars},
     substitutions::Substitutions,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_checker::TypeError,
     type_def::{Property, TypeDef},
     type_var_id::TypeVarKind,
@@ -208,7 +208,10 @@ impl<'a> ConformanceChecker<'a> {
     fn type_def(&self) -> Option<&TypeDef> {
         match self.ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
+                kind:
+                    RowKind::Enum(symbol_id, _)
+                    | RowKind::Struct(symbol_id, _)
+                    | RowKind::Protocol(symbol_id, _),
                 ..
             } => self.env.lookup_type(symbol_id),
             Ty::Int => self.env.lookup_type(&SymbolID::INT),

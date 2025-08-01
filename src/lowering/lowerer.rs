@@ -109,16 +109,16 @@ impl Ty {
                 element: el.to_ir(lowerer).into(),
             },
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
                 kind,
+                fields,
                 ..
             } => match kind {
-                RowKind::Enum => IRType::Enum(
+                RowKind::Enum(symbol_id, _) => IRType::Enum(
                     *symbol_id,
                     generics.iter().map(|i| i.to_ir(lowerer)).collect(),
                 ),
-                RowKind::Struct => {
+                RowKind::Struct(symbol_id, _) => {
                     let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
                         tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
                         return IRType::Void;
@@ -135,31 +135,20 @@ impl Ty {
                         generics.iter().map(|g| g.to_ir(lowerer)).collect(),
                     )
                 }
-                _ => {
-                    tracing::error!("Unsupported nominal row kind: {:?}", kind);
-                    IRType::Void
+                RowKind::Protocol(_, _) => {
+                    return IRType::Void;
+                }
+                RowKind::Record => {
+                    let field_types: Vec<IRType> =
+                        fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
+
+                    IRType::Struct(
+                        SymbolID::RECORD,
+                        field_types,
+                        vec![], // Records don't have generics
+                    )
                 }
             },
-            Ty::Row { kind, .. } => {
-                // Protocols have no runtime representation
-                if matches!(kind, crate::ty::RowKind::Protocol) {
-                    return IRType::Void;
-                }
-
-                // Structural type (record) - use a special symbol ID and include field types
-                let Ty::Row { fields, .. } = self else {
-                    return IRType::Void;
-                };
-
-                let field_types: Vec<IRType> =
-                    fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
-
-                IRType::Struct(
-                    SymbolID::RECORD,
-                    field_types,
-                    vec![], // Records don't have generics
-                )
-            }
         }
     }
 }
@@ -1663,11 +1652,10 @@ impl<'a> Lowerer<'a> {
                 let struct_ty = &pattern_typed_expr.ty;
                 match struct_ty {
                     Ty::Row {
-                        nominal_id,
-                        kind: RowKind::Struct | RowKind::Record,
+                        kind: kind @ RowKind::Struct(_, _) | kind @ RowKind::Record,
                         ..
                     } => {
-                        let type_def = if let Some(struct_id) = nominal_id {
+                        let type_def = if let RowKind::Struct(struct_id, _) = kind {
                             self.env.lookup_type(struct_id).cloned()
                         } else {
                             None
@@ -1743,9 +1731,8 @@ impl<'a> Lowerer<'a> {
             } => {
                 // Get enum info
                 if let Ty::Row {
-                    nominal_id: Some(enum_id),
                     generics: enum_generics,
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(enum_id, _),
                     ..
                 } = &pattern_typed_expr.ty
                     && let Some(enum_def) = self.env.lookup_enum(enum_id).cloned()
@@ -2106,8 +2093,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 let Ty::Row {
-                    nominal_id: Some(enum_id),
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(enum_id, _),
                     ..
                 } = pattern_typed_expr.ty
                 else {
@@ -2132,7 +2118,7 @@ impl<'a> Lowerer<'a> {
                 let values = match &variant.ty {
                     Ty::Func(params, _, _) => params,
                     Ty::Row {
-                        kind: RowKind::Enum,
+                        kind: RowKind::Enum(_, _),
                         ..
                     } => {
                         // Variant with no parameters
@@ -2208,8 +2194,7 @@ impl<'a> Lowerer<'a> {
         is_lvalue: bool,
     ) -> Option<Register> {
         if let Ty::Row {
-            nominal_id: Some(sym),
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(sym, _),
             ..
         } = &typed_expr.ty
         {
@@ -2232,11 +2217,9 @@ impl<'a> Lowerer<'a> {
         };
 
         match &receiver.ty {
-            Ty::Row {
-                fields, nominal_id, ..
-            } => {
+            Ty::Row { fields, kind, .. } => {
                 // Handle nominal rows (structs/protocols)
-                if let Some(struct_id) = nominal_id {
+                if let RowKind::Struct(struct_id, _) = kind {
                     let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
                         unreachable!("didn't get struct def for nominal row");
                     };
@@ -2617,7 +2600,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle struct construction
         if let Ty::Row {
-            nominal_id: Some(struct_id),
+            kind: RowKind::Struct(struct_id, _),
             ..
         } = &callee_typed_expr.ty
         {
@@ -2656,8 +2639,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle enum variant construction
         if let Ty::Row {
-            nominal_id: Some(enum_id),
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(enum_id, _),
             ..
         } = &ret_ty
         {
@@ -2886,7 +2868,7 @@ impl<'a> Lowerer<'a> {
             if matches!(
                 arg_ty,
                 Ty::Row {
-                    kind: RowKind::Struct,
+                    kind: RowKind::Struct(_, _),
                     ..
                 }
             ) {
@@ -2958,7 +2940,10 @@ impl<'a> Lowerer<'a> {
 
         let callee_name = match &receiver_ty.ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
+                kind:
+                    RowKind::Struct(symbol_id, _)
+                    | RowKind::Enum(symbol_id, _)
+                    | RowKind::Protocol(symbol_id, _),
                 ..
             } => {
                 let type_def = self.env.lookup_type(symbol_id)?;

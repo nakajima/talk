@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt::Display};
 use derive_visitor::Drive;
 
 use crate::{
-    SymbolID, builtin_type_def,
+    SymbolID,
     environment::Environment,
     impl_option_eq,
     type_checker::{FuncParams, FuncReturning},
@@ -15,13 +15,17 @@ use crate::{
 #[derive(Clone, PartialEq, Debug, Drive)]
 pub enum RowKind {
     /// A struct - concrete type with storage
-    Struct,
+    #[drive(skip)]
+    Struct(SymbolID, String),
     /// A protocol - interface/trait type without storage
-    Protocol,
+    #[drive(skip)]
+    Protocol(SymbolID, String),
     /// A record - structural type (anonymous)
+    #[drive(skip)]
     Record,
     /// An enum - sum type with variants
-    Enum,
+    #[drive(skip)]
+    Enum(SymbolID, String),
 }
 
 impl_option_eq!(Ty);
@@ -58,9 +62,7 @@ pub enum Ty {
         #[drive(skip)]
         fields: Vec<(String, Ty)>, // field name -> type pairs, in canonical order
         row: Option<Box<Ty>>, // Optional row variable for extensible rows
-        #[drive(skip)]
-        nominal_id: Option<SymbolID>, // Some for nominal types (structs/protocols), None for structural (records)
-        generics: Vec<Ty>, // Generic type arguments (for nominal types)
+        generics: Vec<Ty>,    // Generic type arguments (for nominal types)
         #[drive(skip)]
         kind: RowKind, // Distinguishes between struct/protocol/record
     },
@@ -121,25 +123,14 @@ impl Display for Ty {
             Ty::Row {
                 fields,
                 row,
-                nominal_id,
                 generics: _,
                 kind,
             } => {
-                if let Some(sym) = nominal_id {
-                    // Nominal type - display based on kind
-                    let base_name = if let Some(builtin) = builtin_type_def(sym) {
-                        builtin.name().to_string()
-                    } else if sym == &SymbolID::ARRAY {
-                        "Array".to_string()
-                    } else if sym == &SymbolID::STRING {
-                        "String".to_string()
-                    } else {
-                        format!("Row({sym:?})")
-                    };
-                    match kind {
-                        RowKind::Protocol => write!(f, "{base_name} (protocol)"),
-                        _ => write!(f, "{base_name}"),
-                    }
+                if let RowKind::Struct(_, name)
+                | RowKind::Protocol(_, name)
+                | RowKind::Enum(_, name) = kind
+                {
+                    write!(f, "{}", name)
                 } else {
                     // Structural type - display as record
                     let field_strs: Vec<String> = fields
@@ -175,7 +166,7 @@ impl Ty {
         matches!(
             self,
             Ty::Row {
-                kind: RowKind::Protocol,
+                kind: RowKind::Protocol(_, _),
                 ..
             }
         )
@@ -186,48 +177,44 @@ impl Ty {
         Ty::Row {
             fields: vec![], // String has no exposed fields
             row: None,
-            nominal_id: Some(SymbolID::STRING),
             generics: vec![],
-            kind: RowKind::Struct,
+            kind: RowKind::Struct(SymbolID::STRING, "String".into()),
         }
     }
 
     /// Create a struct type using Row representation
-    pub fn struct_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
+    pub fn struct_type(symbol_id: SymbolID, name: String, generics: Vec<Ty>) -> Ty {
         // Create Row type for structs
         Ty::Row {
             fields: vec![], // Fields are stored in TypeDef
             row: None,      // TODO: Get row var from TypeDef
-            nominal_id: Some(symbol_id),
             generics,
-            kind: RowKind::Struct,
+            kind: RowKind::Struct(symbol_id, name),
         }
     }
 
     /// Create a protocol type using Row representation
-    pub fn protocol_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
+    pub fn protocol_type(symbol_id: SymbolID, name: String, generics: Vec<Ty>) -> Ty {
         Ty::Row {
             fields: vec![], // Protocol members are stored in TypeDef
             row: None,
-            nominal_id: Some(symbol_id),
             generics,
-            kind: RowKind::Protocol,
+            kind: RowKind::Protocol(symbol_id, name),
         }
     }
 
     /// Create an enum type using Row representation
-    pub fn enum_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
+    pub fn enum_type(symbol_id: SymbolID, name: String, generics: Vec<Ty>) -> Ty {
         Ty::Row {
             fields: vec![], // Enum variants are stored in TypeDef
             row: None,
-            nominal_id: Some(symbol_id),
             generics,
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(symbol_id, name),
         }
     }
 
     pub fn optional(&self) -> Ty {
-        Ty::enum_type(SymbolID::OPTIONAL, vec![self.clone()])
+        Ty::enum_type(SymbolID::OPTIONAL, "Optional".into(), vec![self.clone()])
     }
 
     pub fn is_concrete(&self) -> bool {
@@ -240,14 +227,12 @@ impl Ty {
                 Ty::Row {
                     fields: lhs_fields,
                     row: lhs_row,
-                    nominal_id: lhs_nominal_id,
                     generics: lhs_generics,
                     kind: lhs_kind,
                 },
                 Ty::Row {
                     fields: rhs_fields,
                     row: rhs_row,
-                    nominal_id: rhs_nominal_id,
                     generics: rhs_generics,
                     kind: rhs_kind,
                 },
@@ -257,10 +242,6 @@ impl Ty {
                 }
 
                 if lhs_row != rhs_row {
-                    return false;
-                }
-
-                if lhs_nominal_id != rhs_nominal_id {
                     return false;
                 }
 
@@ -302,7 +283,7 @@ impl Ty {
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
         let sym = match self {
             Ty::Row {
-                nominal_id: Some(sym),
+                kind: RowKind::Struct(sym, _) | RowKind::Enum(sym, _) | RowKind::Protocol(sym, _),
                 ..
             } => *sym,
             Ty::Int => SymbolID::INT,
@@ -386,7 +367,6 @@ impl Ty {
             Ty::Row {
                 fields,
                 row,
-                nominal_id,
                 generics,
                 kind,
             } => {
@@ -401,7 +381,6 @@ impl Ty {
                         row: row
                             .as_ref()
                             .map(|r| Box::new(r.replace(replacement.clone(), f))),
-                        nominal_id: *nominal_id,
                         generics: generics
                             .iter()
                             .map(|g| g.replace(replacement.clone(), f))

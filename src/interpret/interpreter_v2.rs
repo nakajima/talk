@@ -731,9 +731,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
             Instr::Phi(dest, _ty, predecessors) => {
                 // Phi nodes select a value based on which block we came from
                 let frame = self.call_stack.last().unwrap();
-                let pred_block = frame
-                    .pred
-                    .ok_or(InterpreterError::PredecessorNotFound)?;
+                let pred_block = frame.pred.ok_or(InterpreterError::PredecessorNotFound)?;
 
                 // Find the value from the predecessor block
                 for (reg, block) in &predecessors.0 {
@@ -1202,8 +1200,8 @@ mod tests {
             Value::Int(10),
             interpret(
                 "
-                let sum = 0
-                let i = 0
+                let mut sum = 0
+                let mut i = 0
                 loop i < 5 {
                     sum = sum + i
                     i = i + 1
@@ -1818,8 +1816,8 @@ mod tests {
           }
         }
 
-        let i = 0
-        let n = 0
+        let mut i = 0
+        let mut n = 0
 
         loop i < 10 {
           n = fib(i)
@@ -1896,7 +1894,7 @@ mod tests {
             return fib(n - 2) + fib(n - 1)
         }
 
-        let i = 0
+        let mut i = 0
 
         // Calculate some numbers
         loop i < 15 {

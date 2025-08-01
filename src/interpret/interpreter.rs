@@ -810,8 +810,8 @@ mod tests {
           }
         }
 
-        let i = 0
-        let n = 0
+        let mut i = 0
+        let mut n = 0
 
         loop i < 10 {
           n = fib(i)
@@ -833,7 +833,7 @@ mod tests {
             interpret(
                 "
         func makeCounter() {
-			let count = 0
+			let mut count = 0
 
 			return func() {
 				count = count + 1
@@ -1025,7 +1025,7 @@ mod tests {
             return fib(n - 2) + fib(n - 1)
         }
 
-        let i = 0
+        let mut i = 0
 
         // Calculate some numbers
         loop i < 15 {

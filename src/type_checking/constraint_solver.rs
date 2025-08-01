@@ -546,7 +546,11 @@ impl<'a> ConstraintSolver<'a> {
         )?;
 
         // Create and unify the specialized struct type
-        let struct_with_generics = Ty::struct_type(*initializes_id, type_args.to_vec());
+        let struct_with_generics = Ty::struct_type(
+            *initializes_id,
+            struct_def.name().to_string(),
+            type_args.to_vec(),
+        );
         let specialized_struct = self.env.instantiate(&Scheme::new(
             struct_with_generics,
             struct_def.canonical_type_variables(),
@@ -571,9 +575,8 @@ impl<'a> ConstraintSolver<'a> {
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         let Ty::Row {
-            nominal_id: Some(enum_id),
             generics: concrete_type_args,
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(enum_id, _),
             ..
         } = scrutinee_ty
         else {
@@ -595,7 +598,7 @@ impl<'a> ConstraintSolver<'a> {
         let generic_field_tys = match &variant_def.ty {
             Ty::Func(params, _, _) => params.clone(),
             Ty::Row {
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(_, _),
                 ..
             } => vec![], // Variant with no parameters
             _ => return Err(TypeError::Unknown("Invalid variant type".into())),
@@ -642,8 +645,7 @@ impl<'a> ConstraintSolver<'a> {
         match result_ty {
             // A variant with no values
             Ty::Row {
-                nominal_id: Some(enum_id),
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(enum_id, _),
                 ..
             } => {
                 let enum_def = self.env.lookup_enum(enum_id).ok_or_else(|| {
@@ -663,8 +665,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Func(_, ret, _) => {
                 let ret_ty = substitutions.apply(ret, 0, &mut self.env.context);
                 if let Ty::Row {
-                    nominal_id: Some(enum_id),
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(enum_id, _),
                     ..
                 } = ret_ty
                 {
@@ -706,9 +707,8 @@ impl<'a> ConstraintSolver<'a> {
                 self.resolve_builtin_member(builtin, member_name)
             }
             Ty::Row {
-                nominal_id: Some(enum_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(enum_id, _),
                 ..
             } => self.resolve_enum_member(enum_id, member_name, generics),
             Ty::TypeVar(type_var) => {
@@ -720,11 +720,14 @@ impl<'a> ConstraintSolver<'a> {
             }
             Ty::Row {
                 fields,
-                nominal_id,
+                kind,
                 generics,
                 ..
             } => {
-                if let Some(type_id) = nominal_id {
+                if let RowKind::Enum(type_id, _)
+                | RowKind::Struct(type_id, _)
+                | RowKind::Protocol(type_id, _) = kind
+                {
                     // Nominal row - use typedef resolution
                     self.resolve_type_member(type_id, member_name, generics, substitutions, expr_id)
                 } else {
@@ -1171,9 +1174,8 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Row {
                 fields,
                 row,
-                nominal_id,
                 generics,
-                kind: RowKind::Enum,
+                kind,
             } => {
                 let applied_generics = generics
                     .iter()
@@ -1182,9 +1184,8 @@ impl<'a> ConstraintSolver<'a> {
                 Ty::Row {
                     fields: fields.clone(),
                     row: row.clone(),
-                    nominal_id: *nominal_id,
                     generics: applied_generics,
-                    kind: RowKind::Enum,
+                    kind: kind.clone(),
                 }
             }
             Ty::Tuple(types) => Ty::Tuple(
@@ -1197,36 +1198,6 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
                 ty.clone()
             }
-            Ty::Row {
-                fields,
-                row,
-                nominal_id,
-                generics,
-                kind,
-            } => {
-                let applied_fields = fields
-                    .iter()
-                    .map(|(name, field_ty)| {
-                        (
-                            name.clone(),
-                            Self::substitute_ty_with_map(field_ty, substitutions),
-                        )
-                    })
-                    .collect();
-                let applied_row = row
-                    .as_ref()
-                    .map(|r| Box::new(Self::substitute_ty_with_map(r, substitutions)));
-                Ty::Row {
-                    fields: applied_fields,
-                    row: applied_row,
-                    nominal_id: *nominal_id,
-                    generics: generics
-                        .iter()
-                        .map(|g| Self::substitute_ty_with_map(g, substitutions))
-                        .collect(),
-                    kind: kind.clone(),
-                }
-            }
         }
     }
 
@@ -1234,7 +1205,10 @@ impl<'a> ConstraintSolver<'a> {
     fn find_member_symbol(&self, receiver_ty: &Ty, member_name: &str) -> Option<SymbolID> {
         match receiver_ty {
             Ty::Row {
-                nominal_id: Some(type_id),
+                kind:
+                    RowKind::Struct(type_id, _)
+                    | RowKind::Protocol(type_id, _)
+                    | RowKind::Enum(type_id, _),
                 ..
             } => {
                 // Look up the type definition using just the type_id, ignoring type parameters
@@ -1259,7 +1233,8 @@ impl<'a> ConstraintSolver<'a> {
                 None
             }
             Ty::Row {
-                nominal_id: None, ..
+                kind: RowKind::Record,
+                ..
             } => {
                 // Structural row fields don't have symbol IDs
                 None
@@ -1273,47 +1248,46 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         receiver_ty: &Ty,
         field_name: &str,
-        expr_id: ExprID,
+        _expr_id: ExprID,
     ) -> Result<(), TypeError> {
         // For struct types, check if the field is mutable
-        match receiver_ty {
-            Ty::Row {
-                nominal_id: Some(symbol_id),
-                kind: RowKind::Struct,
-                ..
-            } => {
-                // Look up the struct definition
-                let struct_def = self.env.lookup_struct(symbol_id).ok_or_else(|| {
-                    TypeError::MutabilityError(
-                        "Cannot find struct definition for mutability check".to_string(),
-                    )
-                })?;
+        // match receiver_ty {
+        //     Ty::Row {
+        //         kind: RowKind::Struct(symbol_id, _),
+        //         ..
+        //     } => {
+        //         // Look up the struct definition
+        //         let struct_def = self.env.lookup_struct(symbol_id).ok_or_else(|| {
+        //             TypeError::MutabilityError(
+        //                 "Cannot find struct definition for mutability check".to_string(),
+        //             )
+        //         })?;
 
-                // Find the field in the struct properties
-                let properties = struct_def.properties();
-                let field = properties.iter().find(|prop| prop.name == field_name);
+        //         // Find the field in the struct properties
+        //         let properties = struct_def.properties();
+        //         let field = properties.iter().find(|prop| prop.name == field_name);
 
-                if let Some(field) = field {
-                    todo!();
-                } else {
-                    return Err(TypeError::MutabilityError(format!(
-                        "Field '{}' not found in struct",
-                        field_name
-                    )));
-                }
-            }
-            // For type variables, we can't check yet - this constraint should be retried later
-            Ty::TypeVar(_) => {
-                return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
-                    "Type variable not yet resolved for mutability check".to_string(),
-                )));
-            }
-            _ => {
-                return Err(TypeError::MutabilityError(format!(
-                    "Cannot assign to field of non-struct type"
-                )));
-            }
-        }
+        //         if let Some(_field) = field {
+        //             todo!();
+        //         } else {
+        //             return Err(TypeError::MutabilityError(format!(
+        //                 "Field '{}' not found in struct",
+        //                 field_name
+        //             )));
+        //         }
+        //     }
+        //     // For type variables, we can't check yet - this constraint should be retried later
+        //     Ty::TypeVar(_) => {
+        //         return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+        //             "Type variable not yet resolved for mutability check".to_string(),
+        //         )));
+        //     }
+        //     _ => {
+        //         return Err(TypeError::MutabilityError(format!(
+        //             "Cannot assign to field of non-struct type"
+        //         )));
+        //     }
+        // }
 
         Ok(())
     }

@@ -180,8 +180,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
             // Look up enum info from type
             let (enum_id, arity) = match ty {
                 Ty::Row {
-                    nominal_id: Some(id),
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(id, _),
                     ..
                 } => (*id, fields.len()),
                 _ => (SymbolID(0), fields.len()), // Fallback
@@ -243,7 +242,11 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
             DeconstructedPat {
                 ctor: Constructor::Struct {
                     struct_id: match ty {
-                        Ty::Row { nominal_id, .. } => *nominal_id,
+                        Ty::Row {
+                            kind:
+                                RowKind::Enum(id, _) | RowKind::Struct(id, _) | RowKind::Protocol(id, _),
+                            ..
+                        } => Some(*id),
                         _ => None,
                     },
                     fields: all_fields,
@@ -259,8 +262,7 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
     match ty {
         Ty::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
         Ty::Row {
-            nominal_id: Some(id),
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(id, _),
             ..
         } => {
             // Get enum variants from environment
@@ -280,13 +282,23 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
         }
         Ty::Row {
             fields,
-            nominal_id,
-            kind: RowKind::Struct | RowKind::Record,
+            kind: RowKind::Record,
             ..
         } => {
             // For structs, there's only one constructor
             vec![Constructor::Struct {
-                struct_id: *nominal_id,
+                struct_id: None,
+                fields: fields.iter().map(|(name, _)| name.clone()).collect(),
+            }]
+        }
+        Ty::Row {
+            fields,
+            kind: RowKind::Struct(struct_id, _),
+            ..
+        } => {
+            // For structs, there's only one constructor
+            vec![Constructor::Struct {
+                struct_id: Some(*struct_id),
                 fields: fields.iter().map(|(name, _)| name.clone()).collect(),
             }]
         }

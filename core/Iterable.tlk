@@ -8,11 +8,13 @@ protocol Iterable<Element> {
 
 struct ArrayIterator<Element>: Iterator<Element> {
 	let array: Array<Element>
-	let cur: Int
+	let mut cur: Int
 
 	func next() -> Element? {
 		if self.cur < self.array.count {
-			Optional.some(self.array.get(self.cur))
+			let result = Optional.some(self.array.get(self.cur))
+			self.cur = self.cur + 1
+			result
 		} else {
 			Optional.none
 		}

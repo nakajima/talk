@@ -57,8 +57,7 @@ impl<'a> ExhaustivenessChecker<'a> {
 
         match scrutinee_ty {
             Ty::Row {
-                nominal_id: Some(enum_id),
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(enum_id, _),
                 ..
             } => self.check_enum_exhaustiveness(enum_id, patterns),
             Ty::TypeVar(type_var) => self.check_type_var_exhaustiveness(type_var, patterns),

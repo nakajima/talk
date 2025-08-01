@@ -37,7 +37,7 @@ impl PartialEq for ExprID {
 #[cfg(test)]
 impl PartialEq for ExprID {
     fn eq(&self, other: &Self) -> bool {
-        if other.0 == Self::ANY.0 {
+        if other.0 == Self::ANY.0 || self.0 == Self::ANY.0 {
             true
         } else {
             other.0 == self.0

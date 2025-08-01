@@ -40,7 +40,7 @@ mod examples {
 
         // Step 5: Use the type - member access works through row constraints
         let meta = ExprMetaStorage::default();
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, "Point".to_string(), vec![]);
         let x_result = env.new_type_variable(TypeVarKind::Blank, ExprID(3));
 
         env.constrain(Constraint::MemberAccess(
@@ -108,7 +108,7 @@ mod examples {
 
         // All members are accessible through row constraints
         let meta = ExprMetaStorage::default();
-        let rect_ty = Ty::struct_type(rect_id, vec![]);
+        let rect_ty = Ty::struct_type(rect_id, "Rectangle".to_string(), vec![]);
 
         // Test first set of members
         let width_result = env.new_type_variable(TypeVarKind::Blank, ExprID(15));

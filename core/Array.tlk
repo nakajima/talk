@@ -1,7 +1,7 @@
 struct Array<Element> {
-	let count: Int  
-	let capacity: Int
-	let storage: Pointer
+	let mut count: Int  
+	let mut capacity: Int
+	let mut storage: Pointer
 
 	init(capacity: Int) {
 		self.count = 0

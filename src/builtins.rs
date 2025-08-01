@@ -510,7 +510,7 @@ mod optional_tests {
                     })
                     .into()
                 ),
-                false  // is_mutable
+                false // is_mutable
             ))
         );
     }
@@ -537,7 +537,7 @@ mod array_tests {
         let checked = crate::type_checking::check("[1,2,3]").unwrap();
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
         );
     }
 

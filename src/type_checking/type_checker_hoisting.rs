@@ -9,7 +9,7 @@ use crate::{
     parsed_expr::ParsedExpr,
     parsing::expr_id::ExprID,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_checker::{Scheme, TypeChecker, TypeError},
     type_def::{EnumVariant, Initializer, Method, Property, TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
@@ -213,17 +213,35 @@ impl<'a> TypeChecker<'a> {
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::struct_type(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Struct => Ty::struct_type(
+                    *symbol_id,
+                    expr_ids.name.name_str().to_string(),
+                    canonical_types.clone(),
+                ),
                 PredeclarationKind::Extension => {
                     // For extensions, use the existing type
                     env.lookup_type(symbol_id)
                         .map(|td| td.ty())
-                        .unwrap_or_else(|| Ty::struct_type(*symbol_id, canonical_types.clone()))
+                        .unwrap_or_else(|| {
+                            Ty::struct_type(
+                                *symbol_id,
+                                expr_ids.name.name_str().to_string(),
+                                canonical_types.clone(),
+                            )
+                        })
                 }
-                PredeclarationKind::Enum => Ty::enum_type(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty::enum_type(
+                    *symbol_id,
+                    expr_ids.name.name_str().to_string(),
+                    canonical_types.clone(),
+                ),
                 PredeclarationKind::Protocol => {
                     // Use the protocol_type helper
-                    Ty::protocol_type(*symbol_id, canonical_types.clone())
+                    Ty::protocol_type(
+                        *symbol_id,
+                        expr_ids.name.name_str().to_string(),
+                        canonical_types.clone(),
+                    )
                 }
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
@@ -563,7 +581,11 @@ impl<'a> TypeChecker<'a> {
                         .infer_node(
                             variant.expr,
                             env,
-                            &Some(Ty::enum_type(def.symbol_id(), vec![])),
+                            &Some(Ty::enum_type(
+                                def.symbol_id(),
+                                def.name().to_string(),
+                                vec![],
+                            )),
                         )
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
@@ -588,9 +610,8 @@ impl<'a> TypeChecker<'a> {
                 // Protocols are now represented as Row types
                 let (name, associated_types) = match &typed_expr.ty {
                     Ty::Row {
-                        nominal_id: Some(name),
                         generics,
-                        kind: crate::ty::RowKind::Protocol,
+                        kind: RowKind::Protocol(name, _),
                         ..
                     } => (*name, generics.clone()),
                     Ty::Row { kind, .. } => {
@@ -706,7 +727,8 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _, _) = &lhs.expr
+            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _, _) =
+                &lhs.expr
             else {
                 continue;
             };

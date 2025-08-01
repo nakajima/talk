@@ -50,7 +50,7 @@ mod tests {
                 Expr::Call {
                     callee: any_typed!(
                         Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::struct_type(SymbolID::typed(1), vec![])
+                        Ty::struct_type(SymbolID::typed(1), "Person".to_string(), vec![])
                     )
                     .into(),
                     type_args: vec![],
@@ -62,7 +62,7 @@ mod tests {
                         Ty::Int
                     )],
                 },
-                Ty::struct_type(SymbolID::typed(1), vec![])
+                Ty::struct_type(SymbolID::typed(1), "Person".to_string(), vec![])
             ),
         );
     }
@@ -98,6 +98,7 @@ mod tests {
                                         )),
                                         Ty::struct_type(
                                             SymbolID::ANY,
+                                            "Person".to_string(),
                                             vec![Ty::TypeVar(TypeVarID::ANY)]
                                         )
                                     )
@@ -105,7 +106,7 @@ mod tests {
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::struct_type(SymbolID::ANY, vec![Ty::Int])
+                                Ty::struct_type(SymbolID::ANY, "Person".to_string(), vec![Ty::Int])
                             )
                             .into()
                         ),
@@ -140,6 +141,7 @@ mod tests {
                                         )),
                                         Ty::struct_type(
                                             SymbolID::ANY,
+                                            "Person".to_string(),
                                             vec![Ty::TypeVar(TypeVarID::ANY)]
                                         )
                                     )
@@ -147,7 +149,11 @@ mod tests {
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::struct_type(SymbolID::ANY, vec![Ty::Float])
+                                Ty::struct_type(
+                                    SymbolID::ANY,
+                                    "Person".to_string(),
+                                    vec![Ty::Float]
+                                )
                             )
                             .into()
                         ),
@@ -593,7 +599,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::enum_type(SymbolID::typed(1), vec![Ty::Int]),
+            Ty::enum_type(SymbolID::typed(1), "Maybe".to_string(), vec![Ty::Int]),
         );
     }
 
@@ -689,7 +695,7 @@ mod tests {
         assert_eq!(sym, *person_struct);
         assert_eq!(
             checker.type_for(checker.root_ids()[1]).unwrap(),
-            Ty::struct_type(*person_struct, vec![])
+            Ty::struct_type(*person_struct, "Person".to_string(), vec![])
         );
     }
 
@@ -715,24 +721,24 @@ mod tests {
                         Expr::Block(vec![
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(1), "foo".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "Fizz".to_string()),
                                     vec![]
                                 ),
-                                Ty::enum_type(SymbolID::typed(1), vec![])
+                                Ty::enum_type(SymbolID::typed(1), "Fizz".to_string(), vec![])
                             ),
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(1), "bar".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "Fizz".to_string()),
                                     vec![]
                                 ),
-                                Ty::enum_type(SymbolID::typed(1), vec![])
+                                Ty::enum_type(SymbolID::typed(1), "Fizz".to_string(), vec![])
                             )
                         ]),
-                        Ty::enum_type(SymbolID::typed(1), vec![])
+                        Ty::enum_type(SymbolID::typed(1), "Fizz".to_string(), vec![])
                     )
                     .into(),
                 },
-                Ty::enum_type(SymbolID::typed(1), vec![])
+                Ty::enum_type(SymbolID::typed(1), "Fizz".to_string(), vec![])
             )
         );
     }
@@ -759,7 +765,7 @@ mod tests {
                         Expr::Block(vec![
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(1), "foo".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "Fizz".to_string()),
                                     vec![any_typed!(
                                         Expr::TypeRepr {
                                             name: ResolvedName(SymbolID::INT, "Int".to_string()),
@@ -772,23 +778,27 @@ mod tests {
                                 ),
                                 Ty::Func(
                                     vec![Ty::Int],
-                                    Box::new(Ty::enum_type(SymbolID::typed(1), vec![])),
+                                    Box::new(Ty::enum_type(
+                                        SymbolID::typed(1),
+                                        "Fizz".to_string(),
+                                        vec![]
+                                    )),
                                     vec![]
                                 )
                             ),
                             any_typed!(
                                 Expr::EnumVariant(
-                                    ResolvedName(SymbolID::typed(1), "bar".to_string()),
+                                    ResolvedName(SymbolID::typed(1), "Fizz".to_string()),
                                     vec![]
                                 ),
-                                Ty::enum_type(SymbolID::typed(1), vec![])
+                                Ty::enum_type(SymbolID::typed(1), "Fizz".to_string(), vec![])
                             )
                         ]),
-                        Ty::enum_type(SymbolID::ANY, vec![])
+                        Ty::enum_type(SymbolID::ANY, "Fizz".to_string(), vec![])
                     )
                     .into(),
                 },
-                Ty::enum_type(SymbolID::typed(1), vec![])
+                Ty::enum_type(SymbolID::typed(1), "Fizz".to_string(), vec![])
             )
         );
     }
@@ -807,9 +817,8 @@ mod tests {
         let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         match enum_ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(symbol_id, _),
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -836,7 +845,10 @@ mod tests {
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(checker.root_ids()[1]).unwrap();
-        assert_eq!(call_result, Ty::enum_type(SymbolID::typed(1), vec![]));
+        assert_eq!(
+            call_result,
+            Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![])
+        );
     }
 
     #[test]
@@ -856,9 +868,8 @@ mod tests {
         let call1 = checker.type_for(checker.root_ids()[1]).unwrap();
         match call1 {
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(symbol_id, _),
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -871,9 +882,8 @@ mod tests {
         let call2 = checker.type_for(checker.root_ids()[2]).unwrap();
         match call2 {
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(symbol_id, _),
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -903,9 +913,8 @@ mod tests {
         let result_ty = checker.type_for(checker.root_ids()[2]).unwrap();
         match result_ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(symbol_id, _),
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(5)); // Result enum
@@ -914,9 +923,8 @@ mod tests {
                 // First generic should be Option<Int>
                 match &generics[0] {
                     Ty::Row {
-                        nominal_id: Some(opt_id),
                         generics: opt_generics,
-                        kind: RowKind::Enum,
+                        kind: RowKind::Enum(opt_id, _),
                         ..
                     } => {
                         assert_eq!(*opt_id, SymbolID::typed(1)); // Option enum
@@ -952,7 +960,10 @@ mod tests {
         match func_ty {
             Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::enum_type(SymbolID::typed(1), vec![])); // Bool
+                assert_eq!(
+                    params[0],
+                    Ty::enum_type(SymbolID::typed(1), "Boolean".to_string(), vec![])
+                ); // Bool
                 assert_eq!(*ret, Ty::Int);
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
@@ -981,7 +992,10 @@ mod tests {
         match func_ty {
             Ty::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::enum_type(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
+                assert_eq!(
+                    params[0],
+                    Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![Ty::Int])
+                ); // Option<Int>
                 assert_eq!(*ret, Ty::Int);
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
@@ -1002,9 +1016,8 @@ mod tests {
         let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         match enum_ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(symbol_id, _),
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -1030,8 +1043,7 @@ mod tests {
                 // Return type should be List<T>
                 match ret_ty.as_ref() {
                     Ty::Row {
-                        nominal_id: Some(enum_id),
-                        kind: RowKind::Enum,
+                        kind: RowKind::Enum(enum_id, _),
                         ..
                     } => assert_eq!(*enum_id, SymbolID::typed(1)),
                     _ => panic!("Expected List return type"),
@@ -1039,8 +1051,7 @@ mod tests {
                 // Second field should be List<T> (recursive reference)
                 match &field_types[1] {
                     Ty::Row {
-                        nominal_id: Some(list_id),
-                        kind: RowKind::Enum,
+                        kind: RowKind::Enum(list_id, _),
                         ..
                     } => assert_eq!(*list_id, SymbolID::typed(1)),
                     _ => panic!("Expected recursive List type"),
@@ -1115,7 +1126,10 @@ mod tests {
         .unwrap();
 
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::enum_type(SymbolID::typed(1), vec![])); // Bool
+        assert_eq!(
+            call_result,
+            Ty::enum_type(SymbolID::typed(1), "Boolean".to_string(), vec![])
+        ); // Bool
     }
 
     #[test]
@@ -1136,7 +1150,7 @@ mod tests {
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
         assert_eq!(
             call_result,
-            Ty::enum_type(SymbolID::typed(1), vec![Ty::Int])
+            Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![Ty::Int])
         ); // Option<Int>
     }
 
@@ -1163,12 +1177,20 @@ mod tests {
                 // Input: Either<Int, Float>
                 assert_eq!(
                     params[0],
-                    Ty::enum_type(SymbolID::typed(1), vec![Ty::Int, Ty::Float])
+                    Ty::enum_type(
+                        SymbolID::typed(1),
+                        "Either".to_string(),
+                        vec![Ty::Int, Ty::Float]
+                    )
                 );
                 // Output: Either<Float, Int>
                 assert_eq!(
                     *ret,
-                    Ty::enum_type(SymbolID::typed(1), vec![Ty::Float, Ty::Int])
+                    Ty::enum_type(
+                        SymbolID::typed(1),
+                        "Either".to_string(),
+                        vec![Ty::Float, Ty::Int]
+                    )
                 );
             }
             _ => panic!("Expected function type"),
@@ -1194,12 +1216,14 @@ mod tests {
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(checker.root_ids()[0]).unwrap();
-        assert_eq!(x_ty, Ty::enum_type(SymbolID::OPTIONAL, vec![Ty::Int]));
+        assert_eq!(
+            x_ty,
+            Ty::enum_type(SymbolID::OPTIONAL, "Optional".to_string(), vec![Ty::Int])
+        );
         match x_ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(symbol_id, _),
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
@@ -1213,7 +1237,7 @@ mod tests {
         assert_eq!(match_ty, Ty::Int);
         assert_eq!(
             checker.type_for(checker.root_ids()[3]).unwrap(),
-            Ty::enum_type(SymbolID::OPTIONAL, vec![Ty::Int])
+            Ty::enum_type(SymbolID::OPTIONAL, "Optional".to_string(), vec![Ty::Int])
         );
     }
 
@@ -1295,7 +1319,11 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]),
-            Some(Ty::enum_type(SymbolID::typed(1), vec![]))
+            Some(Ty::enum_type(
+                SymbolID::typed(1),
+                "Fizz".to_string(),
+                vec![]
+            ))
         );
         let Some(enum_def) = checked.env.lookup_enum(&SymbolID::typed(1)) else {
             panic!();
@@ -1307,7 +1335,11 @@ mod tests {
                 .unwrap(),
             Ty::Func(
                 vec![],
-                Box::new(Ty::enum_type(SymbolID::typed(1), vec![])),
+                Box::new(Ty::enum_type(
+                    SymbolID::typed(1),
+                    "Fizz".to_string(),
+                    vec![]
+                )),
                 vec![]
             )
         );
@@ -1352,7 +1384,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
         );
     }
 
@@ -1368,7 +1400,8 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
             Ty::Method {
-                self_ty: Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                self_ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
+                    .into(),
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
             }
         );
@@ -1388,8 +1421,12 @@ mod tests {
         assert_eq!(
             root.ty,
             Ty::Func(
-                vec![Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])],
-                Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                vec![Ty::struct_type(
+                    SymbolID::ARRAY,
+                    "Array".to_string(),
+                    vec![Ty::Int]
+                )],
+                Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int]).into(),
                 vec![],
             )
         );
@@ -1427,7 +1464,8 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
             Ty::Method {
-                self_ty: Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
+                self_ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
+                    .into(),
                 func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
             }
         );
@@ -1447,11 +1485,11 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
         );
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Float])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Float])
         );
     }
 
@@ -1934,7 +1972,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(2).unwrap(),
-            Ty::struct_type(SymbolID::typed(4), vec![])
+            Ty::struct_type(SymbolID::typed(4), "I".to_string(), vec![])
         );
     }
 
@@ -2152,7 +2190,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(2).unwrap(),
-            Ty::struct_type(SymbolID::resolved(1), vec![])
+            Ty::struct_type(SymbolID::resolved(1), "ImportedStruct".to_string(), vec![])
         );
         assert_eq!(checked.nth(3).unwrap(), Ty::Int);
         assert_eq!(checked.nth(4).unwrap(), Ty::Float);
@@ -2244,7 +2282,7 @@ mod tests {
 
         // Test that member access works
         let meta = ExprMetaStorage::default();
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, "Point".to_string(), vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(4));
 
         env.constrain(Constraint::MemberAccess(
@@ -2292,14 +2330,14 @@ mod tests {
             crate::type_def::EnumVariant {
                 tag: 0,
                 name: "None".to_string(),
-                ty: Ty::enum_type(option_id, vec![]),
+                ty: Ty::enum_type(option_id, "Option".to_string(), vec![]),
             },
             crate::type_def::EnumVariant {
                 tag: 1,
                 name: "Some".to_string(),
                 ty: Ty::Func(
                     vec![Ty::Int],
-                    Box::new(Ty::enum_type(option_id, vec![])),
+                    Box::new(Ty::enum_type(option_id, "Option".to_string(), vec![])),
                     vec![],
                 ),
             },
@@ -2310,7 +2348,7 @@ mod tests {
 
         // Test variant access
         let meta = ExprMetaStorage::default();
-        let _option_ty = Ty::enum_type(option_id, vec![]);
+        let _option_ty = Ty::enum_type(option_id, "Option".to_string(), vec![]);
         let _result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(11));
 
         // Access None variant through the enum type
@@ -2332,7 +2370,7 @@ mod tests {
 
         // Create a Point struct type
         let point_id = SymbolID(1000);
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, "Point".to_string(), vec![]);
 
         // In a real implementation, when we define a struct, we would:
         // 1. Create a canonical row variable for it
@@ -6311,7 +6349,7 @@ mod tests {
         let _conformance_result = env.new_type_variable(TypeVarKind::Blank, ExprID(120));
         env.constrain(Constraint::ConformsTo {
             expr_id: ExprID(121),
-            ty: Ty::struct_type(circle_id, vec![]),
+            ty: Ty::struct_type(circle_id, "Circle".to_string(), vec![]),
             conformance: Conformance {
                 protocol_id: drawable_id,
                 associated_types: vec![],
@@ -6485,7 +6523,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "host".to_string(),
-                field_ty: Ty::struct_type(SymbolID(100), vec![]), // String type
+                field_ty: Ty::struct_type(SymbolID(100), "Config".to_string(), vec![]), // String type
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6954,7 +6992,7 @@ mod tests {
         env.register(&circle_def).unwrap();
 
         // Step 3: Test member access on Circle
-        let circle_ty = Ty::struct_type(circle_id, vec![]);
+        let circle_ty = Ty::struct_type(circle_id, "Circle".to_string(), vec![]);
         let radius_result = env.new_type_variable(TypeVarKind::Blank, ExprID(8));
 
         env.constrain(Constraint::MemberAccess(
@@ -7161,7 +7199,7 @@ mod tests {
         });
 
         // Now test member access
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty::struct_type(point_id, "Point".to_string(), vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(4));
 
         env.constrain(Constraint::MemberAccess(
@@ -7236,7 +7274,7 @@ mod tests {
             },
         });
 
-        let rect_ty = Ty::struct_type(rect_id, vec![]);
+        let rect_ty = Ty::struct_type(rect_id, "Rectangle".to_string(), vec![]);
 
         // Test accessing traditional member
         let width_result = env.new_type_variable(TypeVarKind::Blank, ExprID(13));
@@ -7868,7 +7906,7 @@ makePoint()
             assert_eq!(params.len(), 1);
             assert!(matches!(
                 &params[0],
-                Ty::Row { fields, row: None, nominal_id: None, generics: _, .. } if fields.len() == 2
+                Ty::Row { kind: RowKind::Record, fields, row: None, generics: _, .. } if fields.len() == 2
             ));
             assert_eq_diff!(ret_ty.as_ref(), &Ty::Int);
         } else {
@@ -7895,7 +7933,6 @@ makePoint()
             match &roots[1].ty {
                 Ty::Row {
                     fields,
-                    nominal_id: None,
                     generics: _,
                     ..
                 } => {
@@ -8002,7 +8039,6 @@ makePoint()
         if let Some(last) = checked.roots().last()
             && let Ty::Row {
                 fields,
-                nominal_id: None,
                 generics: _,
                 ..
             } = &last.ty
@@ -8082,7 +8118,6 @@ makePoint()
             match &roots[1].ty {
                 Ty::Row {
                     fields,
-                    nominal_id: None,
                     generics: _,
                     ..
                 } => {
@@ -8126,7 +8161,6 @@ makePoint()
             match &roots[1].ty {
                 Ty::Row {
                     fields,
-                    nominal_id: None,
                     generics: _,
                     ..
                 } => {
@@ -8166,7 +8200,6 @@ makePoint()
             match &roots[2].ty {
                 Ty::Row {
                     fields,
-                    nominal_id: None,
                     generics: _,
                     ..
                 } => {
@@ -8219,7 +8252,6 @@ makePoint()
             match &roots[2].ty {
                 Ty::Row {
                     fields,
-                    nominal_id: None,
                     generics: _,
                     ..
                 } => {

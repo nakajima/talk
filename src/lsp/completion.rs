@@ -3,6 +3,7 @@ use crate::Typed;
 use crate::compiling::driver::Driver;
 use crate::environment::Environment;
 use crate::symbol_table::SymbolKind;
+use crate::ty::RowKind;
 use crate::type_checking::ty::Ty;
 use crate::type_def::TypeMember;
 use async_lsp::lsp_types::CompletionItem;
@@ -94,12 +95,13 @@ impl<'a> CompletionContext<'a> {
         match ty {
             // Enums are now represented as Row types
             // Handle unified row types
-            Ty::Row {
-                fields, nominal_id, ..
-            } => {
-                if let Some(id) = nominal_id {
+            Ty::Row { fields, kind, .. } => {
+                if let RowKind::Struct(symbol_id, _)
+                | RowKind::Protocol(symbol_id, _)
+                | RowKind::Enum(symbol_id, _) = kind
+                {
                     // Nominal row - use typedef
-                    if let Some(type_def) = self.env.lookup_type(id) {
+                    if let Some(type_def) = self.env.lookup_type(symbol_id) {
                         self.get_completions_for_typedef(type_def)
                     } else {
                         vec![]

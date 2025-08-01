@@ -345,9 +345,11 @@ impl<'a> TypeChecker<'a> {
             crate::parsed_expr::Expr::Variable(name) => {
                 self.infer_variable(parsed_expr.id, name, env)
             }
-            crate::parsed_expr::Expr::Parameter(name @ Name::Resolved(_, _), param_ty, _is_mutable) => {
-                self.infer_parameter(parsed_expr.id, name, param_ty, env)
-            }
+            crate::parsed_expr::Expr::Parameter(
+                name @ Name::Resolved(_, _),
+                param_ty,
+                _is_mutable,
+            ) => self.infer_parameter(parsed_expr.id, name, param_ty, env),
             crate::parsed_expr::Expr::Tuple(types) => self.infer_tuple(parsed_expr.id, types, env),
             crate::parsed_expr::Expr::Unary(op, rhs) => {
                 self.infer_unary(parsed_expr.id, op.clone(), rhs, expected, env)
@@ -567,6 +569,7 @@ impl<'a> TypeChecker<'a> {
         // Protocols are represented as Row types
         let ty = Ty::protocol_type(
             *symbol_id,
+            name_str.to_string(),
             inferred_associated_types
                 .iter()
                 .map(|t| t.ty.clone())
@@ -677,9 +680,8 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let Some(Ty::Row {
-            nominal_id: Some(enum_id),
             generics,
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(enum_id, name),
             ..
         }) = env.selfs.last().cloned()
         else {
@@ -694,18 +696,18 @@ impl<'a> TypeChecker<'a> {
         // - A function from the variant's parameters to the enum type (if it has parameters)
         // - The enum type itself (if it has no parameters)
         let ty = if values.is_empty() {
-            Ty::enum_type(enum_id, generics)
+            Ty::enum_type(enum_id, name.clone(), generics)
         } else {
             Ty::Func(
                 values.iter().map(|v| v.ty.clone()).collect(),
-                Box::new(Ty::enum_type(enum_id, generics)),
+                Box::new(Ty::enum_type(enum_id, name.clone(), generics)),
                 vec![], // No generic parameters on the function itself
             )
         };
 
         Ok(TypedExpr {
             id,
-            expr: typed_expr::Expr::EnumVariant(ResolvedName(enum_id, name.name_str()), values),
+            expr: typed_expr::Expr::EnumVariant(ResolvedName(enum_id, name.to_string()), values),
             ty,
         })
     }
@@ -888,6 +890,7 @@ impl<'a> TypeChecker<'a> {
 
         let ty = Ty::struct_type(
             *symbol_id,
+            name_str.to_string(),
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
 
@@ -930,6 +933,7 @@ impl<'a> TypeChecker<'a> {
 
         let ty = Ty::struct_type(
             *symbol_id,
+            name_str.to_string(),
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
 
@@ -971,7 +975,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: Ty::struct_type(SymbolID::ARRAY, vec![ty]),
+            ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![ty]),
             expr: typed_expr::Expr::LiteralArray(typed_items),
         })
     }
@@ -1091,7 +1095,7 @@ impl<'a> TypeChecker<'a> {
 
         match &callee.expr {
             // Handle struct initialization
-            typed_expr::Expr::Variable(ResolvedName(symbol_id, _name_str))
+            typed_expr::Expr::Variable(ResolvedName(symbol_id, name_str))
                 if env.is_struct_symbol(symbol_id) =>
             {
                 let Some(struct_def) = env.lookup_struct(symbol_id).cloned() else {
@@ -1139,7 +1143,7 @@ impl<'a> TypeChecker<'a> {
                     .collect::<Vec<Constraint>>();
 
                 ret_var = env.instantiate(&Scheme::new(
-                    Ty::struct_type(*symbol_id, type_args.clone()),
+                    Ty::struct_type(*symbol_id, name_str.to_string(), type_args.clone()),
                     struct_def.canonical_type_variables(),
                     constraints,
                 ));
@@ -1193,14 +1197,14 @@ impl<'a> TypeChecker<'a> {
             parsed_expr::Expr::Variable(_) => {
                 self.check_mutability(lhs)?;
             }
-            parsed_expr::Expr::Member(receiver, field_name) => {
+            parsed_expr::Expr::Member(_receiver, _field_name) => {
                 // We'll add the mutability constraint after we have the type information
                 // This will be handled after type inference
             }
             _ => {
-                return Err(TypeError::MutabilityError(format!(
-                    "Cannot assign to this expression"
-                )));
+                // return Err(TypeError::MutabilityError(format!(
+                //     "Cannot assign to this expression"
+                // )));
             }
         }
 
@@ -1214,9 +1218,10 @@ impl<'a> TypeChecker<'a> {
                 // The receiver type is already determined during lhs inference
                 // We can extract it from the typed expression
                 match &lhs_ty.expr {
-                    typed_expr::Expr::Member(typed_receiver, _) => {
-                        typed_receiver.as_ref().map(|r| r.ty.clone()).unwrap_or(Ty::SelfType)
-                    }
+                    typed_expr::Expr::Member(typed_receiver, _) => typed_receiver
+                        .as_ref()
+                        .map(|r| r.ty.clone())
+                        .unwrap_or(Ty::SelfType),
                     _ => Ty::SelfType, // Fallback
                 }
             } else {
@@ -1248,48 +1253,48 @@ impl<'a> TypeChecker<'a> {
         match &expr.expr {
             // Let expressions are declarations, always allowed
             parsed_expr::Expr::Let(..) => Ok(()),
-            
+
             // Variable assignment: check if variable is mutable
             parsed_expr::Expr::Variable(name) => {
                 let symbol_id = name.symbol_id().map_err(|_| {
                     TypeError::MutabilityError(format!("Cannot assign to unresolved variable"))
                 })?;
-                
+
                 let symbol_info = self.symbol_table.get(&symbol_id).ok_or_else(|| {
                     TypeError::MutabilityError(format!("Cannot find symbol information"))
                 })?;
-                
+
                 if !symbol_info.is_mutable {
                     return Err(TypeError::MutabilityError(format!(
                         "Cannot assign to immutable variable '{}'",
                         symbol_info.name
                     )));
                 }
-                
+
                 Ok(())
             }
-            
+
             // Member assignment: check if the field is mutable
-            parsed_expr::Expr::Member(receiver, field_name) => {
+            parsed_expr::Expr::Member(receiver, _field_name) => {
                 // First check if the receiver is mutable (for owned types)
                 if let Some(receiver_expr) = receiver {
                     self.check_mutability(receiver_expr)?;
                 }
-                
+
                 // Then check if the field itself is mutable
                 // This requires looking up the field in the type definition
                 // For now, we'll accept all field assignments until we have full type information
                 // in the mutability checker
-                
+
                 // TODO: Look up the struct type and check if the specific field is mutable
                 // This would require access to the type information for the receiver
                 Ok(())
             }
-            
+
             // Array/indexing assignment would go here
-            _ => Err(TypeError::MutabilityError(format!(
-                "Cannot assign to this expression"
-            ))),
+            _ => Ok(()), // Err(TypeError::MutabilityError(format!(
+                         //     "Cannot assign to this expression"
+                         // ))),
         }
     }
 
@@ -1307,7 +1312,10 @@ impl<'a> TypeChecker<'a> {
         let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
                 Some(Ty::Row {
-                    nominal_id: Some(symbol_id),
+                    kind:
+                        RowKind::Struct(symbol_id, _)
+                        | RowKind::Protocol(symbol_id, _)
+                        | RowKind::Enum(symbol_id, _),
                     ..
                 }) => (*symbol_id, "Self".to_string()),
                 _ => {
@@ -1330,9 +1338,8 @@ impl<'a> TypeChecker<'a> {
                 // Protocols are now represented as Row types
                 let (protocol_id, associated_types) = match &typed_conformance.ty {
                     Ty::Row {
-                        nominal_id: Some(id),
                         generics,
-                        kind: RowKind::Protocol,
+                        kind: RowKind::Protocol(id, _),
                         ..
                     } => (*id, generics.clone()),
                     Ty::Row { kind, .. } => {
@@ -1661,8 +1668,7 @@ impl<'a> TypeChecker<'a> {
                 if let Some(self_) = env.selfs.last() {
                     match self_ {
                         Ty::Row {
-                            nominal_id: Some(symbol_id),
-                            kind: RowKind::Protocol,
+                            kind: RowKind::Protocol(symbol_id, _),
                             ..
                         } => {
                             Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id))
@@ -2131,14 +2137,13 @@ impl<'a> TypeChecker<'a> {
                     Ty::Row {
                         fields: field_types,
                         row: row_variable,
-                        nominal_id,
-                        kind: RowKind::Struct | RowKind::Record,
+                        kind,
                         ..
                     } => {
-                        tracing::debug!("field_types: {field_types:?}, nominal_id: {nominal_id:?}");
+                        tracing::debug!("field_types: {field_types:?}, nominal_id: {kind:?}");
 
                         // For nominal struct types, get fields from the TypeDef
-                        let actual_field_types = if let Some(symbol_id) = nominal_id {
+                        let actual_field_types = if let RowKind::Struct(symbol_id, _) = kind {
                             // Look up the struct definition to get its fields
                             if let Some(struct_def) = env.lookup_struct(symbol_id) {
                                 struct_def
@@ -2242,9 +2247,8 @@ impl<'a> TypeChecker<'a> {
                 // The expected type should be an Enum type
                 match expected {
                     Ty::Row {
-                        nominal_id: Some(enum_id),
                         generics: type_args,
-                        kind: RowKind::Enum,
+                        kind: RowKind::Enum(enum_id, _),
                         ..
                     } => {
                         let Some(enum_def) = env.lookup_enum(enum_id).cloned() else {
@@ -2261,7 +2265,7 @@ impl<'a> TypeChecker<'a> {
                         let values = match &variant.ty {
                             Ty::Func(params, _, _) => params,
                             Ty::Row {
-                                kind: RowKind::Enum,
+                                kind: RowKind::Enum(_, _),
                                 ..
                             } => {
                                 // Variant with no parameters
@@ -2385,7 +2389,6 @@ impl<'a> TypeChecker<'a> {
                     match &spread_ty {
                         Ty::Row {
                             fields: spread_fields,
-                            nominal_id: None,
                             generics: _,
                             ..
                         } => {
@@ -2444,7 +2447,6 @@ impl<'a> TypeChecker<'a> {
         let record_ty = Ty::Row {
             fields: field_vec,
             row: None,             // No row variable for concrete record literals
-            nominal_id: None,      // Records are structural types
             generics: vec![],      // Records don't have generics
             kind: RowKind::Record, // Records are structural types
         };
@@ -2455,7 +2457,6 @@ impl<'a> TypeChecker<'a> {
                 Ty::Row {
                     fields: expected_fields,
                     row: expected_row,
-                    nominal_id: None,
                     generics: _,
                     ..
                 } => {
@@ -2630,7 +2631,6 @@ impl<'a> TypeChecker<'a> {
         let record_ty = Ty::Row {
             fields: field_types,
             row: typed_row_var.as_ref().map(|tv| Box::new(tv.ty.clone())),
-            nominal_id: None,      // Records are structural types
             generics: vec![],      // Records don't have generics
             kind: RowKind::Record, // Records are structural types
         };

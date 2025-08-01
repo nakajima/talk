@@ -123,7 +123,6 @@ impl Substitutions {
             Ty::Row {
                 fields,
                 row,
-                nominal_id,
                 generics,
                 kind,
             } => {
@@ -139,7 +138,6 @@ impl Substitutions {
                 Ty::Row {
                     fields: applied_fields,
                     row: applied_row,
-                    nominal_id: *nominal_id,
                     generics: self.apply_multiple(generics, depth + 1, context),
                     kind: kind.clone(),
                 }
@@ -313,16 +311,16 @@ impl Substitutions {
             // Handle Row types - check nominal_id and unify generics
             (
                 Ty::Row {
-                    nominal_id: Some(id1),
+                    kind: kind1,
                     generics: gen1,
                     ..
                 },
                 Ty::Row {
-                    nominal_id: Some(id2),
+                    kind: kind2,
                     generics: gen2,
                     ..
                 },
-            ) if id1 == id2 => {
+            ) if kind1 == kind2 => {
                 // Unify generics
                 if gen1.len() != gen2.len() {
                     return Err(TypeError::Mismatch(
@@ -338,13 +336,11 @@ impl Substitutions {
             // Handle records
             (
                 Ty::Row {
-                    nominal_id: None,
                     generics: lhs_generics,
                     fields: lhs_fields,
                     ..
                 },
                 Ty::Row {
-                    nominal_id: None,
                     generics: rhs_generics,
                     fields: rhs_fields,
                     ..

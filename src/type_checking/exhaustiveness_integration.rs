@@ -46,8 +46,7 @@ impl<'a> RowEnumAnalyzer<'a> {
         match ty {
             Ty::TypeVar(type_var) => self.analyze_type_var(type_var),
             Ty::Row {
-                nominal_id: Some(enum_id),
-                kind: RowKind::Enum,
+                kind: RowKind::Enum(enum_id, _),
                 ..
             } => self.analyze_traditional_enum(enum_id),
             _ => None,
@@ -166,8 +165,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             if !all_missing.is_empty() {
                 // For enums, return Variants with all missing variant names
                 if let Ty::Row {
-                    kind: RowKind::Enum,
-                    nominal_id: Some(id),
+                    kind: RowKind::Enum(id, _),
                     ..
                 } = scrutinee_ty
                     && let Some(enum_def) = self.analyzer.env.lookup_enum(id)
