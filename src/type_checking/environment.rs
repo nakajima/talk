@@ -9,9 +9,8 @@ use crate::{
     parsing::expr_id::ExprID,
     semantic_index::SemanticIndex,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_checker::TypeError,
-    type_def::{TypeDef, TypeDefKind},
     type_var_context::{TypeVarContext, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -40,7 +39,6 @@ pub struct Environment {
     pub typed_exprs: TypedExprs,
     constraints: Vec<Constraint>,
     pub scopes: Vec<Scope>,
-    pub types: BTreeMap<SymbolID, TypeDef>,
     pub selfs: Vec<Ty>,
     pub context: TypeVarContext,
     next_id: i32,
@@ -62,7 +60,6 @@ impl Default for Environment {
             typed_exprs: BTreeMap::new(),
             constraints: vec![],
             scopes: vec![crate::builtins::default_env_scope()],
-            types: crate::builtins::default_env_types(),
             next_id: 0,
             selfs: vec![],
             context,
@@ -170,14 +167,6 @@ impl Environment {
         }
 
         // Populate TypeDef members from row constraints after solving
-        let type_ids: Vec<SymbolID> = self.types.keys().cloned().collect();
-        for type_id in type_ids {
-            if let Some(mut type_def) = self.types.remove(&type_id) {
-                type_def.populate_from_rows(self);
-                self.types.insert(type_id, type_def);
-            }
-        }
-
         Ok(solution)
     }
 
@@ -332,65 +321,18 @@ impl Environment {
         type_var_id
     }
 
-    pub fn register(&mut self, def: &TypeDef) -> Result<(), TypeError> {
-        self.register_with_mode(def, false)
-    }
-
-    /// Register a type definition with explicit mode
-    /// If `is_extension` is true, only new members are added to existing types
-    pub fn register_with_mode(
-        &mut self,
-        def: &TypeDef,
-        is_extension: bool,
-    ) -> Result<(), TypeError> {
-        self.declare(
-            def.symbol_id,
-            Scheme::new(def.ty(), def.canonical_type_variables(), vec![]),
-        )?;
-
-        // If the type already exists (e.g., from a struct definition being extended),
-        // merge the new members instead of replacing the entire definition
-        if let Some(existing_def) = self.types.get_mut(&def.symbol_id()) {
-            tracing::debug!(
-                "Merging type {} - existing has {} members, new has {} members, is_extension: {}",
-                existing_def.name_str,
-                existing_def.members.len(),
-                def.members.len(),
-                is_extension
+    pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {
+        if let Ok(scheme) = self.lookup_symbol(symbol_id) {
+            return matches!(
+                scheme.ty(),
+                Ty::Row {
+                    kind: RowKind::Struct(_, _),
+                    ..
+                }
             );
-
-            // Always merge new members into existing
-            for (name, member) in &def.members {
-                tracing::trace!("  Adding member: {}", name);
-                existing_def.members.insert(name.clone(), member.clone());
-            }
-
-            // Merge conformances
-            existing_def.conformances.extend(def.conformances.clone());
-
-            // Update row_var if the new definition has one but existing doesn't
-            if existing_def.row_var.is_none() && def.row_var.is_some() {
-                existing_def.row_var = def.row_var.clone();
-            }
-
-            // Merge row_managed_members set
-            existing_def.merge_row_managed_members(def);
-
-            tracing::debug!(
-                "After merge, {} has {} members",
-                existing_def.name_str,
-                existing_def.members.len()
-            );
-        } else {
-            tracing::trace!(
-                "Inserting new type {} with {} members",
-                def.name_str,
-                def.members.len()
-            );
-            // Type doesn't exist yet, insert the whole definition
-            self.types.insert(def.symbol_id(), def.clone());
         }
-        Ok(())
+
+        false
     }
 
     pub fn lookup_symbol(&self, symbol_id: &SymbolID) -> Result<&Scheme, TypeError> {
@@ -427,64 +369,6 @@ impl Environment {
 
         Ok(scheme)
     }
-
-    pub fn lookup_type(&self, name: &SymbolID) -> Option<&TypeDef> {
-        self.types.get(name)
-    }
-
-    pub fn lookup_type_mut(&mut self, name: &SymbolID) -> Option<&mut TypeDef> {
-        self.types.get_mut(name)
-    }
-
-    pub fn is_struct_symbol(&self, symbol_id: &SymbolID) -> bool {
-        matches!(
-            self.lookup_type(symbol_id),
-            Some(TypeDef {
-                kind: TypeDefKind::Struct,
-                ..
-            })
-        )
-    }
-
-    pub fn lookup_enum(&self, name: &SymbolID) -> Option<&TypeDef> {
-        if let Some(def) = self.types.get(name)
-            && def.kind == TypeDefKind::Enum
-        {
-            Some(def)
-        } else {
-            None
-        }
-    }
-
-    pub fn lookup_enum_mut(&mut self, name: &SymbolID) -> Option<&mut TypeDef> {
-        if let Some(def) = self.types.get_mut(name)
-            && def.kind == TypeDefKind::Enum
-        {
-            Some(def)
-        } else {
-            None
-        }
-    }
-
-    pub fn lookup_struct(&self, name: &SymbolID) -> Option<&TypeDef> {
-        if let Some(def) = self.types.get(name)
-            && def.kind == TypeDefKind::Struct
-        {
-            Some(def)
-        } else {
-            None
-        }
-    }
-
-    pub fn lookup_protocol(&self, name: &SymbolID) -> Option<&TypeDef> {
-        if let Some(def) = self.types.get(name)
-            && def.kind == TypeDefKind::Protocol
-        {
-            Some(def)
-        } else {
-            None
-        }
-    }
 }
 
 fn walk(ty: &Ty, map: &Substitutions) -> Ty {
@@ -519,9 +403,7 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
         }
         Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
         Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
-        Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
-            ty.clone()
-        }
+        Ty::SelfType | Ty::Primitive(_) => ty.clone(),
         Ty::Row {
             fields,
             row,

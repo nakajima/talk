@@ -150,17 +150,6 @@ pub fn _compile_prelude() -> Prelude {
         exit(0)
     }
 
-    // Populate type members from row constraints before clearing constraints
-    // This ensures prelude types have all their members available when imported
-    let type_ids: Vec<SymbolID> = environment.types.keys().cloned().collect();
-    for type_id in type_ids {
-        if let Some(mut type_def) = environment.types.remove(&type_id) {
-            type_def.populate_from_rows(&environment);
-
-            environment.types.insert(type_id, type_def);
-        }
-    }
-
     environment.clear_constraints();
 
     Prelude {

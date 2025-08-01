@@ -3,11 +3,8 @@ use std::{collections::BTreeMap, fmt::Display};
 use derive_visitor::Drive;
 
 use crate::{
-    SymbolID,
-    environment::Environment,
-    impl_option_eq,
+    SymbolID, impl_option_eq,
     type_checker::{FuncParams, FuncReturning},
-    type_def::TypeDef,
     type_var_id::TypeVarID,
 };
 
@@ -31,11 +28,18 @@ pub enum RowKind {
 impl_option_eq!(Ty);
 
 #[derive(Clone, PartialEq, Debug, Drive)]
-pub enum Ty {
+pub enum Primitive {
     Void,
     Int,
-    Bool,
     Float,
+    Bool,
+    Byte,
+    Pointer,
+}
+
+#[derive(Clone, PartialEq, Debug, Drive)]
+pub enum Ty {
+    Primitive(Primitive),
     Init(#[drive(skip)] SymbolID, Vec<Ty> /* params */),
     Method {
         self_ty: Box<Ty>,
@@ -54,8 +58,6 @@ pub enum Ty {
     TypeVar(#[drive(skip)] TypeVarID),
     Tuple(Vec<Ty>),
     Array(Box<Ty>),
-    Byte,
-    Pointer,
     SelfType,
     // Unified row type that can represent structs, protocols, and records
     Row {
@@ -71,11 +73,7 @@ pub enum Ty {
 impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Ty::Byte => write!(f, "byte"),
-            Ty::Void => write!(f, "void"),
-            Ty::Int => write!(f, "Int"),
-            Ty::Bool => write!(f, "Bool"),
-            Ty::Float => write!(f, "Float"),
+            Ty::Primitive(primitive) => write!(f, "{primitive:?}"),
             Ty::SelfType => write!(f, "Self"),
             Ty::Init(_, params) => write!(
                 f,
@@ -119,7 +117,6 @@ impl Display for Ty {
                     .join(", ")
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
-            Ty::Pointer => write!(f, "pointer"),
             Ty::Row {
                 fields,
                 row,
@@ -160,7 +157,15 @@ impl std::hash::Hash for Ty {
 
 impl Eq for Ty {}
 
+#[allow(non_upper_case_globals)]
 impl Ty {
+    pub const Int: Ty = Ty::Primitive(Primitive::Int);
+    pub const Float: Ty = Ty::Primitive(Primitive::Float);
+    pub const Bool: Ty = Ty::Primitive(Primitive::Bool);
+    pub const Byte: Ty = Ty::Primitive(Primitive::Byte);
+    pub const Pointer: Ty = Ty::Primitive(Primitive::Pointer);
+    pub const Void: Ty = Ty::Primitive(Primitive::Void);
+
     /// Check if this type is a protocol
     pub fn is_protocol(&self) -> bool {
         matches!(
@@ -278,22 +283,6 @@ impl Ty {
             }
             (_, _) => self == other,
         }
-    }
-
-    pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
-        let sym = match self {
-            Ty::Row {
-                kind: RowKind::Struct(sym, _) | RowKind::Enum(sym, _) | RowKind::Protocol(sym, _),
-                ..
-            } => *sym,
-            Ty::Int => SymbolID::INT,
-            Ty::Float => SymbolID::FLOAT,
-            Ty::Bool => SymbolID::BOOL,
-            Ty::Pointer => SymbolID::POINTER,
-            _ => return None,
-        };
-
-        env.lookup_type(&sym)
     }
 
     pub fn replace<F: Fn(&Ty) -> bool>(&self, replacement: Ty, f: &F) -> Ty {

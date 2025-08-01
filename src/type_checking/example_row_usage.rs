@@ -3,14 +3,8 @@
 #[cfg(test)]
 mod examples {
     use crate::{
-        ExprMetaStorage, SymbolID,
-        constraint::Constraint,
-        constraint_solver::ConstraintSolver,
-        environment::Environment,
-        expr_id::ExprID,
-        ty::Ty,
-        type_def::{Method, Property, TypeDef, TypeDefKind},
-        type_var_id::TypeVarKind,
+        ExprMetaStorage, SymbolID, constraint::Constraint, constraint_solver::ConstraintSolver,
+        environment::Environment, expr_id::ExprID, ty::Ty, type_var_id::TypeVarKind,
     };
 
     /// Example: Creating a struct with row-based members

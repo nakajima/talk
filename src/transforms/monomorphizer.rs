@@ -11,7 +11,6 @@ use crate::{
         ir_type::IRType,
         lowerer::{BasicBlock, RefKind, RegisterList, TypedRegister},
     },
-    type_def::TypeDef,
 };
 
 // The Monomorphizer monomorphizes. So it takes a func like this:

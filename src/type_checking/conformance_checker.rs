@@ -205,23 +205,6 @@ impl<'a> ConformanceChecker<'a> {
         }
     }
 
-    fn type_def(&self) -> Option<&TypeDef> {
-        match self.ty {
-            Ty::Row {
-                kind:
-                    RowKind::Enum(symbol_id, _)
-                    | RowKind::Struct(symbol_id, _)
-                    | RowKind::Protocol(symbol_id, _),
-                ..
-            } => self.env.lookup_type(symbol_id),
-            Ty::Int => self.env.lookup_type(&SymbolID::INT),
-            Ty::Float => self.env.lookup_type(&SymbolID::FLOAT),
-            Ty::Bool => self.env.lookup_type(&SymbolID::BOOL),
-            Ty::Pointer => self.env.lookup_type(&SymbolID::POINTER),
-            _ => None,
-        }
-    }
-
     fn check_conformance_of_ty(&mut self, protocol_def: &TypeDef) -> Option<&Conformance> {
         let type_def = self.ty.type_def(self.env)?;
 

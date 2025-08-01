@@ -62,11 +62,7 @@ impl Substitutions {
         // tracing::trace!("Applying:\n{:#?}\n---\n{:?}", ty);
 
         match ty {
-            Ty::Pointer => ty.clone(),
-            Ty::Int => ty.clone(),
-            Ty::Byte => ty.clone(),
-            Ty::Float => ty.clone(),
-            Ty::Bool => ty.clone(),
+            Ty::Primitive(_) => ty.clone(),
             Ty::SelfType => ty.clone(),
             Ty::Func(params, returning, generics) => {
                 let applied_params = self.apply_multiple(params, depth + 1, context);
@@ -119,7 +115,6 @@ impl Substitutions {
                 self_ty: self.apply(self_ty, depth + 1, context).into(),
                 func: self.apply(func, depth + 1, context).into(),
             },
-            Ty::Void => ty.clone(),
             Ty::Row {
                 fields,
                 row,

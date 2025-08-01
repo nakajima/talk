@@ -8,10 +8,10 @@ use crate::{
     name::Name,
     parsed_expr::ParsedExpr,
     parsing::expr_id::ExprID,
+    row::{FieldInfo, FieldMetadata, RowSpec},
     substitutions::Substitutions,
     ty::{RowKind, Ty},
     type_checker::{Scheme, TypeChecker, TypeError},
-    type_def::{EnumVariant, Initializer, Method, Property, TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::Expr,
 };
@@ -108,8 +108,6 @@ impl<'a> TypeChecker<'a> {
                 tracing::debug!(
                     "Importing type: {our_type_def:?}, substitutions: {substitutions:?}"
                 );
-
-                env.register(&our_type_def)?;
             }
         }
 
@@ -275,6 +273,7 @@ impl<'a> TypeChecker<'a> {
                     crate::parsed_expr::Expr::Property {
                         name: Name::Resolved(prop_id, name_str),
                         default_value,
+                        is_mutable,
                         ..
                     } if expr_ids.kind != PredeclarationKind::Enum => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
@@ -295,6 +294,7 @@ impl<'a> TypeChecker<'a> {
                             expr: body_expr,
                             placeholder: type_var.clone(),
                             default_value,
+                            is_mutable: *is_mutable,
                             symbol_id: *prop_id,
                         });
 
@@ -411,37 +411,7 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect();
 
-            let type_def = env.lookup_type(symbol_id).cloned().unwrap_or_else(|| {
-                let kind = match expr_ids.kind {
-                    PredeclarationKind::Enum => TypeDefKind::Enum,
-                    PredeclarationKind::Struct => TypeDefKind::Struct,
-                    PredeclarationKind::Extension => TypeDefKind::Struct, // Extensions use the same kind as the base type
-                    PredeclarationKind::Protocol => TypeDefKind::Protocol,
-                    PredeclarationKind::Builtin(symbol_id) =>
-                    {
-                        #[allow(clippy::unwrap_used)]
-                        TypeDefKind::Builtin(builtin_type(&symbol_id).unwrap())
-                    }
-                };
-
-                // Create new TypeDef, but preserve row_managed_members if type exists
-                let mut new_def = TypeDef::new(*symbol_id, name_str.clone(), kind, type_params);
-
-                // If this type already exists, preserve its row_managed_members
-                if let Some(existing) = env.lookup_type(symbol_id) {
-                    new_def.merge_row_managed_members(existing);
-                }
-
-                new_def
-            });
-
-            // Only register if this is a new type definition, not an extension
-            // Extensions will register after adding their new members
-            if env.lookup_type(symbol_id).is_none() {
-                env.register(&type_def).map_err(|e| (root.id, e))?;
-            }
-
-            placeholders.push((type_def.symbol_id(), ty_placeholders));
+            placeholders.push((*symbol_id, ty_placeholders));
         }
 
         Ok(placeholders)
@@ -456,49 +426,46 @@ impl<'a> TypeChecker<'a> {
 
         // Sick, all the names are declared. Now let's actually infer.
         for (sym, placeholders) in &mut placeholders.into_iter() {
-            let Some(mut def) = env.lookup_type(&sym).cloned() else {
+            let Ok(Scheme {
+                ty:
+                    ty @ Ty::Row {
+                        fields,
+                        row,
+                        generics,
+                        kind,
+                    },
+                ..
+            }) = env.lookup_symbol(&sym).cloned()
+            else {
                 continue;
             };
 
-            // TODO: Should this be happening in typedef ty instead of here?
-            let ty = if let TypeDefKind::Builtin(ref ty) = def.kind {
-                ty.clone()
-            } else {
-                // Use the canonical type with the type definition's parameters
-                // instead of instantiating to avoid creating instantiation type variables
-                def.ty()
-            };
+            let mut spec = RowSpec::empty();
 
             env.selfs.push(ty);
 
-            if def.kind != TypeDefKind::Enum {
+            if !matches!(kind, RowKind::Enum(_, _)) {
                 let mut properties = vec![];
-                for property in placeholders.properties.iter() {
+                for (i, property) in placeholders.properties.iter().enumerate() {
                     let typed_expr = self
                         .infer_node(property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
-                    let prop = Property {
-                        index: property.index,
-                        name: property.name.clone(),
-                        expr_id: property.expr.id,
-                        ty: typed_expr.ty.clone(),
-                        has_default: matches!(
-                            typed_expr.expr,
-                            Expr::Property {
-                                default_value: Some(_),
-                                ..
-                            }
-                        ),
-                        symbol_id: Some(property.symbol_id),
-                    };
-                    properties.push(prop);
+
+                    spec = spec.with_field(
+                        property.name,
+                        FieldInfo {
+                            ty: typed_expr.ty,
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::RecordField {
+                                index: i,
+                                has_default: property.default_value.is_some(),
+                                is_mutable: property.is_mutable,
+                            },
+                        },
+                    );
 
                     substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());
                 }
-
-                def.add_properties_with_rows(properties.clone(), env);
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
             }
 
             let mut methods = vec![];
@@ -888,6 +855,7 @@ pub struct RawProperty<'a> {
     pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
     pub default_value: &'a Option<Box<ParsedExpr>>,
+    pub is_mutable: bool,
     pub symbol_id: SymbolID,
 }
 
