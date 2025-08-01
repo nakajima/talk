@@ -268,7 +268,7 @@ impl Value {
                 format!("[{}]", elem_strs.join(", "))
             }
             Value::RawBuffer(bytes) => {
-                if bytes.iter().all(|&b| b >= 32 && b < 127) {
+                if bytes.iter().all(|&b| (32..127).contains(&b)) {
                     // If all bytes are printable ASCII, show as string
                     format!("\"{}\"", String::from_utf8_lossy(bytes))
                 } else {

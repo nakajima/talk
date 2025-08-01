@@ -20,6 +20,12 @@ struct ArenaChunk {
     layout: Layout,
 }
 
+impl Default for Arena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Arena {
     pub fn new() -> Self {
         let mut arena = Self {

@@ -733,7 +733,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                 let frame = self.call_stack.last().unwrap();
                 let pred_block = frame
                     .pred
-                    .ok_or_else(|| InterpreterError::PredecessorNotFound)?;
+                    .ok_or(InterpreterError::PredecessorNotFound)?;
 
                 // Find the value from the predecessor block
                 for (reg, block) in &predecessors.0 {
@@ -775,7 +775,7 @@ impl<'a, IO: InterpreterIO> IRInterpreter<'a, IO> {
                         match inner.as_ref() {
                             Value::Struct(sym, fields) if *sym == SymbolID::ENUM_TAG => {
                                 // First field is the tag
-                                if let Some(Value::Int(tag)) = fields.get(0) {
+                                if let Some(Value::Int(tag)) = fields.first() {
                                     self.set_register_value(*dest, Value::Int(*tag));
                                 } else {
                                     self.set_register_value(*dest, Value::Int(0));
