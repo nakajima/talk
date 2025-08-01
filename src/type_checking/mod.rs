@@ -30,7 +30,7 @@ pub mod ty;
 pub mod type_checker;
 pub mod type_checker_hoisting;
 pub mod type_constraint;
-// pub mod type_def;
+pub mod type_def;
 pub mod type_def_rows;
 pub mod type_var_context;
 pub mod type_var_id;

@@ -224,13 +224,8 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
                 .collect();
 
             // Get all field names from the type
-            let all_fields = match ty {
-                Ty::Row { fields, .. } => fields
-                    .iter()
-                    .map(|(name, _)| name.clone())
-                    .collect::<Vec<_>>(),
-                _ => field_names.iter().map(|n| n.name_str()).collect(),
-            };
+            // TODO: Get fields from row constraints
+            let all_fields = field_names.iter().map(|n| n.name_str()).collect::<Vec<_>>();
 
             // Create pattern columns for all fields (wildcard for missing ones)
             let field_patterns = all_fields

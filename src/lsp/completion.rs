@@ -5,7 +5,7 @@ use crate::environment::Environment;
 use crate::symbol_table::SymbolKind;
 use crate::ty::RowKind;
 use crate::type_checking::ty::Ty;
-use crate::type_def::TypeMember;
+use crate::type_checking::type_def::TypeMember;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
 use async_lsp::lsp_types::Position;
@@ -95,7 +95,7 @@ impl<'a> CompletionContext<'a> {
         match ty {
             // Enums are now represented as Row types
             // Handle unified row types
-            Ty::Row { fields, kind, .. } => {
+            Ty::Row { kind, .. } => {
                 if let RowKind::Struct(symbol_id, _)
                 | RowKind::Protocol(symbol_id, _)
                 | RowKind::Enum(symbol_id, _) = kind
@@ -107,16 +107,8 @@ impl<'a> CompletionContext<'a> {
                         vec![]
                     }
                 } else {
-                    // Structural row - use fields directly
-                    fields
-                        .iter()
-                        .map(|(field_name, field_ty)| CompletionItem {
-                            label: field_name.clone(),
-                            kind: Some(CompletionItemKind::FIELD),
-                            detail: Some(format!("{field_ty:?}")),
-                            ..Default::default()
-                        })
-                        .collect()
+                    // Structural row - TODO: look up fields from constraints
+                    vec![]
                 }
             }
             _ => vec![],
@@ -126,7 +118,7 @@ impl<'a> CompletionContext<'a> {
     /// Get completions from a typedef's members
     fn get_completions_for_typedef(
         &self,
-        type_def: &crate::type_def::TypeDef,
+        type_def: &crate::type_checking::type_def::TypeDef,
     ) -> Vec<CompletionItem> {
         type_def
             .members

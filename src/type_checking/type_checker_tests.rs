@@ -7906,7 +7906,7 @@ makePoint()
             assert_eq!(params.len(), 1);
             assert!(matches!(
                 &params[0],
-                Ty::Row { kind: RowKind::Record, fields, row: None, generics: _, .. } if fields.len() == 2
+                Ty::Row { kind: RowKind::Record, .. }
             ));
             assert_eq_diff!(ret_ty.as_ref(), &Ty::Int);
         } else {

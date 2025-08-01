@@ -763,19 +763,8 @@ impl<'a> ConstraintSolver<'a> {
             _ => unreachable!("Invalid builtin type"),
         };
 
-        let type_def = self
-            .env
-            .lookup_type(&symbol_id)
-            .ok_or_else(|| TypeError::Unknown("Builtin type definition not found".into()))?
-            .clone();
-
-        let member = type_def
-            .member_ty_with_conformances(member_name, self.env)
-            .ok_or_else(|| {
-                TypeError::MemberNotFound(builtin.to_string(), member_name.to_string())
-            })?;
-
-        Ok((member, vec![], vec![]))
+        // TODO: Look up member from row constraints instead of type def
+        Err(TypeError::Unknown("Builtin member lookup not yet implemented for constraint-based rows".into()))
     }
 
     fn resolve_type_member(
@@ -786,11 +775,12 @@ impl<'a> ConstraintSolver<'a> {
         substitutions: &Substitutions,
         expr_id: &ExprID,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
-        // First get the type def info we need
-        let (type_name, type_params) = {
-            let type_def = self.env.lookup_type(type_id).ok_or_else(|| {
-                TypeError::Unknown(format!("Unable to resolve type with id: {type_id:?}"))
-            })?;
+        // TODO: Get type info from row constraints instead of type def
+        // For now, return an error
+        return Err(TypeError::Unknown("Type member lookup not yet implemented for constraint-based rows".into()));
+        
+        #[allow(unreachable_code)]
+        {
             (
                 type_def.name().to_string(),
                 type_def.type_parameters().clone(),

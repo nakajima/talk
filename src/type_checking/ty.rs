@@ -61,10 +61,9 @@ pub enum Ty {
     Array(Box<Ty>),
     SelfType,
     // Unified row type that can represent structs, protocols, and records
+    // Row structure is expressed through constraints on the type_var
     Row {
-        #[drive(skip)]
-        fields: BTreeMap<String, FieldInfo>, // field name -> type pairs, in canonical order
-        row: Option<Box<Ty>>, // Optional row variable for extensible rows
+        type_var: TypeVarID,  // Type variable with row constraints
         generics: Vec<Ty>,    // Generic type arguments (for nominal types)
         #[drive(skip)]
         kind: RowKind, // Distinguishes between struct/protocol/record
@@ -119,8 +118,7 @@ impl Display for Ty {
             ),
             Ty::Array(ty) => write!(f, "Array<{ty}>"),
             Ty::Row {
-                fields,
-                row,
+                type_var: _,
                 generics: _,
                 kind,
             } => {
@@ -130,19 +128,8 @@ impl Display for Ty {
                 {
                     write!(f, "{}", name)
                 } else {
-                    // Structural type - display as record
-                    let field_strs: Vec<String> = fields
-                        .iter()
-                        .map(|(name, ty)| format!("{name}: {ty}"))
-                        .collect();
-                    let mut result = field_strs.join(", ");
-                    if let Some(row_ty) = row {
-                        if !fields.is_empty() {
-                            result.push_str(", ");
-                        }
-                        result.push_str(&format!("..{row_ty}"));
-                    }
-                    write!(f, "{{{result}}}")
+                    // Structural type - we'd need constraint context to display fields
+                    write!(f, "{{...}}")
                 }
             }
             _ => write!(f, "{self:?}"),
@@ -179,10 +166,9 @@ impl Ty {
     }
 
     pub fn string() -> Ty {
-        // String is a builtin struct type without fields
+        // String is a builtin struct type
         Ty::Row {
-            fields: vec![], // String has no exposed fields
-            row: None,
+            type_var: TypeVarID::new(),
             generics: vec![],
             kind: RowKind::Struct(SymbolID::STRING, "String".into()),
         }
@@ -192,8 +178,7 @@ impl Ty {
     pub fn struct_type(symbol_id: SymbolID, name: String, generics: Vec<Ty>) -> Ty {
         // Create Row type for structs
         Ty::Row {
-            fields: vec![], // Fields are stored in TypeDef
-            row: None,      // TODO: Get row var from TypeDef
+            type_var: TypeVarID::new(),
             generics,
             kind: RowKind::Struct(symbol_id, name),
         }
@@ -202,8 +187,7 @@ impl Ty {
     /// Create a protocol type using Row representation
     pub fn protocol_type(symbol_id: SymbolID, name: String, generics: Vec<Ty>) -> Ty {
         Ty::Row {
-            fields: vec![], // Protocol members are stored in TypeDef
-            row: None,
+            type_var: TypeVarID::new(),
             generics,
             kind: RowKind::Protocol(symbol_id, name),
         }
@@ -212,8 +196,7 @@ impl Ty {
     /// Create an enum type using Row representation
     pub fn enum_type(symbol_id: SymbolID, name: String, generics: Vec<Ty>) -> Ty {
         Ty::Row {
-            fields: vec![], // Enum variants are stored in TypeDef
-            row: None,
+            type_var: TypeVarID::new(),
             generics,
             kind: RowKind::Enum(symbol_id, name),
         }
@@ -227,60 +210,55 @@ impl Ty {
         !matches!(self, Ty::TypeVar(_))
     }
 
-    pub fn equal_to(&self, other: &Ty) -> bool {
+    pub fn satisfies(&self, other: &Ty) -> bool {
         match (self, other) {
             (
                 Ty::Row {
-                    fields: lhs_fields,
-                    row: lhs_row,
+                    type_var: lhs_var,
                     generics: lhs_generics,
                     kind: lhs_kind,
                 },
                 Ty::Row {
-                    fields: rhs_fields,
-                    row: rhs_row,
+                    type_var: rhs_var,
                     generics: rhs_generics,
                     kind: rhs_kind,
                 },
             ) => {
-                if lhs_kind != rhs_kind {
-                    return false;
-                }
+                // For constraint-based rows, we'd need access to the constraint solver
+                // For now, just check structural equality
+                lhs_var == rhs_var
+                    && lhs_kind == rhs_kind
+                    && lhs_generics.len() == rhs_generics.len()
+                    && lhs_generics
+                        .iter()
+                        .enumerate()
+                        .all(|(i, g)| g.satisfies(&rhs_generics[i]))
+            }
+            (_, _) => self == other,
+        }
+    }
 
-                if lhs_row != rhs_row {
-                    return false;
-                }
-
-                if lhs_fields.len() != rhs_fields.len() {
-                    return false;
-                }
-
-                if lhs_generics.len() != rhs_generics.len() {
-                    return false;
-                }
-
-                if !lhs_generics
-                    .iter()
-                    .enumerate()
-                    .all(|(i, g)| g.equal_to(&rhs_generics[i]))
-                {
-                    return false;
-                }
-
-                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
-                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
-
-                for (field, ty) in &lhs_fields {
-                    let Some(rhs_ty) = rhs_fields.get(field) else {
-                        return false;
-                    };
-
-                    if !ty.equal_to(rhs_ty) {
-                        return false;
-                    }
-                }
-
-                true
+    pub fn equal_to(&self, other: &Ty) -> bool {
+        match (self, other) {
+            (
+                Ty::Row {
+                    type_var: lhs_var,
+                    generics: lhs_generics,
+                    kind: lhs_kind,
+                },
+                Ty::Row {
+                    type_var: rhs_var,
+                    generics: rhs_generics,
+                    kind: rhs_kind,
+                },
+            ) => {
+                lhs_var == rhs_var
+                    && lhs_kind == rhs_kind
+                    && lhs_generics.len() == rhs_generics.len()
+                    && lhs_generics
+                        .iter()
+                        .enumerate()
+                        .all(|(i, g)| g.equal_to(&rhs_generics[i]))
             }
             (_, _) => self == other,
         }
@@ -355,8 +333,7 @@ impl Ty {
                 }
             }
             Ty::Row {
-                fields,
-                row,
+                type_var,
                 generics,
                 kind,
             } => {
@@ -364,13 +341,7 @@ impl Ty {
                     replacement
                 } else {
                     Ty::Row {
-                        fields: fields
-                            .iter()
-                            .map(|(name, ty)| (name.clone(), ty.replace(replacement.clone(), f)))
-                            .collect(),
-                        row: row
-                            .as_ref()
-                            .map(|r| Box::new(r.replace(replacement.clone(), f))),
+                        type_var: type_var.clone(),
                         generics: generics
                             .iter()
                             .map(|g| g.replace(replacement.clone(), f))

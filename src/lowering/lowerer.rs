@@ -111,7 +111,6 @@ impl Ty {
             Ty::Row {
                 generics,
                 kind,
-                fields,
                 ..
             } => match kind {
                 RowKind::Enum(symbol_id, _) => IRType::Enum(
@@ -139,8 +138,8 @@ impl Ty {
                     return IRType::Void;
                 }
                 RowKind::Record => {
-                    let field_types: Vec<IRType> =
-                        fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
+                    // TODO: Get field types from row constraints
+                    let field_types: Vec<IRType> = vec![];
 
                     IRType::Struct(
                         SymbolID::RECORD,
@@ -717,21 +716,11 @@ impl<'a> Lowerer<'a> {
         typed_expr: &TypedExpr,
         fields: &[TypedExpr],
     ) -> Option<Register> {
-        // For records, we need to ensure a consistent field order
-        // The type's field order might be non-deterministic, so we'll sort by field name
-        let Ty::Row {
-            fields: type_fields,
-            ..
-        } = &typed_expr.ty
-        else {
-            self.push_err("Record literal doesn't have Row type", typed_expr);
-            return None;
-        };
-
-        // Create a sorted list of field names for consistent ordering
-        let mut sorted_field_names: Vec<String> =
-            type_fields.iter().map(|(name, _)| name.clone()).collect();
-        sorted_field_names.sort();
+        // TODO: Update to work with constraint-based rows
+        // Need to look up fields from row constraints
+        
+        // For now, create empty field list
+        let sorted_field_names: Vec<String> = vec![];
 
         tracing::debug!(
             "Record literal has fields in sorted order: {:?}",
@@ -761,10 +750,10 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        // Map types from the Row type
-        for (name, ty) in type_fields {
-            type_map.insert(name.clone(), ty.to_ir(self));
-        }
+        // TODO: Map types from the Row type constraints
+        // for (name, ty) in type_fields {
+        //     type_map.insert(name.clone(), ty.to_ir(self));
+        // }
 
         // Build the struct with fields in sorted order
         let mut member_registers = vec![];
@@ -1676,30 +1665,8 @@ impl<'a> Lowerer<'a> {
                                     continue;
                                 }
                             } else {
-                                // Record - fields are in sorted order
-                                if let Ty::Row {
-                                    fields: row_fields, ..
-                                } = struct_ty
-                                {
-                                    // Create sorted field list
-                                    let mut sorted_fields: Vec<_> = row_fields
-                                        .iter()
-                                        .map(|(name, ty)| (name.clone(), ty))
-                                        .collect();
-                                    sorted_fields.sort_by_key(|(name, _)| name.clone());
-
-                                    if let Some((idx, (_, field_ty))) = sorted_fields
-                                        .iter()
-                                        .enumerate()
-                                        .find(|(_, (fname, _))| fname == field_name_str)
-                                    {
-                                        (idx, field_ty.to_ir(self))
-                                    } else {
-                                        continue;
-                                    }
-                                } else {
-                                    continue;
-                                }
+                                // TODO: Record - need to look up fields from constraints
+                                continue;
                             };
 
                             // Allocate register for extracted field
@@ -2217,7 +2184,7 @@ impl<'a> Lowerer<'a> {
         };
 
         match &receiver.ty {
-            Ty::Row { fields, kind, .. } => {
+            Ty::Row { kind, .. } => {
                 // Handle nominal rows (structs/protocols)
                 if let RowKind::Struct(struct_id, _) = kind {
                     let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
@@ -2252,15 +2219,16 @@ impl<'a> Lowerer<'a> {
                     return None;
                 }
 
-                // Handle structural rows (records) - find field by position
-                let field_index = fields.iter().position(|(fname, _)| fname == name)?;
-                self.generate_field_access(
-                    receiver_reg,
-                    &receiver.ty,
-                    field_index,
-                    typed_expr,
-                    is_lvalue,
-                )
+                // TODO: Handle structural rows (records) - need to look up fields from constraints
+                // let field_index = fields.iter().position(|(fname, _)| fname == name)?;
+                // self.generate_field_access(
+                //     receiver_reg,
+                //     &receiver.ty,
+                //     field_index,
+                //     typed_expr,
+                //     is_lvalue,
+                // )
+                None
             }
             _ => {
                 self.push_err(format!("Member not lowered {name}").as_str(), typed_expr);
