@@ -1347,9 +1347,7 @@ impl<'a> Lowerer<'a> {
                 let mut capture_registers = vec![];
                 let mut captured_ir_types = vec![];
                 for (i, capture) in captures.iter().enumerate() {
-                    let Some(symbol_value) = self.lookup_register(capture) else {
-                        return None;
-                    };
+                    let symbol_value = self.lookup_register(capture)?;
                     let symbol_value = symbol_value.clone();
                     let register = match symbol_value {
                         SymbolValue::Register(reg) => reg,
@@ -3173,9 +3171,13 @@ impl<'a> Lowerer<'a> {
             Some(name) => name,
             None => {
                 let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
-                let symbol =
-                    self.symbol_table
-                        .add(&name_str, SymbolKind::CustomType, ExprID(12345), None);
+                let symbol = self.symbol_table.add(
+                    &name_str,
+                    SymbolKind::CustomType,
+                    ExprID(12345),
+                    false,
+                    None,
+                );
                 ResolvedName(symbol, name_str)
             }
         }
@@ -3273,6 +3275,7 @@ fn find_or_create_main(
             is_captured: false,
             definition: None,
             documentation: None,
+            is_mutable: false,
         },
     );
 

@@ -706,7 +706,7 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _) = &lhs.expr
+            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _, _) = &lhs.expr
             else {
                 continue;
             };

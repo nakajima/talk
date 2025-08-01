@@ -64,6 +64,12 @@ pub enum Constraint {
         expr_id: ExprID,
         constraint: RowConstraint,
     },
+    /// Mutability constraint for field assignments
+    Mutability {
+        expr_id: ExprID,
+        receiver_ty: Ty,
+        field_name: String,
+    },
     Retry(Box<Constraint>, usize),
 }
 
@@ -78,6 +84,7 @@ impl Constraint {
             Self::InstanceOf { expr_id, .. } => expr_id,
             Self::ConformsTo { expr_id, .. } => expr_id,
             Self::Row { expr_id, .. } => expr_id,
+            Self::Mutability { expr_id, .. } => expr_id,
             Self::Retry(c, _) => c.expr_id(),
         }
     }
@@ -119,6 +126,7 @@ impl Constraint {
                     _ => false,
                 }
             }
+            Constraint::Mutability { receiver_ty, .. } => f(receiver_ty),
             _ => false,
         }
     }
@@ -156,6 +164,7 @@ impl Constraint {
                 .associated_types
                 .iter()
                 .any(has_canonical_type_var),
+            Constraint::Mutability { receiver_ty, .. } => has_canonical_type_var(receiver_ty),
             _ => false,
         }
     }
@@ -322,6 +331,15 @@ impl Constraint {
                     constraint: new_constraint,
                 }
             }
+            Constraint::Mutability {
+                expr_id,
+                receiver_ty,
+                field_name,
+            } => Constraint::Mutability {
+                expr_id: *expr_id,
+                receiver_ty: substitutions.apply(receiver_ty, 0, context),
+                field_name: field_name.clone(),
+            },
         }
     }
 }

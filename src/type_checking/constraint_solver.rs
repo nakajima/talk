@@ -477,6 +477,14 @@ impl<'a> ConstraintSolver<'a> {
 
                 tracing::trace!("Row constraint handled");
             }
+            Constraint::Mutability {
+                expr_id,
+                receiver_ty,
+                field_name,
+            } => {
+                let receiver_ty = substitutions.apply(receiver_ty, 0, &mut self.env.context);
+                self.solve_mutability_constraint(&receiver_ty, field_name, *expr_id)?;
+            }
         };
 
         Ok(())
@@ -1258,5 +1266,55 @@ impl<'a> ConstraintSolver<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Solve mutability constraints by checking if a field assignment is valid
+    fn solve_mutability_constraint(
+        &mut self,
+        receiver_ty: &Ty,
+        field_name: &str,
+        expr_id: ExprID,
+    ) -> Result<(), TypeError> {
+        // For struct types, check if the field is mutable
+        match receiver_ty {
+            Ty::Row {
+                nominal_id: Some(symbol_id),
+                kind: RowKind::Struct,
+                ..
+            } => {
+                // Look up the struct definition
+                let struct_def = self.env.lookup_struct(symbol_id).ok_or_else(|| {
+                    TypeError::MutabilityError(
+                        "Cannot find struct definition for mutability check".to_string(),
+                    )
+                })?;
+
+                // Find the field in the struct properties
+                let properties = struct_def.properties();
+                let field = properties.iter().find(|prop| prop.name == field_name);
+
+                if let Some(field) = field {
+                    todo!();
+                } else {
+                    return Err(TypeError::MutabilityError(format!(
+                        "Field '{}' not found in struct",
+                        field_name
+                    )));
+                }
+            }
+            // For type variables, we can't check yet - this constraint should be retried later
+            Ty::TypeVar(_) => {
+                return Err(TypeError::Defer(ConformanceError::TypeCannotConform(
+                    "Type variable not yet resolved for mutability check".to_string(),
+                )));
+            }
+            _ => {
+                return Err(TypeError::MutabilityError(format!(
+                    "Cannot assign to field of non-struct type"
+                )));
+            }
+        }
+
+        Ok(())
     }
 }

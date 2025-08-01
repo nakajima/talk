@@ -27,6 +27,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-1),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -46,6 +47,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-2),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -65,6 +67,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-3),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -84,6 +87,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-4),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -103,6 +107,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-5),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -129,6 +134,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-6),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -155,6 +161,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-7),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -169,6 +176,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-8),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -203,6 +211,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-9),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -235,6 +244,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-11),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -265,6 +275,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-12),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -296,6 +307,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-13),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -497,7 +509,8 @@ mod optional_tests {
                         introduces_type: false
                     })
                     .into()
-                )
+                ),
+                false  // is_mutable
             ))
         );
     }

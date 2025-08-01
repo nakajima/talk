@@ -13,7 +13,7 @@ struct String {
     let newCapacity = self.length + other.length
     let newStorage = __alloc<Byte>(newCapacity)
     let currentLength = self.length
-    let i = 0
+    let mut i = 0
 
 		if currentLength > 0 {
     	loop i < currentLength {

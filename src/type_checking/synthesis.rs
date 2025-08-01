@@ -48,12 +48,13 @@ pub fn synthesize_inits(
                     &property.name,
                     crate::SymbolKind::Param,
                     env.next_expr_id(),
+                    false,
                     None,
                 );
 
                 param_exprs.push(gen_expr(
                     env,
-                    Expr::Parameter(Name::Resolved(param_sym, property.name.to_string()), None),
+                    Expr::Parameter(Name::Resolved(param_sym, property.name.to_string()), None, false),
                 ));
 
                 let member_expr = Expr::Member(
@@ -86,6 +87,7 @@ pub fn synthesize_inits(
                     params: param_exprs,
                     body: Box::new(body),
                     ret: None,
+                    is_mutating: false,
                     captures: vec![],
                     attributes: vec![],
                 },
@@ -104,6 +106,7 @@ pub fn synthesize_inits(
                 "init",
                 SymbolKind::SyntheticConstructor,
                 init.id,
+                false,
                 definition,
             );
 

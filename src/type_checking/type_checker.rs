@@ -53,6 +53,7 @@ pub enum TypeError {
     ConformanceError(Vec<ConformanceError>),
     Nonconformance(String, String),
     MemberNotFound(String, String),
+    MutabilityError(String),
 }
 
 impl TypeError {
@@ -83,6 +84,7 @@ impl TypeError {
             Self::ConformanceError(err) => {
                 format!("{err:?}")
             }
+            Self::MutabilityError(message) => message.to_string(),
         }
     }
 }
@@ -337,13 +339,13 @@ impl<'a> TypeChecker<'a> {
                 env,
                 None,
             ),
-            crate::parsed_expr::Expr::Let(name, rhs) => {
+            crate::parsed_expr::Expr::Let(name, rhs, _is_mutable) => {
                 self.infer_let(parsed_expr.id, env, name, rhs, expected)
             }
             crate::parsed_expr::Expr::Variable(name) => {
                 self.infer_variable(parsed_expr.id, name, env)
             }
-            crate::parsed_expr::Expr::Parameter(name @ Name::Resolved(_, _), param_ty) => {
+            crate::parsed_expr::Expr::Parameter(name @ Name::Resolved(_, _), param_ty, _is_mutable) => {
                 self.infer_parameter(parsed_expr.id, name, param_ty, env)
             }
             crate::parsed_expr::Expr::Tuple(types) => self.infer_tuple(parsed_expr.id, types, env),
@@ -440,6 +442,7 @@ impl<'a> TypeChecker<'a> {
                 name,
                 type_repr,
                 default_value,
+                is_mutable: _,
             } => self.infer_property(parsed_expr.id, name, type_repr, default_value, env),
             crate::parsed_expr::Expr::Break => Ok(TypedExpr {
                 id: parsed_expr.id,
@@ -1185,10 +1188,47 @@ impl<'a> TypeChecker<'a> {
         rhs: &ParsedExpr,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let rhs_ty = self.infer_node(rhs, env, &None)?;
+        // Check variable mutability immediately, defer field mutability to constraint solver
+        match &lhs.expr {
+            parsed_expr::Expr::Variable(_) => {
+                self.check_mutability(lhs)?;
+            }
+            parsed_expr::Expr::Member(receiver, field_name) => {
+                // We'll add the mutability constraint after we have the type information
+                // This will be handled after type inference
+            }
+            _ => {
+                return Err(TypeError::MutabilityError(format!(
+                    "Cannot assign to this expression"
+                )));
+            }
+        }
 
-        // Expect lhs to be the same as rhs
+        let rhs_ty = self.infer_node(rhs, env, &None)?;
         let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.ty.clone()))?;
+
+        // For member assignments, add mutability constraint after type inference
+        if let parsed_expr::Expr::Member(receiver, field_name) = &lhs.expr {
+            // Use the inferred type of the receiver
+            let receiver_ty = if let Some(_receiver) = receiver {
+                // The receiver type is already determined during lhs inference
+                // We can extract it from the typed expression
+                match &lhs_ty.expr {
+                    typed_expr::Expr::Member(typed_receiver, _) => {
+                        typed_receiver.as_ref().map(|r| r.ty.clone()).unwrap_or(Ty::SelfType)
+                    }
+                    _ => Ty::SelfType, // Fallback
+                }
+            } else {
+                Ty::SelfType
+            };
+
+            env.constrain(Constraint::Mutability {
+                expr_id: id,
+                receiver_ty,
+                field_name: field_name.clone(),
+            });
+        }
 
         env.constrain(Constraint::Equality(
             rhs.id,
@@ -1201,6 +1241,56 @@ impl<'a> TypeChecker<'a> {
             ty: rhs_ty.ty.clone(),
             expr: typed_expr::Expr::Assignment(Box::new(lhs_ty), Box::new(rhs_ty)),
         })
+    }
+
+    /// Check if the given expression represents a mutable location that can be assigned to
+    fn check_mutability(&self, expr: &ParsedExpr) -> Result<(), TypeError> {
+        match &expr.expr {
+            // Let expressions are declarations, always allowed
+            parsed_expr::Expr::Let(..) => Ok(()),
+            
+            // Variable assignment: check if variable is mutable
+            parsed_expr::Expr::Variable(name) => {
+                let symbol_id = name.symbol_id().map_err(|_| {
+                    TypeError::MutabilityError(format!("Cannot assign to unresolved variable"))
+                })?;
+                
+                let symbol_info = self.symbol_table.get(&symbol_id).ok_or_else(|| {
+                    TypeError::MutabilityError(format!("Cannot find symbol information"))
+                })?;
+                
+                if !symbol_info.is_mutable {
+                    return Err(TypeError::MutabilityError(format!(
+                        "Cannot assign to immutable variable '{}'",
+                        symbol_info.name
+                    )));
+                }
+                
+                Ok(())
+            }
+            
+            // Member assignment: check if the field is mutable
+            parsed_expr::Expr::Member(receiver, field_name) => {
+                // First check if the receiver is mutable (for owned types)
+                if let Some(receiver_expr) = receiver {
+                    self.check_mutability(receiver_expr)?;
+                }
+                
+                // Then check if the field itself is mutable
+                // This requires looking up the field in the type definition
+                // For now, we'll accept all field assignments until we have full type information
+                // in the mutability checker
+                
+                // TODO: Look up the struct type and check if the specific field is mutable
+                // This would require access to the type information for the receiver
+                Ok(())
+            }
+            
+            // Array/indexing assignment would go here
+            _ => Err(TypeError::MutabilityError(format!(
+                "Cannot assign to this expression"
+            ))),
+        }
     }
 
     #[tracing::instrument(level = "DEBUG", skip(self, env))]

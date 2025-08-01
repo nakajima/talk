@@ -253,6 +253,12 @@ impl Precedence {
                 infix: None,
                 precedence: Precedence::Assignment,
             },
+            
+            TokenKind::Mut => ParseHandler {
+                prefix: Some(Parser::mut_prefix),
+                infix: None,
+                precedence: Precedence::Assignment,
+            },
 
             TokenKind::Let => ParseHandler {
                 prefix: Some(Parser::let_expr),

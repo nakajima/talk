@@ -281,6 +281,7 @@ impl<'a> Lexer<'a> {
         match string.as_str() {
             "func" => Func,
             "let" => Let,
+            "mut" => Mut,
             "if" => If,
             "else" => Else,
             "true" => True,

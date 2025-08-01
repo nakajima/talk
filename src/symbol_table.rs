@@ -109,6 +109,7 @@ pub struct PropertyInfo {
     pub type_id: Option<ParsedExpr>,
     pub default_value_id: Option<ParsedExpr>,
     pub symbol_id: Option<SymbolID>,
+    pub is_mutable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -117,6 +118,7 @@ pub struct SymbolInfo {
     pub kind: SymbolKind,
     pub expr_id: ExprID,
     pub is_captured: bool,
+    pub is_mutable: bool,
     pub definition: Option<Definition>,
     pub documentation: Option<String>,
 }
@@ -192,6 +194,7 @@ impl SymbolTable {
         name: &str,
         kind: SymbolKind,
         expr_id: ExprID,
+        is_mutable: bool,
         definition: Option<Definition>,
     ) -> SymbolID {
         tracing::trace!(
@@ -214,6 +217,7 @@ impl SymbolTable {
                 kind,
                 expr_id,
                 is_captured: false,
+                is_mutable,
                 definition,
                 documentation: None,
             },
@@ -242,12 +246,14 @@ impl SymbolTable {
         type_id: Option<Box<ParsedExpr>>,
         default_value_id: Option<Box<ParsedExpr>>,
         property_symbol_id: Option<SymbolID>,
+        is_mutable: bool,
     ) {
         let info = PropertyInfo {
             name,
             type_id: type_id.map(|e| *e),
             default_value_id: default_value_id.map(|e| *e),
             symbol_id: property_symbol_id,
+            is_mutable,
         };
 
         let Some(table) = self.types.get_mut(&to_symbol_id) else {

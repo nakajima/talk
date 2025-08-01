@@ -108,6 +108,8 @@ pub enum Expr {
         name: Name,
         type_repr: Option<Box<ParsedExpr>>,
         default_value: Option<Box<ParsedExpr>>,
+        #[drive(skip)]
+        is_mutable: bool,
     },
 
     // A type annotation
@@ -151,6 +153,8 @@ pub enum Expr {
         body: Box<ParsedExpr>,        /* body */
         ret: Option<Box<ParsedExpr>>, /* return type */
         #[drive(skip)]
+        is_mutating: bool, /* mut func */
+        #[drive(skip)]
         captures: Vec<SymbolID>,
         attributes: Vec<ParsedExpr>,
     },
@@ -158,6 +162,7 @@ pub enum Expr {
     Parameter(
         #[drive(skip)] Name,     /* name */
         Option<Box<ParsedExpr>>, /* TypeRepr */
+        #[drive(skip)] bool,     /* is_mutable */
     ),
     CallArg {
         #[drive(skip)]
@@ -169,6 +174,7 @@ pub enum Expr {
     Let(
         #[drive(skip)] Name,     /* name */
         Option<Box<ParsedExpr>>, /* type annotation */
+        #[drive(skip)] bool,     /* is_mutable */
     ),
     Assignment(
         Box<ParsedExpr>, /* LHS */
@@ -271,6 +277,8 @@ pub enum Expr {
         params: Vec<ParsedExpr>,
         generics: Vec<ParsedExpr>,
         ret: Box<ParsedExpr>,
+        #[drive(skip)]
+        is_mutable: bool,
     },
 
     Import(#[drive(skip)] String),

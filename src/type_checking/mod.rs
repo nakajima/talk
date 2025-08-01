@@ -43,6 +43,8 @@ pub mod dumb_dot;
 pub mod example_row_usage;
 #[cfg(test)]
 pub mod type_checker_tests;
+#[cfg(test)]
+pub mod mutability_tests;
 
 #[cfg(test)]
 #[derive(Debug)]

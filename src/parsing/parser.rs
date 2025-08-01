@@ -9,7 +9,7 @@ use crate::{
     expr_id::ExprID,
     expr_meta::ExprMeta,
     lexer::Lexer,
-    parsed_expr::{self, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
+    parsed_expr::{self, Expr, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
     token::Token,
     token_kind::TokenKind,
 };
@@ -478,6 +478,7 @@ impl<'a> Parser<'a> {
                         params,
                         generics,
                         ret,
+                        is_mutable: _,
                     } = &func_requirement.expr
                     else {
                         return Err(ParserError::UnknownError(format!(
@@ -496,6 +497,7 @@ impl<'a> Parser<'a> {
                             params: params.clone(),
                             body,
                             ret: Some(ret.clone()),
+                            is_mutating: false,
                             captures: vec![],
                             attributes: vec![],
                         };
@@ -525,6 +527,10 @@ impl<'a> Parser<'a> {
     pub(crate) fn property(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
+
+        // Check for `mut` keyword
+        let is_mutable = self.did_match(TokenKind::Mut)?;
+
         let name = self.identifier()?;
         let type_repr = if self.did_match(TokenKind::Colon)? {
             Some(Box::new(self.type_repr(false)?))
@@ -544,6 +550,7 @@ impl<'a> Parser<'a> {
                 name: Name::Raw(name),
                 type_repr,
                 default_value,
+                is_mutable,
             },
             tok,
         )
@@ -976,11 +983,47 @@ impl<'a> Parser<'a> {
         self.add_expr(Tuple(items), tok)
     }
 
+    pub(crate) fn mut_prefix(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
+        // Consume the 'mut' keyword
+        self.advance();
+
+        // Check what follows 'mut'
+        match &self.current {
+            some_kind!(Func) => {
+                // This is a 'mut func'
+                self.consume(TokenKind::Func)?;
+                let mut func_expr = self.func(vec![])?;
+
+                // Set the is_mutable flag
+                if let Expr::Func {
+                    is_mutating: is_mutable,
+                    ..
+                } = &mut func_expr.expr
+                {
+                    *is_mutable = true;
+                }
+
+                Ok(func_expr)
+            }
+            _ => {
+                // This might be a mutable parameter in the future
+                // For now, we'll return an error
+                Err(ParserError::UnknownError(
+                    "Expected 'func' after 'mut'".into(),
+                ))
+            }
+        }
+    }
+
     pub(crate) fn let_expr(&mut self, _can_assign: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         // Consume the `let` keyword
         self.advance();
+
+        // Check for `mut` keyword
+        let is_mutable = self.did_match(TokenKind::Mut)?;
+
         let name = self.identifier()?;
 
         let type_repr = if self.did_match(TokenKind::Colon)? {
@@ -989,7 +1032,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr), tok)?;
+        let let_expr = self.add_expr(Let(Name::Raw(name), type_repr, is_mutable), tok)?;
 
         if self.did_match(TokenKind::Equals)? {
             let tok = self.push_source_location();
@@ -1028,6 +1071,10 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn func_requirement(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
+
+        // Check for 'mut' before 'func'
+        let is_mutable = self.did_match(TokenKind::Mut)?;
+
         self.consume(TokenKind::Func)?;
 
         let name_str = match self.current.clone() {
@@ -1060,6 +1107,7 @@ impl<'a> Parser<'a> {
                 params,
                 generics,
                 ret,
+                is_mutable,
             },
             tok,
         )
@@ -1158,6 +1206,7 @@ impl<'a> Parser<'a> {
                 params,
                 body,
                 ret,
+                is_mutating: false, // Default to false, will be set to true by mut_prefix if needed
                 captures: vec![],
                 attributes,
             },
@@ -1173,28 +1222,40 @@ impl<'a> Parser<'a> {
 
     fn parameter_list(&mut self) -> Result<Vec<ParsedExpr>, ParserError> {
         let mut params: Vec<ParsedExpr> = vec![];
-        while let Some((
-            _,
-            Token {
-                kind: TokenKind::Identifier(name),
-                ..
-            },
-        )) = self.try_identifier()
-        {
-            let tok = self.push_source_location();
-            let ty_repr = if self.did_match(TokenKind::Colon)? {
-                Some(Box::new(self.type_repr(false)?))
+        loop {
+            // Check for 'mut' keyword
+            let is_mutable = self.did_match(TokenKind::Mut)?;
+
+            // Now look for identifier
+            if let Some((
+                _,
+                Token {
+                    kind: TokenKind::Identifier(name),
+                    ..
+                },
+            )) = self.try_identifier()
+            {
+                let tok = self.push_source_location();
+                let ty_repr = if self.did_match(TokenKind::Colon)? {
+                    Some(Box::new(self.type_repr(false)?))
+                } else {
+                    None
+                };
+
+                params.push(self.add_expr(Parameter(name.into(), ty_repr, is_mutable), tok)?);
+
+                if self.did_match(TokenKind::Comma)? {
+                    continue;
+                }
+
+                break;
+            } else if is_mutable {
+                // We consumed 'mut' but didn't find an identifier
+                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
             } else {
-                None
-            };
-
-            params.push(self.add_expr(Parameter(name.into(), ty_repr), tok)?);
-
-            if self.did_match(TokenKind::Comma)? {
-                continue;
+                // No more parameters
+                break;
             }
-
-            break;
         }
 
         Ok(params)

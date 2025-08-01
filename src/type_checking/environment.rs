@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use tracing::debug_span;
 
 use crate::{
-    ExprMetaStorage, SymbolID,
+    ExprMetaStorage, SymbolID, SymbolTable,
     constraint::Constraint,
     constraint_solver::{ConstraintSolver, ConstraintSolverSolution},
     parsing::expr_id::ExprID,
