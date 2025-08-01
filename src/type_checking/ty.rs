@@ -4,6 +4,7 @@ use derive_visitor::Drive;
 
 use crate::{
     SymbolID, impl_option_eq,
+    row::FieldInfo,
     type_checker::{FuncParams, FuncReturning},
     type_var_id::TypeVarID,
 };
@@ -62,7 +63,7 @@ pub enum Ty {
     // Unified row type that can represent structs, protocols, and records
     Row {
         #[drive(skip)]
-        fields: Vec<(String, Ty)>, // field name -> type pairs, in canonical order
+        fields: BTreeMap<String, FieldInfo>, // field name -> type pairs, in canonical order
         row: Option<Box<Ty>>, // Optional row variable for extensible rows
         generics: Vec<Ty>,    // Generic type arguments (for nominal types)
         #[drive(skip)]

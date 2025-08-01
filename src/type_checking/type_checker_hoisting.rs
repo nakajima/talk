@@ -218,15 +218,9 @@ impl<'a> TypeChecker<'a> {
                 ),
                 PredeclarationKind::Extension => {
                     // For extensions, use the existing type
-                    env.lookup_type(symbol_id)
-                        .map(|td| td.ty())
-                        .unwrap_or_else(|| {
-                            Ty::struct_type(
-                                *symbol_id,
-                                expr_ids.name.name_str().to_string(),
-                                canonical_types.clone(),
-                            )
-                        })
+                    env.lookup_symbol(symbol_id)
+                        .map(|t| t.ty())
+                        .map_err(|e| (expr_ids.body.id, e))?
                 }
                 PredeclarationKind::Enum => Ty::enum_type(
                     *symbol_id,
@@ -426,6 +420,7 @@ impl<'a> TypeChecker<'a> {
 
         // Sick, all the names are declared. Now let's actually infer.
         for (sym, placeholders) in &mut placeholders.into_iter() {
+            let t = env.lookup_symbol(&sym).cloned();
             let Ok(Scheme {
                 ty:
                     ty @ Ty::Row {
@@ -435,18 +430,17 @@ impl<'a> TypeChecker<'a> {
                         kind,
                     },
                 ..
-            }) = env.lookup_symbol(&sym).cloned()
+            }) = t.as_ref()
             else {
                 continue;
             };
 
             let mut spec = RowSpec::empty();
 
-            env.selfs.push(ty);
+            env.selfs.push(ty.clone());
 
             if !matches!(kind, RowKind::Enum(_, _)) {
-                let mut properties = vec![];
-                for (i, property) in placeholders.properties.iter().enumerate() {
+                for (i, property) in placeholders.properties.into_iter().enumerate() {
                     let typed_expr = self
                         .infer_node(property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
@@ -454,7 +448,7 @@ impl<'a> TypeChecker<'a> {
                     spec = spec.with_field(
                         property.name,
                         FieldInfo {
-                            ty: typed_expr.ty,
+                            ty: typed_expr.ty.clone(),
                             expr_id: typed_expr.id,
                             metadata: FieldMetadata::RecordField {
                                 index: i,
@@ -468,110 +462,87 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            let mut methods = vec![];
-            for method in &placeholders.methods {
+            for method in placeholders.methods {
                 let typed_expr = self
                     .infer_method(method.expr.id, method.expr, env)
                     .map_err(|e| (method.expr.id, e))?;
-                methods.push(Method {
-                    name: method.name.clone(),
-                    expr_id: method.expr.id,
-                    ty: typed_expr.ty.clone(),
-                    symbol_id: Some(method.symbol_id),
-                });
+
+                spec = spec.with_field(
+                    method.name,
+                    FieldInfo {
+                        ty: typed_expr.ty.clone(),
+                        expr_id: typed_expr.id,
+                        metadata: FieldMetadata::Method,
+                    },
+                );
 
                 substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
             }
-            def.add_methods_with_rows(methods.clone(), env);
-            env.register_with_mode(&def, placeholders.is_extension)
-                .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
 
-            if def.kind == TypeDefKind::Protocol {
-                let mut method_requirements = vec![];
-                for method in placeholders.method_requirements.iter() {
+            if matches!(kind, RowKind::Protocol(_, _)) {
+                for method in placeholders.method_requirements {
                     let typed_expr = self
                         .infer_node(method.expr, env, &None)
                         .map_err(|e| (method.expr.id, e))?;
-                    method_requirements.push(Method {
-                        name: method.name.clone(),
-                        expr_id: method.expr.id,
-                        ty: typed_expr.ty.clone(),
-                        symbol_id: Some(method.symbol_id),
-                    });
+
+                    spec = spec.with_field(
+                        method.name,
+                        FieldInfo {
+                            ty: typed_expr.ty.clone(),
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::MethodRequirement,
+                        },
+                    );
+
                     substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
                 }
-
-                def.add_method_requirements(method_requirements.clone());
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| {
-                        (
-                            method_requirements
-                                .last()
-                                .map(|p| p.expr_id)
-                                .unwrap_or_default(),
-                            e,
-                        )
-                    })?;
             }
 
-            if def.kind != TypeDefKind::Enum {
-                let mut initializers = vec![];
-
-                for initializer in placeholders.initializers.iter() {
+            if !matches!(kind, RowKind::Enum(_, _)) {
+                for initializer in placeholders.initializers {
                     let typed_expr = self
                         .infer_node(initializer.expr, env, &None)
                         .map_err(|e| (initializer.expr.id, e))?;
 
+                    spec = spec.with_field(
+                        initializer.name,
+                        FieldInfo {
+                            ty: typed_expr.ty.clone(),
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::Initializer,
+                        },
+                    );
+
                     substitutions.insert(initializer.placeholder.clone(), typed_expr.ty.clone());
-
-                    initializers.push(Initializer {
-                        name: initializer.name.clone(),
-                        expr_id: initializer.expr.id,
-                        ty: typed_expr.ty.clone(),
-                    });
                 }
-
-                def.add_initializers_with_rows(initializers.clone(), env);
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| {
-                        (
-                            initializers.last().map(|p| p.expr_id).unwrap_or_default(),
-                            e,
-                        )
-                    })?;
             }
 
-            if def.kind == TypeDefKind::Enum {
-                let mut variants = vec![];
-                for variant in placeholders.variants.iter() {
+            if let RowKind::Enum(symbol_id, name_str) = kind {
+                for (i, variant) in placeholders.variants.into_iter().enumerate() {
                     let typed_expr = self
                         .infer_node(
                             variant.expr,
                             env,
-                            &Some(Ty::enum_type(
-                                def.symbol_id(),
-                                def.name().to_string(),
-                                vec![],
-                            )),
+                            &Some(Ty::enum_type(*symbol_id, name_str.to_string(), vec![])),
                         )
                         .map_err(|e| (variant.expr.id, e))?;
-                    variants.push(EnumVariant {
-                        tag: variant.tag,
-                        name: variant.name.clone(),
-                        ty: typed_expr.ty.clone(),
-                    });
-                }
 
-                def.add_variants_with_rows(variants, env);
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| (Default::default(), e))?;
+                    spec = spec.with_field(
+                        variant.name,
+                        FieldInfo {
+                            ty: typed_expr.ty,
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::EnumVariant { tag: i },
+                        },
+                    );
+                }
             }
 
             let mut conformance_constraints = vec![];
             let mut conformances = vec![];
-            for conformance_expr in placeholders.conformances.iter() {
+            for conformance_expr in placeholders.conformances.into_iter() {
                 let typed_expr = self
-                    .infer_node(conformance_expr, env, &None)
+                    .infer_node(&conformance_expr, env, &None)
                     .map_err(|e| (conformance_expr.id, e))?;
 
                 // Protocols are now represented as Row types
@@ -595,17 +566,35 @@ impl<'a> TypeChecker<'a> {
                 conformances.push(conformance.clone());
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: conformance_expr.id,
-                    ty: def.ty(),
+                    ty: Ty::Row {
+                        fields: spec.fields.clone(),
+                        row: None,
+                        generics: generics.clone(),
+                        kind: kind.clone(),
+                    },
                     conformance,
                 });
             }
 
-            def.add_conformances(conformances);
-            env.register_with_mode(&def, placeholders.is_extension)
-                .map_err(|e| (Default::default(), e))?;
+            for constraint in conformance_constraints.iter() {
+                env.constrain(constraint.clone());
+            }
 
-            for constraint in conformance_constraints {
-                env.constrain(constraint);
+            if let RowKind::Struct(symbol_id, _)
+            | RowKind::Enum(symbol_id, _)
+            | RowKind::Protocol(symbol_id, _) = kind
+            {
+                env.declare(
+                    *symbol_id,
+                    Scheme::new(
+                        ty.clone(),
+                        free_type_vars(&ty)
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<TypeVarID>>(),
+                        conformance_constraints,
+                    ),
+                );
             }
 
             env.selfs.pop();
