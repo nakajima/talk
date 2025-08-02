@@ -1,7 +1,7 @@
 struct Array<Element> {
-	let count: Int  
-	let capacity: Int
-	let storage: Pointer
+	let mut count: Int  
+	let mut capacity: Int
+	let mut storage: Pointer
 
 	init(capacity: Int) {
 		self.count = 0
@@ -32,7 +32,7 @@ struct Array<Element> {
 		}
 
 		let newStorage = __alloc<Element>(self.capacity * 2)
-		let i = 0
+		let mut i = 0
 		loop i < self.count {
 			__store<Element>(newStorage, i, self.get(i))
 			i = i + 1

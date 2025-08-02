@@ -1,13 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    SymbolID, SymbolInfo, SymbolKind, SymbolTable,
-    name::Name,
-    parsing::expr_id::ExprID,
-    ty::Ty,
-    type_checker::Scheme,
-    type_def::{TypeDef, TypeDefKind},
-    type_var_id::{TypeVarID, TypeVarKind},
+    name::Name, parsing::expr_id::ExprID, ty::{Primitive, Ty}, type_checker::Scheme, type_var_id::{TypeVarID, TypeVarKind}, SymbolID, SymbolInfo, SymbolKind, SymbolTable
 };
 
 pub struct Builtin {
@@ -15,7 +9,6 @@ pub struct Builtin {
     info: SymbolInfo,
     pub ty: Ty,
     pub unbound_vars: Vec<TypeVarID>,
-    type_def: Option<TypeDef>,
 }
 
 pub fn builtins() -> Vec<Builtin> {
@@ -27,17 +20,12 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-1),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
-            ty: Ty::Int,
+            ty: Ty::Primitive(Primitive::Int),
             unbound_vars: vec![],
-            type_def: Some(TypeDef::new(
-                SymbolID(-1),
-                "Int".to_string(),
-                TypeDefKind::Builtin(Ty::Int),
-                vec![],
-            )),
         },
         Builtin {
             id: -2,
@@ -46,17 +34,12 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-2),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
-            ty: Ty::Float,
+            ty: Ty::Primitive(Primitive::Float),
             unbound_vars: vec![],
-            type_def: Some(TypeDef::new(
-                SymbolID(-2),
-                "Float".to_string(),
-                TypeDefKind::Builtin(Ty::Float),
-                vec![],
-            )),
         },
         Builtin {
             id: -3,
@@ -65,17 +48,12 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-3),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
-            ty: Ty::Bool,
+            ty: Ty::Primitive(Primitive::Bool),
             unbound_vars: vec![],
-            type_def: Some(TypeDef::new(
-                SymbolID(-3),
-                "Bool".to_string(),
-                TypeDefKind::Builtin(Ty::Bool),
-                vec![],
-            )),
         },
         Builtin {
             id: -4,
@@ -84,17 +62,12 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-4),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
-            ty: Ty::Pointer,
+            ty: Ty::Primitive(Primitive::Pointer),
             unbound_vars: vec![],
-            type_def: Some(TypeDef::new(
-                SymbolID(-4),
-                "Pointer".to_string(),
-                TypeDefKind::Builtin(Ty::Pointer),
-                vec![],
-            )),
         },
         Builtin {
             id: -5,
@@ -103,12 +76,13 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-5),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
             ty: Ty::Func(
                 vec![Ty::Int /* capacity */],
-                Ty::Pointer.into(),
+                Ty::Primitive(Primitive::Pointer).into(),
                 vec![Ty::TypeVar(TypeVarID {
                     id: 0,
                     kind: TypeVarKind::Element,
@@ -120,7 +94,6 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: TypeVarKind::Element,
                 expr_id: ExprID(-5),
             }],
-            type_def: None,
         },
         Builtin {
             id: -6,
@@ -129,6 +102,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-6),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -146,7 +120,6 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: TypeVarKind::Element,
                 expr_id: ExprID(-6),
             }],
-            type_def: None,
         },
         Builtin {
             id: -7,
@@ -155,12 +128,12 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-7),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
             ty: Ty::Func(vec![Ty::Pointer], Ty::Void.into(), vec![]),
             unbound_vars: vec![],
-            type_def: None,
         },
         Builtin {
             id: -8,
@@ -169,6 +142,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-8),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -194,7 +168,6 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: TypeVarKind::Element,
                 expr_id: ExprID(-8),
             }],
-            type_def: None,
         },
         Builtin {
             id: -9,
@@ -203,6 +176,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-9),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -225,7 +199,6 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: TypeVarKind::Element,
                 expr_id: ExprID(-9),
             }],
-            type_def: None,
         },
         // Reserve -10 for tuple symbol
         Builtin {
@@ -235,6 +208,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-11),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -256,7 +230,6 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: TypeVarKind::FuncParam("printable".into()),
                 expr_id: ExprID(-11),
             }],
-            type_def: None,
         },
         Builtin {
             id: -12,
@@ -265,6 +238,7 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinFunc,
                 expr_id: ExprID(-12),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
@@ -287,7 +261,6 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: TypeVarKind::CallReturn,
                 expr_id: ExprID(-12),
             }],
-            type_def: None,
         },
         Builtin {
             id: -13,
@@ -296,17 +269,12 @@ pub fn builtins() -> Vec<Builtin> {
                 kind: SymbolKind::BuiltinType,
                 expr_id: ExprID(-13),
                 is_captured: false,
+                is_mutable: false,
                 definition: None,
                 documentation: None,
             },
             ty: Ty::Byte,
             unbound_vars: vec![],
-            type_def: Some(TypeDef::new(
-                SymbolID(-13),
-                "Byte".to_string(),
-                TypeDefKind::Builtin(Ty::Byte),
-                vec![],
-            )),
         },
     ]
 }
@@ -321,23 +289,21 @@ pub fn builtin_type(symbol_id: &SymbolID) -> Option<Ty> {
     None
 }
 
-pub fn builtin_type_def(symbol_id: &SymbolID) -> Option<TypeDef> {
+pub fn builtin_type_def(symbol_id: &SymbolID) -> Option<Ty> {
     for builtin in builtins() {
         if symbol_id == &SymbolID(builtin.id) {
             #[allow(clippy::expect_used)]
-            return builtin.type_def;
+            return Some(builtin.ty);
         }
     }
 
     None
 }
 
-pub fn default_env_types() -> BTreeMap<SymbolID, TypeDef> {
+pub fn default_env_types() -> BTreeMap<SymbolID, Ty> {
     let mut result = BTreeMap::default();
     for builtin in builtins() {
-        if let Some(def) = builtin.type_def {
-            result.insert(SymbolID(builtin.id), def);
-        }
+        result.insert(SymbolID(builtin.id), builtin.ty);
     }
     result
 }
@@ -497,7 +463,8 @@ mod optional_tests {
                         introduces_type: false
                     })
                     .into()
-                )
+                ),
+                false // is_mutable
             ))
         );
     }
@@ -524,7 +491,7 @@ mod array_tests {
         let checked = crate::type_checking::check("[1,2,3]").unwrap();
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
         );
     }
 

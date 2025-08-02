@@ -1269,7 +1269,7 @@ pub mod lowering_tests {
                     instructions: vec![
                         Instr::GetElementPointer {
                             dest: Register(2),
-                            ty: IRType::closure(),
+                            ty: IRType::Struct(SymbolID::ENV, vec![IRType::Int], vec![]),
                             base: Register(0),
                             index: 0.into(),
                         },

@@ -189,7 +189,11 @@ mod tests {
             .substitutions
             .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
         match resolved {
-            Ty::Row { nominal_id: Some(id), kind: RowKind::Enum, .. } => assert_eq!(id, option_id),
+            Ty::Row {
+                nominal_id: Some(id),
+                kind: RowKind::Enum,
+                ..
+            } => assert_eq!(id, option_id),
             _ => panic!("Expected enum type"),
         }
     }

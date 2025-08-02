@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     SymbolID,
     environment::Environment,
-    ty::{RowKind, Ty},
+    ty::{Primitive, RowKind, Ty},
     typed_expr::Pattern,
 };
 
@@ -180,8 +180,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
             // Look up enum info from type
             let (enum_id, arity) = match ty {
                 Ty::Row {
-                    nominal_id: Some(id),
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(id, _),
                     ..
                 } => (*id, fields.len()),
                 _ => (SymbolID(0), fields.len()), // Fallback
@@ -225,13 +224,8 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
                 .collect();
 
             // Get all field names from the type
-            let all_fields = match ty {
-                Ty::Row { fields, .. } => fields
-                    .iter()
-                    .map(|(name, _)| name.clone())
-                    .collect::<Vec<_>>(),
-                _ => field_names.iter().map(|n| n.name_str()).collect(),
-            };
+            // TODO: Get fields from row constraints
+            let all_fields = field_names.iter().map(|n| n.name_str()).collect::<Vec<_>>();
 
             // Create pattern columns for all fields (wildcard for missing ones)
             let field_patterns = all_fields
@@ -243,7 +237,11 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
             DeconstructedPat {
                 ctor: Constructor::Struct {
                     struct_id: match ty {
-                        Ty::Row { nominal_id, .. } => *nominal_id,
+                        Ty::Row {
+                            kind:
+                                RowKind::Enum(id, _) | RowKind::Struct(id, _) | RowKind::Protocol(id, _),
+                            ..
+                        } => Some(*id),
                         _ => None,
                     },
                     fields: all_fields,
@@ -257,10 +255,9 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
 /// Get all possible constructors for a type
 pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
     match ty {
-        Ty::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
+        Ty::Primitive(Primitive::Bool) => vec![Constructor::Bool(true), Constructor::Bool(false)],
         Ty::Row {
-            nominal_id: Some(id),
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(id, _),
             ..
         } => {
             // Get enum variants from environment
@@ -279,14 +276,24 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
             }
         }
         Ty::Row {
-            fields,
-            nominal_id,
-            kind: RowKind::Struct | RowKind::Record,
+            kind: RowKind::Record,
             ..
         } => {
-            // For structs, there's only one constructor
+            // For records, get fields from constraints
+            let fields = ty.get_row_fields();
             vec![Constructor::Struct {
-                struct_id: *nominal_id,
+                struct_id: None,
+                fields: fields.iter().map(|(name, _)| name.clone()).collect(),
+            }]
+        }
+        Ty::Row {
+            kind: RowKind::Struct(struct_id, _),
+            ..
+        } => {
+            // For structs, get fields from constraints
+            let fields = ty.get_row_fields();
+            vec![Constructor::Struct {
+                struct_id: Some(*struct_id),
                 fields: fields.iter().map(|(name, _)| name.clone()).collect(),
             }]
         }

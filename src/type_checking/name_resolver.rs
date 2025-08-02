@@ -277,6 +277,7 @@ impl<'a> NameResolver<'a> {
                 type_repr,
                 default_value,
                 name,
+                is_mutable,
             } => {
                 if let Some(type_repr) = type_repr {
                     *type_repr = Box::new(self.resolve_node(type_repr, meta, symbol_table)?);
@@ -291,6 +292,7 @@ impl<'a> NameResolver<'a> {
                         name_str.clone(),
                         SymbolKind::Property,
                         parsed_expr.id,
+                        *is_mutable,
                         meta,
                         symbol_table,
                     );
@@ -319,12 +321,13 @@ impl<'a> NameResolver<'a> {
             Expr::Member(Some(receiver), _member) => {
                 *receiver = Box::new(self.resolve_node(receiver, meta, symbol_table)?);
             }
-            Expr::Let(name, rhs) => {
+            Expr::Let(name, rhs, is_mutable) => {
                 if let Name::Raw(name_str) = name {
                     let symbol_id = self.declare(
                         name_str.clone(),
                         SymbolKind::Local,
                         parsed_expr.id,
+                        *is_mutable,
                         meta,
                         symbol_table,
                     );
@@ -374,12 +377,13 @@ impl<'a> NameResolver<'a> {
             Expr::CallArg { value, .. } => {
                 *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
             }
-            Expr::Parameter(name, ty_repr) => {
+            Expr::Parameter(name, ty_repr, is_mutable) => {
                 if let Name::Raw(name_str) = &name {
                     let symbol_id = self.declare(
                         name_str.to_string(),
                         SymbolKind::Param,
                         parsed_expr.id,
+                        *is_mutable,
                         meta,
                         symbol_table,
                     );
@@ -456,6 +460,7 @@ impl<'a> NameResolver<'a> {
                                 raw_name_str.clone(),
                                 SymbolKind::TypeParameter,
                                 parsed_expr.id,
+                                false,
                                 meta,
                                 symbol_table,
                             );
@@ -529,6 +534,7 @@ impl<'a> NameResolver<'a> {
                         name_str.clone(),
                         SymbolKind::EnumVariant(SymbolID(type_sym.0)),
                         parsed_expr.id,
+                        false,
                         meta,
                         symbol_table,
                     );
@@ -572,6 +578,7 @@ impl<'a> NameResolver<'a> {
                         name_str.clone(),
                         SymbolKind::Protocol,
                         parsed_expr.id,
+                        false,
                         meta,
                         symbol_table,
                     );
@@ -596,6 +603,7 @@ impl<'a> NameResolver<'a> {
                             label.name_str(),
                             SymbolKind::RecordLabel,
                             parsed_expr.id,
+                            false,
                             meta,
                             symbol_table,
                         )
@@ -618,6 +626,7 @@ impl<'a> NameResolver<'a> {
                     label.name_str(),
                     SymbolKind::RecordLabel,
                     parsed_expr.id,
+                    false,
                     meta,
                     symbol_table,
                 );
@@ -720,12 +729,16 @@ impl<'a> NameResolver<'a> {
         symbol_table: &mut SymbolTable,
     ) -> Result<(), NameResolverError> {
         for parsed_expr in parsed_exprs {
-            if let Expr::Func { name, .. } = &mut parsed_expr.expr {
+            if let Expr::Func {
+                name, is_mutating, ..
+            } = &mut parsed_expr.expr
+            {
                 if let Some(Name::Raw(name_str)) = name {
                     let symbol_id = self.declare(
                         name_str.to_string(),
                         SymbolKind::FuncDef,
                         parsed_expr.id,
+                        *is_mutating,
                         meta,
                         symbol_table,
                     );
@@ -748,12 +761,16 @@ impl<'a> NameResolver<'a> {
                 self.end_scope(tok);
             }
 
-            if let Expr::FuncSignature { name, .. } = &mut parsed_expr.expr {
+            if let Expr::FuncSignature {
+                name, is_mutable, ..
+            } = &mut parsed_expr.expr
+            {
                 if let Name::Raw(name_str) = name {
                     let symbol_id = self.declare(
                         name_str.to_string(),
                         SymbolKind::FuncDef,
                         parsed_expr.id,
+                        *is_mutable,
                         meta,
                         symbol_table,
                     );
@@ -808,6 +825,7 @@ impl<'a> NameResolver<'a> {
                 name_str.clone(),
                 SymbolKind::Struct,
                 parsed_expr.id,
+                false,
                 meta,
                 symbol_table,
             );
@@ -838,6 +856,7 @@ impl<'a> NameResolver<'a> {
                     name,
                     type_repr: ty,
                     default_value: val,
+                    is_mutable,
                 } = &mut body_expr.expr
                 {
                     let name_str = name.name_str();
@@ -846,6 +865,7 @@ impl<'a> NameResolver<'a> {
                         name_str.clone(),
                         SymbolKind::Property,
                         body_expr.id,
+                        *is_mutable,
                         meta,
                         symbol_table,
                     );
@@ -856,6 +876,7 @@ impl<'a> NameResolver<'a> {
                         ty.clone(),
                         val.clone(),
                         Some(property_symbol),
+                        *is_mutable,
                     );
 
                     *name = Name::Resolved(property_symbol, name_str.clone());
@@ -890,6 +911,7 @@ impl<'a> NameResolver<'a> {
                             params,
                             body,
                             ret,
+                            is_mutating: false,
                             captures,
                             attributes: vec![],
                         },
@@ -931,6 +953,7 @@ impl<'a> NameResolver<'a> {
                 name_str.clone(),
                 SymbolKind::Enum,
                 parsed_expr.id,
+                false,
                 meta,
                 symbol_table,
             );
@@ -968,6 +991,7 @@ impl<'a> NameResolver<'a> {
                     name_str.clone(),
                     SymbolKind::PatternBind,
                     *expr_id,
+                    false,
                     meta,
                     symbol_table,
                 );
@@ -1007,6 +1031,7 @@ impl<'a> NameResolver<'a> {
                             label.name_str(),
                             SymbolKind::RecordLabel,
                             *expr_id,
+                            false,
                             meta,
                             symbol_table,
                         );
@@ -1085,6 +1110,7 @@ impl<'a> NameResolver<'a> {
                 name_str.clone(),
                 SymbolKind::Protocol,
                 parsed_expr.id,
+                false,
                 meta,
                 symbol_table,
             );
@@ -1156,6 +1182,7 @@ impl<'a> NameResolver<'a> {
         name: String,
         kind: SymbolKind,
         expr_id: ExprID,
+        is_mutable: bool,
         meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
     ) -> SymbolID {
@@ -1174,7 +1201,8 @@ impl<'a> NameResolver<'a> {
             sym: None,
         };
 
-        let symbol_id = symbol_table.add(&name, kind.clone(), expr_id, Some(definition));
+        let symbol_id =
+            symbol_table.add(&name, kind.clone(), expr_id, is_mutable, Some(definition));
 
         tracing::info!("Replacing {kind:?} {name} with {symbol_id:?}");
 
@@ -1209,7 +1237,13 @@ impl<'a> NameResolver<'a> {
             tracing::warn!("Already declared name: {name}");
         }
 
-        let symbol_id = symbol_table.add(&name, SymbolKind::Import(symbol.clone()), expr_id, None);
+        let symbol_id = symbol_table.add(
+            &name,
+            SymbolKind::Import(symbol.clone()),
+            expr_id,
+            false,
+            None,
+        );
 
         tracing::info!("Importing {name:?}");
 
@@ -1385,13 +1419,15 @@ mod tests {
                 generics: vec![],
                 params: vec![any_expr!(Expr::Parameter(
                     Name::Resolved(SymbolID::ANY, "x".into()),
-                    None
+                    None,
+                    false
                 ))],
                 body: any_expr!(Expr::Block(vec![any_expr!(Expr::Variable(
                     Name::Resolved(SymbolID::ANY, "x".into())
                 ))]))
                 .into(),
                 ret: None,
+                is_mutating: false,
                 captures: vec![],
                 attributes: vec![],
             })
@@ -1410,11 +1446,13 @@ mod tests {
                 params: vec![
                     any_expr!(Expr::Parameter(
                         Name::Resolved(SymbolID::ANY, "x".into()),
-                        None
+                        None,
+                        false
                     )),
                     any_expr!(Expr::Parameter(
                         Name::Resolved(SymbolID::ANY, "y".into()),
-                        None
+                        None,
+                        false
                     )),
                 ],
                 body: any_expr!(Expr::Block(vec![
@@ -1423,7 +1461,8 @@ mod tests {
                         generics: vec![],
                         params: vec![any_expr!(Expr::Parameter(
                             Name::Resolved(SymbolID::ANY, "x".into()),
-                            None
+                            None,
+                            false
                         ))],
                         body: any_expr!(Expr::Block(vec![
                             any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "x".into()))),
@@ -1431,6 +1470,7 @@ mod tests {
                         ]))
                         .into(),
                         ret: None,
+                        is_mutating: false,
                         captures: vec![SymbolID::resolved(2)],
                         attributes: vec![],
                     }),
@@ -1438,6 +1478,7 @@ mod tests {
                 ]))
                 .into(),
                 ret: None,
+                is_mutating: false,
                 captures: vec![],
                 attributes: vec![],
             }),
@@ -1456,7 +1497,12 @@ mod tests {
         assert_eq!(
             resolved.roots()[0],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "a".into()), None)).into(),
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::ANY, "a".into()),
+                    None,
+                    false
+                ))
+                .into(),
                 any_expr!(Expr::LiteralInt("1".into())).into()
             ))
         );
@@ -1464,7 +1510,12 @@ mod tests {
         assert_eq!(
             resolved.roots()[1],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "b".into()), None)).into(),
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::ANY, "b".into()),
+                    None,
+                    false
+                ))
+                .into(),
                 any_expr!(Expr::LiteralInt("2".into())).into()
             ))
         );
@@ -1472,7 +1523,12 @@ mod tests {
         assert_eq!(
             resolved.roots()[2],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "c".into()), None)).into(),
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::ANY, "c".into()),
+                    None,
+                    false
+                ))
+                .into(),
                 any_expr!(Expr::LiteralInt("3".into())).into()
             ))
         );
@@ -1525,7 +1581,12 @@ mod tests {
         assert_eq!(
             tree.roots()[0],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "x".into()), None)).into(),
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::ANY, "x".into()),
+                    None,
+                    false
+                ))
+                .into(),
                 any_expr!(Expr::LiteralInt("123".into())).into()
             ))
         );
@@ -1533,7 +1594,12 @@ mod tests {
         assert_eq!(
             tree.roots()[1],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "y".into()), None)).into(),
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::ANY, "y".into()),
+                    None,
+                    false
+                ))
+                .into(),
                 any_expr!(Expr::LiteralInt("345".into())).into()
             ))
         );
@@ -1560,7 +1626,12 @@ mod tests {
         assert_eq!(
             tree.roots()[0],
             any_expr!(Expr::Assignment(
-                any_expr!(Expr::Let(Name::Resolved(SymbolID::ANY, "x".into()), None)).into(),
+                any_expr!(Expr::Let(
+                    Name::Resolved(SymbolID::ANY, "x".into()),
+                    None,
+                    false
+                ))
+                .into(),
                 any_expr!(Expr::Member(
                     Some(
                         any_expr!(Expr::Variable(Name::Resolved(
@@ -1710,6 +1781,7 @@ mod tests {
                     )))]))
                     .into(),
                     ret: None,
+                    is_mutating: false,
                     captures: vec![],
                     attributes: vec![],
                 })]))
@@ -1758,7 +1830,8 @@ mod tests {
             any_expr!(Expr::Assignment(
                 any_expr!(Expr::Let(
                     Name::Resolved(SymbolID::ANY, "count".into()),
-                    None
+                    None,
+                    false
                 ))
                 .into(),
                 any_expr!(Expr::LiteralInt("0".into())).into()
@@ -1783,6 +1856,7 @@ mod tests {
                 ]))
                 .into(),
                 ret: None,
+                is_mutating: false,
                 captures: vec![SymbolID::ANY],
                 attributes: vec![],
             })
@@ -1832,6 +1906,7 @@ mod tests {
                 })]))
                 .into(),
                 ret: None,
+                is_mutating: false,
                 captures: vec![],
                 attributes: vec![],
             })
@@ -1863,6 +1938,7 @@ mod tests {
                     })
                     .into()
                 ),
+                is_mutating: false,
                 captures: vec![],
                 attributes: vec![],
             })
@@ -1909,6 +1985,7 @@ mod tests {
                         .into()
                     ),
                     default_value: None,
+                    is_mutable: false,
                 })]))
                 .into(),
                 generics: vec![],
@@ -1948,6 +2025,7 @@ mod tests {
                             .into()
                         ),
                         default_value: None,
+                        is_mutable: false,
                     }),
                     any_expr!(Expr::Init(
                         Some(SymbolID::ANY),
@@ -1965,6 +2043,7 @@ mod tests {
                                     })
                                     .into()
                                 ),
+                                false
                             ))],
                             body: any_expr!(Expr::Block(vec![any_expr!(Expr::Assignment(
                                 any_expr!(Expr::Member(
@@ -1983,6 +2062,7 @@ mod tests {
                             ))]))
                             .into(),
                             ret: None,
+                            is_mutating: false,
                             captures: vec![],
                             attributes: vec![],
                         })
@@ -2055,6 +2135,7 @@ mod tests {
                         kind: SymbolKind::Struct,
                         expr_id: _,
                         is_captured: false,
+                        is_mutable: _,
                         definition: Some(Definition { .. }),
                         documentation: None,
                     },

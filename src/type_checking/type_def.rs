@@ -186,14 +186,26 @@ impl TypeDef {
 
     pub fn ty(&self) -> Ty {
         match &self.kind {
-            TypeDefKind::Enum => Ty::enum_type(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Enum => Ty::enum_type(
+                self.symbol_id,
+                self.name().to_string(),
+                self.canonical_type_parameters(),
+            ),
             TypeDefKind::Struct => {
                 // Use the struct_type helper
-                Ty::struct_type(self.symbol_id, self.canonical_type_parameters())
+                Ty::struct_type(
+                    self.symbol_id,
+                    self.name().to_string(),
+                    self.canonical_type_parameters(),
+                )
             }
             TypeDefKind::Protocol => {
                 // Use the protocol_type helper
-                Ty::protocol_type(self.symbol_id, self.canonical_type_parameters())
+                Ty::protocol_type(
+                    self.symbol_id,
+                    self.name().to_string(),
+                    self.canonical_type_parameters(),
+                )
             }
             TypeDefKind::Builtin(ty) => ty.clone(),
         }

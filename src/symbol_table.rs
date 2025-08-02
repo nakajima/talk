@@ -25,11 +25,12 @@ impl std::hash::Hash for SymbolID {
 
 impl PartialEq for SymbolID {
     fn eq(&self, other: &Self) -> bool {
-        if other.0 == i32::MIN + 2 {
-            true
-        } else {
-            other.0 == self.0
+        #[cfg(test)]
+        if other.0 == SymbolID::ANY.0 || self.0 == SymbolID::ANY.0 {
+            return true;
         }
+
+        other.0 == self.0
     }
 }
 
@@ -60,6 +61,7 @@ impl SymbolID {
     // These are special for the lowering phase
     pub const GENERATED_MAIN: SymbolID = SymbolID(i32::MIN);
     pub const ENV: SymbolID = SymbolID(i32::MIN + 1);
+    pub const ENUM_TAG: SymbolID = SymbolID(i32::MIN + 2);
 
     // Remove the prelude's symbol offset
     pub fn resolved(index: i32) -> SymbolID {
@@ -108,6 +110,7 @@ pub struct PropertyInfo {
     pub type_id: Option<ParsedExpr>,
     pub default_value_id: Option<ParsedExpr>,
     pub symbol_id: Option<SymbolID>,
+    pub is_mutable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -116,6 +119,7 @@ pub struct SymbolInfo {
     pub kind: SymbolKind,
     pub expr_id: ExprID,
     pub is_captured: bool,
+    pub is_mutable: bool,
     pub definition: Option<Definition>,
     pub documentation: Option<String>,
 }
@@ -191,6 +195,7 @@ impl SymbolTable {
         name: &str,
         kind: SymbolKind,
         expr_id: ExprID,
+        is_mutable: bool,
         definition: Option<Definition>,
     ) -> SymbolID {
         tracing::trace!(
@@ -213,6 +218,7 @@ impl SymbolTable {
                 kind,
                 expr_id,
                 is_captured: false,
+                is_mutable,
                 definition,
                 documentation: None,
             },
@@ -241,12 +247,14 @@ impl SymbolTable {
         type_id: Option<Box<ParsedExpr>>,
         default_value_id: Option<Box<ParsedExpr>>,
         property_symbol_id: Option<SymbolID>,
+        is_mutable: bool,
     ) {
         let info = PropertyInfo {
             name,
             type_id: type_id.map(|e| *e),
             default_value_id: default_value_id.map(|e| *e),
             symbol_id: property_symbol_id,
+            is_mutable,
         };
 
         let Some(table) = self.types.get_mut(&to_symbol_id) else {

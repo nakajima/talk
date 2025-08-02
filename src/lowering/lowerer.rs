@@ -37,7 +37,7 @@ use crate::{
     source_file,
     token::Token,
     token_kind::TokenKind,
-    ty::{RowKind, Ty},
+    ty::{Primitive, RowKind, Ty},
     type_checker::Scheme,
     type_def::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
@@ -83,16 +83,16 @@ impl Ty {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
             Ty::SelfType => IRType::Void,
-            Ty::Pointer => IRType::POINTER,
+            Ty::Primitive(Primitive::Pointer) => IRType::POINTER,
             Ty::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
             ),
-            Ty::Byte => IRType::Byte,
-            Ty::Void => IRType::Void,
-            Ty::Int => IRType::Int,
-            Ty::Bool => IRType::Bool,
-            Ty::Float => IRType::Float,
+            Ty::Primitive(Primitive::Byte) => IRType::Byte,
+            Ty::Primitive(Primitive::Void) => IRType::Void,
+            Ty::Primitive(Primitive::Int) => IRType::Int,
+            Ty::Primitive(Primitive::Bool) => IRType::Bool,
+            Ty::Primitive(Primitive::Float) => IRType::Float,
             Ty::Func(items, ty, _generics) => IRType::Func(
                 items.iter().map(|t| t.to_ir(lowerer)).collect(),
                 Box::new(ty.to_ir(lowerer)),
@@ -109,57 +109,37 @@ impl Ty {
                 element: el.to_ir(lowerer).into(),
             },
             Ty::Row {
-                nominal_id: Some(symbol_id),
                 generics,
                 kind,
                 ..
             } => match kind {
-                RowKind::Enum => IRType::Enum(
+                RowKind::Enum(symbol_id, _) => IRType::Enum(
                     *symbol_id,
                     generics.iter().map(|i| i.to_ir(lowerer)).collect(),
                 ),
-                RowKind::Struct => {
-                    let Some(struct_def) = lowerer.env.lookup_struct(symbol_id) else {
-                        tracing::error!("Unable to determine definition of struct: {symbol_id:?}");
-                        return IRType::Void;
-                    };
+                RowKind::Struct(symbol_id, _) => {
+                    // TODO: Get struct info from row constraints
+                    // For now, return a basic struct type
+                    return IRType::Struct(
+                        *symbol_id,
+                        vec![], // TODO: Get field types from constraints
+                        generics.iter().map(|g| g.to_ir(lowerer)).collect(),
+                    );
+                }
+                RowKind::Protocol(_, _) => {
+                    return IRType::Void;
+                }
+                RowKind::Record => {
+                    // TODO: Get field types from row constraints
+                    let field_types: Vec<IRType> = vec![];
 
                     IRType::Struct(
-                        *symbol_id,
-                        struct_def
-                            .properties()
-                            .iter()
-                            .sorted_by(|a, b| a.index.cmp(&b.index))
-                            .map(|p| p.ty.to_ir(lowerer))
-                            .collect(),
-                        generics.iter().map(|g| g.to_ir(lowerer)).collect(),
+                        SymbolID::RECORD,
+                        field_types,
+                        vec![], // Records don't have generics
                     )
                 }
-                _ => {
-                    tracing::error!("Unsupported nominal row kind: {:?}", kind);
-                    IRType::Void
-                }
             },
-            Ty::Row { kind, .. } => {
-                // Protocols have no runtime representation
-                if matches!(kind, crate::ty::RowKind::Protocol) {
-                    return IRType::Void;
-                }
-
-                // Structural type (record) - use a special symbol ID and include field types
-                let Ty::Row { fields, .. } = self else {
-                    return IRType::Void;
-                };
-
-                let field_types: Vec<IRType> =
-                    fields.iter().map(|(_, ty)| ty.to_ir(lowerer)).collect();
-
-                IRType::Struct(
-                    SymbolID::RECORD,
-                    field_types,
-                    vec![], // Records don't have generics
-                )
-            }
         }
     }
 }
@@ -728,21 +708,11 @@ impl<'a> Lowerer<'a> {
         typed_expr: &TypedExpr,
         fields: &[TypedExpr],
     ) -> Option<Register> {
-        // For records, we need to ensure a consistent field order
-        // The type's field order might be non-deterministic, so we'll sort by field name
-        let Ty::Row {
-            fields: type_fields,
-            ..
-        } = &typed_expr.ty
-        else {
-            self.push_err("Record literal doesn't have Row type", typed_expr);
-            return None;
-        };
-
-        // Create a sorted list of field names for consistent ordering
-        let mut sorted_field_names: Vec<String> =
-            type_fields.iter().map(|(name, _)| name.clone()).collect();
-        sorted_field_names.sort();
+        // TODO: Update to work with constraint-based rows
+        // Need to look up fields from row constraints
+        
+        // For now, create empty field list
+        let sorted_field_names: Vec<String> = vec![];
 
         tracing::debug!(
             "Record literal has fields in sorted order: {:?}",
@@ -751,7 +721,7 @@ impl<'a> Lowerer<'a> {
 
         // Create a map from field names to their values and types
         let mut field_map = std::collections::HashMap::new();
-        let mut type_map = std::collections::HashMap::new();
+        let mut type_map: std::collections::HashMap<String, IRType> = std::collections::HashMap::new();
 
         // Map from literal
         for field in fields {
@@ -772,10 +742,10 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        // Map types from the Row type
-        for (name, ty) in type_fields {
-            type_map.insert(name.clone(), ty.to_ir(self));
-        }
+        // TODO: Map types from the Row type constraints
+        // for (name, ty) in type_fields {
+        //     type_map.insert(name.clone(), ty.to_ir(self));
+        // }
 
         // Build the struct with fields in sorted order
         let mut member_registers = vec![];
@@ -849,7 +819,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_string(&mut self, _expr_id: &TypedExpr, string: String) -> Option<Register> {
-        // Allocate the storage
+        // For now, create strings with static storage
+        // The string append segfault issue needs to be fixed in String.append
+        // by ensuring it handles static memory properly
         let chars_bytes = string.as_bytes();
         let static_addr = self.push_constant(IRConstantData::RawBuffer(chars_bytes.to_vec()));
 
@@ -1014,18 +986,10 @@ impl<'a> Lowerer<'a> {
         struct_id: SymbolID,
         body: &TypedExpr,
     ) -> Option<Register> {
-        let Some(struct_def) = self.env.lookup_struct(&struct_id).cloned() else {
-            self.add_diagnostic(Diagnostic::lowering(
-                self.source_file.path.clone(),
-                typed_expr.span(&self.source_file.meta),
-                IRError::Unknown(format!(
-                    "Could not resolve struct for symbol: {struct_id:?}"
-                )),
-            ));
-            return None;
-        };
-
-        for initializer in &struct_def.initializers() {
+        // TODO: Get struct initializers from row constraints
+        // For now, skip initializer processing
+        
+        /*for initializer in &struct_def.initializers() {
             let Some(typed_initializer) = self.source_file.typed_expr(initializer.expr_id).cloned()
             else {
                 tracing::error!("didn't get initializer");
@@ -1049,7 +1013,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-        }
+        }*/
 
         let Expr::Block(member_exprs) = &body.expr else {
             self.add_diagnostic(Diagnostic::lowering(
@@ -1078,13 +1042,14 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        self.register_global(&struct_id, SymbolValue::Struct(struct_def.into()));
+        // TODO: Register struct properly once we have constraint-based struct info
+        // self.register_global(&struct_id, SymbolValue::Struct(struct_def.into()));
 
         None
     }
 
     fn lower_extend(&mut self, type_id: SymbolID, body: &TypedExpr) -> Option<Register> {
-        let Some(type_def) = self.env.lookup_type(&type_id).cloned() else {
+        let Some(type_def) = self.env.lookup_type(&type_id) else {
             self.add_diagnostic(Diagnostic::lowering(
                 self.source_file.path.clone(),
                 body.span(&self.source_file.meta),
@@ -1130,7 +1095,7 @@ impl<'a> Lowerer<'a> {
         symbol_id: &SymbolID,
         typed_func: &TypedExpr,
     ) -> Option<(IRType, TypeDef, TypedExpr, Register, Option<IRValue>)> {
-        let Some(type_def) = self.env.lookup_type(symbol_id).cloned() else {
+        let Some(type_def) = self.env.lookup_type(symbol_id) else {
             tracing::error!("Cannot setup self context for {symbol_id:?} {typed_func:?}");
             return None;
         };
@@ -1195,7 +1160,7 @@ impl<'a> Lowerer<'a> {
         };
 
         // Override func type for init to always return the struct
-        let init_func_ty = Ty::Func(params, Ty::Pointer.into(), generics);
+        let init_func_ty = Ty::Func(params, Ty::Primitive(Primitive::Pointer).into(), generics);
         let current_function = self.current_functions.pop()?;
 
         let func = current_function.export(
@@ -1303,6 +1268,12 @@ impl<'a> Lowerer<'a> {
 
         // If the only capture is the func itself, we don't need to allocate a closure
 
+        // Register the function symbol so it can be captured by other functions
+        self.current_func_mut()?.register_symbol(
+            name.symbol_id(),
+            SymbolValue::FuncRef(name.mangled(&typed_expr.ty)),
+        );
+
         let ret = if captures.is_empty() {
             let fn_ptr = self.allocate_register();
             self.push_instr(Instr::Ref(
@@ -1339,12 +1310,48 @@ impl<'a> Lowerer<'a> {
                 let mut capture_registers = vec![];
                 let mut captured_ir_types = vec![];
                 for (i, capture) in captures.iter().enumerate() {
-                    let Some(SymbolValue::Register(register)) = self.lookup_register(capture)
-                    else {
-                        self.push_err("don't know how to handle captured captures yet", typed_expr);
-                        return None;
+                    let symbol_value = self.lookup_register(capture)?;
+                    let symbol_value = symbol_value.clone();
+                    let register = match symbol_value {
+                        SymbolValue::Register(reg) => reg,
+                        SymbolValue::Capture(idx, ty) => {
+                            // Load the capture from the outer environment into a register
+                            let outer_env_ty =
+                                self.current_func()?.env_ty.clone().unwrap_or_else(|| {
+                                    IRType::Struct(SymbolID::ENV, vec![], vec![])
+                                });
+
+                            let env_ptr = self.allocate_register();
+                            self.push_instr(Instr::GetElementPointer {
+                                dest: env_ptr,
+                                base: Register(0),
+                                ty: outer_env_ty,
+                                index: IRValue::ImmediateInt(idx as i64),
+                            });
+                            let loaded_reg = self.allocate_register();
+                            self.push_instr(Instr::Load {
+                                dest: loaded_reg,
+                                ty: ty.clone(),
+                                addr: env_ptr,
+                            });
+                            loaded_reg
+                        }
+                        SymbolValue::FuncRef(func_name) => {
+                            // For function references, create a Ref instruction
+                            let func_reg = self.allocate_register();
+                            self.push_instr(Instr::Ref(
+                                func_reg,
+                                IRType::POINTER,
+                                RefKind::Func(func_name.clone()),
+                            ));
+                            func_reg
+                        }
+                        _ => {
+                            self.push_err("unexpected symbol type for capture", typed_expr);
+                            return None;
+                        }
                     };
-                    capture_registers.push(*register);
+                    capture_registers.push(register);
 
                     if *capture == self_symbol {
                         captured_ir_types.push(IRType::POINTER);
@@ -1357,17 +1364,24 @@ impl<'a> Lowerer<'a> {
                                 // This is gnarly
                                 let sym = capture_types[i];
                                 let Some(info) = self.symbol_table.get(&sym) else {
-                                    return Scheme::new(Ty::Void, vec![], vec![]);
+                                    return Scheme::new(Ty::Primitive(Primitive::Void), vec![], vec![]);
                                 };
                                 let Some(typed_expr) = self.source_file.typed_expr(info.expr_id)
                                 else {
-                                    return Scheme::new(Ty::Void, vec![], vec![]);
+                                    return Scheme::new(Ty::Primitive(Primitive::Void), vec![], vec![]);
                                 };
 
                                 Scheme::new(typed_expr.ty.clone(), vec![], vec![])
                             })
                             .ty();
-                        captured_ir_types.push(capture_ty.to_ir(self));
+                        let ir_ty = capture_ty.to_ir(self);
+                        // Functions are stored as pointers in closures
+                        let ir_ty = if matches!(ir_ty, IRType::Func(_, _)) {
+                            IRType::POINTER
+                        } else {
+                            ir_ty
+                        };
+                        captured_ir_types.push(ir_ty);
                     }
                 }
 
@@ -1612,12 +1626,11 @@ impl<'a> Lowerer<'a> {
                 let struct_ty = &pattern_typed_expr.ty;
                 match struct_ty {
                     Ty::Row {
-                        nominal_id,
-                        kind: RowKind::Struct | RowKind::Record,
+                        kind: kind @ RowKind::Struct(_, _) | kind @ RowKind::Record,
                         ..
                     } => {
-                        let type_def = if let Some(struct_id) = nominal_id {
-                            self.env.lookup_type(struct_id).cloned()
+                        let type_def = if let RowKind::Struct(struct_id, _) = kind {
+                            self.env.lookup_type(struct_id)
                         } else {
                             None
                         };
@@ -1637,30 +1650,8 @@ impl<'a> Lowerer<'a> {
                                     continue;
                                 }
                             } else {
-                                // Record - fields are in sorted order
-                                if let Ty::Row {
-                                    fields: row_fields, ..
-                                } = struct_ty
-                                {
-                                    // Create sorted field list
-                                    let mut sorted_fields: Vec<_> = row_fields
-                                        .iter()
-                                        .map(|(name, ty)| (name.clone(), ty))
-                                        .collect();
-                                    sorted_fields.sort_by_key(|(name, _)| name.clone());
-
-                                    if let Some((idx, (_, field_ty))) = sorted_fields
-                                        .iter()
-                                        .enumerate()
-                                        .find(|(_, (fname, _))| fname == field_name_str)
-                                    {
-                                        (idx, field_ty.to_ir(self))
-                                    } else {
-                                        continue;
-                                    }
-                                } else {
-                                    continue;
-                                }
+                                // TODO: Record - need to look up fields from constraints
+                                continue;
                             };
 
                             // Allocate register for extracted field
@@ -1692,40 +1683,30 @@ impl<'a> Lowerer<'a> {
             } => {
                 // Get enum info
                 if let Ty::Row {
-                    nominal_id: Some(enum_id),
                     generics: enum_generics,
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(enum_id, _),
                     ..
                 } = &pattern_typed_expr.ty
-                    && let Some(enum_def) = self.env.lookup_enum(enum_id).cloned()
-                    && let Some(variant) = enum_def.find_variant(variant_name)
                 {
-                    // Check tag
-                    let variant_tag = variant.tag as u16;
+                    // TODO: Get enum variant info from row constraints
+                    // For now, use a placeholder tag
+                    let variant_tag = 0u16; // Placeholder
                     tests.push(PatternTest::CheckTag { tag: variant_tag });
 
                     // Handle variant fields
-                    let variant_field_types = match &variant.ty {
+                    // TODO: Get variant field types from constraints
+                    let variant_field_types = vec![]; // Placeholder
+                    /*match &variant.ty {
                         Ty::Func(params, _, _) => params.clone(),
                         _ => vec![],
-                    };
+                    };*/
 
                     for (i, field_pattern) in fields.iter().enumerate() {
                         let field_reg = self.allocate_register();
-                        let mut field_ty = variant_field_types.get(i).cloned().unwrap_or(Ty::Void);
+                        let mut field_ty = variant_field_types.get(i).cloned().unwrap_or(Ty::Primitive(Primitive::Void));
 
-                        // Substitute type variables with concrete types from the enum generics
-                        if let Ty::TypeVar(var) = &field_ty {
-                            // Find the position of this type variable in the enum's type parameters
-                            if let Some(generic_pos) = enum_def
-                                .type_parameters
-                                .iter()
-                                .position(|t| t.type_var == *var)
-                                && let Some(concrete_ty) = enum_generics.get(generic_pos)
-                            {
-                                field_ty = concrete_ty.clone();
-                            }
-                        }
+                        // TODO: Substitute type variables with concrete types from the enum generics
+                        // For now, just use the field type as-is
 
                         let field_ty_ir = field_ty.to_ir(self);
 
@@ -2055,8 +2036,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 let Ty::Row {
-                    nominal_id: Some(enum_id),
-                    kind: RowKind::Enum,
+                    kind: RowKind::Enum(enum_id, _),
                     ..
                 } = pattern_typed_expr.ty
                 else {
@@ -2067,21 +2047,16 @@ impl<'a> Lowerer<'a> {
                     );
                     return None;
                 };
-                let Some(type_def) = self.env.lookup_enum(&enum_id).cloned() else {
-                    self.push_err(
-                        format!("didn't get type def for {enum_id:?}").as_str(),
-                        pattern_typed_expr,
-                    );
-                    return None;
-                };
-
-                let variant = type_def.find_variant(variant_name)?;
+                // TODO: Get enum variant info from row constraints
+                // For now, create a placeholder variant
+                let variant_tag = 0u16; // Placeholder
+                let variant_ty = Ty::Primitive(Primitive::Void); // Placeholder
 
                 let dest = self.allocate_register();
-                let values = match &variant.ty {
+                let values = match &variant_ty {
                     Ty::Func(params, _, _) => params,
                     Ty::Row {
-                        kind: RowKind::Enum,
+                        kind: RowKind::Enum(_, _),
                         ..
                     } => {
                         // Variant with no parameters
@@ -2089,7 +2064,7 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => {
                         self.push_err(
-                            format!("unexpected variant type: {:?}", variant.ty).as_str(),
+                            format!("unexpected variant type: {:?}", variant_ty).as_str(),
                             pattern_typed_expr,
                         );
                         return Some(dest);
@@ -2110,7 +2085,7 @@ impl<'a> Lowerer<'a> {
                 self.push_instr(Instr::TagVariant(
                     dest,
                     pattern_typed_expr.ty.to_ir(self),
-                    variant.tag as u16,
+                    variant_tag,
                     args,
                 ));
 
@@ -2157,8 +2132,7 @@ impl<'a> Lowerer<'a> {
         is_lvalue: bool,
     ) -> Option<Register> {
         if let Ty::Row {
-            nominal_id: Some(sym),
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(sym, _),
             ..
         } = &typed_expr.ty
         {
@@ -2181,12 +2155,10 @@ impl<'a> Lowerer<'a> {
         };
 
         match &receiver.ty {
-            Ty::Row {
-                fields, nominal_id, ..
-            } => {
+            Ty::Row { kind, .. } => {
                 // Handle nominal rows (structs/protocols)
-                if let Some(struct_id) = nominal_id {
-                    let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
+                if let RowKind::Struct(struct_id, _) = kind {
+                    let Some(type_def) = self.env.lookup_type(struct_id) else {
                         unreachable!("didn't get struct def for nominal row");
                     };
 
@@ -2218,15 +2190,16 @@ impl<'a> Lowerer<'a> {
                     return None;
                 }
 
-                // Handle structural rows (records) - find field by position
-                let field_index = fields.iter().position(|(fname, _)| fname == name)?;
-                self.generate_field_access(
-                    receiver_reg,
-                    &receiver.ty,
-                    field_index,
-                    typed_expr,
-                    is_lvalue,
-                )
+                // TODO: Handle structural rows (records) - need to look up fields from constraints
+                // let field_index = fields.iter().position(|(fname, _)| fname == name)?;
+                // self.generate_field_access(
+                //     receiver_reg,
+                //     &receiver.ty,
+                //     field_index,
+                //     typed_expr,
+                //     is_lvalue,
+                // )
+                None
             }
             _ => {
                 self.push_err(format!("Member not lowered {name}").as_str(), typed_expr);
@@ -2243,24 +2216,18 @@ impl<'a> Lowerer<'a> {
         ty: &Ty,
         args: &[TypedRegister],
     ) -> Option<Register> {
-        let Some(type_def) = self.env.lookup_enum(&enum_id).cloned() else {
-            self.push_err(
-                format!("didn't get type def for {enum_id:?}").as_str(),
-                typed_expr,
-            );
-            return None;
-        };
-
-        let Some(variant) = type_def.find_variant(variant_name) else {
-            self.push_err("did not find variant for tag", typed_expr);
-            return None;
-        };
+        // TODO: Get enum variant info from row constraints
+        // For now, use a placeholder tag
+        let variant_tag = 0u16; // Placeholder
+        
+        // In the future, we'll look up the variant from the enum's row constraints
+        // let variant = get_enum_variant_from_constraints(&enum_id, variant_name);
 
         let dest = self.allocate_register();
         self.push_instr(Instr::TagVariant(
             dest,
             ty.to_ir(self),
-            variant.tag as u16,
+            variant_tag,
             RegisterList(args.to_vec()),
         ));
 
@@ -2442,11 +2409,17 @@ impl<'a> Lowerer<'a> {
         match value.clone() {
             SymbolValue::Register(reg) => Some(reg),
             SymbolValue::Capture(idx, ty) => {
+                // Register 0 contains the environment pointer
+                let env_ty = self.current_func()?.env_ty.clone().unwrap_or_else(|| {
+                    // Fallback - shouldn't happen
+                    IRType::Struct(SymbolID::ENV, vec![], vec![])
+                });
+
                 let env_ptr = self.allocate_register();
                 self.push_instr(Instr::GetElementPointer {
                     dest: env_ptr,
                     base: Register(0),
-                    ty: IRType::closure(),
+                    ty: env_ty,
                     index: IRValue::ImmediateInt(idx as i64),
                 });
 
@@ -2560,7 +2533,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle struct construction
         if let Ty::Row {
-            nominal_id: Some(struct_id),
+            kind: RowKind::Struct(struct_id, _),
             ..
         } = &callee_typed_expr.ty
         {
@@ -2599,8 +2572,7 @@ impl<'a> Lowerer<'a> {
 
         // Handle enum variant construction
         if let Ty::Row {
-            nominal_id: Some(enum_id),
-            kind: RowKind::Enum,
+            kind: RowKind::Enum(enum_id, _),
             ..
         } = &ret_ty
         {
@@ -2807,9 +2779,9 @@ impl<'a> Lowerer<'a> {
         struct_id: &SymbolID,
         ty: &Ty,
         mut arg_registers: Vec<TypedRegister>,
-        _arg_tys: &[Ty],
+        arg_tys: &[Ty],
     ) -> Option<Register> {
-        let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
+        let Some(type_def) = self.env.lookup_type(struct_id) else {
             unreachable!()
         };
 
@@ -2821,6 +2793,30 @@ impl<'a> Lowerer<'a> {
             ty: struct_ty.clone(),
             count: None,
         });
+
+        // Check if we need to dereference any struct arguments
+        // Init functions expect struct parameters by value, but string literals
+        // and other init calls return pointers
+        for (i, arg_ty) in arg_tys.iter().enumerate() {
+            if matches!(
+                arg_ty,
+                Ty::Row {
+                    kind: RowKind::Struct(_, _),
+                    ..
+                }
+            ) {
+                // This parameter expects a struct by value
+                // Load the value from the pointer
+                let loaded_reg = self.allocate_register();
+                let struct_ty = arg_ty.to_ir(self);
+                self.push_instr(Instr::Load {
+                    dest: loaded_reg,
+                    ty: struct_ty.clone(),
+                    addr: arg_registers[i].register,
+                });
+                arg_registers[i].register = loaded_reg;
+            }
+        }
 
         // Add the instance address as the first arg
         arg_registers.insert(
@@ -2877,7 +2873,10 @@ impl<'a> Lowerer<'a> {
 
         let callee_name = match &receiver_ty.ty {
             Ty::Row {
-                nominal_id: Some(symbol_id),
+                kind:
+                    RowKind::Struct(symbol_id, _)
+                    | RowKind::Enum(symbol_id, _)
+                    | RowKind::Protocol(symbol_id, _),
                 ..
             } => {
                 let type_def = self.env.lookup_type(symbol_id)?;
@@ -3090,9 +3089,13 @@ impl<'a> Lowerer<'a> {
             Some(name) => name,
             None => {
                 let name_str = format!("fn{}", self.symbol_table.max_id() + 1);
-                let symbol =
-                    self.symbol_table
-                        .add(&name_str, SymbolKind::CustomType, ExprID(12345), None);
+                let symbol = self.symbol_table.add(
+                    &name_str,
+                    SymbolKind::CustomType,
+                    ExprID(12345),
+                    false,
+                    None,
+                );
                 ResolvedName(symbol, name_str)
             }
         }
@@ -3119,11 +3122,9 @@ impl<'a> Lowerer<'a> {
             unreachable!("didn't get property index for {:?}", irtype)
         };
 
-        let Some(struct_def) = self.env.lookup_struct(&symbol_id) else {
-            unreachable!("didn't get typedef for {:?}", irtype)
-        };
-
-        struct_def.find_property(name).map(|p| p.index)
+        // TODO: Get property index from row constraints
+        // For now, return None
+        None
     }
 }
 
@@ -3167,7 +3168,7 @@ fn find_or_create_main(
         body: Box::new(TypedExpr {
             id: ExprID(0),
             expr: body_expr,
-            ty: Ty::Void,
+            ty: Ty::Primitive(Primitive::Void),
         }),
         ret: None,
         captures: vec![],
@@ -3176,7 +3177,7 @@ fn find_or_create_main(
     let typed_expr = TypedExpr {
         id: ExprID(SymbolID::GENERATED_MAIN.0),
         expr: func_expr.clone(),
-        ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+        ty: Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
     };
 
     // source_file.roots_mut().insert(0, typed_expr.clone());
@@ -3190,6 +3191,7 @@ fn find_or_create_main(
             is_captured: false,
             definition: None,
             documentation: None,
+            is_mutable: false,
         },
     );
 

@@ -23,6 +23,7 @@ pub mod pattern_exhaustiveness;
 pub mod pattern_matrix;
 pub mod row;
 pub mod row_constraints;
+pub mod row_utils;
 pub mod scope_tree;
 pub mod substitutions;
 pub mod synthesis;
@@ -40,7 +41,7 @@ pub mod typed_expr;
 pub mod dumb_dot;
 
 #[cfg(test)]
-pub mod example_row_usage;
+pub mod mutability_tests;
 #[cfg(test)]
 pub mod type_checker_tests;
 

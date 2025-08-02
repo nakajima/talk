@@ -62,11 +62,7 @@ impl Substitutions {
         // tracing::trace!("Applying:\n{:#?}\n---\n{:?}", ty);
 
         match ty {
-            Ty::Pointer => ty.clone(),
-            Ty::Int => ty.clone(),
-            Ty::Byte => ty.clone(),
-            Ty::Float => ty.clone(),
-            Ty::Bool => ty.clone(),
+            Ty::Primitive(_) => ty.clone(),
             Ty::SelfType => ty.clone(),
             Ty::Func(params, returning, generics) => {
                 let applied_params = self.apply_multiple(params, depth + 1, context);
@@ -119,28 +115,19 @@ impl Substitutions {
                 self_ty: self.apply(self_ty, depth + 1, context).into(),
                 func: self.apply(func, depth + 1, context).into(),
             },
-            Ty::Void => ty.clone(),
             Ty::Row {
-                fields,
-                row,
-                nominal_id,
+                type_var,
+                constraints,
                 generics,
                 kind,
             } => {
-                let applied_fields: Vec<(String, Ty)> = fields
-                    .iter()
-                    .map(|(name, field_ty)| {
-                        (name.clone(), self.apply(field_ty, depth + 1, context))
-                    })
-                    .collect();
-                let applied_row = row
-                    .as_ref()
-                    .map(|r| Box::new(self.apply(r, depth + 1, context)));
+                // TODO: Apply substitutions to types within constraints
+                let applied_constraints = constraints.clone(); // For now, just clone
+                let applied_generics = self.apply_multiple(generics, depth + 1, context);
                 Ty::Row {
-                    fields: applied_fields,
-                    row: applied_row,
-                    nominal_id: *nominal_id,
-                    generics: self.apply_multiple(generics, depth + 1, context),
+                    type_var: type_var.clone(),
+                    constraints: applied_constraints,
+                    generics: applied_generics,
                     kind: kind.clone(),
                 }
             }
@@ -190,7 +177,15 @@ impl Substitutions {
 
         tracing::trace!("lhs = {lhs:?}, rhs = {rhs:?}");
 
-        let res = match (lhs.clone(), rhs.clone()) {
+        //tracing::trace!(
+        //    "{:?} <> {:?} = {:?} <> {:?}",
+        //    lhs,
+        //    rhs,
+        //    self.apply(&lhs, 0, context),
+        //    self.apply(&rhs, 0, context)
+        //);
+
+        match (lhs.clone(), rhs.clone()) {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
 
@@ -305,16 +300,16 @@ impl Substitutions {
             // Handle Row types - check nominal_id and unify generics
             (
                 Ty::Row {
-                    nominal_id: Some(id1),
+                    kind: kind1,
                     generics: gen1,
                     ..
                 },
                 Ty::Row {
-                    nominal_id: Some(id2),
+                    kind: kind2,
                     generics: gen2,
                     ..
                 },
-            ) if id1 == id2 => {
+            ) if kind1 == kind2 => {
                 // Unify generics
                 if gen1.len() != gen2.len() {
                     return Err(TypeError::Mismatch(
@@ -330,26 +325,30 @@ impl Substitutions {
             // Handle records
             (
                 Ty::Row {
-                    nominal_id: None,
                     generics: lhs_generics,
-                    fields: lhs_fields,
                     ..
                 },
                 Ty::Row {
-                    nominal_id: None,
                     generics: rhs_generics,
-                    fields: rhs_fields,
                     ..
                 },
-            ) if lhs_generics.len() == rhs_generics.len()
-                && lhs_fields.len() == rhs_fields.len() =>
+            ) if lhs_generics.len() == rhs_generics.len() =>
             {
                 for (g1, g2) in lhs_generics.iter().zip(rhs_generics) {
                     self.unify(g1, &g2, context, generation)?;
                 }
 
-                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
-                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
+                // Get fields from constraints
+                let lhs_fields_info = lhs.get_row_fields();
+                let rhs_fields_info = rhs.get_row_fields();
+                
+                // Convert to BTreeMap<String, Ty> for comparison
+                let lhs_fields: BTreeMap<String, Ty> = lhs_fields_info.iter()
+                    .map(|(k, v)| (k.clone(), v.ty.clone()))
+                    .collect();
+                let rhs_fields: BTreeMap<String, Ty> = rhs_fields_info.iter()
+                    .map(|(k, v)| (k.clone(), v.ty.clone()))
+                    .collect();
 
                 for (label, ty) in lhs_fields.iter() {
                     let Some(rhs_ty) = rhs_fields.get(label) else {
@@ -367,17 +366,7 @@ impl Substitutions {
                 self.apply(&lhs, 0, context).to_string(),
                 self.apply(&rhs, 0, context).to_string(),
             )),
-        };
-
-        tracing::trace!(
-            "∪ {:?} <> {:?} = {:?} <> {:?}",
-            lhs,
-            rhs,
-            self.apply(&lhs, 0, context),
-            self.apply(&rhs, 0, context)
-        );
-
-        res
+        }
     }
 
     /// Returns true if `v` occurs inside `ty`

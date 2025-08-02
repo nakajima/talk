@@ -265,6 +265,7 @@ impl<'a> Higlighter<'a> {
                 name: _name,
                 type_repr,
                 default_value,
+                is_mutable: _,
             } => {
                 if let Some(type_repr) = type_repr {
                     result.extend(self.tokens_from_expr(type_repr));
@@ -316,12 +317,12 @@ impl<'a> Higlighter<'a> {
                 }
             }
             Expr::Init(_, func_id) => result.extend(self.tokens_from_expr(func_id)),
-            Expr::Parameter(_name, ty) => {
+            Expr::Parameter(_name, ty, _) => {
                 if let Some(ty) = ty {
                     result.extend(self.tokens_from_expr(ty));
                 }
             }
-            Expr::Let(_name, rhs) => {
+            Expr::Let(_name, rhs, _) => {
                 if let Some(rhs) = rhs {
                     result.extend(self.tokens_from_expr(rhs));
                 }

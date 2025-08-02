@@ -4,5 +4,7 @@
     "--nocapture"
   ],
   "rust-analyzer.testExplorer": true,
-  "rust-analyzer.check.command": "clippy"
+  "rust-analyzer.check.command": "clippy",
+  "todo-tree.regex.regex": "((//|#|<!--|;|/\\*|^)\\s*($TAGS)|($TAGS)!.*)",
+  "todo-tree.regex.regexCaseSensitive": false,
 }

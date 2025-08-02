@@ -1,7 +1,7 @@
 struct String {
-  let length: Int
-  let capacity: Int
-  let storage: Pointer
+  let mut length: Int
+  let mut capacity: Int
+  let mut storage: Pointer
   
   init(capacity: Int) {
     self.length = 0
@@ -13,7 +13,7 @@ struct String {
     let newCapacity = self.length + other.length
     let newStorage = __alloc<Byte>(newCapacity)
     let currentLength = self.length
-    let i = 0
+    let mut i = 0
 
 		if currentLength > 0 {
     	loop i < currentLength {
@@ -37,7 +37,7 @@ struct String {
 
 extend String: Add<String, String> {
   func add(rhs: String) -> String {
-    let res = ""
+    let mut res = ""
     res.append(self)
     res.append(rhs)
     res

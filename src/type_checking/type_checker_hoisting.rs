@@ -8,10 +8,10 @@ use crate::{
     name::Name,
     parsed_expr::ParsedExpr,
     parsing::expr_id::ExprID,
+    row::{FieldInfo, FieldMetadata, RowSpec},
     substitutions::Substitutions,
-    ty::Ty,
+    ty::{RowKind, Ty},
     type_checker::{Scheme, TypeChecker, TypeError},
-    type_def::{EnumVariant, Initializer, Method, Property, TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::Expr,
 };
@@ -108,8 +108,6 @@ impl<'a> TypeChecker<'a> {
                 tracing::debug!(
                     "Importing type: {our_type_def:?}, substitutions: {substitutions:?}"
                 );
-
-                env.register(&our_type_def)?;
             }
         }
 
@@ -213,17 +211,29 @@ impl<'a> TypeChecker<'a> {
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::struct_type(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Struct => Ty::struct_type(
+                    *symbol_id,
+                    expr_ids.name.name_str().to_string(),
+                    canonical_types.clone(),
+                ),
                 PredeclarationKind::Extension => {
                     // For extensions, use the existing type
-                    env.lookup_type(symbol_id)
-                        .map(|td| td.ty())
-                        .unwrap_or_else(|| Ty::struct_type(*symbol_id, canonical_types.clone()))
+                    env.lookup_symbol(symbol_id)
+                        .map(|t| t.ty())
+                        .map_err(|e| (expr_ids.body.id, e))?
                 }
-                PredeclarationKind::Enum => Ty::enum_type(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty::enum_type(
+                    *symbol_id,
+                    expr_ids.name.name_str().to_string(),
+                    canonical_types.clone(),
+                ),
                 PredeclarationKind::Protocol => {
                     // Use the protocol_type helper
-                    Ty::protocol_type(*symbol_id, canonical_types.clone())
+                    Ty::protocol_type(
+                        *symbol_id,
+                        expr_ids.name.name_str().to_string(),
+                        canonical_types.clone(),
+                    )
                 }
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
@@ -257,6 +267,7 @@ impl<'a> TypeChecker<'a> {
                     crate::parsed_expr::Expr::Property {
                         name: Name::Resolved(prop_id, name_str),
                         default_value,
+                        is_mutable,
                         ..
                     } if expr_ids.kind != PredeclarationKind::Enum => {
                         let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
@@ -277,6 +288,7 @@ impl<'a> TypeChecker<'a> {
                             expr: body_expr,
                             placeholder: type_var.clone(),
                             default_value,
+                            is_mutable: *is_mutable,
                             symbol_id: *prop_id,
                         });
 
@@ -393,37 +405,7 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect();
 
-            let type_def = env.lookup_type(symbol_id).cloned().unwrap_or_else(|| {
-                let kind = match expr_ids.kind {
-                    PredeclarationKind::Enum => TypeDefKind::Enum,
-                    PredeclarationKind::Struct => TypeDefKind::Struct,
-                    PredeclarationKind::Extension => TypeDefKind::Struct, // Extensions use the same kind as the base type
-                    PredeclarationKind::Protocol => TypeDefKind::Protocol,
-                    PredeclarationKind::Builtin(symbol_id) =>
-                    {
-                        #[allow(clippy::unwrap_used)]
-                        TypeDefKind::Builtin(builtin_type(&symbol_id).unwrap())
-                    }
-                };
-
-                // Create new TypeDef, but preserve row_managed_members if type exists
-                let mut new_def = TypeDef::new(*symbol_id, name_str.clone(), kind, type_params);
-
-                // If this type already exists, preserve its row_managed_members
-                if let Some(existing) = env.lookup_type(symbol_id) {
-                    new_def.merge_row_managed_members(existing);
-                }
-
-                new_def
-            });
-
-            // Only register if this is a new type definition, not an extension
-            // Extensions will register after adding their new members
-            if env.lookup_type(symbol_id).is_none() {
-                env.register(&type_def).map_err(|e| (root.id, e))?;
-            }
-
-            placeholders.push((type_def.symbol_id(), ty_placeholders));
+            placeholders.push((*symbol_id, ty_placeholders));
         }
 
         Ok(placeholders)
@@ -438,159 +420,132 @@ impl<'a> TypeChecker<'a> {
 
         // Sick, all the names are declared. Now let's actually infer.
         for (sym, placeholders) in &mut placeholders.into_iter() {
-            let Some(mut def) = env.lookup_type(&sym).cloned() else {
+            let t = env.lookup_symbol(&sym).cloned();
+            let Ok(scheme) = t.as_ref() else {
                 continue;
             };
-
-            // TODO: Should this be happening in typedef ty instead of here?
-            let ty = if let TypeDefKind::Builtin(ref ty) = def.kind {
-                ty.clone()
-            } else {
-                // Use the canonical type with the type definition's parameters
-                // instead of instantiating to avoid creating instantiation type variables
-                def.ty()
+            
+            let ty = scheme.ty();
+            let (generics, kind) = match &ty {
+                Ty::Row { generics, kind, .. } => (generics.clone(), kind.clone()),
+                _ => continue,
             };
 
-            env.selfs.push(ty);
+            let mut spec = RowSpec::empty();
 
-            if def.kind != TypeDefKind::Enum {
-                let mut properties = vec![];
-                for property in placeholders.properties.iter() {
+            env.selfs.push(ty.clone());
+
+            if !matches!(&kind, RowKind::Enum(_, _)) {
+                for (i, property) in placeholders.properties.into_iter().enumerate() {
                     let typed_expr = self
                         .infer_node(property.expr, env, &None)
                         .map_err(|e| (property.expr.id, e))?;
-                    let prop = Property {
-                        index: property.index,
-                        name: property.name.clone(),
-                        expr_id: property.expr.id,
-                        ty: typed_expr.ty.clone(),
-                        has_default: matches!(
-                            typed_expr.expr,
-                            Expr::Property {
-                                default_value: Some(_),
-                                ..
-                            }
-                        ),
-                        symbol_id: Some(property.symbol_id),
-                    };
-                    properties.push(prop);
+
+                    spec = spec.with_field(
+                        property.name,
+                        FieldInfo {
+                            ty: typed_expr.ty.clone(),
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::RecordField {
+                                index: i,
+                                has_default: property.default_value.is_some(),
+                                is_mutable: property.is_mutable,
+                            },
+                        },
+                    );
 
                     substitutions.insert(property.placeholder.clone(), typed_expr.ty.clone());
                 }
-
-                def.add_properties_with_rows(properties.clone(), env);
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| (properties.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
             }
 
-            let mut methods = vec![];
-            for method in &placeholders.methods {
+            for method in placeholders.methods {
                 let typed_expr = self
                     .infer_method(method.expr.id, method.expr, env)
                     .map_err(|e| (method.expr.id, e))?;
-                methods.push(Method {
-                    name: method.name.clone(),
-                    expr_id: method.expr.id,
-                    ty: typed_expr.ty.clone(),
-                    symbol_id: Some(method.symbol_id),
-                });
+
+                spec = spec.with_field(
+                    method.name,
+                    FieldInfo {
+                        ty: typed_expr.ty.clone(),
+                        expr_id: typed_expr.id,
+                        metadata: FieldMetadata::Method,
+                    },
+                );
 
                 substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
             }
-            def.add_methods_with_rows(methods.clone(), env);
-            env.register_with_mode(&def, placeholders.is_extension)
-                .map_err(|e| (methods.last().map(|p| p.expr_id).unwrap_or_default(), e))?;
 
-            if def.kind == TypeDefKind::Protocol {
-                let mut method_requirements = vec![];
-                for method in placeholders.method_requirements.iter() {
+            if matches!(kind, RowKind::Protocol(_, _)) {
+                for method in placeholders.method_requirements {
                     let typed_expr = self
                         .infer_node(method.expr, env, &None)
                         .map_err(|e| (method.expr.id, e))?;
-                    method_requirements.push(Method {
-                        name: method.name.clone(),
-                        expr_id: method.expr.id,
-                        ty: typed_expr.ty.clone(),
-                        symbol_id: Some(method.symbol_id),
-                    });
+
+                    spec = spec.with_field(
+                        method.name,
+                        FieldInfo {
+                            ty: typed_expr.ty.clone(),
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::MethodRequirement,
+                        },
+                    );
+
                     substitutions.insert(method.placeholder.clone(), typed_expr.ty.clone());
                 }
-
-                def.add_method_requirements(method_requirements.clone());
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| {
-                        (
-                            method_requirements
-                                .last()
-                                .map(|p| p.expr_id)
-                                .unwrap_or_default(),
-                            e,
-                        )
-                    })?;
             }
 
-            if def.kind != TypeDefKind::Enum {
-                let mut initializers = vec![];
-
-                for initializer in placeholders.initializers.iter() {
+            if !matches!(&kind, RowKind::Enum(_, _)) {
+                for initializer in placeholders.initializers {
                     let typed_expr = self
                         .infer_node(initializer.expr, env, &None)
                         .map_err(|e| (initializer.expr.id, e))?;
 
+                    spec = spec.with_field(
+                        initializer.name,
+                        FieldInfo {
+                            ty: typed_expr.ty.clone(),
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::Initializer,
+                        },
+                    );
+
                     substitutions.insert(initializer.placeholder.clone(), typed_expr.ty.clone());
-
-                    initializers.push(Initializer {
-                        name: initializer.name.clone(),
-                        expr_id: initializer.expr.id,
-                        ty: typed_expr.ty.clone(),
-                    });
                 }
-
-                def.add_initializers_with_rows(initializers.clone(), env);
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| {
-                        (
-                            initializers.last().map(|p| p.expr_id).unwrap_or_default(),
-                            e,
-                        )
-                    })?;
             }
 
-            if def.kind == TypeDefKind::Enum {
-                let mut variants = vec![];
-                for variant in placeholders.variants.iter() {
+            if let RowKind::Enum(symbol_id, name_str) = &kind {
+                for (i, variant) in placeholders.variants.into_iter().enumerate() {
                     let typed_expr = self
                         .infer_node(
                             variant.expr,
                             env,
-                            &Some(Ty::enum_type(def.symbol_id(), vec![])),
+                            &Some(Ty::enum_type(*symbol_id, name_str.to_string(), vec![])),
                         )
                         .map_err(|e| (variant.expr.id, e))?;
-                    variants.push(EnumVariant {
-                        tag: variant.tag,
-                        name: variant.name.clone(),
-                        ty: typed_expr.ty.clone(),
-                    });
-                }
 
-                def.add_variants_with_rows(variants, env);
-                env.register_with_mode(&def, placeholders.is_extension)
-                    .map_err(|e| (Default::default(), e))?;
+                    spec = spec.with_field(
+                        variant.name,
+                        FieldInfo {
+                            ty: typed_expr.ty,
+                            expr_id: typed_expr.id,
+                            metadata: FieldMetadata::EnumVariant { tag: i },
+                        },
+                    );
+                }
             }
 
             let mut conformance_constraints = vec![];
             let mut conformances = vec![];
-            for conformance_expr in placeholders.conformances.iter() {
+            for conformance_expr in placeholders.conformances.into_iter() {
                 let typed_expr = self
-                    .infer_node(conformance_expr, env, &None)
+                    .infer_node(&conformance_expr, env, &None)
                     .map_err(|e| (conformance_expr.id, e))?;
 
                 // Protocols are now represented as Row types
                 let (name, associated_types) = match &typed_expr.ty {
                     Ty::Row {
-                        nominal_id: Some(name),
                         generics,
-                        kind: crate::ty::RowKind::Protocol,
+                        kind: RowKind::Protocol(name, _),
                         ..
                     } => (*name, generics.clone()),
                     Ty::Row { kind, .. } => {
@@ -605,19 +560,51 @@ impl<'a> TypeChecker<'a> {
 
                 let conformance = Conformance::new(name, associated_types);
                 conformances.push(conformance.clone());
+                // Create a type variable for the row
+                let type_var = env.new_type_variable(TypeVarKind::Row, conformance_expr.id);
+                
+                // Create constraints from spec fields
+                let mut constraints = vec![];
+                for (label, field_info) in spec.fields.iter() {
+                    constraints.push(crate::row::RowConstraint::HasField {
+                        type_var: type_var.clone(),
+                        label: label.clone(),
+                        field_ty: field_info.ty.clone(),
+                        metadata: field_info.metadata.clone(),
+                    });
+                }
+                
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: conformance_expr.id,
-                    ty: def.ty(),
+                    ty: Ty::Row {
+                        type_var,
+                        constraints,
+                        generics: generics.clone(),
+                        kind: kind.clone(),
+                    },
                     conformance,
                 });
             }
 
-            def.add_conformances(conformances);
-            env.register_with_mode(&def, placeholders.is_extension)
-                .map_err(|e| (Default::default(), e))?;
+            for constraint in conformance_constraints.iter() {
+                env.constrain(constraint.clone());
+            }
 
-            for constraint in conformance_constraints {
-                env.constrain(constraint);
+            if let RowKind::Struct(symbol_id, _)
+            | RowKind::Enum(symbol_id, _)
+            | RowKind::Protocol(symbol_id, _) = &kind
+            {
+                env.declare(
+                    *symbol_id,
+                    Scheme::new(
+                        ty.clone(),
+                        free_type_vars(&ty)
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<TypeVarID>>(),
+                        conformance_constraints,
+                    ),
+                );
             }
 
             env.selfs.pop();
@@ -706,7 +693,8 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _) = &lhs.expr
+            let crate::parsed_expr::Expr::Let(Name::Resolved(symbol_id, name_str), _, _) =
+                &lhs.expr
             else {
                 continue;
             };
@@ -866,6 +854,7 @@ pub struct RawProperty<'a> {
     pub expr: &'a ParsedExpr,
     pub placeholder: TypeVarID,
     pub default_value: &'a Option<Box<ParsedExpr>>,
+    pub is_mutable: bool,
     pub symbol_id: SymbolID,
 }
 
