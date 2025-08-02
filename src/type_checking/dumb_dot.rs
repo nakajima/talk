@@ -15,7 +15,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use crate::ExprMetaStorage;
-use crate::ty::Ty;
+use crate::ty::Ty2;
 use crate::type_var_context::UnificationEntry;
 
 /* ───────────────────────── Union–Find (unchanged) ────────────────────────── */
@@ -64,12 +64,12 @@ where
     P: AsRef<Path>,
 {
     /* 1. Assign a numeric handle to every distinct Ty. */
-    let mut handles = HashMap::<Ty, (usize, String)>::new();
+    let mut handles = HashMap::<Ty2, (usize, String)>::new();
     let mut uf = UF::default();
 
-    let h_of = |ty: &Ty,
+    let h_of = |ty: &Ty2,
                 label: String,
-                handles: &mut HashMap<Ty, (usize, String)>,
+                handles: &mut HashMap<Ty2, (usize, String)>,
                 uf: &mut UF|
      -> usize {
         if let Some((h, _label)) = handles.get(ty) {
@@ -120,7 +120,7 @@ where
                     format!("Instantiated {generation:?}")
                 };
 
-                let canonical_ty = Ty::TypeVar(canonical.clone());
+                let canonical_ty = Ty2::TypeVar(canonical.clone());
                 let h_canon = h_of(&canonical_ty, label.clone(), &mut handles, &mut uf);
                 let h_inst = h_of(instantiated, label.clone(), &mut handles, &mut uf);
 
@@ -176,7 +176,7 @@ where
 
     /* 4.a  Nodes (double border for roots) */
     for (ty, (h, label)) in &handles {
-        let shape = if matches!(ty, Ty::TypeVar(_)) {
+        let shape = if matches!(ty, Ty2::TypeVar(_)) {
             "ellipse"
         } else {
             "box"

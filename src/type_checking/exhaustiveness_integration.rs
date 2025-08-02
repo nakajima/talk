@@ -7,7 +7,7 @@ use crate::{
     environment::Environment,
     expr_id::ExprID,
     row::{FieldMetadata, RowConstraint},
-    ty::{RowKind, Ty},
+    ty::{RowKind, Ty2},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{self, Pattern},
 };
@@ -42,10 +42,10 @@ impl<'a> RowEnumAnalyzer<'a> {
     }
 
     /// Analyze a type to extract enum variant information
-    pub fn analyze_type(&self, ty: &Ty) -> Option<RowEnumInfo> {
+    pub fn analyze_type(&self, ty: &Ty2) -> Option<RowEnumInfo> {
         match ty {
-            Ty::TypeVar(type_var) => self.analyze_type_var(type_var),
-            Ty::Row {
+            Ty2::TypeVar(type_var) => self.analyze_type_var(type_var),
+            Ty2::Row {
                 nominal_id: Some(enum_id),
                 kind: RowKind::Enum,
                 ..
@@ -145,11 +145,11 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
     /// Check if a match expression is exhaustive
     pub fn check_match(
         &self,
-        scrutinee_ty: &Ty,
+        scrutinee_ty: &Ty2,
         patterns: &[typed_expr::Pattern],
     ) -> ExhaustivenessResult {
         // Special handling for boolean types to match expected format
-        if matches!(scrutinee_ty, Ty::Bool) {
+        if matches!(scrutinee_ty, Ty2::Bool) {
             return self.check_bool_exhaustiveness(patterns);
         }
 
@@ -165,7 +165,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
 
             if !all_missing.is_empty() {
                 // For enums, return Variants with all missing variant names
-                if let Ty::Row {
+                if let Ty2::Row {
                     kind: RowKind::Enum,
                     nominal_id: Some(id),
                     ..
@@ -199,7 +199,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
     }
 
     /// Collect all missing patterns
-    fn collect_missing_patterns(&self, matrix: &PatternMatrix, ty: &Ty) -> Vec<String> {
+    fn collect_missing_patterns(&self, matrix: &PatternMatrix, ty: &Ty2) -> Vec<String> {
         let mut missing = Vec::new();
 
         // Get all constructors that need to be covered
@@ -257,7 +257,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
 /// Function to check exhaustiveness during type checking
 pub fn check_match_exhaustiveness(
     env: &Environment,
-    scrutinee_ty: &Ty,
+    scrutinee_ty: &Ty2,
     patterns: &[typed_expr::Pattern],
 ) -> Result<(), String> {
     let checker = RowAwareExhaustivenessChecker::new(env);
@@ -311,7 +311,7 @@ mod tests {
 
         // Missing false
         let patterns = vec![Pattern::LiteralTrue];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty2::Bool, &patterns);
 
         match result {
             ExhaustivenessResult::NonExhaustive(missing) => {

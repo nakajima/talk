@@ -10,7 +10,7 @@ use crate::{
     ExprMetaStorage, SymbolID,
     conformance::Conformance,
     conformance_checker::{ConformanceChecker, ConformanceError},
-    constraint::Constraint,
+    constraint::Constraint2,
     environment::{Environment, TypeParameter},
     name::Name,
     parsing::expr_id::ExprID,
@@ -18,7 +18,7 @@ use crate::{
     row_constraints::RowConstraintSolver,
     semantic_index::ResolvedExpr,
     substitutions::Substitutions,
-    ty::{RowKind, Ty},
+    ty::{RowKind, Ty2},
     type_checker::{Scheme, TypeError},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -26,7 +26,7 @@ use crate::{
 /// The result of running the constraint solver.
 pub struct ConstraintSolverSolution {
     /// Constraints that could not be solved
-    pub unsolved_constraints: Vec<Constraint>,
+    pub unsolved_constraints: Vec<Constraint2>,
     /// Type substitutions derived from solving constraints
     pub substitutions: Substitutions,
     /// Type errors encountered during solving
@@ -40,7 +40,7 @@ pub struct ConstraintSolver<'a> {
     /// Metadata storage for expression information
     meta: &'a ExprMetaStorage,
     /// Stack of constraints to be solved
-    constraints: Vec<Constraint>,
+    constraints: Vec<Constraint2>,
     /// Generation counter for type variables
     generation: u32,
     /// Solved row constraints for member resolution
@@ -62,14 +62,14 @@ impl<'a> ConstraintSolver<'a> {
     /// Some constraints need to wait for other type information to be resolved first.
     fn should_defer_constraint(
         &mut self,
-        constraint: &Constraint,
+        constraint: &Constraint2,
         substitutions: &mut Substitutions,
     ) -> bool {
         match constraint {
-            Constraint::MemberAccess(_, receiver_ty, _, _) => {
+            Constraint2::MemberAccess(_, receiver_ty, _, _) => {
                 let resolved_receiver = substitutions.apply(receiver_ty, 0, &mut self.env.context);
                 // Defer if receiver is still an unresolved TypeVar that's not a placeholder/instance
-                if let Ty::TypeVar(tv) = &resolved_receiver {
+                if let Ty2::TypeVar(tv) = &resolved_receiver {
                     match &tv.kind {
                         TypeVarKind::Member(_) | TypeVarKind::CallReturn | TypeVarKind::Let => {
                             // These are intermediate TypeVars that should be resolved first
@@ -82,7 +82,7 @@ impl<'a> ConstraintSolver<'a> {
                         _ => {
                             // Also defer if there are any unprocessed row constraints for this type var
                             let has_row_constraints = self.constraints.iter().any(|c| {
-                                matches!(c, Constraint::Row { constraint, .. } if {
+                                matches!(c, Constraint2::Row { constraint, .. } if {
                                     use crate::row::RowConstraint;
                                     match constraint {
                                         RowConstraint::HasField { type_var, .. } |
@@ -107,13 +107,13 @@ impl<'a> ConstraintSolver<'a> {
                 }
                 false
             }
-            Constraint::Row { constraint, .. } => {
+            Constraint2::Row { constraint, .. } => {
                 use crate::row::RowConstraint;
                 match constraint {
                     RowConstraint::RowConcat { left, right, .. } => {
                         // Defer RowConcat if we haven't processed HasField constraints for left/right yet
                         let has_pending_fields = self.constraints.iter().any(|c| {
-                            matches!(c, Constraint::Row { constraint: rc, .. } if {
+                            matches!(c, Constraint2::Row { constraint: rc, .. } if {
                                 match rc {
                                     RowConstraint::HasField { type_var, .. } =>
                                         type_var == left || type_var == right,
@@ -132,7 +132,7 @@ impl<'a> ConstraintSolver<'a> {
                     RowConstraint::RowRestrict { source, .. } => {
                         // Defer RowRestrict if we haven't processed HasField constraints for source yet
                         let has_pending_fields = self.constraints.iter().any(|c| {
-                            matches!(c, Constraint::Row { constraint: rc, .. } if {
+                            matches!(c, Constraint2::Row { constraint: rc, .. } if {
                                 match rc {
                                     RowConstraint::HasField { type_var, .. } => type_var == source,
                                     _ => false,
@@ -181,18 +181,19 @@ impl<'a> ConstraintSolver<'a> {
                     Ok(_) => (),
                     Err(err) => {
                         // Row constraint errors should never be deferred - they are immediate failures
-                        let is_row_constraint = matches!(&constraint, Constraint::Row { .. });
+                        let is_row_constraint = matches!(&constraint, Constraint2::Row { .. });
 
                         // For MemberAccess on TypeVars, keep deferring as long as possible
                         // since the TypeVar might be resolved in a later iteration
                         let should_defer = if is_row_constraint {
                             false // Never defer row constraint errors
-                        } else if let Constraint::MemberAccess(_, receiver_ty, member_name, _) =
+                        } else if let Constraint2::MemberAccess(_, receiver_ty, member_name, _) =
                             &constraint
                         {
                             let resolved =
                                 substitutions.apply(receiver_ty, 0, &mut self.env.context);
-                            if matches!(resolved, Ty::TypeVar(_)) && iterations < MAX_ITERATIONS - 1
+                            if matches!(resolved, Ty2::TypeVar(_))
+                                && iterations < MAX_ITERATIONS - 1
                             {
                                 tracing::trace!(
                                     "Deferring MemberAccess({}) on TypeVar in iteration {}",
@@ -252,7 +253,7 @@ impl<'a> ConstraintSolver<'a> {
         for (_id, typed_expr) in &mut self.env.typed_exprs.iter_mut() {
             typed_expr.ty = substitutions.apply(&typed_expr.ty, 0, &mut self.env.context);
 
-            if let Ty::TypeVar(var) = &typed_expr.ty {
+            if let Ty2::TypeVar(var) = &typed_expr.ty {
                 remaining_type_vars.push(var.clone());
             }
         }
@@ -271,17 +272,17 @@ impl<'a> ConstraintSolver<'a> {
     #[tracing::instrument(level = Level::TRACE, skip(self, substitutions), fields(result))]
     fn solve_constraint(
         &mut self,
-        constraint: &Constraint,
+        constraint: &Constraint2,
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         match &constraint.replacing(substitutions, &mut self.env.context) {
-            Constraint::Retry(c, _) => {
+            Constraint2::Retry(c, _) => {
                 self.solve_constraint(c, substitutions)?;
             }
-            Constraint::ConformsTo {
+            Constraint2::ConformsTo {
                 ty, conformance, ..
             } => {
-                if let Ty::TypeVar(type_var) = ty {
+                if let Ty2::TypeVar(type_var) = ty {
                     self.solve_type_var_conformance(type_var, conformance, substitutions)?;
                 } else {
                     let conformance_checker = ConformanceChecker::new(ty, conformance, self.env);
@@ -291,7 +292,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                 }
             }
-            Constraint::Equality(expr_id, lhs, rhs) => {
+            Constraint2::Equality(expr_id, lhs, rhs) => {
                 let lhs = substitutions.apply(lhs, 0, &mut self.env.context);
                 let rhs = substitutions.apply(rhs, 0, &mut self.env.context);
 
@@ -304,12 +305,12 @@ impl<'a> ConstraintSolver<'a> {
                         err
                     })?;
             }
-            Constraint::InstanceOf { scheme, ty, .. } => {
+            Constraint2::InstanceOf { scheme, ty, .. } => {
                 let mut mapping = Substitutions::new();
                 for unbound_var in &scheme.unbound_vars() {
                     mapping.insert(
                         unbound_var.clone(),
-                        Ty::TypeVar(
+                        Ty2::TypeVar(
                             self.env
                                 .new_type_variable(TypeVarKind::Unbound, unbound_var.expr_id),
                         ),
@@ -324,11 +325,11 @@ impl<'a> ConstraintSolver<'a> {
                     self.generation,
                 )?;
             }
-            Constraint::UnqualifiedMember(_node_id, member_name, result_ty) => {
+            Constraint2::UnqualifiedMember(_node_id, member_name, result_ty) => {
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
                 self.solve_unqualified_member(&result_ty, member_name, substitutions)?;
             }
-            Constraint::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
+            Constraint2::MemberAccess(node_id, receiver_ty, member_name, result_ty) => {
                 let receiver_ty = substitutions.apply(receiver_ty, 0, &mut self.env.context);
                 let result_ty = substitutions.apply(result_ty, 0, &mut self.env.context);
 
@@ -371,7 +372,7 @@ impl<'a> ConstraintSolver<'a> {
                     }
                 }
             }
-            Constraint::InitializerCall {
+            Constraint2::InitializerCall {
                 initializes_id,
                 args,
                 func_ty,
@@ -388,7 +389,7 @@ impl<'a> ConstraintSolver<'a> {
                     substitutions,
                 )?;
             }
-            Constraint::VariantMatch {
+            Constraint2::VariantMatch {
                 scrutinee_ty,
                 variant_name,
                 field_tys,
@@ -397,7 +398,7 @@ impl<'a> ConstraintSolver<'a> {
                 let scrutinee_ty = substitutions.apply(scrutinee_ty, 0, &mut self.env.context);
                 self.solve_variant_match(&scrutinee_ty, variant_name, field_tys, substitutions)?;
             }
-            Constraint::Row {
+            Constraint2::Row {
                 constraint,
                 expr_id,
             } => {
@@ -485,10 +486,10 @@ impl<'a> ConstraintSolver<'a> {
     fn solve_initializer_call(
         &mut self,
         initializes_id: &SymbolID,
-        args: &[Ty],
-        func_ty: &Ty,
-        result_ty: &Ty,
-        type_args: &[Ty],
+        args: &[Ty2],
+        func_ty: &Ty2,
+        result_ty: &Ty2,
+        type_args: &[Ty2],
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         let struct_def = self
@@ -509,7 +510,7 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         let initializer = &initializers[0];
-        let Ty::Init(_, params) = &initializer.ty else {
+        let Ty2::Init(_, params) = &initializer.ty else {
             return Err(TypeError::Unknown("Invalid initializer type".into()));
         };
 
@@ -538,7 +539,7 @@ impl<'a> ConstraintSolver<'a> {
         )?;
 
         // Create and unify the specialized struct type
-        let struct_with_generics = Ty::struct_type(*initializes_id, type_args.to_vec());
+        let struct_with_generics = Ty2::struct_type(*initializes_id, type_args.to_vec());
         let specialized_struct = self.env.instantiate(&Scheme::new(
             struct_with_generics,
             struct_def.canonical_type_variables(),
@@ -557,12 +558,12 @@ impl<'a> ConstraintSolver<'a> {
 
     fn solve_variant_match(
         &mut self,
-        scrutinee_ty: &Ty,
+        scrutinee_ty: &Ty2,
         variant_name: &str,
-        field_tys: &[Ty],
+        field_tys: &[Ty2],
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
-        let Ty::Row {
+        let Ty2::Row {
             nominal_id: Some(enum_id),
             generics: concrete_type_args,
             kind: RowKind::Enum,
@@ -585,8 +586,8 @@ impl<'a> ConstraintSolver<'a> {
 
         // Extract the generic field types from the variant's definition
         let generic_field_tys = match &variant_def.ty {
-            Ty::Func(params, _, _) => params.clone(),
-            Ty::Row {
+            Ty2::Func(params, _, _) => params.clone(),
+            Ty2::Row {
                 kind: RowKind::Enum,
                 ..
             } => vec![], // Variant with no parameters
@@ -627,13 +628,13 @@ impl<'a> ConstraintSolver<'a> {
 
     fn solve_unqualified_member(
         &mut self,
-        result_ty: &Ty,
+        result_ty: &Ty2,
         member_name: &str,
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         match result_ty {
             // A variant with no values
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(enum_id),
                 kind: RowKind::Enum,
                 ..
@@ -652,9 +653,9 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
             // A variant with values (function type returning enum)
-            Ty::Func(_, ret, _) => {
+            Ty2::Func(_, ret, _) => {
                 let ret_ty = substitutions.apply(ret, 0, &mut self.env.context);
-                if let Ty::Row {
+                if let Ty2::Row {
                     nominal_id: Some(enum_id),
                     kind: RowKind::Enum,
                     ..
@@ -683,34 +684,34 @@ impl<'a> ConstraintSolver<'a> {
 
     fn resolve_member_type(
         &mut self,
-        receiver_ty: &Ty,
+        receiver_ty: &Ty2,
         member_name: &str,
         substitutions: &Substitutions,
         expr_id: &ExprID,
-    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+    ) -> Result<(Ty2, Vec<TypeParameter>, Vec<Ty2>), TypeError> {
         tracing::debug!(
             "resolve_member_type: receiver_ty = {:?}, member = {}",
             receiver_ty,
             member_name
         );
         match receiver_ty {
-            builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
+            builtin @ (Ty2::Int | Ty2::Float | Ty2::Bool | Ty2::Pointer) => {
                 self.resolve_builtin_member(builtin, member_name)
             }
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(enum_id),
                 generics,
                 kind: RowKind::Enum,
                 ..
             } => self.resolve_enum_member(enum_id, member_name, generics),
-            Ty::TypeVar(type_var) => {
+            Ty2::TypeVar(type_var) => {
                 tracing::debug!("Resolving member {} on TypeVar {:?}", member_name, type_var);
                 let result =
                     self.resolve_type_var_member(type_var, member_name, substitutions, expr_id);
                 tracing::debug!("TypeVar member resolution result: {:?}", result);
                 result
             }
-            Ty::Row {
+            Ty2::Row {
                 fields,
                 nominal_id,
                 generics,
@@ -741,14 +742,14 @@ impl<'a> ConstraintSolver<'a> {
 
     fn resolve_builtin_member(
         &mut self,
-        builtin: &Ty,
+        builtin: &Ty2,
         member_name: &str,
-    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+    ) -> Result<(Ty2, Vec<TypeParameter>, Vec<Ty2>), TypeError> {
         let symbol_id = match builtin {
-            Ty::Int => SymbolID::INT,
-            Ty::Float => SymbolID::FLOAT,
-            Ty::Bool => SymbolID::BOOL,
-            Ty::Pointer => SymbolID::POINTER,
+            Ty2::Int => SymbolID::INT,
+            Ty2::Float => SymbolID::FLOAT,
+            Ty2::Bool => SymbolID::BOOL,
+            Ty2::Pointer => SymbolID::POINTER,
             _ => unreachable!("Invalid builtin type"),
         };
 
@@ -771,10 +772,10 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         type_id: &SymbolID,
         member_name: &str,
-        generics: &[Ty],
+        generics: &[Ty2],
         substitutions: &Substitutions,
         expr_id: &ExprID,
-    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+    ) -> Result<(Ty2, Vec<TypeParameter>, Vec<Ty2>), TypeError> {
         // First get the type def info we need
         let (type_name, type_params) = {
             let type_def = self.env.lookup_type(type_id).ok_or_else(|| {
@@ -817,8 +818,8 @@ impl<'a> ConstraintSolver<'a> {
         &self,
         enum_id: &SymbolID,
         member_name: &str,
-        generics: &[Ty],
-    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+        generics: &[Ty2],
+    ) -> Result<(Ty2, Vec<TypeParameter>, Vec<Ty2>), TypeError> {
         let enum_def = self.env.lookup_enum(enum_id).ok_or_else(|| {
             TypeError::Unknown(format!("Unable to resolve enum with id: {enum_id:?}"))
         })?;
@@ -844,7 +845,7 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
         substitutions: &Substitutions,
         expr_id: &ExprID,
-    ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
+    ) -> Result<(Ty2, Vec<TypeParameter>, Vec<Ty2>), TypeError> {
         // Check if this is a row type variable that needs a field constraint
         if matches!(type_var.kind, TypeVarKind::Row) {
             // Check if we already have a field constraint for this member
@@ -855,7 +856,7 @@ impl<'a> ConstraintSolver<'a> {
 
             if !has_field_constraint {
                 // Generate a new field type variable
-                let field_ty = Ty::TypeVar(
+                let field_ty = Ty2::TypeVar(
                     self.env
                         .new_type_variable(TypeVarKind::Member(member_name.to_string()), *expr_id),
                 );
@@ -868,7 +869,7 @@ impl<'a> ConstraintSolver<'a> {
                     metadata: Default::default(),
                 };
 
-                self.constraints.push(Constraint::Row {
+                self.constraints.push(Constraint2::Row {
                     expr_id: *expr_id,
                     constraint: new_constraint.clone(),
                 });
@@ -883,12 +884,12 @@ impl<'a> ConstraintSolver<'a> {
         let matching_constraints = self
             .constraints
             .iter()
-            .filter(|constraint| constraint.contains(|t| *t == Ty::TypeVar(type_var.clone())))
+            .filter(|constraint| constraint.contains(|t| *t == Ty2::TypeVar(type_var.clone())))
             .collect::<Vec<_>>();
 
         for constraint in matching_constraints {
             match constraint {
-                Constraint::ConformsTo { conformance, .. } => {
+                Constraint2::ConformsTo { conformance, .. } => {
                     if let Some((ty, params, assoc_types)) = self.resolve_protocol_member(
                         &conformance.protocol_id,
                         member_name,
@@ -897,7 +898,7 @@ impl<'a> ConstraintSolver<'a> {
                         return Ok((ty, params, assoc_types));
                     }
                 }
-                Constraint::InstanceOf {
+                Constraint2::InstanceOf {
                     symbol_id, scheme, ..
                 } => {
                     let type_def = self.env.lookup_type(symbol_id).ok_or_else(|| {
@@ -908,7 +909,7 @@ impl<'a> ConstraintSolver<'a> {
                         let associated_types = scheme
                             .unbound_vars()
                             .iter()
-                            .map(|t| Ty::TypeVar(t.clone()))
+                            .map(|t| Ty2::TypeVar(t.clone()))
                             .collect();
 
                         return Ok((
@@ -977,8 +978,8 @@ impl<'a> ConstraintSolver<'a> {
         &self,
         protocol_id: &SymbolID,
         member_name: &str,
-        associated_types: &[Ty],
-    ) -> Result<Option<(Ty, Vec<TypeParameter>, Vec<Ty>)>, TypeError> {
+        associated_types: &[Ty2],
+    ) -> Result<Option<(Ty2, Vec<TypeParameter>, Vec<Ty2>)>, TypeError> {
         let protocol_def = self
             .env
             .lookup_protocol(protocol_id)
@@ -1012,7 +1013,7 @@ impl<'a> ConstraintSolver<'a> {
 
         match candidates.len() {
             0 => Err(TypeError::Defer(ConformanceError::TypeCannotConform(
-                Ty::TypeVar(type_var.clone()).to_string(),
+                Ty2::TypeVar(type_var.clone()).to_string(),
             ))),
             1 => {
                 let (candidate_ty, candidate_unifs, type_def_conf) = &candidates[0];
@@ -1034,7 +1035,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         conformance: &Conformance,
         substitutions: &mut Substitutions,
-    ) -> Result<Vec<(Ty, Vec<(Ty, Ty)>, Conformance)>, TypeError> {
+    ) -> Result<Vec<(Ty2, Vec<(Ty2, Ty2)>, Conformance)>, TypeError> {
         let types: Vec<_> = self
             .env
             .types
@@ -1084,15 +1085,15 @@ impl<'a> ConstraintSolver<'a> {
     fn apply_conformance_solution(
         &mut self,
         type_var: &TypeVarID,
-        candidate_ty: &Ty,
-        candidate_unifications: &[(Ty, Ty)],
+        candidate_ty: &Ty2,
+        candidate_unifications: &[(Ty2, Ty2)],
         conformance: &Conformance,
         type_def_conformance: &Conformance,
         substitutions: &mut Substitutions,
     ) -> Result<(), TypeError> {
         // Unify the type variable with the candidate type
         substitutions.unify(
-            &Ty::TypeVar(type_var.clone()),
+            &Ty2::TypeVar(type_var.clone()),
             candidate_ty,
             &mut self.env.context,
             self.generation,
@@ -1117,28 +1118,28 @@ impl<'a> ConstraintSolver<'a> {
 
     /// Applies a given substitution map to a type. Does not recurse on type variables already in the map.
     #[tracing::instrument(level = Level::TRACE, fields(result))]
-    pub fn substitute_ty_with_map(ty: &Ty, substitutions: &Substitutions) -> Ty {
+    pub fn substitute_ty_with_map(ty: &Ty2, substitutions: &Substitutions) -> Ty2 {
         match ty {
-            Ty::TypeVar(type_var_id) => {
+            Ty2::TypeVar(type_var_id) => {
                 if let Some(substituted_ty) = substitutions.get(type_var_id) {
                     substituted_ty.clone()
                 } else {
                     ty.clone() // Not in this substitution map, return as is.
                 }
             }
-            Ty::Init(struct_id, params) => {
+            Ty2::Init(struct_id, params) => {
                 let applied_params = params
                     .iter()
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
                     .collect();
 
-                Ty::Init(*struct_id, applied_params)
+                Ty2::Init(*struct_id, applied_params)
             }
-            Ty::Method { self_ty, func } => Ty::Method {
+            Ty2::Method { self_ty, func } => Ty2::Method {
                 self_ty: Self::substitute_ty_with_map(self_ty, substitutions).into(),
                 func: Self::substitute_ty_with_map(func, substitutions).into(),
             },
-            Ty::Func(params, returning, generics) => {
+            Ty2::Func(params, returning, generics) => {
                 let applied_params = params
                     .iter()
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
@@ -1148,19 +1149,19 @@ impl<'a> ConstraintSolver<'a> {
                     .iter()
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
                     .collect();
-                Ty::Func(applied_params, Box::new(applied_return), applied_generics)
+                Ty2::Func(applied_params, Box::new(applied_return), applied_generics)
             }
-            Ty::Closure { func, captures } => {
+            Ty2::Closure { func, captures } => {
                 let func = Self::substitute_ty_with_map(func, substitutions)
                     .clone()
                     .into();
 
-                Ty::Closure {
+                Ty2::Closure {
                     func,
                     captures: captures.clone(),
                 }
             }
-            Ty::Row {
+            Ty2::Row {
                 fields,
                 row,
                 nominal_id,
@@ -1171,7 +1172,7 @@ impl<'a> ConstraintSolver<'a> {
                     .iter()
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
                     .collect();
-                Ty::Row {
+                Ty2::Row {
                     fields: fields.clone(),
                     row: row.clone(),
                     nominal_id: *nominal_id,
@@ -1179,17 +1180,21 @@ impl<'a> ConstraintSolver<'a> {
                     kind: RowKind::Enum,
                 }
             }
-            Ty::Tuple(types) => Ty::Tuple(
+            Ty2::Tuple(types) => Ty2::Tuple(
                 types
                     .iter()
                     .map(|param| Self::substitute_ty_with_map(param, substitutions))
                     .collect(),
             ),
-            Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
-                ty.clone()
-            }
-            Ty::Row {
+            Ty2::Array(ty) => Ty2::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
+            Ty2::Void
+            | Ty2::Pointer
+            | Ty2::Int
+            | Ty2::Float
+            | Ty2::Bool
+            | Ty2::SelfType
+            | Ty2::Byte => ty.clone(),
+            Ty2::Row {
                 fields,
                 row,
                 nominal_id,
@@ -1208,7 +1213,7 @@ impl<'a> ConstraintSolver<'a> {
                 let applied_row = row
                     .as_ref()
                     .map(|r| Box::new(Self::substitute_ty_with_map(r, substitutions)));
-                Ty::Row {
+                Ty2::Row {
                     fields: applied_fields,
                     row: applied_row,
                     nominal_id: *nominal_id,
@@ -1223,9 +1228,9 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     /// Find the symbol ID for a member of a type
-    fn find_member_symbol(&self, receiver_ty: &Ty, member_name: &str) -> Option<SymbolID> {
+    fn find_member_symbol(&self, receiver_ty: &Ty2, member_name: &str) -> Option<SymbolID> {
         match receiver_ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(type_id),
                 ..
             } => {
@@ -1250,7 +1255,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 None
             }
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: None, ..
             } => {
                 // Structural row fields don't have symbol IDs

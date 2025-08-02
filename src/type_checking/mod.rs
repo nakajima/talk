@@ -5,9 +5,9 @@ use crate::{
     diagnostic::Diagnostic,
     environment::Environment,
     parsing::expr_id::ExprID,
-    ty::Ty,
+    ty::Ty2,
     type_checker::TypeError,
-    type_var_context::TypeVarContext,
+    type_var_context::TypeVarContext2,
     typed_expr::TypedExpr,
 };
 
@@ -51,7 +51,7 @@ pub struct CheckResult {
     pub source_file: SourceFile<Typed>,
     pub env: Environment,
     pub symbols: SymbolTable,
-    pub type_var_context: TypeVarContext,
+    pub type_var_context: TypeVarContext2,
     pub meta: ExprMetaStorage,
 }
 
@@ -95,7 +95,7 @@ impl CheckResult {
         self.source_file.typed_expr(expr_id)
     }
 
-    pub fn nth(&self, idx: usize) -> Option<Ty> {
+    pub fn nth(&self, idx: usize) -> Option<Ty2> {
         self.source_file
             .phase_data
             .roots
@@ -103,7 +103,7 @@ impl CheckResult {
             .map(|t| t.ty.clone())
     }
 
-    pub fn type_for(&self, expr_id: ExprID) -> Option<Ty> {
+    pub fn type_for(&self, expr_id: ExprID) -> Option<Ty2> {
         self.source_file
             .typed_expr(expr_id)
             .map(|typed_expr| typed_expr.ty.clone())

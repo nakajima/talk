@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use derive_visitor::DriveMut;
 
-use crate::{SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind};
+use crate::{name::Name, parsing::expr_id::ExprID, token_kind::TokenKind, type_checker::TypeError, typed_expr::TypedExpr, types::ty::Ty, SymbolID};
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum IncompleteExpr {
@@ -282,3 +284,4 @@ pub struct ParsedExpr {
     pub id: ExprID,
     pub expr: Expr,
 }
+

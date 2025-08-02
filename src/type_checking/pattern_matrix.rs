@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     SymbolID,
     environment::Environment,
-    ty::{RowKind, Ty},
+    ty::{RowKind, Ty2},
     typed_expr::Pattern,
 };
 
@@ -52,7 +52,7 @@ pub enum PatternColumn {
 }
 
 impl PatternColumn {
-    fn to_deconstructed(&self, env: &Environment, ty: &Ty) -> DeconstructedPat {
+    fn to_deconstructed(&self, env: &Environment, ty: &Ty2) -> DeconstructedPat {
         match self {
             PatternColumn::Pattern(p) => deconstruct_pattern(p, env, ty),
             PatternColumn::Synthetic(d) => (**d).clone(),
@@ -92,7 +92,7 @@ impl PatternMatrix {
         ctor: &Constructor,
         arity: usize,
         env: &Environment,
-        ty: &Ty,
+        ty: &Ty2,
     ) -> PatternMatrix {
         let mut new_rows = Vec::new();
 
@@ -118,7 +118,7 @@ impl PatternMatrix {
     }
 
     /// Get all constructors that appear in the first column
-    pub fn column_constructors(&self, env: &Environment, ty: &Ty) -> HashSet<Constructor> {
+    pub fn column_constructors(&self, env: &Environment, ty: &Ty2) -> HashSet<Constructor> {
         self.first_column()
             .into_iter()
             .map(|p| p.to_deconstructed(env, ty).ctor)
@@ -147,7 +147,7 @@ pub fn constructors_match(ctor1: &Constructor, ctor2: &Constructor) -> bool {
 }
 
 /// Deconstruct a pattern into a constructor and its fields
-fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> DeconstructedPat {
+fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty2) -> DeconstructedPat {
     match pattern {
         Pattern::LiteralInt(s) => {
             let val = s.parse::<i64>().unwrap_or(0);
@@ -179,7 +179,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
         } => {
             // Look up enum info from type
             let (enum_id, arity) = match ty {
-                Ty::Row {
+                Ty2::Row {
                     nominal_id: Some(id),
                     kind: RowKind::Enum,
                     ..
@@ -226,7 +226,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
 
             // Get all field names from the type
             let all_fields = match ty {
-                Ty::Row { fields, .. } => fields
+                Ty2::Row { fields, .. } => fields
                     .iter()
                     .map(|(name, _)| name.clone())
                     .collect::<Vec<_>>(),
@@ -243,7 +243,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
             DeconstructedPat {
                 ctor: Constructor::Struct {
                     struct_id: match ty {
-                        Ty::Row { nominal_id, .. } => *nominal_id,
+                        Ty2::Row { nominal_id, .. } => *nominal_id,
                         _ => None,
                     },
                     fields: all_fields,
@@ -255,10 +255,10 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
 }
 
 /// Get all possible constructors for a type
-pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
+pub fn all_constructors(ty: &Ty2, env: &Environment) -> Vec<Constructor> {
     match ty {
-        Ty::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
-        Ty::Row {
+        Ty2::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
+        Ty2::Row {
             nominal_id: Some(id),
             kind: RowKind::Enum,
             ..
@@ -271,14 +271,14 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
                     .map(|v| Constructor::Variant {
                         enum_id: *id,
                         variant_name: v.name.clone(),
-                        arity: if matches!(v.ty, Ty::Void) { 0 } else { 1 },
+                        arity: if matches!(v.ty, Ty2::Void) { 0 } else { 1 },
                     })
                     .collect()
             } else {
                 vec![Constructor::Wildcard]
             }
         }
-        Ty::Row {
+        Ty2::Row {
             fields,
             nominal_id,
             kind: RowKind::Struct | RowKind::Record,
@@ -299,14 +299,14 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
 }
 
 /// Check if a pattern matrix is exhaustive
-pub fn is_exhaustive(matrix: &PatternMatrix, ty: &Ty, env: &Environment) -> bool {
+pub fn is_exhaustive(matrix: &PatternMatrix, ty: &Ty2, env: &Environment) -> bool {
     is_exhaustive_with_types(matrix, &[ty], env)
 }
 
 /// Check if a pattern matrix is exhaustive with multiple column types
 fn is_exhaustive_with_types(
     matrix: &PatternMatrix,
-    column_types: &[&Ty],
+    column_types: &[&Ty2],
     env: &Environment,
 ) -> bool {
     // Base case: empty matrix means nothing is covered
@@ -370,7 +370,7 @@ fn is_exhaustive_with_types(
         let specialized = matrix.specialize(ctor, arity, env, first_ty);
 
         // Construct types for the subpatterns - collect into owned values first
-        let mut sub_types_owned: Vec<Ty> = vec![];
+        let mut sub_types_owned: Vec<Ty2> = vec![];
         match ctor {
             Constructor::Variant {
                 enum_id,
@@ -381,7 +381,7 @@ fn is_exhaustive_with_types(
                 if let Some(enum_def) = env.lookup_enum(enum_id) {
                     let variants = enum_def.variants();
                     if let Some(variant) = variants.iter().find(|v| &v.name == variant_name)
-                        && !matches!(variant.ty, Ty::Void)
+                        && !matches!(variant.ty, Ty2::Void)
                     {
                         sub_types_owned.push(variant.ty.clone());
                     }
@@ -403,7 +403,7 @@ fn is_exhaustive_with_types(
         }
 
         // Convert to references and add remaining column types
-        let mut sub_types: Vec<&Ty> = sub_types_owned.iter().collect();
+        let mut sub_types: Vec<&Ty2> = sub_types_owned.iter().collect();
         sub_types.extend_from_slice(&column_types[1..]);
 
         // Recursively check exhaustiveness
@@ -428,7 +428,7 @@ fn constructor_arity(ctor: &Constructor) -> usize {
 }
 
 /// Generate a witness (counter-example) for non-exhaustive matches
-pub fn generate_witness(matrix: &PatternMatrix, ty: &Ty, env: &Environment) -> Option<String> {
+pub fn generate_witness(matrix: &PatternMatrix, ty: &Ty2, env: &Environment) -> Option<String> {
     if is_exhaustive(matrix, ty, env) {
         return None;
     }

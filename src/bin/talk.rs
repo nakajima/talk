@@ -15,9 +15,9 @@ async fn main() {
 
     #[derive(Subcommand, Debug)]
     enum Commands {
-        IR { filename: PathBuf },
+        // IR { filename: PathBuf },
         // Parse { filename: String },
-        Run { filename: PathBuf },
+        // Run { filename: PathBuf },
         Lsp(LspArgs),
     }
 
@@ -36,39 +36,39 @@ async fn main() {
     match &cli.command {
         // Dump the IR
         #[allow(clippy::print_with_newline)]
-        Commands::IR { filename } => {
-            use talk::{compiling::driver::Driver, lowering::ir_printer::print};
-            let cwd = std::env::current_dir().expect("couldn’t get CWD");
-            let mut driver = Driver::with_files(vec![cwd.join(filename).clone()]);
-            let lowered = driver.lower();
+        // Commands::IR { filename } => {
+        //     use talk::{compiling::driver::Driver, lowering::ir_printer::print};
+        //     let cwd = std::env::current_dir().expect("couldn’t get CWD");
+        //     let mut driver = Driver::with_files(vec![cwd.join(filename).clone()]);
+        //     let lowered = driver.lower();
 
-            for unit in lowered {
-                use talk::analysis::module_pass_manager::ModulePassManager;
+        //     for unit in lowered {
+        //         use talk::analysis::module_pass_manager::ModulePassManager;
 
-                let module = ModulePassManager::run(&unit.env, unit.module());
-                print!("{}\n", print(&module));
-            }
-        }
+        //         let module = ModulePassManager::run(&unit.env, unit.module());
+        //         print!("{}\n", print(&module));
+        //     }
+        // }
 
-        Commands::Run { filename } => {
-            use talk::compiling::driver::Driver;
-            let mut driver = Driver::with_files(vec![filename.clone()]);
-            let lowered = driver.lower();
+        // Commands::Run { filename } => {
+        //     use talk::compiling::driver::Driver;
+        //     let mut driver = Driver::with_files(vec![filename.clone()]);
+        //     let lowered = driver.lower();
 
-            use talk::interpret::interpreter::IRInterpreter;
-            use talk::interpret::io::InterpreterStdIO;
+        //     use talk::interpret::interpreter::IRInterpreter;
+        //     use talk::interpret::io::InterpreterStdIO;
 
-            // let contents = std::fs::read_to_string(filename).expect("Could not read file");
-            // let lowered = lower(&contents);
-            let io = InterpreterStdIO::default();
-            for lowered in lowered {
-                use talk::analysis::module_pass_manager::ModulePassManager;
+        //     // let contents = std::fs::read_to_string(filename).expect("Could not read file");
+        //     // let lowered = lower(&contents);
+        //     let io = InterpreterStdIO::default();
+        //     for lowered in lowered {
+        //         use talk::analysis::module_pass_manager::ModulePassManager;
 
-                let module = ModulePassManager::run(&lowered.env, lowered.module());
-                let interpreter = IRInterpreter::new(module, &io, &driver.symbol_table);
-                interpreter.run().unwrap();
-            }
-        }
+        //         let module = ModulePassManager::run(&lowered.env, lowered.module());
+        //         let interpreter = IRInterpreter::new(module, &io, &driver.symbol_table);
+        //         interpreter.run().unwrap();
+        //     }
+        // }
         Commands::Lsp(_args) => talk::lsp::server::start().await,
     }
 }

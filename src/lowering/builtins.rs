@@ -9,7 +9,7 @@ use crate::{
         lowerer::{Lowerer, TypedRegister},
         register::Register,
     },
-    ty::Ty,
+    ty::Ty2,
     typed_expr::{Expr, TypedExpr},
 };
 
@@ -51,7 +51,7 @@ fn lower_alloc(
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
-    let Ty::Func(_, _, type_params) = &typed_callee.ty else {
+    let Ty2::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __alloc func".to_string()));
     };
 
@@ -112,7 +112,7 @@ fn lower_store(
     args: &[TypedRegister],
     _arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
-    let Ty::Func(_, _, type_params) = &typed_callee.ty else {
+    let Ty2::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __store func".to_string()));
     };
 
@@ -143,7 +143,7 @@ fn lower_load(
 ) -> Result<Option<Register>, IRError> {
     let dest = lowerer.allocate_register();
 
-    let Ty::Func(_, _, type_params) = &typed_callee.ty else {
+    let Ty2::Func(_, _, type_params) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __load func".to_string()));
     };
 
@@ -172,7 +172,7 @@ fn lower_ir_instr(
     _args: &[TypedRegister],
     arg_exprs: &[TypedExpr],
 ) -> Result<Option<Register>, IRError> {
-    let Ty::Func(_, _, _) = &typed_callee.ty else {
+    let Ty2::Func(_, _, _) = &typed_callee.ty else {
         return Err(IRError::Unknown("Did not get __ir_instr func".to_string()));
     };
 

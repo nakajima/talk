@@ -882,14 +882,8 @@ impl ServerState {
                     self.encode_diagnostics_from(path, parsed)
                         .unwrap_or_default()
                 }
-                1 => {
-                    let checked = self.driver.check();
-                    round += 1;
-                    self.encode_diagnostics_from(path, checked)
-                        .unwrap_or_default()
-                }
                 _ => {
-                    let lowered = self.driver.lower();
+                    let lowered = self.driver.check();
                     round += 1;
                     self.encode_diagnostics_from(path, lowered)
                         .unwrap_or_default()

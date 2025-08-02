@@ -3,8 +3,8 @@ use std::{hash::Hash, path::PathBuf};
 use miette::{NamedSource, SourceSpan};
 
 use crate::{
-    ExprMetaStorage, lexer::LexerError, lowering::ir_error::IRError,
-    name_resolver::NameResolverError, parser::ParserError, type_checker::TypeError,
+    ExprMetaStorage, lexer::LexerError, name_resolver::NameResolverError, parser::ParserError,
+    type_checker::TypeError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, miette::Diagnostic)]
@@ -60,7 +60,7 @@ pub enum DiagnosticKind {
     Parse(ParserError),
     Resolve(NameResolverError),
     Typing(TypeError),
-    Lowering(IRError),
+    // Lowering(IRError),
 }
 
 pub type ErrorSpan = (usize, usize);
@@ -111,13 +111,13 @@ impl Diagnostic {
         }
     }
 
-    pub fn lowering(path: PathBuf, span: ErrorSpan, err: IRError) -> Diagnostic {
-        Self {
-            path,
-            kind: DiagnosticKind::Lowering(err),
-            span,
-        }
-    }
+    // pub fn lowering(path: PathBuf, span: ErrorSpan, err: IRError) -> Diagnostic {
+    //     Self {
+    //         path,
+    //         kind: DiagnosticKind::Lowering(err),
+    //         span,
+    //     }
+    // }
 
     pub fn message(&self) -> String {
         match &self.kind {
@@ -125,7 +125,7 @@ impl Diagnostic {
             DiagnosticKind::Parse(e) => e.message(),
             DiagnosticKind::Resolve(e) => e.message(),
             DiagnosticKind::Typing(e) => e.message(),
-            DiagnosticKind::Lowering(e) => e.message(),
+            // DiagnosticKind::Lowering(e) => e.message(),
         }
     }
 

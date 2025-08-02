@@ -9,7 +9,7 @@ mod tests {
         ExprMetaStorage, SymbolID, any_typed, assert_eq_diff, check, check_with_imports,
         compiling::driver::{Driver, DriverConfig},
         conformance::Conformance,
-        constraint::Constraint,
+        constraint::Constraint2,
         constraint_solver::ConstraintSolver,
         diagnostic::{Diagnostic, DiagnosticKind},
         dumb_dot::{self, dump_unification_dot},
@@ -20,7 +20,7 @@ mod tests {
         row_constraints::RowConstraintSolver,
         substitutions::Substitutions,
         token_kind::TokenKind,
-        ty::{RowKind, Ty},
+        ty::{RowKind, Ty2},
         type_checker::TypeError,
         type_def::{Method, Property, TypeDef, TypeDefKind, TypeMember},
         type_var_id::{TypeVarID, TypeVarKind},
@@ -50,19 +50,19 @@ mod tests {
                 Expr::Call {
                     callee: any_typed!(
                         Expr::Variable(ResolvedName(SymbolID::typed(1), "Person".to_string())),
-                        Ty::struct_type(SymbolID::typed(1), vec![])
+                        Ty2::struct_type(SymbolID::typed(1), vec![])
                     )
                     .into(),
                     type_args: vec![],
                     args: vec![any_typed!(
                         Expr::CallArg {
                             label: None,
-                            value: any_typed!(Expr::LiteralInt("123".into()), Ty::Int).into()
+                            value: any_typed!(Expr::LiteralInt("123".into()), Ty2::Int).into()
                         },
-                        Ty::Int
+                        Ty2::Int
                     )],
                 },
-                Ty::struct_type(SymbolID::typed(1), vec![])
+                Ty2::struct_type(SymbolID::typed(1), vec![])
             ),
         );
     }
@@ -96,34 +96,34 @@ mod tests {
                                             SymbolID::ANY,
                                             "Person".to_string()
                                         )),
-                                        Ty::struct_type(
+                                        Ty2::struct_type(
                                             SymbolID::ANY,
-                                            vec![Ty::TypeVar(TypeVarID::ANY)]
+                                            vec![Ty2::TypeVar(TypeVarID::ANY)]
                                         )
                                     )
                                     .into(),
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::struct_type(SymbolID::ANY, vec![Ty::Int])
+                                Ty2::struct_type(SymbolID::ANY, vec![Ty2::Int])
                             )
                             .into()
                         ),
                         "foo".to_string()
                     ),
-                    Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+                    Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![])
                 )
                 .into(),
                 args: vec![any_typed!(
                     Expr::CallArg {
                         label: None,
-                        value: any_typed!(Expr::LiteralInt("1".to_string()), Ty::Int).into()
+                        value: any_typed!(Expr::LiteralInt("1".to_string()), Ty2::Int).into()
                     },
-                    Ty::Int
+                    Ty2::Int
                 )],
                 type_args: vec![]
             },
-            Ty::Int
+            Ty2::Int
         );
 
         let expected_float = any_typed!(
@@ -138,34 +138,35 @@ mod tests {
                                             SymbolID::ANY,
                                             "Person".to_string()
                                         )),
-                                        Ty::struct_type(
+                                        Ty2::struct_type(
                                             SymbolID::ANY,
-                                            vec![Ty::TypeVar(TypeVarID::ANY)]
+                                            vec![Ty2::TypeVar(TypeVarID::ANY)]
                                         )
                                     )
                                     .into(),
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::struct_type(SymbolID::ANY, vec![Ty::Float])
+                                Ty2::struct_type(SymbolID::ANY, vec![Ty2::Float])
                             )
                             .into()
                         ),
                         "foo".to_string()
                     ),
-                    Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
+                    Ty2::Func(vec![Ty2::Float], Ty2::Float.into(), vec![])
                 )
                 .into(),
                 args: vec![any_typed!(
                     Expr::CallArg {
                         label: None,
-                        value: any_typed!(Expr::LiteralFloat("1.23".to_string()), Ty::Float).into()
+                        value: any_typed!(Expr::LiteralFloat("1.23".to_string()), Ty2::Float)
+                            .into()
                     },
-                    Ty::Float
+                    Ty2::Float
                 )],
                 type_args: vec![]
             },
-            Ty::Float
+            Ty2::Float
         );
 
         assert_eq_diff!(checked.roots()[1], expected_int);
@@ -185,7 +186,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -205,7 +206,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -229,7 +230,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -276,19 +277,19 @@ mod tests {
     #[test]
     fn checks_an_int() {
         let checker = check("123").unwrap();
-        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty2::Int);
     }
 
     #[test]
     fn checks_a_float() {
         let checker = check("123.0").unwrap();
-        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty2::Float);
     }
 
     #[test]
     fn checks_a_string() {
         let checker = check("\"hello world\"").unwrap();
-        assert_eq!(checker.first_root().ty, Ty::string())
+        assert_eq!(checker.first_root().ty, Ty2::string())
     }
 
     #[test]
@@ -296,7 +297,7 @@ mod tests {
         let checker = check("func sup(name) { name }\nsup").unwrap();
         let root_id = checker.root_ids()[0];
 
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty2::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
             panic!(
                 "didnt get a func, got: {:#?}",
                 checker.type_for(root_id).unwrap()
@@ -307,7 +308,7 @@ mod tests {
 
         assert_eq!(return_type, param_type.into());
 
-        let Ty::TypeVar(TypeVarID {
+        let Ty2::TypeVar(TypeVarID {
             id: _,
             kind: TypeVarKind::FuncParam(name),
             ..
@@ -319,7 +320,7 @@ mod tests {
         assert_eq!(name, "name".to_string());
 
         // The second root-expr is the *use* of `sup`.
-        let Ty::Func(params2, return_type2, _) = checker.type_for(checker.root_ids()[1]).unwrap()
+        let Ty2::Func(params2, return_type2, _) = checker.type_for(checker.root_ids()[1]).unwrap()
         else {
             panic!(
                 "expected `sup` to be a function, got: {:?}",
@@ -339,15 +340,15 @@ mod tests {
     fn checks_a_func_with_return_type() {
         let checker = check("func sup(name) -> Int { name }\n").unwrap();
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty2::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
             panic!(
                 "didnt get a func, got: {:#?}",
                 checker.type_for(root_id).unwrap()
             );
         };
 
-        assert_eq!(params, vec![Ty::Int]);
-        assert_eq!(*return_type, Ty::Int);
+        assert_eq!(params, vec![Ty2::Int]);
+        assert_eq!(*return_type, Ty2::Int);
     }
 
     #[test]
@@ -360,14 +361,14 @@ mod tests {
         )
         .unwrap();
         let root_id = checker.root_ids()[1];
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(root_id).unwrap(), Ty2::Int);
     }
 
     #[test]
     fn checks_a_let_assignment() {
         let checker = check("let count = 123\ncount").unwrap();
         let root_id = checker.root_ids()[1];
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(root_id).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -381,7 +382,7 @@ mod tests {
         .unwrap();
 
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty2::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
             panic!(
                 "expected `applyTwice` to be a function, got: {:?}",
                 checker.type_for(root_id).unwrap()
@@ -393,7 +394,7 @@ mod tests {
 
         // f : A -> A
         match &params[0] {
-            Ty::Func(arg_tys, ret_ty, _) => {
+            Ty2::Func(arg_tys, ret_ty, _) => {
                 assert_eq!(arg_tys.len(), 1);
                 // the return of f must be the same type as x
                 assert_eq!(**ret_ty, params[1].clone());
@@ -417,8 +418,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Bool);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty2::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty2::Bool);
     }
 
     #[test]
@@ -434,7 +435,7 @@ mod tests {
         )
         .unwrap();
         let root_id = checker.root_ids()[0];
-        let Ty::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
+        let Ty2::Func(params, return_type, _) = checker.type_for(root_id).unwrap() else {
             panic!(
                 "expected `compose` to be a function, got: {:?}",
                 checker.type_for(root_id).unwrap()
@@ -447,13 +448,13 @@ mod tests {
         let g_ty = &params[1];
 
         // f : B -> C
-        let Ty::Func(f_args, f_ret, _) = f_ty.clone() else {
+        let Ty2::Func(f_args, f_ret, _) = f_ty.clone() else {
             panic!("did not get func: {f_ty:?}");
         };
         assert_eq!(f_args.len(), 1);
 
         // g : A -> B
-        let Ty::Func(g_args, g_ret, _) = g_ty.clone() else {
+        let Ty2::Func(g_args, g_ret, _) = g_ty.clone() else {
             panic!("did not get func")
         };
 
@@ -463,8 +464,8 @@ mod tests {
         assert_eq!(*g_ret, f_args[0].clone());
 
         // the inner function's return (and thus compose's return) is f's return type C
-        let Ty::Closure {
-            func: box Ty::Func(inner_params, inner_ret, _),
+        let Ty2::Closure {
+            func: box Ty2::Func(inner_params, inner_ret, _),
             ..
         } = *return_type
         else {
@@ -473,24 +474,24 @@ mod tests {
         assert_eq!(inner_params.len(), 1);
 
         let inner_id = match inner_params[0].clone() {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
+            Ty2::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
             other => panic!("unexpected inner param type: {other:?}"),
         };
 
         let g_arg_id = match g_args[0].clone() {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
+            Ty2::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
             other => panic!("unexpected g arg type: {other:?}"),
         };
 
         assert_eq!(inner_id, g_arg_id);
 
         let inner_ret = match *inner_ret {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
+            Ty2::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
             other => panic!("didn't get inner_ret: {other:?}"),
         };
 
         let f_ret = match *f_ret {
-            Ty::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
+            Ty2::TypeVar(tv) => tv.canonicalized().unwrap_or(tv).id,
             other => panic!("didn't get f_ret: {other:?}"),
         };
 
@@ -512,13 +513,13 @@ mod tests {
         // the bare `rec` at the top level should be a Func([α], α)
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(root_id).unwrap();
-        let Ty::Func(params, ret, _) = ty else {
+        let Ty2::Func(params, ret, _) = ty else {
             panic!("didn't get closure for ty: {ty:?}");
         };
         // exactly one parameter
         assert_eq!(params.len(), 1);
         // return type equals the parameter type
-        let Ty::TypeVar(TypeVarID { .. }) = *ret else {
+        let Ty2::TypeVar(TypeVarID { .. }) = *ret else {
             panic!("didn't get call return");
         };
     }
@@ -537,8 +538,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty2::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty2::Float);
     }
 
     #[test]
@@ -564,14 +565,14 @@ mod tests {
         let root_id = checker.root_ids()[0];
         let ty = checker.type_for(root_id).unwrap();
         match ty {
-            Ty::Closure {
-                func: box Ty::Func(params, ret, _),
+            Ty2::Closure {
+                func: box Ty2::Func(params, ret, _),
                 ..
             } => {
                 assert_eq!(params.len(), 1);
                 // both even and odd must have the same input and output type
-                assert_eq!(*ret, Ty::Int);
-                assert_eq!(params[0].clone(), Ty::Int);
+                assert_eq!(*ret, Ty2::Int);
+                assert_eq!(params[0].clone(), Ty2::Int);
             }
             other => panic!("expected a function, got {other:?}"),
         }
@@ -593,7 +594,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::enum_type(SymbolID::typed(1), vec![Ty::Int]),
+            Ty2::enum_type(SymbolID::typed(1), vec![Ty2::Int]),
         );
     }
 
@@ -608,8 +609,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty2::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty2::Float);
     }
 
     #[test]
@@ -622,7 +623,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -635,11 +636,11 @@ mod tests {
         )
         .unwrap();
 
-        let Ty::Func(params, _, _) = checker.type_for(checker.root_ids()[1]).unwrap() else {
+        let Ty2::Func(params, _, _) = checker.type_for(checker.root_ids()[1]).unwrap() else {
             panic!("didn't get func")
         };
 
-        let Ty::TypeVar(id) = &params[0] else {
+        let Ty2::TypeVar(id) = &params[0] else {
             panic!("didn't get id")
         };
 
@@ -689,7 +690,7 @@ mod tests {
         assert_eq!(sym, *person_struct);
         assert_eq!(
             checker.type_for(checker.root_ids()[1]).unwrap(),
-            Ty::struct_type(*person_struct, vec![])
+            Ty2::struct_type(*person_struct, vec![])
         );
     }
 
@@ -718,21 +719,21 @@ mod tests {
                                     ResolvedName(SymbolID::typed(1), "foo".to_string()),
                                     vec![]
                                 ),
-                                Ty::enum_type(SymbolID::typed(1), vec![])
+                                Ty2::enum_type(SymbolID::typed(1), vec![])
                             ),
                             any_typed!(
                                 Expr::EnumVariant(
                                     ResolvedName(SymbolID::typed(1), "bar".to_string()),
                                     vec![]
                                 ),
-                                Ty::enum_type(SymbolID::typed(1), vec![])
+                                Ty2::enum_type(SymbolID::typed(1), vec![])
                             )
                         ]),
-                        Ty::enum_type(SymbolID::typed(1), vec![])
+                        Ty2::enum_type(SymbolID::typed(1), vec![])
                     )
                     .into(),
                 },
-                Ty::enum_type(SymbolID::typed(1), vec![])
+                Ty2::enum_type(SymbolID::typed(1), vec![])
             )
         );
     }
@@ -767,12 +768,12 @@ mod tests {
                                             conformances: vec![],
                                             introduces_type: false
                                         },
-                                        Ty::Int
+                                        Ty2::Int
                                     )]
                                 ),
-                                Ty::Func(
-                                    vec![Ty::Int],
-                                    Box::new(Ty::enum_type(SymbolID::typed(1), vec![])),
+                                Ty2::Func(
+                                    vec![Ty2::Int],
+                                    Box::new(Ty2::enum_type(SymbolID::typed(1), vec![])),
                                     vec![]
                                 )
                             ),
@@ -781,14 +782,14 @@ mod tests {
                                     ResolvedName(SymbolID::typed(1), "bar".to_string()),
                                     vec![]
                                 ),
-                                Ty::enum_type(SymbolID::typed(1), vec![])
+                                Ty2::enum_type(SymbolID::typed(1), vec![])
                             )
                         ]),
-                        Ty::enum_type(SymbolID::ANY, vec![])
+                        Ty2::enum_type(SymbolID::ANY, vec![])
                     )
                     .into(),
                 },
-                Ty::enum_type(SymbolID::typed(1), vec![])
+                Ty2::enum_type(SymbolID::typed(1), vec![])
             )
         );
     }
@@ -806,7 +807,7 @@ mod tests {
 
         let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         match enum_ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind: RowKind::Enum,
@@ -815,7 +816,7 @@ mod tests {
                 assert_eq!(symbol_id, SymbolID::typed(1));
                 assert_eq!(generics.len(), 1);
                 // Should be a type variable for T
-                assert!(matches!(generics[0], Ty::TypeVar(_)));
+                assert!(matches!(generics[0], Ty2::TypeVar(_)));
             }
             _ => panic!("Expected generic enum type, got {enum_ty:?}"),
         }
@@ -836,7 +837,7 @@ mod tests {
 
         // The call to some(42) should return Option type
         let call_result = checker.type_for(checker.root_ids()[1]).unwrap();
-        assert_eq!(call_result, Ty::enum_type(SymbolID::typed(1), vec![]));
+        assert_eq!(call_result, Ty2::enum_type(SymbolID::typed(1), vec![]));
     }
 
     #[test]
@@ -855,14 +856,14 @@ mod tests {
         // First call should be Option<Int>
         let call1 = checker.type_for(checker.root_ids()[1]).unwrap();
         match call1 {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind: RowKind::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
-                assert_eq!(generics, vec![Ty::Int]);
+                assert_eq!(generics, vec![Ty2::Int]);
             }
             _ => panic!("Expected Option<Int>, got {call1:?}"),
         }
@@ -870,14 +871,14 @@ mod tests {
         // Second call should be Option<Float>
         let call2 = checker.type_for(checker.root_ids()[2]).unwrap();
         match call2 {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind: RowKind::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
-                assert_eq!(generics, vec![Ty::Float]);
+                assert_eq!(generics, vec![Ty2::Float]);
             }
             _ => panic!("Expected Option<Float>, got {call2:?}"),
         }
@@ -902,7 +903,7 @@ mod tests {
         // Should be Result<Option<Int>, _>
         let result_ty = checker.type_for(checker.root_ids()[2]).unwrap();
         match result_ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind: RowKind::Enum,
@@ -913,14 +914,14 @@ mod tests {
 
                 // First generic should be Option<Int>
                 match &generics[0] {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id: Some(opt_id),
                         generics: opt_generics,
                         kind: RowKind::Enum,
                         ..
                     } => {
                         assert_eq!(*opt_id, SymbolID::typed(1)); // Option enum
-                        assert_eq!(opt_generics, &vec![Ty::Int]);
+                        assert_eq!(opt_generics, &vec![Ty2::Int]);
                     }
                     _ => panic!("Expected Option<Int> as first generic"),
                 }
@@ -950,10 +951,10 @@ mod tests {
         // Function should have type Bool -> Int
         let func_ty = checker.type_for(checker.root_ids()[1]).unwrap();
         match func_ty {
-            Ty::Func(params, ret, _) => {
+            Ty2::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::enum_type(SymbolID::typed(1), vec![])); // Bool
-                assert_eq!(*ret, Ty::Int);
+                assert_eq!(params[0], Ty2::enum_type(SymbolID::typed(1), vec![])); // Bool
+                assert_eq!(*ret, Ty2::Int);
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
         }
@@ -979,10 +980,13 @@ mod tests {
         // Function should have type Option<Int> -> Int
         let func_ty = checker.type_for(checker.root_ids()[1]).unwrap();
         match func_ty {
-            Ty::Func(params, ret, _) => {
+            Ty2::Func(params, ret, _) => {
                 assert_eq!(params.len(), 1);
-                assert_eq!(params[0], Ty::enum_type(SymbolID::typed(1), vec![Ty::Int])); // Option<Int>
-                assert_eq!(*ret, Ty::Int);
+                assert_eq!(
+                    params[0],
+                    Ty2::enum_type(SymbolID::typed(1), vec![Ty2::Int])
+                ); // Option<Int>
+                assert_eq!(*ret, Ty2::Int);
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
         }
@@ -1001,7 +1005,7 @@ mod tests {
 
         let enum_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         match enum_ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind: RowKind::Enum,
@@ -1025,11 +1029,11 @@ mod tests {
         // Check cons variant has recursive structure: T, List<T>
         let cons_variant = checker.type_for(exprs[0].id);
         match cons_variant {
-            Some(Ty::Func(field_types, ret_ty, _)) => {
+            Some(Ty2::Func(field_types, ret_ty, _)) => {
                 assert_eq!(field_types.len(), 2);
                 // Return type should be List<T>
                 match ret_ty.as_ref() {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id: Some(enum_id),
                         kind: RowKind::Enum,
                         ..
@@ -1038,7 +1042,7 @@ mod tests {
                 }
                 // Second field should be List<T> (recursive reference)
                 match &field_types[1] {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id: Some(list_id),
                         kind: RowKind::Enum,
                         ..
@@ -1093,7 +1097,7 @@ mod tests {
 
         // Call should type check correctly
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::Int);
+        assert_eq!(call_result, Ty2::Int);
     }
 
     #[test]
@@ -1115,7 +1119,7 @@ mod tests {
         .unwrap();
 
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::enum_type(SymbolID::typed(1), vec![])); // Bool
+        assert_eq!(call_result, Ty2::enum_type(SymbolID::typed(1), vec![])); // Bool
     }
 
     #[test]
@@ -1136,7 +1140,7 @@ mod tests {
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
         assert_eq!(
             call_result,
-            Ty::enum_type(SymbolID::typed(1), vec![Ty::Int])
+            Ty2::enum_type(SymbolID::typed(1), vec![Ty2::Int])
         ); // Option<Int>
     }
 
@@ -1159,16 +1163,16 @@ mod tests {
 
         let func_ty = checker.type_for(checker.root_ids()[1]).unwrap();
         match func_ty {
-            Ty::Func(params, ret, _) => {
+            Ty2::Func(params, ret, _) => {
                 // Input: Either<Int, Float>
                 assert_eq!(
                     params[0],
-                    Ty::enum_type(SymbolID::typed(1), vec![Ty::Int, Ty::Float])
+                    Ty2::enum_type(SymbolID::typed(1), vec![Ty2::Int, Ty2::Float])
                 );
                 // Output: Either<Float, Int>
                 assert_eq!(
                     *ret,
-                    Ty::enum_type(SymbolID::typed(1), vec![Ty::Float, Ty::Int])
+                    Ty2::enum_type(SymbolID::typed(1), vec![Ty2::Float, Ty2::Int])
                 );
             }
             _ => panic!("Expected function type"),
@@ -1194,26 +1198,26 @@ mod tests {
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(checker.root_ids()[0]).unwrap();
-        assert_eq!(x_ty, Ty::enum_type(SymbolID::OPTIONAL, vec![Ty::Int]));
+        assert_eq!(x_ty, Ty2::enum_type(SymbolID::OPTIONAL, vec![Ty2::Int]));
         match x_ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind: RowKind::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
-                assert_eq!(generics, vec![Ty::Int]);
+                assert_eq!(generics, vec![Ty2::Int]);
             }
             _ => panic!("Expected Optional<Int>, got {x_ty:?}"),
         }
 
         // The match should return Int
         let match_ty = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(match_ty, Ty::Int);
+        assert_eq!(match_ty, Ty2::Int);
         assert_eq!(
             checker.type_for(checker.root_ids()[3]).unwrap(),
-            Ty::enum_type(SymbolID::OPTIONAL, vec![Ty::Int])
+            Ty2::enum_type(SymbolID::OPTIONAL, vec![Ty2::Int])
         );
     }
 
@@ -1229,7 +1233,7 @@ mod tests {
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(checker.root_ids()[1]).unwrap();
-        assert_eq!(x_ty, Ty::Int.optional());
+        assert_eq!(x_ty, Ty2::Int.optional());
     }
 
     #[test]
@@ -1295,7 +1299,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]),
-            Some(Ty::enum_type(SymbolID::typed(1), vec![]))
+            Some(Ty2::enum_type(SymbolID::typed(1), vec![]))
         );
         let Some(enum_def) = checked.env.lookup_enum(&SymbolID::typed(1)) else {
             panic!();
@@ -1305,9 +1309,9 @@ mod tests {
             checked
                 .type_for(enum_def.find_method("buzz").unwrap().expr_id)
                 .unwrap(),
-            Ty::Func(
+            Ty2::Func(
                 vec![],
-                Box::new(Ty::enum_type(SymbolID::typed(1), vec![])),
+                Box::new(Ty2::enum_type(SymbolID::typed(1), vec![])),
                 vec![]
             )
         );
@@ -1315,7 +1319,7 @@ mod tests {
             checked
                 .type_for(enum_def.find_method("foo").unwrap().expr_id)
                 .unwrap(),
-            Ty::Func(vec![], Box::new(Ty::Int), vec![])
+            Ty2::Func(vec![], Box::new(Ty2::Int), vec![])
         );
     }
 
@@ -1334,8 +1338,8 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::Closure {
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
+            Ty2::Closure {
+                func: Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![]).into(),
                 captures: vec![SymbolID::typed(2)]
             }
         );
@@ -1352,7 +1356,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
+            Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Int])
         );
     }
 
@@ -1367,9 +1371,9 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::Method {
-                self_ty: Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+            Ty2::Method {
+                self_ty: Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Int]).into(),
+                func: Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![]).into()
             }
         );
     }
@@ -1387,9 +1391,9 @@ mod tests {
         let root = checked.typed_expr(checked.root_ids()[0]).unwrap();
         assert_eq!(
             root.ty,
-            Ty::Func(
-                vec![Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])],
-                Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
+            Ty2::Func(
+                vec![Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Int])],
+                Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Int]).into(),
                 vec![],
             )
         );
@@ -1411,7 +1415,7 @@ mod tests {
         .unwrap();
 
         assert!(checked.diagnostics().is_empty());
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Int));
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty2::Int));
     }
 
     #[test]
@@ -1426,9 +1430,9 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::Method {
-                self_ty: Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int]).into(),
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+            Ty2::Method {
+                self_ty: Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Int]).into(),
+                func: Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![]).into()
             }
         );
     }
@@ -1447,11 +1451,11 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Int])
+            Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Int])
         );
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, vec![Ty::Float])
+            Ty2::struct_type(SymbolID::ARRAY, vec![Ty2::Float])
         );
     }
 
@@ -1478,19 +1482,19 @@ mod tests {
 
     #[test]
     fn checks_literal_true() {
-        assert_eq!(check("true").unwrap().first_root().ty, Ty::Bool);
+        assert_eq!(check("true").unwrap().first_root().ty, Ty2::Bool);
     }
 
     #[test]
     fn checks_literal_false() {
-        assert_eq!(check("false").unwrap().first_root().ty, Ty::Bool);
+        assert_eq!(check("false").unwrap().first_root().ty, Ty2::Bool);
     }
 
     #[test]
     fn checks_if_expression() {
         assert_eq!(
             check("if true { 1 } else { 0 }").unwrap().first_root().ty,
-            Ty::Int
+            Ty2::Int
         );
     }
 
@@ -1498,7 +1502,7 @@ mod tests {
     fn checks_if_expression_without_else() {
         assert_eq!(
             check("if true { 1 }").unwrap().first_root().ty,
-            Ty::Int.optional()
+            Ty2::Int.optional()
         );
     }
 
@@ -1518,12 +1522,12 @@ mod tests {
 
     #[test]
     fn checks_loop_expression() {
-        assert_eq!(check("loop { 1 }").unwrap().first_root().ty, Ty::Void);
+        assert_eq!(check("loop { 1 }").unwrap().first_root().ty, Ty2::Void);
     }
 
     #[test]
     fn checks_loop_expression_with_condition() {
-        assert_eq!(check("loop true { 1 }").unwrap().first_root().ty, Ty::Void);
+        assert_eq!(check("loop true { 1 }").unwrap().first_root().ty, Ty2::Void);
     }
 
     #[test]
@@ -1534,7 +1538,7 @@ mod tests {
             checked.diagnostics().contains(&Diagnostic::typing(
                 checked.source_file.path.clone(),
                 (0, 14),
-                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string())
+                TypeError::Mismatch(Ty2::Float.to_string(), Ty2::Bool.to_string())
             )),
             "{:?}",
             checked.diagnostics()
@@ -1545,13 +1549,13 @@ mod tests {
     fn checks_tuple_expression() {
         assert_eq!(
             check("(1, true)").unwrap().first_root().ty,
-            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+            Ty2::Tuple(vec![Ty2::Int, Ty2::Bool])
         );
     }
 
     #[test]
     fn checks_unit_tuple_expression() {
-        assert_eq!(check("()").unwrap().first_root().ty, Ty::Tuple(vec![]));
+        assert_eq!(check("()").unwrap().first_root().ty, Ty2::Tuple(vec![]));
     }
 
     #[test]
@@ -1568,12 +1572,12 @@ mod tests {
 
     #[test]
     fn checks_grouping_expression() {
-        assert_eq!(check("(1)").unwrap().first_root().ty, Ty::Int);
+        assert_eq!(check("(1)").unwrap().first_root().ty, Ty2::Int);
     }
 
     #[test]
     fn checks_unary_expression() {
-        assert_eq!(check("-1").unwrap().first_root().ty, Ty::Int);
+        assert_eq!(check("-1").unwrap().first_root().ty, Ty2::Int);
     }
 
     #[test]
@@ -1586,8 +1590,8 @@ mod tests {
             "1 + 2",
         )
         .unwrap();
-        assert_eq!(checked.first_root().ty, Ty::Int);
-        assert_eq!(check("1.1 + 2.1").unwrap().first_root().ty, Ty::Float);
+        assert_eq!(checked.first_root().ty, Ty2::Int);
+        assert_eq!(check("1.1 + 2.1").unwrap().first_root().ty, Ty2::Float);
     }
 
     #[test]
@@ -1601,7 +1605,7 @@ mod tests {
             .unwrap()
             .first_root()
             .ty,
-            Ty::Void
+            Ty2::Void
         );
     }
 
@@ -1629,7 +1633,7 @@ mod tests {
             .unwrap()
             .first_root()
             .ty,
-            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+            Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![])
         );
     }
 
@@ -1644,7 +1648,7 @@ mod tests {
             .unwrap()
             .first_root()
             .ty,
-            Ty::Int
+            Ty2::Int
         );
     }
 
@@ -1666,7 +1670,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1732,7 +1736,7 @@ mod tests {
         assert_eq!(person_def.conformances.len(), 1);
         assert_eq!(
             person_def.conformances[0],
-            Conformance::new(SymbolID::typed(1), vec![Ty::Int])
+            Conformance::new(SymbolID::typed(1), vec![Ty2::Int])
         );
     }
 
@@ -1754,7 +1758,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1775,7 +1779,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1804,8 +1808,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty::Float);
-        assert_eq!(checked.type_for(checked.root_ids()[5]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty2::Float);
+        assert_eq!(checked.type_for(checked.root_ids()[5]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1839,7 +1843,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1934,7 +1938,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(2).unwrap(),
-            Ty::struct_type(SymbolID::typed(4), vec![])
+            Ty2::struct_type(SymbolID::typed(4), vec![])
         );
     }
 
@@ -1955,7 +1959,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(3).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1974,7 +1978,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(2).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(2).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -1996,7 +2000,7 @@ mod tests {
                     generics: vec![],
                     params: vec![any_typed!(
                         Expr::Parameter(ResolvedName(SymbolID::typed(2), "x".to_string()), None),
-                        Ty::Int
+                        Ty2::Int
                     )],
                     body: any_typed!(
                         Expr::Block(vec![any_typed!(
@@ -2006,21 +2010,21 @@ mod tests {
                                         SymbolID::typed(2),
                                         "x".to_string()
                                     )),
-                                    Ty::Int
+                                    Ty2::Int
                                 )
                                 .into(),
                                 TokenKind::Plus,
-                                any_typed!(Expr::LiteralInt("1".to_string()), Ty::Int).into()
+                                any_typed!(Expr::LiteralInt("1".to_string()), Ty2::Int).into()
                             ),
-                            Ty::Int
+                            Ty2::Int
                         )]),
-                        Ty::Int
+                        Ty2::Int
                     )
                     .into(),
                     ret: None,
                     captures: vec![]
                 },
-                Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+                Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![])
             )
         );
     }
@@ -2040,7 +2044,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(2).unwrap(), Ty::string());
+        assert_eq!(checked.nth(2).unwrap(), Ty2::string());
     }
 
     #[test]
@@ -2056,7 +2060,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(1).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(1).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -2068,7 +2072,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.first_root().ty, Ty::string());
+        assert_eq!(checked.first_root().ty, Ty2::string());
     }
 
     #[test]
@@ -2110,7 +2114,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(1).unwrap(),
-            Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
+            Ty2::Func(vec![Ty2::Int], Ty2::Bool.into(), vec![]),
         );
     }
 
@@ -2152,10 +2156,10 @@ mod tests {
 
         assert_eq!(
             checked.nth(2).unwrap(),
-            Ty::struct_type(SymbolID::resolved(1), vec![])
+            Ty2::struct_type(SymbolID::resolved(1), vec![])
         );
-        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
-        assert_eq!(checked.nth(4).unwrap(), Ty::Float);
+        assert_eq!(checked.nth(3).unwrap(), Ty2::Int);
+        assert_eq!(checked.nth(4).unwrap(), Ty2::Float);
     }
 
     #[test]
@@ -2233,8 +2237,8 @@ mod tests {
 
         // Now simulate adding properties using the row-aware method
         let properties = vec![
-            Property::new(0, "x".to_string(), ExprID(2), Ty::Float, false),
-            Property::new(1, "y".to_string(), ExprID(3), Ty::Float, false),
+            Property::new(0, "x".to_string(), ExprID(2), Ty2::Float, false),
+            Property::new(1, "y".to_string(), ExprID(3), Ty2::Float, false),
         ];
 
         type_def.add_properties_with_rows(properties, &mut env);
@@ -2244,14 +2248,14 @@ mod tests {
 
         // Test that member access works
         let meta = ExprMetaStorage::default();
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty2::struct_type(point_id, vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(4));
 
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(5),
             point_ty,
             "x".to_string(),
-            Ty::TypeVar(result_tv.clone()),
+            Ty2::TypeVar(result_tv.clone()),
         ));
 
         let mut solver = ConstraintSolver::new(&mut env, &meta, 0);
@@ -2260,8 +2264,8 @@ mod tests {
         assert!(solution.errors.is_empty());
         let resolved = solution
             .substitutions
-            .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
-        assert_eq!(resolved, Ty::Float);
+            .apply(&Ty2::TypeVar(result_tv), 0, &mut env.context);
+        assert_eq!(resolved, Ty2::Float);
     }
 
     #[test]
@@ -2292,14 +2296,14 @@ mod tests {
             crate::type_def::EnumVariant {
                 tag: 0,
                 name: "None".to_string(),
-                ty: Ty::enum_type(option_id, vec![]),
+                ty: Ty2::enum_type(option_id, vec![]),
             },
             crate::type_def::EnumVariant {
                 tag: 1,
                 name: "Some".to_string(),
-                ty: Ty::Func(
-                    vec![Ty::Int],
-                    Box::new(Ty::enum_type(option_id, vec![])),
+                ty: Ty2::Func(
+                    vec![Ty2::Int],
+                    Box::new(Ty2::enum_type(option_id, vec![])),
                     vec![],
                 ),
             },
@@ -2310,7 +2314,7 @@ mod tests {
 
         // Test variant access
         let meta = ExprMetaStorage::default();
-        let _option_ty = Ty::enum_type(option_id, vec![]);
+        let _option_ty = Ty2::enum_type(option_id, vec![]);
         let _result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(11));
 
         // Access None variant through the enum type
@@ -2332,7 +2336,7 @@ mod tests {
 
         // Create a Point struct type
         let point_id = SymbolID(1000);
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty2::struct_type(point_id, vec![]);
 
         // In a real implementation, when we define a struct, we would:
         // 1. Create a canonical row variable for it
@@ -2345,11 +2349,11 @@ mod tests {
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(1));
 
         // Create the member access constraint
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(2),
             point_ty.clone(),
             "x".to_string(),
-            Ty::TypeVar(result_tv.clone()),
+            Ty2::TypeVar(result_tv.clone()),
         ));
 
         // Now we need to tell the constraint solver about Point's members
@@ -2363,12 +2367,12 @@ mod tests {
         );
 
         // Add constraint: point_row has field x: Float
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasField {
                 type_var: point_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2403,12 +2407,12 @@ mod tests {
         );
 
         // Drawable requires a draw method
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(11),
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
                 metadata: FieldMetadata::MethodRequirement,
             },
         });
@@ -2421,23 +2425,23 @@ mod tests {
         );
 
         // Circle has a draw method
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(13),
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
                 metadata: FieldMetadata::Method,
             },
         });
 
         // Circle also has a radius property
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(14),
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "radius".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2464,7 +2468,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(2),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -2476,7 +2480,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(3),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -2488,7 +2492,7 @@ mod tests {
 
         let exact_row = RowSpec { fields };
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasExactRow {
                 type_var: exact_point.clone(),
@@ -2497,12 +2501,12 @@ mod tests {
         });
 
         // Try to add an additional field (should fail)
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(5),
             constraint: RowConstraint::HasField {
                 type_var: exact_point.clone(),
                 label: "z".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -2535,7 +2539,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -2547,7 +2551,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -2563,7 +2567,7 @@ mod tests {
             ExprID(13),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(14),
             constraint: RowConstraint::HasRow {
                 type_var: open_point.clone(),
@@ -2577,12 +2581,12 @@ mod tests {
         assert!(solution.errors.is_empty());
 
         // Try to add an additional field (should succeed)
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(15),
             constraint: RowConstraint::HasField {
                 type_var: open_point.clone(),
                 label: "z".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -2610,12 +2614,12 @@ mod tests {
             ExprID(20),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(21),
             constraint: RowConstraint::HasField {
                 type_var: base.clone(),
                 label: "id".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2624,12 +2628,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(22),
             constraint: RowConstraint::HasField {
                 type_var: base.clone(),
                 label: "name".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -2649,7 +2653,7 @@ mod tests {
         exact_fields.insert(
             "id".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(26),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -2661,7 +2665,7 @@ mod tests {
         exact_fields.insert(
             "name".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(27),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -2671,7 +2675,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(28),
             constraint: RowConstraint::HasExactRow {
                 type_var: exact_type.clone(),
@@ -2682,12 +2686,12 @@ mod tests {
         });
 
         // Trying to add a field to exact type should fail
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(29),
             constraint: RowConstraint::HasField {
                 type_var: exact_type,
                 label: "extra".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty2::Bool,
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -2733,7 +2737,7 @@ mod tests {
                 0,
                 "field".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty2::Int,
                 false,
             )),
         );
@@ -2764,7 +2768,7 @@ mod tests {
                 0,
                 "x".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty2::Int,
                 false,
             )),
         );
@@ -2785,7 +2789,7 @@ mod tests {
                 1,
                 "y".to_string(),
                 crate::expr_id::ExprID(2),
-                crate::ty::Ty::Float,
+                crate::ty::Ty2::Float,
                 false,
             )),
         );
@@ -2809,12 +2813,12 @@ mod tests {
         let tv = env.new_type_variable(TypeVarKind::Blank, ExprID(0));
 
         // Add a row constraint saying tv has field "x" of type Int
-        let row_constraint = Constraint::Row {
+        let row_constraint = Constraint2::Row {
             expr_id: ExprID(1),
             constraint: RowConstraint::HasField {
                 type_var: tv.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2825,11 +2829,11 @@ mod tests {
 
         // Add a member access constraint
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(2));
-        let member_constraint = Constraint::MemberAccess(
+        let member_constraint = Constraint2::MemberAccess(
             ExprID(3),
-            Ty::TypeVar(tv.clone()),
+            Ty2::TypeVar(tv.clone()),
             "x".to_string(),
-            Ty::TypeVar(result_tv.clone()),
+            Ty2::TypeVar(result_tv.clone()),
         );
 
         // Add constraints to environment
@@ -2843,8 +2847,8 @@ mod tests {
         // Check that result_tv is unified with Int
         let resolved = solution
             .substitutions
-            .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
-        assert_eq!(resolved, Ty::Int);
+            .apply(&Ty2::TypeVar(result_tv), 0, &mut env.context);
+        assert_eq!(resolved, Ty2::Int);
     }
 
     #[test]
@@ -2858,12 +2862,12 @@ mod tests {
         let t3 = env.new_type_variable(TypeVarKind::Blank, ExprID(2));
 
         // T1 has field x: Int
-        let c1 = Constraint::Row {
+        let c1 = Constraint2::Row {
             expr_id: ExprID(3),
             constraint: RowConstraint::HasField {
                 type_var: t1.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2873,12 +2877,12 @@ mod tests {
         };
 
         // T2 has field y: Float
-        let c2 = Constraint::Row {
+        let c2 = Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasField {
                 type_var: t2.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -2888,7 +2892,7 @@ mod tests {
         };
 
         // T1 ⊕ T2 = T3
-        let c3 = Constraint::Row {
+        let c3 = Constraint2::Row {
             expr_id: ExprID(5),
             constraint: RowConstraint::RowConcat {
                 left: t1,
@@ -2907,18 +2911,18 @@ mod tests {
         let rx = env.new_type_variable(TypeVarKind::Blank, ExprID(6));
         let ry = env.new_type_variable(TypeVarKind::Blank, ExprID(7));
 
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(8),
-            Ty::TypeVar(t3.clone()),
+            Ty2::TypeVar(t3.clone()),
             "x".to_string(),
-            Ty::TypeVar(rx.clone()),
+            Ty2::TypeVar(rx.clone()),
         ));
 
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(9),
-            Ty::TypeVar(t3),
+            Ty2::TypeVar(t3),
             "y".to_string(),
-            Ty::TypeVar(ry.clone()),
+            Ty2::TypeVar(ry.clone()),
         ));
 
         // Solve all constraints together
@@ -2931,13 +2935,13 @@ mod tests {
 
         let resolved_x = solution
             .substitutions
-            .apply(&Ty::TypeVar(rx), 0, &mut env.context);
+            .apply(&Ty2::TypeVar(rx), 0, &mut env.context);
         let resolved_y = solution
             .substitutions
-            .apply(&Ty::TypeVar(ry), 0, &mut env.context);
+            .apply(&Ty2::TypeVar(ry), 0, &mut env.context);
 
-        assert_eq!(resolved_x, Ty::Int);
-        assert_eq!(resolved_y, Ty::Float);
+        assert_eq!(resolved_x, Ty2::Int);
+        assert_eq!(resolved_y, Ty2::Float);
     }
 
     /// Test that protocols can define associated types as row constraints
@@ -2966,7 +2970,7 @@ mod tests {
         // Define that the protocol's get method returns a type with the element row
         let return_type = env.new_type_variable(TypeVarKind::Let, ExprID(3));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasRow {
                 type_var: return_type.clone(),
@@ -3007,7 +3011,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3019,7 +3023,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(13),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -3029,7 +3033,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(14),
             constraint: RowConstraint::HasExactRow {
                 type_var: point_row.clone(),
@@ -3065,7 +3069,7 @@ mod tests {
         // The return type of get() has row R
         let return_type = env.new_type_variable(TypeVarKind::Let, ExprID(22));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(23),
             constraint: RowConstraint::HasRow {
                 type_var: return_type.clone(),
@@ -3107,7 +3111,7 @@ mod tests {
         id_fields.insert(
             "id".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(32),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3117,7 +3121,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(33),
             constraint: RowConstraint::HasRow {
                 type_var: id_row.clone(),
@@ -3136,7 +3140,7 @@ mod tests {
         time_fields.insert(
             "created".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(35),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3148,7 +3152,7 @@ mod tests {
         time_fields.insert(
             "updated".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(36),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -3158,7 +3162,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(37),
             constraint: RowConstraint::HasRow {
                 type_var: time_row.clone(),
@@ -3175,7 +3179,7 @@ mod tests {
             ExprID(38),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(39),
             constraint: RowConstraint::RowConcat {
                 left: id_row.clone(),
@@ -3219,7 +3223,7 @@ mod tests {
 
         let output_type = env.new_type_variable(TypeVarKind::Let, ExprID(44));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(45),
             constraint: RowConstraint::HasRow {
                 type_var: input_type.clone(),
@@ -3230,7 +3234,7 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(46),
             constraint: RowConstraint::HasRow {
                 type_var: output_type.clone(),
@@ -3252,7 +3256,7 @@ mod tests {
         input_fields.insert(
             "firstName".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(48),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3264,7 +3268,7 @@ mod tests {
         input_fields.insert(
             "lastName".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(49),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -3276,7 +3280,7 @@ mod tests {
 
         let concrete_input = env.new_type_variable(TypeVarKind::Let, ExprID(50));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(51),
             constraint: RowConstraint::HasExactRow {
                 type_var: concrete_input.clone(),
@@ -3290,7 +3294,7 @@ mod tests {
         output_fields.insert(
             "fullName".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(52),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3302,7 +3306,7 @@ mod tests {
 
         let concrete_output = env.new_type_variable(TypeVarKind::Let, ExprID(53));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(54),
             constraint: RowConstraint::HasExactRow {
                 type_var: concrete_output.clone(),
@@ -3331,12 +3335,12 @@ mod tests {
             ExprID(1),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(2),
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -3345,12 +3349,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(3),
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -3366,12 +3370,12 @@ mod tests {
         );
 
         for (i, component) in ["r", "g", "b"].iter().enumerate() {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: ExprID(5 + i as i32),
                 constraint: RowConstraint::HasField {
                     type_var: color_row.clone(),
                     label: component.to_string(),
-                    field_ty: Ty::Int,
+                    field_ty: Ty2::Int,
                     metadata: FieldMetadata::RecordField {
                         index: i,
                         has_default: false,
@@ -3387,7 +3391,7 @@ mod tests {
             ExprID(10),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(11),
             constraint: RowConstraint::RowConcat {
                 left: position_row.clone(),
@@ -3414,19 +3418,19 @@ mod tests {
 
         // Step 5: Verify that ColoredPoint has all fields from both Position and Color
         let x_result = env.new_type_variable(TypeVarKind::Blank, ExprID(20));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(21),
-            Ty::TypeVar(colored_point_row.clone()),
+            Ty2::TypeVar(colored_point_row.clone()),
             "x".to_string(),
-            Ty::TypeVar(x_result.clone()),
+            Ty2::TypeVar(x_result.clone()),
         ));
 
         let r_result = env.new_type_variable(TypeVarKind::Blank, ExprID(22));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(23),
-            Ty::TypeVar(colored_point_row.clone()),
+            Ty2::TypeVar(colored_point_row.clone()),
             "r".to_string(),
-            Ty::TypeVar(r_result.clone()),
+            Ty2::TypeVar(r_result.clone()),
         ));
 
         let mut solution = env.flush_constraints(&meta).unwrap();
@@ -3435,13 +3439,13 @@ mod tests {
         // Verify types
         let x_ty = solution
             .substitutions
-            .apply(&Ty::TypeVar(x_result), 0, &mut env.context);
-        assert_eq!(x_ty, Ty::Float);
+            .apply(&Ty2::TypeVar(x_result), 0, &mut env.context);
+        assert_eq!(x_ty, Ty2::Float);
 
         let r_ty = solution
             .substitutions
-            .apply(&Ty::TypeVar(r_result), 0, &mut env.context);
-        assert_eq!(r_ty, Ty::Int);
+            .apply(&Ty2::TypeVar(r_result), 0, &mut env.context);
+        assert_eq!(r_ty, Ty2::Int);
     }
 
     /// Test row restriction - removing fields from a type
@@ -3457,14 +3461,14 @@ mod tests {
         );
 
         let fields = vec![
-            ("id", Ty::Int),
-            ("name", Ty::string()),
-            ("email", Ty::string()),
-            ("password", Ty::string()),
+            ("id", Ty2::Int),
+            ("name", Ty2::string()),
+            ("email", Ty2::string()),
+            ("password", Ty2::string()),
         ];
 
         for (i, (name, ty)) in fields.iter().enumerate() {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: ExprID(31 + i as i32),
                 constraint: RowConstraint::HasField {
                     type_var: user_row.clone(),
@@ -3489,7 +3493,7 @@ mod tests {
         // (since RowRestrict isn't fully implemented in the constraint solver)
         for (i, (name, ty)) in fields.iter().enumerate() {
             if name != &"password" {
-                env.constrain(Constraint::Row {
+                env.constrain(Constraint2::Row {
                     expr_id: ExprID(42 + i as i32),
                     constraint: RowConstraint::HasField {
                         type_var: public_user_row.clone(),
@@ -3511,11 +3515,11 @@ mod tests {
 
         // Verify PublicUser has name but not password
         let name_result = env.new_type_variable(TypeVarKind::Blank, ExprID(50));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(51),
-            Ty::TypeVar(public_user_row.clone()),
+            Ty2::TypeVar(public_user_row.clone()),
             "name".to_string(),
-            Ty::TypeVar(name_result.clone()),
+            Ty2::TypeVar(name_result.clone()),
         ));
 
         // This should succeed
@@ -3524,11 +3528,11 @@ mod tests {
 
         // Try to access password (should fail)
         let password_result = env.new_type_variable(TypeVarKind::Blank, ExprID(52));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(53),
-            Ty::TypeVar(public_user_row),
+            Ty2::TypeVar(public_user_row),
             "password".to_string(),
-            Ty::TypeVar(password_result),
+            Ty2::TypeVar(password_result),
         ));
 
         let solution = env.flush_constraints(&meta).unwrap();
@@ -3572,7 +3576,7 @@ mod tests {
             &RowConstraint::HasField {
                 type_var: safe_config.clone(),
                 label: "host".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -3589,7 +3593,7 @@ mod tests {
             &RowConstraint::HasField {
                 type_var: safe_config.clone(),
                 label: "password".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -3773,12 +3777,12 @@ mod tests {
             TypeVarKind::CanonicalTypeParameter("T".to_string()),
             ExprID(102),
         );
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(101),
             constraint: RowConstraint::HasField {
                 type_var: result_row.clone(),
                 label: "Ok".to_string(),
-                field_ty: Ty::TypeVar(t_var),
+                field_ty: Ty2::TypeVar(t_var),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
         });
@@ -3788,12 +3792,12 @@ mod tests {
             TypeVarKind::CanonicalTypeParameter("E".to_string()),
             ExprID(104),
         );
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(103),
             constraint: RowConstraint::HasField {
                 type_var: result_row.clone(),
                 label: "Err".to_string(),
-                field_ty: Ty::TypeVar(e_var),
+                field_ty: Ty2::TypeVar(e_var),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         });
@@ -3810,19 +3814,19 @@ mod tests {
 
         // Access enum variants through member access
         let ok_type = env.new_type_variable(TypeVarKind::Blank, ExprID(110));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(111),
-            Ty::TypeVar(result_row.clone()),
+            Ty2::TypeVar(result_row.clone()),
             "Ok".to_string(),
-            Ty::TypeVar(ok_type.clone()),
+            Ty2::TypeVar(ok_type.clone()),
         ));
 
         let err_type = env.new_type_variable(TypeVarKind::Blank, ExprID(112));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(113),
-            Ty::TypeVar(result_row.clone()),
+            Ty2::TypeVar(result_row.clone()),
             "Err".to_string(),
-            Ty::TypeVar(err_type.clone()),
+            Ty2::TypeVar(err_type.clone()),
         ));
 
         let solution = env.flush_constraints(&meta).unwrap();
@@ -3841,22 +3845,22 @@ mod tests {
             ExprID(200),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(201),
             constraint: RowConstraint::HasField {
                 type_var: basic_errors.clone(),
                 label: "NotFound".to_string(),
-                field_ty: Ty::Void,
+                field_ty: Ty2::Void,
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(202),
             constraint: RowConstraint::HasField {
                 type_var: basic_errors.clone(),
                 label: "InvalidInput".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         });
@@ -3867,22 +3871,22 @@ mod tests {
             ExprID(210),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(211),
             constraint: RowConstraint::HasField {
                 type_var: network_errors.clone(),
                 label: "Timeout".to_string(),
-                field_ty: Ty::Int, // timeout in seconds
+                field_ty: Ty2::Int, // timeout in seconds
                 metadata: FieldMetadata::EnumCase { tag: 2 },
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(212),
             constraint: RowConstraint::HasField {
                 type_var: network_errors.clone(),
                 label: "ConnectionRefused".to_string(),
-                field_ty: Ty::Void,
+                field_ty: Ty2::Void,
                 metadata: FieldMetadata::EnumCase { tag: 3 },
             },
         });
@@ -3893,7 +3897,7 @@ mod tests {
             ExprID(220),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(221),
             constraint: RowConstraint::RowConcat {
                 left: basic_errors.clone(),
@@ -3921,11 +3925,11 @@ mod tests {
         // Verify we can access all variants
         for variant in ["NotFound", "InvalidInput", "Timeout", "ConnectionRefused"] {
             let variant_type = env.new_type_variable(TypeVarKind::Blank, ExprID(230));
-            env.constrain(Constraint::MemberAccess(
+            env.constrain(Constraint2::MemberAccess(
                 ExprID(231),
-                Ty::TypeVar(all_errors.clone()),
+                Ty2::TypeVar(all_errors.clone()),
                 variant.to_string(),
-                Ty::TypeVar(variant_type),
+                Ty2::TypeVar(variant_type),
             ));
         }
 
@@ -3946,15 +3950,15 @@ mod tests {
         );
 
         for (i, (variant, ty)) in [
-            ("UserError", Ty::string()),
-            ("SystemError", Ty::string()),
-            ("NetworkError", Ty::string()),
-            ("InternalError", Ty::string()),
+            ("UserError", Ty2::string()),
+            ("SystemError", Ty2::string()),
+            ("NetworkError", Ty2::string()),
+            ("InternalError", Ty2::string()),
         ]
         .iter()
         .enumerate()
         {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: ExprID(301 + i as i32),
                 constraint: RowConstraint::HasField {
                     type_var: full_errors.clone(),
@@ -3974,7 +3978,7 @@ mod tests {
         let mut restricted = crate::row::LabelSet::new();
         restricted.insert("InternalError".to_string());
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(311),
             constraint: RowConstraint::RowRestrict {
                 source: full_errors.clone(),
@@ -3985,11 +3989,11 @@ mod tests {
 
         // Solve all constraints together
         let user_error = env.new_type_variable(TypeVarKind::Blank, ExprID(320));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(321),
-            Ty::TypeVar(public_errors.clone()),
+            Ty2::TypeVar(public_errors.clone()),
             "UserError".to_string(),
-            Ty::TypeVar(user_error),
+            Ty2::TypeVar(user_error),
         ));
 
         let solution = env.flush_constraints(&meta).unwrap();
@@ -3997,11 +4001,11 @@ mod tests {
 
         // Verify internal error is not accessible
         let internal_error = env.new_type_variable(TypeVarKind::Blank, ExprID(330));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(331),
-            Ty::TypeVar(public_errors),
+            Ty2::TypeVar(public_errors),
             "InternalError".to_string(),
-            Ty::TypeVar(internal_error),
+            Ty2::TypeVar(internal_error),
         ));
 
         let solution = env.flush_constraints(&meta).unwrap();
@@ -4020,7 +4024,7 @@ mod tests {
         base_fields.insert(
             "name".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(1),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -4035,7 +4039,7 @@ mod tests {
         let extension_constraint = RowConstraint::HasField {
             type_var: extension.clone(),
             label: "age".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4084,7 +4088,7 @@ mod tests {
         exact_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(1),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -4110,7 +4114,7 @@ mod tests {
         let add_field = RowConstraint::HasField {
             type_var: exact.clone(),
             label: "y".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4144,7 +4148,7 @@ mod tests {
         let add_to_extended = RowConstraint::HasField {
             type_var: extended.clone(),
             label: "y".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4174,7 +4178,7 @@ mod tests {
         required_fields.insert(
             "name".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(1),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -4201,7 +4205,7 @@ mod tests {
         let name_constraint = RowConstraint::HasField {
             type_var: person.clone(),
             label: "name".to_string(),
-            field_ty: Ty::string(),
+            field_ty: Ty2::string(),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4211,7 +4215,7 @@ mod tests {
         let age_constraint = RowConstraint::HasField {
             type_var: person.clone(),
             label: "age".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4248,7 +4252,7 @@ mod tests {
         let base_constraint = RowConstraint::HasField {
             type_var: base.clone(),
             label: "a".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4270,7 +4274,7 @@ mod tests {
         let ext1_field = RowConstraint::HasField {
             type_var: ext1.clone(),
             label: "b".to_string(),
-            field_ty: Ty::string(),
+            field_ty: Ty2::string(),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4295,7 +4299,7 @@ mod tests {
         let ext2_field = RowConstraint::HasField {
             type_var: ext2.clone(),
             label: "c".to_string(),
-            field_ty: Ty::Bool,
+            field_ty: Ty2::Bool,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4330,12 +4334,12 @@ mod tests {
             ExprID(1),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(2),
             constraint: RowConstraint::HasField {
                 type_var: left.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4349,12 +4353,12 @@ mod tests {
             ExprID(3),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasField {
                 type_var: right.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4369,7 +4373,7 @@ mod tests {
             ExprID(5),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(6),
             constraint: RowConstraint::RowConcat {
                 left: left.clone(),
@@ -4384,19 +4388,19 @@ mod tests {
 
         // Now try to access fields on the result
         let x_access = env.new_type_variable(TypeVarKind::Blank, ExprID(10));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(11),
-            Ty::TypeVar(result.clone()),
+            Ty2::TypeVar(result.clone()),
             "x".to_string(),
-            Ty::TypeVar(x_access.clone()),
+            Ty2::TypeVar(x_access.clone()),
         ));
 
         let y_access = env.new_type_variable(TypeVarKind::Blank, ExprID(12));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(13),
-            Ty::TypeVar(result.clone()),
+            Ty2::TypeVar(result.clone()),
             "y".to_string(),
-            Ty::TypeVar(y_access.clone()),
+            Ty2::TypeVar(y_access.clone()),
         ));
 
         // This should succeed
@@ -4406,13 +4410,13 @@ mod tests {
         // Verify types
         let x_ty = solution
             .substitutions
-            .apply(&Ty::TypeVar(x_access), 0, &mut env.context);
-        assert_eq!(x_ty, Ty::Int);
+            .apply(&Ty2::TypeVar(x_access), 0, &mut env.context);
+        assert_eq!(x_ty, Ty2::Int);
 
         let y_ty = solution
             .substitutions
-            .apply(&Ty::TypeVar(y_access), 0, &mut env.context);
-        assert_eq!(y_ty, Ty::Int);
+            .apply(&Ty2::TypeVar(y_access), 0, &mut env.context);
+        assert_eq!(y_ty, Ty2::Int);
     }
 
     /// Test member access on row-restricted type variables
@@ -4427,12 +4431,12 @@ mod tests {
             ExprID(20),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(21),
             constraint: RowConstraint::HasField {
                 type_var: source.clone(),
                 label: "public".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4441,12 +4445,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(22),
             constraint: RowConstraint::HasField {
                 type_var: source.clone(),
                 label: "secret".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -4464,7 +4468,7 @@ mod tests {
         let mut labels = crate::row::LabelSet::new();
         labels.insert("secret".to_string());
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(26),
             constraint: RowConstraint::RowRestrict {
                 source: source.clone(),
@@ -4475,11 +4479,11 @@ mod tests {
 
         // Access public field (should succeed)
         let public_access = env.new_type_variable(TypeVarKind::Blank, ExprID(30));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(31),
-            Ty::TypeVar(restricted.clone()),
+            Ty2::TypeVar(restricted.clone()),
             "public".to_string(),
-            Ty::TypeVar(public_access.clone()),
+            Ty2::TypeVar(public_access.clone()),
         ));
 
         // Process all constraints together
@@ -4489,8 +4493,8 @@ mod tests {
         let public_ty =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(public_access), 0, &mut env.context);
-        assert_eq!(public_ty, Ty::string());
+                .apply(&Ty2::TypeVar(public_access), 0, &mut env.context);
+        assert_eq!(public_ty, Ty2::string());
 
         // Now test that accessing secret field fails
         // We need to set up the constraints again since we can't reuse the environment after flush
@@ -4502,12 +4506,12 @@ mod tests {
             ExprID(40),
         );
 
-        env2.constrain(Constraint::Row {
+        env2.constrain(Constraint2::Row {
             expr_id: ExprID(41),
             constraint: RowConstraint::HasField {
                 type_var: source2.clone(),
                 label: "public".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4516,12 +4520,12 @@ mod tests {
             },
         });
 
-        env2.constrain(Constraint::Row {
+        env2.constrain(Constraint2::Row {
             expr_id: ExprID(42),
             constraint: RowConstraint::HasField {
                 type_var: source2.clone(),
                 label: "secret".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -4539,7 +4543,7 @@ mod tests {
         let mut labels2 = crate::row::LabelSet::new();
         labels2.insert("secret".to_string());
 
-        env2.constrain(Constraint::Row {
+        env2.constrain(Constraint2::Row {
             expr_id: ExprID(46),
             constraint: RowConstraint::RowRestrict {
                 source: source2,
@@ -4550,11 +4554,11 @@ mod tests {
 
         // Try to access secret field
         let secret_access = env2.new_type_variable(TypeVarKind::Blank, ExprID(50));
-        env2.constrain(Constraint::MemberAccess(
+        env2.constrain(Constraint2::MemberAccess(
             ExprID(51),
-            Ty::TypeVar(restricted2),
+            Ty2::TypeVar(restricted2),
             "secret".to_string(),
-            Ty::TypeVar(secret_access),
+            Ty2::TypeVar(secret_access),
         ));
 
         let solution2 = env2.flush_constraints(&meta).unwrap();
@@ -4577,20 +4581,20 @@ mod tests {
         let field_result = env.new_type_variable(TypeVarKind::Blank, ExprID(41));
 
         // Add member access first
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(42),
-            Ty::TypeVar(tv.clone()),
+            Ty2::TypeVar(tv.clone()),
             "field".to_string(),
-            Ty::TypeVar(field_result.clone()),
+            Ty2::TypeVar(field_result.clone()),
         ));
 
         // Then add the row constraint that defines the field
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(43),
             constraint: RowConstraint::HasField {
                 type_var: tv.clone(),
                 label: "field".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty2::Bool,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4606,8 +4610,8 @@ mod tests {
         let field_ty =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(field_result), 0, &mut env.context);
-        assert_eq!(field_ty, Ty::Bool);
+                .apply(&Ty2::TypeVar(field_result), 0, &mut env.context);
+        assert_eq!(field_ty, Ty2::Bool);
     }
 
     /// Test exhaustive pattern matching on closed enum
@@ -4896,7 +4900,7 @@ mod tests {
         ok_fields.insert(
             "Ok".to_string(),
             FieldInfo {
-                ty: Ty::TypeVar(t_param.clone()),
+                ty: Ty2::TypeVar(t_param.clone()),
                 expr_id: ExprID(4),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -4907,29 +4911,29 @@ mod tests {
         err_fields.insert(
             "Err".to_string(),
             FieldInfo {
-                ty: Ty::TypeVar(e_param.clone()),
+                ty: Ty2::TypeVar(e_param.clone()),
                 expr_id: ExprID(5),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         );
 
         // Add both variants to the enum
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(6),
             constraint: RowConstraint::HasField {
                 type_var: result_enum.clone(),
                 label: "Ok".to_string(),
-                field_ty: Ty::TypeVar(t_param.clone()),
+                field_ty: Ty2::TypeVar(t_param.clone()),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(7),
             constraint: RowConstraint::HasField {
                 type_var: result_enum.clone(),
                 label: "Err".to_string(),
-                field_ty: Ty::TypeVar(e_param.clone()),
+                field_ty: Ty2::TypeVar(e_param.clone()),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         });
@@ -4957,7 +4961,7 @@ mod tests {
         color_fields.insert(
             "Red".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty2::Void,
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -4966,7 +4970,7 @@ mod tests {
         color_fields.insert(
             "Green".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty2::Void,
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
@@ -4975,14 +4979,14 @@ mod tests {
         color_fields.insert(
             "Blue".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty2::Void,
                 expr_id: ExprID(13),
                 metadata: FieldMetadata::EnumCase { tag: 2 },
             },
         );
 
         // Use HasExactRow to ensure no additional variants
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(14),
             constraint: RowConstraint::HasExactRow {
                 type_var: color_enum.clone(),
@@ -5012,7 +5016,7 @@ mod tests {
         closed_fields.insert(
             "A".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(21),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5020,13 +5024,13 @@ mod tests {
         closed_fields.insert(
             "B".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(22),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(23),
             constraint: RowConstraint::HasExactRow {
                 type_var: closed_enum.clone(),
@@ -5051,7 +5055,7 @@ mod tests {
         base_fields.insert(
             "X".to_string(),
             FieldInfo {
-                ty: Ty::Bool,
+                ty: Ty2::Bool,
                 expr_id: ExprID(26),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5059,13 +5063,13 @@ mod tests {
         base_fields.insert(
             "Y".to_string(),
             FieldInfo {
-                ty: Ty::Float,
+                ty: Ty2::Float,
                 expr_id: ExprID(27),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(28),
             constraint: RowConstraint::HasRow {
                 type_var: open_enum.clone(),
@@ -5099,7 +5103,7 @@ mod tests {
         message_fields.insert(
             "Text".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(31),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5109,7 +5113,7 @@ mod tests {
         message_fields.insert(
             "Number".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(32),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
@@ -5119,13 +5123,13 @@ mod tests {
         message_fields.insert(
             "Pair".to_string(),
             FieldInfo {
-                ty: Ty::Tuple(vec![Ty::Int, Ty::string()]),
+                ty: Ty2::Tuple(vec![Ty2::Int, Ty2::string()]),
                 expr_id: ExprID(33),
                 metadata: FieldMetadata::EnumCase { tag: 2 },
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(34),
             constraint: RowConstraint::HasExactRow {
                 type_var: message_enum.clone(),
@@ -5167,7 +5171,7 @@ mod tests {
         result_fields.insert(
             "Ok".to_string(),
             FieldInfo {
-                ty: Ty::TypeVar(t_param.clone()),
+                ty: Ty2::TypeVar(t_param.clone()),
                 expr_id: ExprID(43),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5175,13 +5179,13 @@ mod tests {
         result_fields.insert(
             "Err".to_string(),
             FieldInfo {
-                ty: Ty::TypeVar(e_param.clone()),
+                ty: Ty2::TypeVar(e_param.clone()),
                 expr_id: ExprID(44),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(45),
             constraint: RowConstraint::HasExactRow {
                 type_var: result_enum.clone(),
@@ -5206,7 +5210,7 @@ mod tests {
         option_fields.insert(
             "Some".to_string(),
             FieldInfo {
-                ty: Ty::TypeVar(inner_param.clone()),
+                ty: Ty2::TypeVar(inner_param.clone()),
                 expr_id: ExprID(48),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5214,13 +5218,13 @@ mod tests {
         option_fields.insert(
             "None".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty2::Void,
                 expr_id: ExprID(49),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(50),
             constraint: RowConstraint::HasExactRow {
                 type_var: option_enum.clone(),
@@ -5258,7 +5262,7 @@ mod tests {
         base_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(3),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5268,7 +5272,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasRow {
                 type_var: param_type.clone(),
@@ -5288,7 +5292,7 @@ mod tests {
         point2d_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5298,7 +5302,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(12),
             constraint: RowConstraint::HasExactRow {
                 type_var: point2d.clone(),
@@ -5315,7 +5319,7 @@ mod tests {
         point3d_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(21),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5327,7 +5331,7 @@ mod tests {
         point3d_fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(22),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5339,7 +5343,7 @@ mod tests {
         point3d_fields.insert(
             "z".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(23),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
@@ -5349,7 +5353,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(24),
             constraint: RowConstraint::HasExactRow {
                 type_var: point3d.clone(),
@@ -5387,7 +5391,7 @@ mod tests {
         required_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(32),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5399,7 +5403,7 @@ mod tests {
         required_fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(33),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5409,7 +5413,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(34),
             constraint: RowConstraint::HasRow {
                 type_var: param_type.clone(),
@@ -5442,7 +5446,7 @@ mod tests {
         );
 
         // Add lacks constraint
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(41),
             constraint: RowConstraint::Lacks {
                 type_var: row_param.clone(),
@@ -5457,7 +5461,7 @@ mod tests {
         base_fields.insert(
             "name".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(43),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5467,7 +5471,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(44),
             constraint: RowConstraint::HasRow {
                 type_var: param_type.clone(),
@@ -5485,7 +5489,7 @@ mod tests {
         safe_fields.insert(
             "name".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(51),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5497,7 +5501,7 @@ mod tests {
         safe_fields.insert(
             "email".to_string(),
             FieldInfo {
-                ty: Ty::string(),
+                ty: Ty2::string(),
                 expr_id: ExprID(52),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5507,7 +5511,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(53),
             constraint: RowConstraint::HasExactRow {
                 type_var: safe_user.clone(),
@@ -5546,7 +5550,7 @@ mod tests {
         // Input type has row R1
         let input_type = env.new_type_variable(TypeVarKind::Let, ExprID(62));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(63),
             constraint: RowConstraint::HasRow {
                 type_var: input_type.clone(),
@@ -5560,7 +5564,7 @@ mod tests {
         // Output type has row R2
         let output_type = env.new_type_variable(TypeVarKind::Let, ExprID(64));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(65),
             constraint: RowConstraint::HasRow {
                 type_var: output_type.clone(),
@@ -5598,7 +5602,7 @@ mod tests {
         generic_fields.insert(
             "first".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(72),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5610,7 +5614,7 @@ mod tests {
         generic_fields.insert(
             "second".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(73),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5620,7 +5624,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(74),
             constraint: RowConstraint::HasRow {
                 type_var: generic_param.clone(),
@@ -5638,7 +5642,7 @@ mod tests {
         concrete_fields.insert(
             "first".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(81),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5650,7 +5654,7 @@ mod tests {
         concrete_fields.insert(
             "second".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(82),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5662,7 +5666,7 @@ mod tests {
         concrete_fields.insert(
             "third".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(83),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
@@ -5672,7 +5676,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(84),
             constraint: RowConstraint::HasExactRow {
                 type_var: concrete_type.clone(),
@@ -5689,7 +5693,7 @@ mod tests {
         extra_fields.insert(
             "third".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(86),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5699,7 +5703,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(87),
             constraint: RowConstraint::HasExactRow {
                 type_var: instantiated_r.clone(),
@@ -5742,19 +5746,19 @@ mod tests {
             TypeMember::Method(Method::new(
                 "doSomething".to_string(),
                 ExprID(2),
-                Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
             )),
         );
 
         env.register(&type_def).unwrap();
 
         // First set of row constraints
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(3),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5763,12 +5767,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(4),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -5792,12 +5796,12 @@ mod tests {
         env.clear_constraints();
 
         // New constraints with same count but different fields
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(5),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "width".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5806,12 +5810,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(6),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "height".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -5851,12 +5855,12 @@ mod tests {
         user_def.row_var = Some(user_row.clone());
 
         // Add some initial fields via row constraints
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(2),
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "id".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5865,12 +5869,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(3),
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "name".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -5885,7 +5889,7 @@ mod tests {
             TypeMember::Method(Method::new(
                 "toString".to_string(),
                 ExprID(4),
-                Ty::Func(vec![], Box::new(Ty::string()), vec![]),
+                Ty2::Func(vec![], Box::new(Ty2::string()), vec![]),
             )),
         );
 
@@ -5900,12 +5904,12 @@ mod tests {
         env.clear_constraints();
 
         // Re-add the base fields plus new ones
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(5),
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "id".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5914,12 +5918,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(6),
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "name".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -5928,12 +5932,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(7),
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "email".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -5942,12 +5946,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(8),
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "isActive".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty2::Bool,
                 metadata: FieldMetadata::RecordField {
                     index: 3,
                     has_default: true,
@@ -5975,13 +5979,13 @@ mod tests {
 
         // Verify new fields have correct types
         if let Some(TypeMember::Property(email)) = user_def.members.get("email") {
-            assert_eq!(email.ty, Ty::string());
+            assert_eq!(email.ty, Ty2::string());
         } else {
             panic!("email should be a property");
         }
 
         if let Some(TypeMember::Property(is_active)) = user_def.members.get("isActive") {
-            assert_eq!(is_active.ty, Ty::Bool);
+            assert_eq!(is_active.ty, Ty2::Bool);
             assert!(is_active.has_default);
         } else {
             panic!("isActive should be a property");
@@ -6013,7 +6017,7 @@ mod tests {
                 0,
                 "oldField1".to_string(),
                 ExprID(2),
-                Ty::Int,
+                Ty2::Int,
                 false,
             )),
         );
@@ -6023,7 +6027,7 @@ mod tests {
                 1,
                 "oldField2".to_string(),
                 ExprID(3),
-                Ty::Int,
+                Ty2::Int,
                 false,
             )),
         );
@@ -6034,7 +6038,7 @@ mod tests {
             TypeMember::Method(Method::new(
                 "someMethod".to_string(),
                 ExprID(4),
-                Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
             )),
         );
 
@@ -6044,12 +6048,12 @@ mod tests {
         // Now add row constraints for 2 different fields
         // This simulates the case where row constraints change to define
         // the same number of fields but with different names
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(5),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "newField1".to_string(),
-                field_ty: Ty::string(),
+                field_ty: Ty2::string(),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6058,12 +6062,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(6),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "newField2".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty2::Bool,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6121,7 +6125,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -6133,7 +6137,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -6143,7 +6147,7 @@ mod tests {
             },
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(13),
             constraint: RowConstraint::HasRow {
                 type_var: row_var.clone(),
@@ -6176,12 +6180,12 @@ mod tests {
         );
 
         // Add required fields to the protocol's row
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(101),
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6190,12 +6194,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(102),
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6204,12 +6208,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(103),
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -6237,12 +6241,12 @@ mod tests {
         );
 
         // Circle has x, y, radius, and draw
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(111),
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6251,12 +6255,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(112),
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6265,12 +6269,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(113),
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "radius".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -6279,12 +6283,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(114),
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
                 metadata: FieldMetadata::RecordField {
                     index: 3,
                     has_default: false,
@@ -6309,9 +6313,9 @@ mod tests {
 
         // Verify Circle conforms to Drawable
         let _conformance_result = env.new_type_variable(TypeVarKind::Blank, ExprID(120));
-        env.constrain(Constraint::ConformsTo {
+        env.constrain(Constraint2::ConformsTo {
             expr_id: ExprID(121),
-            ty: Ty::struct_type(circle_id, vec![]),
+            ty: Ty2::struct_type(circle_id, vec![]),
             conformance: Conformance {
                 protocol_id: drawable_id,
                 associated_types: vec![],
@@ -6334,12 +6338,12 @@ mod tests {
             ExprID(200),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(201),
             constraint: RowConstraint::HasField {
                 type_var: position_required.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6348,12 +6352,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(202),
             constraint: RowConstraint::HasField {
                 type_var: position_required.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6368,12 +6372,12 @@ mod tests {
             ExprID(210),
         );
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(211),
             constraint: RowConstraint::HasField {
                 type_var: point3d.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6382,12 +6386,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(212),
             constraint: RowConstraint::HasField {
                 type_var: point3d.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6396,12 +6400,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(213),
             constraint: RowConstraint::HasField {
                 type_var: point3d.clone(),
                 label: "z".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -6419,19 +6423,19 @@ mod tests {
 
         // Both should be able to access x and y
         let x_result = env.new_type_variable(TypeVarKind::Blank, ExprID(220));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(221),
-            Ty::TypeVar(position_required.clone()),
+            Ty2::TypeVar(position_required.clone()),
             "x".to_string(),
-            Ty::TypeVar(x_result.clone()),
+            Ty2::TypeVar(x_result.clone()),
         ));
 
         let y_result = env.new_type_variable(TypeVarKind::Blank, ExprID(222));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(223),
-            Ty::TypeVar(point3d.clone()),
+            Ty2::TypeVar(point3d.clone()),
             "y".to_string(),
-            Ty::TypeVar(y_result.clone()),
+            Ty2::TypeVar(y_result.clone()),
         ));
 
         let solution = env.flush_constraints(&meta).unwrap();
@@ -6451,8 +6455,8 @@ mod tests {
         let mut struct_def = env.lookup_type(&struct_id).unwrap().clone();
         struct_def.add_properties_with_rows(
             vec![
-                Property::new(0, "x".to_string(), ExprID(1), Ty::Int, false),
-                Property::new(1, "y".to_string(), ExprID(2), Ty::Int, false),
+                Property::new(0, "x".to_string(), ExprID(1), Ty2::Int, false),
+                Property::new(1, "y".to_string(), ExprID(2), Ty2::Int, false),
             ],
             &mut env,
         );
@@ -6480,12 +6484,12 @@ mod tests {
         );
         struct_def.row_var = Some(row_var.clone());
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(1),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "host".to_string(),
-                field_ty: Ty::struct_type(SymbolID(100), vec![]), // String type
+                field_ty: Ty2::struct_type(SymbolID(100), vec![]), // String type
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6494,12 +6498,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(2),
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "port".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty2::Int,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: true,
@@ -6513,7 +6517,7 @@ mod tests {
         let row_constraints: Vec<_> = constraints
             .iter()
             .filter_map(|c| match c {
-                Constraint::Row { constraint, .. } => Some(constraint),
+                Constraint2::Row { constraint, .. } => Some(constraint),
                 _ => None,
             })
             .collect();
@@ -6599,7 +6603,7 @@ mod tests {
                 0,
                 "field".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty2::Int,
                 false,
             )),
         );
@@ -6629,7 +6633,7 @@ mod tests {
                 0,
                 "x".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty2::Int,
                 false,
             )),
         );
@@ -6649,7 +6653,7 @@ mod tests {
                 1,
                 "y".to_string(),
                 crate::expr_id::ExprID(2),
-                crate::ty::Ty::Float,
+                crate::ty::Ty2::Float,
                 false,
             )),
         );
@@ -6730,7 +6734,7 @@ mod tests {
         "#;
 
         let result = check(src).unwrap();
-        assert_eq!(result.nth(1).unwrap(), Ty::Int);
+        assert_eq!(result.nth(1).unwrap(), Ty2::Int);
     }
 
     #[test]
@@ -6749,7 +6753,7 @@ mod tests {
         "#;
 
         let result = check(src).unwrap();
-        assert_eq!(result.nth(2).unwrap(), Ty::Bool);
+        assert_eq!(result.nth(2).unwrap(), Ty2::Bool);
     }
 
     #[test]
@@ -6907,12 +6911,12 @@ mod tests {
         env.register(&drawable_def).unwrap();
 
         // Add draw method requirement via row constraint
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(2),
             constraint: RowConstraint::HasField {
                 type_var: drawable_row,
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
                 metadata: FieldMetadata::MethodRequirement,
             },
         });
@@ -6936,9 +6940,9 @@ mod tests {
 
         // Add properties and methods via row constraints
         let properties = vec![
-            Property::new(0, "x".to_string(), ExprID(4), Ty::Float, false),
-            Property::new(1, "y".to_string(), ExprID(5), Ty::Float, false),
-            Property::new(2, "radius".to_string(), ExprID(6), Ty::Float, false),
+            Property::new(0, "x".to_string(), ExprID(4), Ty2::Float, false),
+            Property::new(1, "y".to_string(), ExprID(5), Ty2::Float, false),
+            Property::new(2, "radius".to_string(), ExprID(6), Ty2::Float, false),
         ];
 
         circle_def.add_properties_with_rows(properties, &mut env);
@@ -6946,7 +6950,7 @@ mod tests {
         let methods = vec![Method::new(
             "draw".to_string(),
             ExprID(7),
-            Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+            Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
         )];
 
         circle_def.add_methods_with_rows(methods, &mut env);
@@ -6954,23 +6958,23 @@ mod tests {
         env.register(&circle_def).unwrap();
 
         // Step 3: Test member access on Circle
-        let circle_ty = Ty::struct_type(circle_id, vec![]);
+        let circle_ty = Ty2::struct_type(circle_id, vec![]);
         let radius_result = env.new_type_variable(TypeVarKind::Blank, ExprID(8));
 
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(9),
             circle_ty.clone(),
             "radius".to_string(),
-            Ty::TypeVar(radius_result.clone()),
+            Ty2::TypeVar(radius_result.clone()),
         ));
 
         let draw_result = env.new_type_variable(TypeVarKind::Blank, ExprID(10));
 
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(11),
             circle_ty,
             "draw".to_string(),
-            Ty::TypeVar(draw_result.clone()),
+            Ty2::TypeVar(draw_result.clone()),
         ));
 
         // Solve constraints
@@ -6983,14 +6987,17 @@ mod tests {
         let resolved_radius =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(radius_result), 0, &mut env.context);
-        assert_eq!(resolved_radius, Ty::Float);
+                .apply(&Ty2::TypeVar(radius_result), 0, &mut env.context);
+        assert_eq!(resolved_radius, Ty2::Float);
 
         let resolved_draw =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(draw_result), 0, &mut env.context);
-        assert_eq!(resolved_draw, Ty::Func(vec![], Box::new(Ty::Void), vec![]));
+                .apply(&Ty2::TypeVar(draw_result), 0, &mut env.context);
+        assert_eq!(
+            resolved_draw,
+            Ty2::Func(vec![], Box::new(Ty2::Void), vec![])
+        );
     }
 
     /// Test row concatenation for type composition
@@ -7002,12 +7009,12 @@ mod tests {
         // Create a Position row with x, y
         let position_row = env.new_type_variable(TypeVarKind::Blank, ExprID(20));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(21),
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -7016,12 +7023,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(22),
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7033,12 +7040,12 @@ mod tests {
         // Create a Size row with width, height
         let size_row = env.new_type_variable(TypeVarKind::Blank, ExprID(23));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(24),
             constraint: RowConstraint::HasField {
                 type_var: size_row.clone(),
                 label: "width".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -7047,12 +7054,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(25),
             constraint: RowConstraint::HasField {
                 type_var: size_row.clone(),
                 label: "height".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7064,7 +7071,7 @@ mod tests {
         // Create a Rectangle by concatenating Position and Size
         let rect_row = env.new_type_variable(TypeVarKind::Blank, ExprID(26));
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(27),
             constraint: RowConstraint::RowConcat {
                 left: position_row,
@@ -7075,19 +7082,19 @@ mod tests {
 
         // Test that rect_row has all fields
         let x_result = env.new_type_variable(TypeVarKind::Blank, ExprID(28));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(29),
-            Ty::TypeVar(rect_row.clone()),
+            Ty2::TypeVar(rect_row.clone()),
             "x".to_string(),
-            Ty::TypeVar(x_result.clone()),
+            Ty2::TypeVar(x_result.clone()),
         ));
 
         let width_result = env.new_type_variable(TypeVarKind::Blank, ExprID(30));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(31),
-            Ty::TypeVar(rect_row),
+            Ty2::TypeVar(rect_row),
             "width".to_string(),
-            Ty::TypeVar(width_result.clone()),
+            Ty2::TypeVar(width_result.clone()),
         ));
 
         // Solve
@@ -7099,14 +7106,14 @@ mod tests {
         // Both should resolve to Float
         let resolved_x = solution
             .substitutions
-            .apply(&Ty::TypeVar(x_result), 0, &mut env.context);
+            .apply(&Ty2::TypeVar(x_result), 0, &mut env.context);
         let resolved_width =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(width_result), 0, &mut env.context);
+                .apply(&Ty2::TypeVar(width_result), 0, &mut env.context);
 
-        assert_eq!(resolved_x, Ty::Float);
-        assert_eq!(resolved_width, Ty::Float);
+        assert_eq!(resolved_x, Ty2::Float);
+        assert_eq!(resolved_width, Ty2::Float);
     }
 
     #[test]
@@ -7132,12 +7139,12 @@ mod tests {
         env.register(&point_def).unwrap();
 
         // Add row constraints for Point's fields
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(2),
             constraint: RowConstraint::HasField {
                 type_var: point_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -7146,12 +7153,12 @@ mod tests {
             },
         });
 
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(3),
             constraint: RowConstraint::HasField {
                 type_var: point_row,
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7161,14 +7168,14 @@ mod tests {
         });
 
         // Now test member access
-        let point_ty = Ty::struct_type(point_id, vec![]);
+        let point_ty = Ty2::struct_type(point_id, vec![]);
         let result_tv = env.new_type_variable(TypeVarKind::Blank, ExprID(4));
 
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(5),
             point_ty,
             "x".to_string(),
-            Ty::TypeVar(result_tv.clone()),
+            Ty2::TypeVar(result_tv.clone()),
         ));
 
         // Solve constraints
@@ -7179,8 +7186,8 @@ mod tests {
         assert!(solution.errors.is_empty());
         let resolved = solution
             .substitutions
-            .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
-        assert_eq!(resolved, Ty::Float);
+            .apply(&Ty2::TypeVar(result_tv), 0, &mut env.context);
+        assert_eq!(resolved, Ty2::Float);
     }
 
     #[test]
@@ -7213,7 +7220,7 @@ mod tests {
                 index: 0,
                 name: "width".to_string(),
                 expr_id: ExprID(11),
-                ty: Ty::Float,
+                ty: Ty2::Float,
                 has_default: false,
                 symbol_id: None,
             }),
@@ -7222,12 +7229,12 @@ mod tests {
         env.register(&rect_def).unwrap();
 
         // Add a row-based property
-        env.constrain(Constraint::Row {
+        env.constrain(Constraint2::Row {
             expr_id: ExprID(12),
             constraint: RowConstraint::HasField {
                 type_var: rect_row,
                 label: "height".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty2::Float,
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7236,24 +7243,24 @@ mod tests {
             },
         });
 
-        let rect_ty = Ty::struct_type(rect_id, vec![]);
+        let rect_ty = Ty2::struct_type(rect_id, vec![]);
 
         // Test accessing traditional member
         let width_result = env.new_type_variable(TypeVarKind::Blank, ExprID(13));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(14),
             rect_ty.clone(),
             "width".to_string(),
-            Ty::TypeVar(width_result.clone()),
+            Ty2::TypeVar(width_result.clone()),
         ));
 
         // Test accessing row-based member
         let height_result = env.new_type_variable(TypeVarKind::Blank, ExprID(15));
-        env.constrain(Constraint::MemberAccess(
+        env.constrain(Constraint2::MemberAccess(
             ExprID(16),
             rect_ty,
             "height".to_string(),
-            Ty::TypeVar(height_result.clone()),
+            Ty2::TypeVar(height_result.clone()),
         ));
 
         // Solve
@@ -7266,14 +7273,14 @@ mod tests {
         let resolved_width =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(width_result), 0, &mut env.context);
+                .apply(&Ty2::TypeVar(width_result), 0, &mut env.context);
         let resolved_height =
             solution
                 .substitutions
-                .apply(&Ty::TypeVar(height_result), 0, &mut env.context);
+                .apply(&Ty2::TypeVar(height_result), 0, &mut env.context);
 
-        assert_eq!(resolved_width, Ty::Float);
-        assert_eq!(resolved_height, Ty::Float);
+        assert_eq!(resolved_width, Ty2::Float);
+        assert_eq!(resolved_height, Ty2::Float);
     }
 
     #[test]
@@ -7286,7 +7293,7 @@ r.x
 
         // The result should be Int (type of field x)
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty2::Int);
     }
 
     #[test]
@@ -7301,7 +7308,7 @@ b
 
         // The result should be Int (type of field y)
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty2::Int);
     }
 
     #[test]
@@ -7336,7 +7343,7 @@ outer.inner.x
 
         // The result should be Int (type of inner.x)
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty2::Int);
     }
 
     #[test]
@@ -7351,7 +7358,7 @@ makePoint()
         ";
         let checked = check(src).unwrap();
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty2::Int);
     }
 
     #[test]
@@ -7614,8 +7621,8 @@ makePoint()
 
         // Add properties using row-aware method (should NOT populate members)
         let properties = vec![
-            Property::new(0, "x".to_string(), ExprID(1), Ty::Float, false),
-            Property::new(1, "y".to_string(), ExprID(2), Ty::Float, false),
+            Property::new(0, "x".to_string(), ExprID(1), Ty2::Float, false),
+            Property::new(1, "y".to_string(), ExprID(2), Ty2::Float, false),
         ];
 
         struct_def.add_properties_with_rows(properties, &mut env);
@@ -7646,12 +7653,12 @@ makePoint()
         // Verify the properties are correct
         let x_prop = struct_def.find_property("x").unwrap();
         assert_eq!(x_prop.name, "x");
-        assert_eq!(x_prop.ty, Ty::Float);
+        assert_eq!(x_prop.ty, Ty2::Float);
         assert_eq!(x_prop.index, 0);
 
         let y_prop = struct_def.find_property("y").unwrap();
         assert_eq!(y_prop.name, "y");
-        assert_eq!(y_prop.ty, Ty::Float);
+        assert_eq!(y_prop.ty, Ty2::Float);
         assert_eq!(y_prop.index, 1);
     }
 
@@ -7674,8 +7681,8 @@ makePoint()
         // Add properties via row constraints only
         struct_def.add_properties_with_rows(
             vec![
-                Property::new(0, "width".to_string(), ExprID(10), Ty::Float, false),
-                Property::new(1, "height".to_string(), ExprID(11), Ty::Float, false),
+                Property::new(0, "width".to_string(), ExprID(10), Ty2::Float, false),
+                Property::new(1, "height".to_string(), ExprID(11), Ty2::Float, false),
             ],
             &mut env,
         );
@@ -7687,7 +7694,7 @@ makePoint()
                 99,
                 "bogus".to_string(),
                 ExprID(99),
-                Ty::string(),
+                Ty2::string(),
                 false,
             )),
         );
@@ -7864,13 +7871,13 @@ makePoint()
         assert!(matches!(&checked.roots()[0].expr, Expr::Func { .. }));
 
         // The function should have the expected type
-        if let Ty::Func(params, ret_ty, _) = &checked.roots()[0].ty {
+        if let Ty2::Func(params, ret_ty, _) = &checked.roots()[0].ty {
             assert_eq!(params.len(), 1);
             assert!(matches!(
                 &params[0],
-                Ty::Row { fields, row: None, nominal_id: None, generics: _, .. } if fields.len() == 2
+                Ty2::Row { fields, row: None, nominal_id: None, generics: _, .. } if fields.len() == 2
             ));
-            assert_eq_diff!(ret_ty.as_ref(), &Ty::Int);
+            assert_eq_diff!(ret_ty.as_ref(), &Ty2::Int);
         } else {
             panic!("Expected function type");
         }
@@ -7893,7 +7900,7 @@ makePoint()
         // Check that point3d has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row {
+                Ty2::Row {
                     fields,
                     nominal_id: None,
                     generics: _,
@@ -7903,17 +7910,17 @@ makePoint()
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "x" && *ty == Ty2::Int)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "y" && *ty == Ty2::Int)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "z" && *ty == Ty2::Int)
                     );
                 }
                 _ => panic!("Expected record type for point3d"),
@@ -7941,7 +7948,7 @@ makePoint()
         .unwrap();
 
         // Verify the last expression (distance calculation) has Int type
-        assert_eq_diff!(checked.roots().last().unwrap().ty, Ty::Int);
+        assert_eq_diff!(checked.roots().last().unwrap().ty, Ty2::Int);
     }
 
     #[test]
@@ -7969,7 +7976,7 @@ makePoint()
         .unwrap();
 
         // All results should be tuples of (Int, Int)
-        let tuple_ty = Ty::Tuple(vec![Ty::Int, Ty::Int]);
+        let tuple_ty = Ty2::Tuple(vec![Ty2::Int, Ty2::Int]);
 
         // Find the let bindings and check their types
         for expr in checked.roots() {
@@ -8000,7 +8007,7 @@ makePoint()
 
         // The result should have at least an id field
         if let Some(last) = checked.roots().last()
-            && let Ty::Row {
+            && let Ty2::Row {
                 fields,
                 nominal_id: None,
                 generics: _,
@@ -8010,7 +8017,7 @@ makePoint()
             assert!(
                 fields
                     .iter()
-                    .any(|(name, ty)| name == "id" && *ty == Ty::Int)
+                    .any(|(name, ty)| name == "id" && *ty == Ty2::Int)
             );
         }
     }
@@ -8080,7 +8087,7 @@ makePoint()
         // Check that spread has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row {
+                Ty2::Row {
                     fields,
                     nominal_id: None,
                     generics: _,
@@ -8090,17 +8097,17 @@ makePoint()
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "x" && *ty == Ty2::Int)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "y" && *ty == Ty2::Int)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "z" && *ty == Ty2::Int)
                     );
                 }
                 _ => panic!("Expected record type for spread"),
@@ -8124,7 +8131,7 @@ makePoint()
         // Check that overridden has type {x: String, y: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row {
+                Ty2::Row {
                     fields,
                     nominal_id: None,
                     generics: _,
@@ -8134,12 +8141,12 @@ makePoint()
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::string())
+                            .any(|(name, ty)| name == "x" && *ty == Ty2::string())
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "y" && *ty == Ty2::Int)
                     );
                 }
                 _ => panic!("Expected record type for overridden"),
@@ -8164,7 +8171,7 @@ makePoint()
         // Check that combined has type {x: Int, y: String, z: Bool, w: Float}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Row {
+                Ty2::Row {
                     fields,
                     nominal_id: None,
                     generics: _,
@@ -8174,22 +8181,22 @@ makePoint()
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "x" && *ty == Ty2::Int)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::string())
+                            .any(|(name, ty)| name == "y" && *ty == Ty2::string())
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::Bool)
+                            .any(|(name, ty)| name == "z" && *ty == Ty2::Bool)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "w" && *ty == Ty::Float)
+                            .any(|(name, ty)| name == "w" && *ty == Ty2::Float)
                     );
                 }
                 _ => panic!("Expected record type for combined"),
@@ -8217,7 +8224,7 @@ makePoint()
         // Check that extended has type {x: Int, y: Bool, z: String}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Row {
+                Ty2::Row {
                     fields,
                     nominal_id: None,
                     generics: _,
@@ -8227,17 +8234,17 @@ makePoint()
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, ty)| name == "x" && *ty == Ty2::Int)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Bool)
+                            .any(|(name, ty)| name == "y" && *ty == Ty2::Bool)
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::string())
+                            .any(|(name, ty)| name == "z" && *ty == Ty2::string())
                     );
                 }
                 _ => panic!("Expected record type for extended"),

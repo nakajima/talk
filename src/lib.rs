@@ -6,6 +6,8 @@
 #![feature(hash_set_entry)]
 #![feature(stmt_expr_attributes)]
 #![feature(error_generic_member_access)]
+#![feature(try_blocks)]
+#![feature(try_trait_v2)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
 #![cfg_attr(not(test), warn(clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::panic))]
@@ -13,6 +15,7 @@
 #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
 pub mod prelude;
+pub mod types;
 
 pub mod builtins;
 pub use builtins::*;
@@ -28,12 +31,11 @@ pub mod type_checking;
 pub use type_checking::*;
 pub mod parsing;
 pub use parsing::*;
-pub mod analysis;
 pub mod compiling;
 pub mod diagnostic;
-pub mod interpret;
-pub mod lowering;
-pub mod transforms;
+// pub mod interpret;
+// pub mod lowering;
+// pub mod transforms;
 
 #[cfg(feature = "cli")]
 pub mod lsp;

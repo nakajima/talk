@@ -10,7 +10,7 @@ use crate::{
     },
     conformance::Conformance,
     conformance_checker::ConformanceError,
-    constraint::Constraint,
+    constraint::Constraint2,
     constraint_solver::ConstraintSolver,
     diagnostic::Diagnostic,
     environment::free_type_vars,
@@ -24,7 +24,7 @@ use crate::{
     substitutions::Substitutions,
     synthesis::synthesize_inits,
     token_kind::TokenKind,
-    ty::{RowKind, Ty},
+    ty::{RowKind, Ty2},
     type_def::{TypeDef, TypeMember},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr,
@@ -33,8 +33,8 @@ use crate::{
 use super::{environment::Environment, typed_expr::TypedExpr};
 
 pub type TypeDefs = HashMap<SymbolID, TypeDef>;
-pub type FuncParams = Vec<Ty>;
-pub type FuncReturning = Box<Ty>;
+pub type FuncParams = Vec<Ty2>;
+pub type FuncReturning = Box<Ty2>;
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum TypeError {
@@ -89,13 +89,13 @@ impl TypeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scheme {
-    ty: Ty,
+    ty: Ty2,
     unbound_vars: Vec<TypeVarID>,
-    constraints: Vec<Constraint>,
+    constraints: Vec<Constraint2>,
 }
 
 impl Scheme {
-    pub fn new(ty: Ty, unbound_vars: Vec<TypeVarID>, constraints: Vec<Constraint>) -> Self {
+    pub fn new(ty: Ty2, unbound_vars: Vec<TypeVarID>, constraints: Vec<Constraint2>) -> Self {
         Self {
             ty,
             unbound_vars,
@@ -103,7 +103,7 @@ impl Scheme {
         }
     }
 
-    pub fn ty(&self) -> Ty {
+    pub fn ty(&self) -> Ty2 {
         self.ty.clone()
     }
 
@@ -111,7 +111,7 @@ impl Scheme {
         self.unbound_vars.clone()
     }
 
-    pub fn constraints(&self) -> Vec<Constraint> {
+    pub fn constraints(&self) -> Vec<Constraint2> {
         self.constraints.clone()
     }
 }
@@ -125,10 +125,10 @@ pub struct TypeChecker<'a> {
     pub(super) module_env: &'a HashMap<String, CompiledModule>,
 }
 
-fn checked_expected(expected: &Option<Ty>, actual: Ty) -> Result<Ty, TypeError> {
+fn checked_expected(expected: &Option<Ty2>, actual: Ty2) -> Result<Ty2, TypeError> {
     if let Some(expected) = expected {
         match (&actual, expected) {
-            (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => (),
+            (Ty2::TypeVar(_), _) | (_, Ty2::TypeVar(_)) => (),
             (typ, expected) => {
                 if typ != expected {
                     return Err(TypeError::UnexpectedType(
@@ -230,7 +230,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         parsed_expr: &ParsedExpr,
         env: &mut Environment,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         let _s = trace_span!(
             "infer_node",
@@ -243,21 +243,21 @@ impl<'a> TypeChecker<'a> {
             crate::parsed_expr::Expr::Import(name) => Ok(TypedExpr {
                 id: parsed_expr.id,
                 expr: typed_expr::Expr::Import(name.to_string()),
-                ty: Ty::Void,
+                ty: Ty2::Void,
             }),
             crate::parsed_expr::Expr::LiteralTrue => {
-                checked_expected(expected, Ty::Bool)?;
+                checked_expected(expected, Ty2::Bool)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Bool,
+                    ty: Ty2::Bool,
                     expr: typed_expr::Expr::LiteralTrue,
                 })
             }
             crate::parsed_expr::Expr::LiteralFalse => {
-                checked_expected(expected, Ty::Bool)?;
+                checked_expected(expected, Ty2::Bool)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Bool,
+                    ty: Ty2::Bool,
                     expr: typed_expr::Expr::LiteralFalse,
                 })
             }
@@ -280,7 +280,7 @@ impl<'a> TypeChecker<'a> {
                 // checked_expected(expected, Ty::Int)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Int,
+                    ty: Ty2::Int,
                     expr: typed_expr::Expr::LiteralInt(v.to_string()),
                 })
             }
@@ -288,14 +288,14 @@ impl<'a> TypeChecker<'a> {
                 // checked_expected(expected, Ty::Float)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Float,
+                    ty: Ty2::Float,
                     expr: typed_expr::Expr::LiteralFloat(v.to_string()),
                 })
             }
             crate::parsed_expr::Expr::LiteralString(v) => Ok(TypedExpr {
                 id: parsed_expr.id,
                 expr: typed_expr::Expr::LiteralString(v.to_string()),
-                ty: Ty::string(),
+                ty: Ty2::string(),
             }),
             crate::parsed_expr::Expr::Assignment(lhs, rhs) => {
                 self.infer_assignment(parsed_expr.id, lhs, rhs, env)
@@ -444,7 +444,7 @@ impl<'a> TypeChecker<'a> {
             crate::parsed_expr::Expr::Break => Ok(TypedExpr {
                 id: parsed_expr.id,
                 expr: typed_expr::Expr::Break,
-                ty: Ty::Void,
+                ty: Ty2::Void,
             }),
             crate::parsed_expr::Expr::ProtocolDecl {
                 name,
@@ -471,7 +471,7 @@ impl<'a> TypeChecker<'a> {
                 let ret = self.infer_node(ret, env, &None)?;
                 Ok(TypedExpr {
                     id: parsed_expr.id,
-                    ty: Ty::Func(
+                    ty: Ty2::Func(
                         params.iter().map(|p| p.ty.clone()).collect(),
                         Box::new(ret.ty.clone()),
                         generics.iter().map(|g| g.ty.clone()).collect(),
@@ -562,7 +562,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unresolved(name.name_str()));
         };
         // Protocols are represented as Row types
-        let ty = Ty::protocol_type(
+        let ty = Ty2::protocol_type(
             *symbol_id,
             inferred_associated_types
                 .iter()
@@ -607,7 +607,7 @@ impl<'a> TypeChecker<'a> {
 
         let ty = match (&type_repr, &default_value) {
             (Some(type_repr), Some(default_value)) => {
-                env.constrain(Constraint::Equality(
+                env.constrain(Constraint2::Equality(
                     id,
                     type_repr.ty.clone(),
                     default_value.ty.clone(),
@@ -670,10 +670,10 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         name: &Name,
         values: &[ParsedExpr],
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let Some(Ty::Row {
+        let Some(Ty2::Row {
             nominal_id: Some(enum_id),
             generics,
             kind: RowKind::Enum,
@@ -691,11 +691,11 @@ impl<'a> TypeChecker<'a> {
         // - A function from the variant's parameters to the enum type (if it has parameters)
         // - The enum type itself (if it has no parameters)
         let ty = if values.is_empty() {
-            Ty::enum_type(enum_id, generics)
+            Ty2::enum_type(enum_id, generics)
         } else {
-            Ty::Func(
+            Ty2::Func(
                 values.iter().map(|v| v.ty.clone()).collect(),
-                Box::new(Ty::enum_type(enum_id, generics)),
+                Box::new(Ty2::enum_type(enum_id, generics)),
                 vec![], // No generic parameters on the function itself
             )
         };
@@ -722,7 +722,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         let ty = param_ty.as_ref().map(|t| t.ty.clone()).unwrap_or_else(|| {
-            Ty::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), id))
+            Ty2::TypeVar(env.new_type_variable(TypeVarKind::FuncParam(name.name_str()), id))
         });
 
         // Parameters are monomorphic inside the function body
@@ -795,9 +795,9 @@ impl<'a> TypeChecker<'a> {
         )?;
 
         let params = match &inferred.ty {
-            Ty::Func(params, _, _) => params.clone(),
-            Ty::Closure {
-                func: box Ty::Func(params, _, _),
+            Ty2::Func(params, _, _) => params.clone(),
+            Ty2::Closure {
+                func: box Ty2::Func(params, _, _),
                 ..
             } => params.clone(),
             _ => {
@@ -810,7 +810,7 @@ impl<'a> TypeChecker<'a> {
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::Init(*struct_id, inferred.clone().into()),
-            ty: Ty::Init(*struct_id, params.clone()),
+            ty: Ty2::Init(*struct_id, params.clone()),
         })
     }
 
@@ -855,7 +855,7 @@ impl<'a> TypeChecker<'a> {
         Ok(TypedExpr {
             id,
             expr: func.expr,
-            ty: Ty::Method {
+            ty: Ty2::Method {
                 self_ty: Box::new(self_ty.clone()),
                 func: Box::new(func.ty),
             },
@@ -872,7 +872,7 @@ impl<'a> TypeChecker<'a> {
         conformances: &[ParsedExpr],
         body: &ParsedExpr,
         env: &mut Environment,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         let mut inferred_generics: Vec<TypedExpr> = vec![];
         for generic in generics {
@@ -883,7 +883,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unresolved(name.name_str()));
         };
 
-        let ty = Ty::struct_type(
+        let ty = Ty2::struct_type(
             *symbol_id,
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
@@ -914,7 +914,7 @@ impl<'a> TypeChecker<'a> {
         conformances: &[ParsedExpr],
         body: &ParsedExpr,
         env: &mut Environment,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         let mut inferred_generics: Vec<TypedExpr> = vec![];
         for generic in generics {
@@ -925,7 +925,7 @@ impl<'a> TypeChecker<'a> {
             return Err(TypeError::Unresolved(name.name_str()));
         };
 
-        let ty = Ty::struct_type(
+        let ty = Ty2::struct_type(
             *symbol_id,
             inferred_generics.iter().map(|t| t.ty.clone()).collect(),
         );
@@ -951,7 +951,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         items: &[ParsedExpr],
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let mut typed_items: Vec<TypedExpr> = vec![];
@@ -964,11 +964,11 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .last()
             .map(|t| t.ty.clone())
-            .unwrap_or_else(|| Ty::TypeVar(env.new_type_variable(TypeVarKind::Element, id)));
+            .unwrap_or_else(|| Ty2::TypeVar(env.new_type_variable(TypeVarKind::Element, id)));
 
         Ok(TypedExpr {
             id,
-            ty: Ty::struct_type(SymbolID::ARRAY, vec![ty]),
+            ty: Ty2::struct_type(SymbolID::ARRAY, vec![ty]),
             expr: typed_expr::Expr::LiteralArray(typed_items),
         })
     }
@@ -979,7 +979,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         rhs: &Option<Box<ParsedExpr>>,
         env: &mut Environment,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         let ret = if let Some(rhs_id) = rhs {
             Some(Box::new(self.infer_node(rhs_id, env, expected)?))
@@ -989,7 +989,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: ret.as_ref().map(|r| r.ty.clone()).unwrap_or(Ty::Void),
+            ty: ret.as_ref().map(|r| r.ty.clone()).unwrap_or(Ty2::Void),
             expr: typed_expr::Expr::Return(ret),
         })
     }
@@ -1003,8 +1003,8 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let cond = if let Some(cond) = cond {
-            let cond = self.infer_node(cond, env, &Some(Ty::Bool))?;
-            env.constrain(Constraint::Equality(id, cond.ty.clone(), Ty::Bool));
+            let cond = self.infer_node(cond, env, &Some(Ty2::Bool))?;
+            env.constrain(Constraint2::Equality(id, cond.ty.clone(), Ty2::Bool));
             Some(Box::new(cond))
         } else {
             None
@@ -1012,7 +1012,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: Ty::Void,
+            ty: Ty2::Void,
             expr: typed_expr::Expr::Loop(cond, Box::new(self.infer_node(body, env, &None)?)),
         })
     }
@@ -1026,14 +1026,14 @@ impl<'a> TypeChecker<'a> {
         alternative: &Option<&ParsedExpr>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
-        let condition = self.infer_node(condition, env, &Some(Ty::Bool))?;
+        let condition = self.infer_node(condition, env, &Some(Ty2::Bool))?;
 
-        env.constrain(Constraint::Equality(id, condition.ty.clone(), Ty::Bool));
+        env.constrain(Constraint2::Equality(id, condition.ty.clone(), Ty2::Bool));
 
         let consequence = self.infer_node(consequence, env, &None)?;
         let alt = if let Some(alternative) = alternative {
             let alternative = self.infer_node(alternative, env, &None)?;
-            env.constrain(Constraint::Equality(
+            env.constrain(Constraint2::Equality(
                 alternative.id,
                 consequence.ty.clone(),
                 alternative.ty.clone(),
@@ -1063,14 +1063,14 @@ impl<'a> TypeChecker<'a> {
         callee: &ParsedExpr,
         type_args: &[ParsedExpr],
         args: &[ParsedExpr],
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         let mut ret_var = if let Some(expected) = expected {
             expected.clone()
         } else {
             // Avoid borrow checker issue by creating the type variable before any borrows
             let call_return_var = env.new_type_variable(TypeVarKind::CallReturn, id);
-            Ty::TypeVar(call_return_var)
+            Ty2::TypeVar(call_return_var)
         };
 
         let mut inferred_type_args = vec![];
@@ -1133,15 +1133,15 @@ impl<'a> TypeChecker<'a> {
                             .any(|p| c.contains_ty(p))
                     })
                     .cloned()
-                    .collect::<Vec<Constraint>>();
+                    .collect::<Vec<Constraint2>>();
 
                 ret_var = env.instantiate(&Scheme::new(
-                    Ty::struct_type(*symbol_id, type_args.clone()),
+                    Ty2::struct_type(*symbol_id, type_args.clone()),
                     struct_def.canonical_type_variables(),
                     constraints,
                 ));
 
-                env.constrain(Constraint::InitializerCall {
+                env.constrain(Constraint2::InitializerCall {
                     expr_id: callee.id,
                     initializes_id: *symbol_id,
                     args: arg_tys.iter().map(|a| a.ty.clone()).collect(),
@@ -1152,13 +1152,13 @@ impl<'a> TypeChecker<'a> {
             }
             _ => {
                 let _s = tracing::trace_span!("non-struct call").entered();
-                let expected_callee_ty = Ty::Func(
+                let expected_callee_ty = Ty2::Func(
                     arg_tys.iter().map(|a| a.ty.clone()).collect(),
                     Box::new(ret_var.clone()),
                     inferred_type_args.iter().map(|a| a.ty.clone()).collect(),
                 );
 
-                env.constrain(Constraint::Equality(
+                env.constrain(Constraint2::Equality(
                     callee.id,
                     callee.ty.clone(),
                     expected_callee_ty,
@@ -1190,7 +1190,7 @@ impl<'a> TypeChecker<'a> {
         // Expect lhs to be the same as rhs
         let lhs_ty = self.infer_node(lhs, env, &Some(rhs_ty.ty.clone()))?;
 
-        env.constrain(Constraint::Equality(
+        env.constrain(Constraint2::Equality(
             rhs.id,
             rhs_ty.ty.clone(),
             lhs_ty.ty.clone(),
@@ -1216,7 +1216,7 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<TypedExpr, TypeError> {
         let (symbol_id, name_str) = match name {
             Name::SelfType => match env.selfs.last() {
-                Some(Ty::Row {
+                Some(Ty2::Row {
                     nominal_id: Some(symbol_id),
                     ..
                 }) => (*symbol_id, "Self".to_string()),
@@ -1239,13 +1239,13 @@ impl<'a> TypeChecker<'a> {
                 let typed_conformance = self.infer_node(conformance, env, &None)?;
                 // Protocols are now represented as Row types
                 let (protocol_id, associated_types) = match &typed_conformance.ty {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id: Some(id),
                         generics,
                         kind: RowKind::Protocol,
                         ..
                     } => (*id, generics.clone()),
-                    Ty::Row { kind, .. } => {
+                    Ty2::Row { kind, .. } => {
                         return Err(TypeError::Unknown(format!(
                             "{typed_conformance:?} is not a protocol (kind: {kind:?})"
                         )));
@@ -1258,7 +1258,7 @@ impl<'a> TypeChecker<'a> {
                 };
 
                 unbound_vars.extend(associated_types.iter().filter_map(|t| {
-                    if let Ty::TypeVar(var) = t {
+                    if let Ty2::TypeVar(var) = t {
                         Some(var.clone())
                     } else {
                         None
@@ -1269,7 +1269,7 @@ impl<'a> TypeChecker<'a> {
                 conformance_data.push((conformance.id, protocol_id, associated_types));
             }
 
-            let ref ty @ Ty::TypeVar(ref type_var_id) =
+            let ref ty @ Ty2::TypeVar(ref type_var_id) =
                 env.placeholder(&id, name.name_str(), &symbol_id, vec![])
             else {
                 unreachable!()
@@ -1278,7 +1278,7 @@ impl<'a> TypeChecker<'a> {
             let mut constraints = vec![];
 
             for (id, protocol_id, associated_types) in conformance_data {
-                let constraint = Constraint::ConformsTo {
+                let constraint = Constraint2::ConformsTo {
                     expr_id: id,
                     ty: ty.clone(),
                     conformance: Conformance::new(protocol_id, associated_types.to_vec()),
@@ -1311,7 +1311,7 @@ impl<'a> TypeChecker<'a> {
         // If there are no generic arguments (`let x: Int`), we are done.
         if generics.is_empty() {
             let ty = if name == &Name::SelfType {
-                Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), id))
+                Ty2::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(symbol_id), id))
             } else {
                 env.ty_for_symbol(&id, name.name_str(), &symbol_id, &[])
             };
@@ -1360,7 +1360,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         args: &[ParsedExpr],
         ret: &ParsedExpr,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         introduces_type: bool,
     ) -> Result<TypedExpr, TypeError> {
         let mut inferred_args = vec![];
@@ -1372,7 +1372,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         let inferred_ret = self.infer_node(ret, env, expected)?;
-        let ty = Ty::Func(inferred_arg_tys, Box::new(inferred_ret.ty.clone()), vec![]);
+        let ty = Ty2::Func(inferred_arg_tys, Box::new(inferred_ret.ty.clone()), vec![]);
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::FuncTypeRepr(
@@ -1403,7 +1403,7 @@ impl<'a> TypeChecker<'a> {
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::TupleTypeRepr(typed_exprs, introduces_type),
-            ty: Ty::Tuple(tys),
+            ty: Ty2::Tuple(tys),
         })
     }
 
@@ -1419,7 +1419,7 @@ impl<'a> TypeChecker<'a> {
         body: &ParsedExpr,
         ret: &Option<Box<ParsedExpr>>,
         env: &mut Environment,
-        override_ret: Option<&Ty>,
+        override_ret: Option<&Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         env.start_scope();
 
@@ -1464,7 +1464,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(annotated_ret_ty) = &annotated_ret_ty
             && let Some(ret_id) = ret
         {
-            env.constrain(Constraint::Equality(
+            env.constrain(Constraint2::Equality(
                 ret_id.id,
                 ret_ty.ty.clone(),
                 annotated_ret_ty.ty.clone(),
@@ -1473,7 +1473,7 @@ impl<'a> TypeChecker<'a> {
 
         env.end_scope();
 
-        let func_ty = Ty::Func(
+        let func_ty = Ty2::Func(
             param_vars.iter().map(|p| p.ty.clone()).collect(),
             Box::new(override_ret.cloned().unwrap_or(ret_ty.ty.clone())),
             inferred_generics.iter().map(|p| p.ty.clone()).collect(),
@@ -1481,7 +1481,7 @@ impl<'a> TypeChecker<'a> {
         let inferred_ty = if captures.is_empty() {
             func_ty
         } else {
-            Ty::Closure {
+            Ty2::Closure {
                 func: func_ty.into(),
                 captures: captures.to_vec(),
             }
@@ -1524,7 +1524,7 @@ impl<'a> TypeChecker<'a> {
         env: &mut Environment,
         name: &Name,
         rhs: &Option<Box<ParsedExpr>>,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         let (typed_rhs, ty) = if let Some(rhs) = rhs {
             let typed = self.infer_node(rhs, env, &None)?;
@@ -1535,7 +1535,7 @@ impl<'a> TypeChecker<'a> {
         } else {
             (
                 None,
-                Ty::TypeVar(env.new_type_variable(TypeVarKind::Let, id)),
+                Ty2::TypeVar(env.new_type_variable(TypeVarKind::Let, id)),
             )
         };
 
@@ -1570,14 +1570,14 @@ impl<'a> TypeChecker<'a> {
             Name::_Self(_sym) => {
                 if let Some(self_) = env.selfs.last() {
                     match self_ {
-                        Ty::Row {
+                        Ty2::Row {
                             nominal_id: Some(symbol_id),
                             kind: RowKind::Protocol,
                             ..
-                        } => {
-                            Ty::TypeVar(env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id))
-                        }
-                        Ty::Row { .. } => self_.clone(),
+                        } => Ty2::TypeVar(
+                            env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id),
+                        ),
+                        Ty2::Row { .. } => self_.clone(),
                         _ => self_.clone(),
                     }
                 } else {
@@ -1591,7 +1591,7 @@ impl<'a> TypeChecker<'a> {
                 let scheme = env.lookup_symbol(symbol_id)?.clone();
 
                 match scheme.ty() {
-                    Ty::TypeVar(ref tv)
+                    Ty2::TypeVar(ref tv)
                         if matches!(
                             tv.kind,
                             TypeVarKind::CanonicalTypeParameter(_) | TypeVarKind::Placeholder(_)
@@ -1638,7 +1638,7 @@ impl<'a> TypeChecker<'a> {
             tys.push(ty);
         }
 
-        let ty = Ty::Tuple(tys);
+        let ty = Ty2::Tuple(tys);
         Ok(TypedExpr {
             id,
             expr: typed_expr::Expr::Tuple(inferred_types),
@@ -1652,7 +1652,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         token_kind: TokenKind,
         rhs: &ParsedExpr,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let typed = self.infer_node(rhs, env, expected)?;
@@ -1672,7 +1672,7 @@ impl<'a> TypeChecker<'a> {
         lhs_id: &ParsedExpr,
         rhs_id: &ParsedExpr,
         op: &TokenKind,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let lhs = self.infer_node(lhs_id, env, &None)?;
@@ -1682,9 +1682,9 @@ impl<'a> TypeChecker<'a> {
         let ret_ty = match op {
             Plus => {
                 let ret_ty = expected.clone().unwrap_or_else(|| {
-                    Ty::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), id))
+                    Ty2::TypeVar(env.new_type_variable(TypeVarKind::BinaryOperand(op.clone()), id))
                 });
-                env.constrain(Constraint::ConformsTo {
+                env.constrain(Constraint2::ConformsTo {
                     expr_id: id,
                     ty: lhs.ty.clone(),
                     conformance: Conformance {
@@ -1697,16 +1697,16 @@ impl<'a> TypeChecker<'a> {
             }
 
             // Bool ops
-            EqualsEquals => Ty::Bool,
-            BangEquals => Ty::Bool,
-            Greater => Ty::Bool,
-            GreaterEquals => Ty::Bool,
-            Less => Ty::Bool,
-            LessEquals => Ty::Bool,
+            EqualsEquals => Ty2::Bool,
+            BangEquals => Ty2::Bool,
+            Greater => Ty2::Bool,
+            GreaterEquals => Ty2::Bool,
+            Less => Ty2::Bool,
+            LessEquals => Ty2::Bool,
 
             // Same type ops
             _ => {
-                env.constrain(Constraint::Equality(
+                env.constrain(Constraint2::Equality(
                     lhs_id.id,
                     lhs.ty.clone(),
                     rhs.ty.clone(),
@@ -1728,7 +1728,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         items: &[ParsedExpr],
         env: &mut Environment,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
     ) -> Result<TypedExpr, TypeError> {
         env.start_scope();
         // self.hoist(&items, env)?;
@@ -1752,9 +1752,9 @@ impl<'a> TypeChecker<'a> {
 
                 // If we have any explicit returns, we need to constrain equality of this with them
                 for ret_ty in &ret_tys {
-                    env.constrain(Constraint::Equality(
+                    env.constrain(Constraint2::Equality(
                         item.id,
-                        block_return_ty.clone().unwrap_or(Ty::Void),
+                        block_return_ty.clone().unwrap_or(Ty2::Void),
                         ret_ty.clone(),
                     ));
                 }
@@ -1765,7 +1765,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: block_return_ty.unwrap_or(Ty::Void),
+            ty: block_return_ty.unwrap_or(Ty2::Void),
             expr: typed_expr::Expr::Block(typed_items),
         })
     }
@@ -1803,12 +1803,12 @@ impl<'a> TypeChecker<'a> {
             typed_arms.push(typed);
         }
 
-        let ret_ty = arm_tys.first().cloned().unwrap_or(Ty::Void);
+        let ret_ty = arm_tys.first().cloned().unwrap_or(Ty2::Void);
 
         // Make sure the return type is the same for all arms
         if arm_tys.len() > 1 {
             for (i, arm_ty) in arm_tys[1..].iter().enumerate() {
-                env.constrain(Constraint::Equality(
+                env.constrain(Constraint2::Equality(
                     arms[i + 1].id,
                     ret_ty.clone(),
                     arm_ty.clone(),
@@ -1825,7 +1825,7 @@ impl<'a> TypeChecker<'a> {
         env.defer_exhaustiveness_check(id, pattern_ty.ty.clone(), &patterns);
 
         // For now, only check exhaustiveness immediately for resolved types
-        let should_check = !matches!(&check_ty, Ty::TypeVar(_));
+        let should_check = !matches!(&check_ty, Ty2::TypeVar(_));
 
         if should_check && let Err(msg) = check_match_exhaustiveness(env, &check_ty, &patterns) {
             // Add diagnostic instead of failing type checking
@@ -1856,7 +1856,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         pattern: &ParsedExpr,
         body: &ParsedExpr,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         env.start_scope();
@@ -1887,7 +1887,7 @@ impl<'a> TypeChecker<'a> {
         };
         Ok(TypedExpr {
             id,
-            ty: Ty::Void,
+            ty: Ty2::Void,
             expr: typed_expr::Expr::PatternVariant(
                 resolved_name,
                 variant_name.resolved()?,
@@ -1902,7 +1902,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         receiver: &Option<Box<ParsedExpr>>,
         member_name: &str,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let (typed_receiver, ret_ty) = match receiver {
@@ -1914,10 +1914,10 @@ impl<'a> TypeChecker<'a> {
                 } else {
                     let member_var =
                         env.new_type_variable(TypeVarKind::Member(member_name.to_string()), id);
-                    Ty::TypeVar(member_var.clone())
+                    Ty2::TypeVar(member_var.clone())
                 };
 
-                env.constrain(Constraint::UnqualifiedMember(
+                env.constrain(Constraint2::UnqualifiedMember(
                     id,
                     member_name.to_string(),
                     ret.clone(),
@@ -1929,13 +1929,13 @@ impl<'a> TypeChecker<'a> {
                 // Qualified: Option.some
                 let typed_receiver = self.infer_node(receiver_id, env, &None)?;
 
-                let member_var = Ty::TypeVar(env.new_type_variable(
+                let member_var = Ty2::TypeVar(env.new_type_variable(
                     TypeVarKind::Member(member_name.to_string()),
                     typed_receiver.id,
                 ));
 
                 // Add a constraint that links the receiver type to the member
-                env.constrain(Constraint::MemberAccess(
+                env.constrain(Constraint2::MemberAccess(
                     id,
                     typed_receiver.ty.clone(),
                     member_name.to_string(),
@@ -1985,7 +1985,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         parsed_expr: &ParsedExpr,
         pattern: &parsed_expr::Pattern,
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let Some(expected) = expected else {
@@ -2010,7 +2010,7 @@ impl<'a> TypeChecker<'a> {
         parsed_expr: &ParsedExpr,
         pattern: &Pattern,
         env: &mut Environment,
-        expected: &Ty,
+        expected: &Ty2,
     ) -> Result<typed_expr::Pattern, TypeError> {
         tracing::trace!("Inferring pattern: {pattern:?}");
         let typed_pattern = match pattern {
@@ -2038,7 +2038,7 @@ impl<'a> TypeChecker<'a> {
                 // For struct patterns, we need to check if the expected type is a struct
                 tracing::debug!("Struct pattern matching with expected type: {expected:?}");
                 match expected {
-                    Ty::Row {
+                    Ty2::Row {
                         fields: field_types,
                         row: row_variable,
                         nominal_id,
@@ -2151,7 +2151,7 @@ impl<'a> TypeChecker<'a> {
                 };
                 // The expected type should be an Enum type
                 match expected {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id: Some(enum_id),
                         generics: type_args,
                         kind: RowKind::Enum,
@@ -2169,8 +2169,8 @@ impl<'a> TypeChecker<'a> {
                             )));
                         };
                         let values = match &variant.ty {
-                            Ty::Func(params, _, _) => params,
-                            Ty::Row {
+                            Ty2::Func(params, _, _) => params,
+                            Ty2::Row {
                                 kind: RowKind::Enum,
                                 ..
                             } => {
@@ -2195,7 +2195,7 @@ impl<'a> TypeChecker<'a> {
                         }
 
                         // Apply substitutions to get concrete field types
-                        let concrete_field_types: Vec<Ty> = values
+                        let concrete_field_types: Vec<Ty2> = values
                             .iter()
                             .map(|field_ty| {
                                 ConstraintSolver::substitute_ty_with_map(field_ty, &substitutions)
@@ -2219,12 +2219,12 @@ impl<'a> TypeChecker<'a> {
                             fields: typed_fields,
                         }
                     }
-                    Ty::TypeVar(_) => {
+                    Ty2::TypeVar(_) => {
                         let mut typed_fields = vec![];
                         // The expected type is still a type variable, so we can't look up variant info yet
                         // Just bind any field patterns to fresh type variables
                         for field_pattern in fields {
-                            let field_ty = Ty::TypeVar(env.new_type_variable(
+                            let field_ty = Ty2::TypeVar(env.new_type_variable(
                                 TypeVarKind::PatternBind(Name::Raw("field".into())),
                                 id,
                             ));
@@ -2258,7 +2258,7 @@ impl<'a> TypeChecker<'a> {
         Ok(typed_pattern)
     }
 
-    pub fn import_ty(&self, imported_symbol: &ImportedSymbol) -> Option<Ty> {
+    pub fn import_ty(&self, imported_symbol: &ImportedSymbol) -> Option<Ty2> {
         if let Some(module) = self.module_env.get(&imported_symbol.module) {
             return module.typed_symbols.get(&imported_symbol.symbol).cloned();
         }
@@ -2270,11 +2270,11 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         fields: &[ParsedExpr],
-        expected: &Option<Ty>,
+        expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let mut typed_fields = Vec::new();
-        let mut field_map: HashMap<String, Ty> = HashMap::new();
+        let mut field_map: HashMap<String, Ty2> = HashMap::new();
 
         // Process fields in order, with later fields overriding earlier ones
         for field_expr in fields {
@@ -2293,7 +2293,7 @@ impl<'a> TypeChecker<'a> {
 
                     // Extract fields from the spread expression's type
                     match &spread_ty {
-                        Ty::Row {
+                        Ty2::Row {
                             fields: spread_fields,
                             nominal_id: None,
                             generics: _,
@@ -2305,7 +2305,7 @@ impl<'a> TypeChecker<'a> {
                                 field_map.insert(field_name.clone(), field_ty.clone());
                             }
                         }
-                        Ty::TypeVar(tv) => {
+                        Ty2::TypeVar(tv) => {
                             // For type variables representing rows, we need to generate constraints
                             // This will be handled by the constraint solver
                             if matches!(tv.kind, TypeVarKind::Row) {
@@ -2348,10 +2348,10 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Convert HashMap back to Vec for the record type
-        let field_vec: Vec<(String, Ty)> = field_map.into_iter().collect();
+        let field_vec: Vec<(String, Ty2)> = field_map.into_iter().collect();
 
         // Create the record type using Row representation
-        let record_ty = Ty::Row {
+        let record_ty = Ty2::Row {
             fields: field_vec,
             row: None,             // No row variable for concrete record literals
             nominal_id: None,      // Records are structural types
@@ -2362,7 +2362,7 @@ impl<'a> TypeChecker<'a> {
         // Check against expected type if provided
         if let Some(expected_ty) = expected {
             match expected_ty {
-                Ty::Row {
+                Ty2::Row {
                     fields: expected_fields,
                     row: expected_row,
                     nominal_id: None,
@@ -2409,9 +2409,9 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 }
-                Ty::TypeVar(_) => {
+                Ty2::TypeVar(_) => {
                     // Constrain the type variable to be equal to our record type
-                    env.constrain(Constraint::Equality(
+                    env.constrain(Constraint2::Equality(
                         id,
                         expected_ty.clone(),
                         record_ty.clone(),
@@ -2438,7 +2438,7 @@ impl<'a> TypeChecker<'a> {
         _id: ExprID,
         _label: &Name,
         _value: &ParsedExpr,
-        _expected: &Option<Ty>,
+        _expected: &Option<Ty2>,
         _env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         // TODO: Implement record field type checking
@@ -2453,7 +2453,7 @@ impl<'a> TypeChecker<'a> {
         fields: &[ParsedExpr],
         row_var: &Option<Box<ParsedExpr>>,
         introduces_type: bool,
-        _expected: &Option<Ty>,
+        _expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         let mut typed_fields = Vec::new();
@@ -2511,7 +2511,7 @@ impl<'a> TypeChecker<'a> {
                             .collect(),
                     };
 
-                    env.constrain(Constraint::Row {
+                    env.constrain(Constraint2::Row {
                         expr_id: id,
                         constraint: RowConstraint::HasRow {
                             type_var: row_type_var.clone(),
@@ -2522,7 +2522,7 @@ impl<'a> TypeChecker<'a> {
 
                     Some(Box::new(TypedExpr {
                         id: row_expr.id,
-                        ty: Ty::TypeVar(row_type_var.clone()),
+                        ty: Ty2::TypeVar(row_type_var.clone()),
                         expr: typed_expr::Expr::RowVariable(name.name_str().to_string()),
                     }))
                 }
@@ -2537,7 +2537,7 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Create the record type using Row representation
-        let record_ty = Ty::Row {
+        let record_ty = Ty2::Row {
             fields: field_types,
             row: typed_row_var.as_ref().map(|tv| Box::new(tv.ty.clone())),
             nominal_id: None,      // Records are structural types
@@ -2561,7 +2561,7 @@ impl<'a> TypeChecker<'a> {
         id: ExprID,
         label: &Name,
         ty: &ParsedExpr,
-        _expected: &Option<Ty>,
+        _expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         // Type check the field type expression
@@ -2581,7 +2581,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         name: &Name,
-        _expected: &Option<Ty>,
+        _expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         // Create a row type variable
@@ -2589,7 +2589,7 @@ impl<'a> TypeChecker<'a> {
 
         Ok(TypedExpr {
             id,
-            ty: Ty::TypeVar(row_type_var),
+            ty: Ty2::TypeVar(row_type_var),
             expr: typed_expr::Expr::RowVariable(name.name_str().to_string()),
         })
     }
@@ -2598,7 +2598,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         id: ExprID,
         expr: &ParsedExpr,
-        _expected: &Option<Ty>,
+        _expected: &Option<Ty2>,
         env: &mut Environment,
     ) -> Result<TypedExpr, TypeError> {
         // Type check the expression being spread

@@ -9,7 +9,7 @@ use crate::{
     environment::{Environment, TypeParameter},
     expr_id::ExprID,
     row::{FieldMetadata, RowConstraint},
-    ty::Ty,
+    ty::Ty2,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -31,7 +31,7 @@ pub enum TypeDefKind {
     Struct,
     Protocol,
     Enum,
-    Builtin(Ty),
+    Builtin(Ty2),
 }
 
 impl RowTypeDef {
@@ -66,7 +66,7 @@ impl RowTypeDef {
         &self,
         env: &mut Environment,
         name: String,
-        ty: Ty,
+        ty: Ty2,
         index: usize,
         has_default: bool,
         is_mutable: bool,
@@ -83,14 +83,14 @@ impl RowTypeDef {
             },
         };
 
-        env.constrain(crate::constraint::Constraint::Row {
+        env.constrain(crate::constraint::Constraint2::Row {
             expr_id,
             constraint,
         });
     }
 
     /// Add a method to this type
-    pub fn add_method(&self, env: &mut Environment, name: String, ty: Ty, expr_id: ExprID) {
+    pub fn add_method(&self, env: &mut Environment, name: String, ty: Ty2, expr_id: ExprID) {
         let constraint = RowConstraint::HasField {
             type_var: self.row_var.clone(),
             label: name,
@@ -98,7 +98,7 @@ impl RowTypeDef {
             metadata: FieldMetadata::Method,
         };
 
-        env.constrain(crate::constraint::Constraint::Row {
+        env.constrain(crate::constraint::Constraint2::Row {
             expr_id,
             constraint,
         });
@@ -109,7 +109,7 @@ impl RowTypeDef {
         &self,
         env: &mut Environment,
         name: String,
-        ty: Ty,
+        ty: Ty2,
         expr_id: ExprID,
     ) {
         let constraint = RowConstraint::HasField {
@@ -119,14 +119,14 @@ impl RowTypeDef {
             metadata: FieldMetadata::MethodRequirement,
         };
 
-        env.constrain(crate::constraint::Constraint::Row {
+        env.constrain(crate::constraint::Constraint2::Row {
             expr_id,
             constraint,
         });
     }
 
     /// Add an initializer
-    pub fn add_initializer(&self, env: &mut Environment, name: String, ty: Ty, expr_id: ExprID) {
+    pub fn add_initializer(&self, env: &mut Environment, name: String, ty: Ty2, expr_id: ExprID) {
         let constraint = RowConstraint::HasField {
             type_var: self.row_var.clone(),
             label: name,
@@ -134,7 +134,7 @@ impl RowTypeDef {
             metadata: FieldMetadata::Initializer,
         };
 
-        env.constrain(crate::constraint::Constraint::Row {
+        env.constrain(crate::constraint::Constraint2::Row {
             expr_id,
             constraint,
         });
@@ -145,7 +145,7 @@ impl RowTypeDef {
         &self,
         env: &mut Environment,
         name: String,
-        ty: Ty,
+        ty: Ty2,
         tag: usize,
         expr_id: ExprID,
     ) {
@@ -156,33 +156,33 @@ impl RowTypeDef {
             metadata: FieldMetadata::EnumVariant { tag },
         };
 
-        env.constrain(crate::constraint::Constraint::Row {
+        env.constrain(crate::constraint::Constraint2::Row {
             expr_id,
             constraint,
         });
     }
 
     /// Get the type for this definition
-    pub fn ty(&self) -> Ty {
+    pub fn ty(&self) -> Ty2 {
         match &self.kind {
-            TypeDefKind::Enum => Ty::enum_type(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Enum => Ty2::enum_type(self.symbol_id, self.canonical_type_parameters()),
             TypeDefKind::Struct => {
                 // For now, keep using Struct for RowTypeDef
                 // TODO: Extract fields from row constraints
-                Ty::struct_type(self.symbol_id, self.canonical_type_parameters())
+                Ty2::struct_type(self.symbol_id, self.canonical_type_parameters())
             }
             TypeDefKind::Protocol => {
                 // Use the protocol_type helper
-                Ty::protocol_type(self.symbol_id, self.canonical_type_parameters())
+                Ty2::protocol_type(self.symbol_id, self.canonical_type_parameters())
             }
             TypeDefKind::Builtin(ty) => ty.clone(),
         }
     }
 
-    pub fn canonical_type_parameters(&self) -> Vec<Ty> {
+    pub fn canonical_type_parameters(&self) -> Vec<Ty2> {
         self.type_parameters
             .iter()
-            .map(|p| Ty::TypeVar(p.type_var.clone()))
+            .map(|p| Ty2::TypeVar(p.type_var.clone()))
             .collect()
     }
 }
@@ -209,7 +209,7 @@ impl<'a> RowTypeDefBuilder<'a> {
     pub fn with_property(
         self,
         name: String,
-        ty: Ty,
+        ty: Ty2,
         index: usize,
         has_default: bool,
         is_mutable: bool,
@@ -220,7 +220,7 @@ impl<'a> RowTypeDefBuilder<'a> {
         self
     }
 
-    pub fn with_method(self, name: String, ty: Ty, expr_id: ExprID) -> Self {
+    pub fn with_method(self, name: String, ty: Ty2, expr_id: ExprID) -> Self {
         self.type_def.add_method(self.env, name, ty, expr_id);
         self
     }

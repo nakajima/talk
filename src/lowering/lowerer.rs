@@ -17,7 +17,7 @@ use crate::{
         driver::{DriverConfig, ModuleEnvironment},
     },
     conformance::Conformance,
-    constraint::Constraint,
+    constraint::Constraint2,
     diagnostic::Diagnostic,
     environment::Environment,
     expr_id::ExprID,
@@ -37,7 +37,7 @@ use crate::{
     source_file,
     token::Token,
     token_kind::TokenKind,
-    ty::{RowKind, Ty},
+    ty::{RowKind, Ty2},
     type_checker::Scheme,
     type_def::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
@@ -79,36 +79,36 @@ impl std::fmt::Display for RefKind {
     }
 }
 
-impl Ty {
+impl Ty2 {
     pub(super) fn to_ir(&self, lowerer: &Lowerer) -> IRType {
         match self {
-            Ty::SelfType => IRType::Void,
-            Ty::Pointer => IRType::POINTER,
-            Ty::Init(_sym, params) => IRType::Func(
+            Ty2::SelfType => IRType::Void,
+            Ty2::Pointer => IRType::POINTER,
+            Ty2::Init(_sym, params) => IRType::Func(
                 params.iter().map(|t| t.to_ir(lowerer)).collect(),
                 IRType::Void.into(),
             ),
-            Ty::Byte => IRType::Byte,
-            Ty::Void => IRType::Void,
-            Ty::Int => IRType::Int,
-            Ty::Bool => IRType::Bool,
-            Ty::Float => IRType::Float,
-            Ty::Func(items, ty, _generics) => IRType::Func(
+            Ty2::Byte => IRType::Byte,
+            Ty2::Void => IRType::Void,
+            Ty2::Int => IRType::Int,
+            Ty2::Bool => IRType::Bool,
+            Ty2::Float => IRType::Float,
+            Ty2::Func(items, ty, _generics) => IRType::Func(
                 items.iter().map(|t| t.to_ir(lowerer)).collect(),
                 Box::new(ty.to_ir(lowerer)),
             ),
-            Ty::Method { func, .. } => func.to_ir(lowerer),
-            Ty::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.id)),
-            Ty::Closure { func, .. } => func.to_ir(lowerer),
-            Ty::Tuple(items) => IRType::Struct(
+            Ty2::Method { func, .. } => func.to_ir(lowerer),
+            Ty2::TypeVar(type_var_id) => IRType::TypeVar(format!("T{}", type_var_id.id)),
+            Ty2::Closure { func, .. } => func.to_ir(lowerer),
+            Ty2::Tuple(items) => IRType::Struct(
                 SymbolID::TUPLE,
                 items.iter().map(|i| i.to_ir(lowerer)).collect(),
                 vec![],
             ),
-            Ty::Array(el) => IRType::TypedBuffer {
+            Ty2::Array(el) => IRType::TypedBuffer {
                 element: el.to_ir(lowerer).into(),
             },
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
                 kind,
@@ -140,14 +140,14 @@ impl Ty {
                     IRType::Void
                 }
             },
-            Ty::Row { kind, .. } => {
+            Ty2::Row { kind, .. } => {
                 // Protocols have no runtime representation
                 if matches!(kind, crate::ty::RowKind::Protocol) {
                     return IRType::Void;
                 }
 
                 // Structural type (record) - use a special symbol ID and include field types
-                let Ty::Row { fields, .. } = self else {
+                let Ty2::Row { fields, .. } = self else {
                     return IRType::Void;
                 };
 
@@ -730,7 +730,7 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Register> {
         // For records, we need to ensure a consistent field order
         // The type's field order might be non-deterministic, so we'll sort by field name
-        let Ty::Row {
+        let Ty2::Row {
             fields: type_fields,
             ..
         } = &typed_expr.ty
@@ -909,7 +909,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_array(&mut self, typed_expr: &TypedExpr, items: &[TypedExpr]) -> Option<Register> {
-        let Ty::Row { generics: els, .. } = &typed_expr.ty else {
+        let Ty2::Row { generics: els, .. } = &typed_expr.ty else {
             self.push_err("Invalid array type", typed_expr);
             return None;
         };
@@ -1140,7 +1140,7 @@ impl<'a> Lowerer<'a> {
             return None;
         };
 
-        let self_ty = if let Ty::Method { self_ty, .. } = &typed_func.ty {
+        let self_ty = if let Ty2::Method { self_ty, .. } = &typed_func.ty {
             *self_ty.clone()
         } else {
             type_def.ty()
@@ -1190,12 +1190,12 @@ impl<'a> Lowerer<'a> {
 
         self.push_instr(Instr::Ret(ty.clone(), Some(loaded_reg.into())));
 
-        let Ty::Func(params, _ret, generics) = typed_func.ty else {
+        let Ty2::Func(params, _ret, generics) = typed_func.ty else {
             return None;
         };
 
         // Override func type for init to always return the struct
-        let init_func_ty = Ty::Func(params, Ty::Pointer.into(), generics);
+        let init_func_ty = Ty2::Func(params, Ty2::Pointer.into(), generics);
         let current_function = self.current_functions.pop()?;
 
         let func = current_function.export(
@@ -1219,9 +1219,9 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Register> {
         let (_ty, type_def, typed_func, env, ret) = self.setup_self_context(type_id, func_id)?;
 
-        let (Ty::Func(_, ret_ty, _)
-        | Ty::Closure {
-            func: box Ty::Func(_, ret_ty, _),
+        let (Ty2::Func(_, ret_ty, _)
+        | Ty2::Closure {
+            func: box Ty2::Func(_, ret_ty, _),
             ..
         }) = &typed_func.ty
         else {
@@ -1250,15 +1250,15 @@ impl<'a> Lowerer<'a> {
 
     fn lower_method_stub(
         &mut self,
-        ty: &Ty,
+        ty: &Ty2,
         protocol_name: &ResolvedName,
         name: &ResolvedName,
     ) -> Option<Register> {
-        let Ty::Func(mut params, ret, generics) = ty.clone() else {
+        let Ty2::Func(mut params, ret, generics) = ty.clone() else {
             unreachable!()
         };
 
-        let type_var = Ty::TypeVar(TypeVarID::new(0, TypeVarKind::SelfVar(name.0), ExprID(0)));
+        let type_var = Ty2::TypeVar(TypeVarID::new(0, TypeVarKind::SelfVar(name.0), ExprID(0)));
 
         // Insert the self env param
         params.insert(0, type_var.clone());
@@ -1270,7 +1270,7 @@ impl<'a> Lowerer<'a> {
             .unwrap_or_else(|| panic!("Did not get protocol {protocol_name:?}"));
 
         let stub_function = IRFunction {
-            ty: Ty::Func(params, ret, generics).to_ir(self),
+            ty: Ty2::Func(params, ret, generics).to_ir(self),
             name: protocol_def.method_fn_name(&name.1),
             blocks: vec![],
             env_ty: Some(type_var.to_ir(self)),
@@ -1327,7 +1327,7 @@ impl<'a> Lowerer<'a> {
             self.current_func_mut()?
                 .register_symbol(name.symbol_id(), SymbolValue::Register(closure_ptr));
 
-            let (capture_types, capture_registers) = if let Ty::Closure {
+            let (capture_types, capture_registers) = if let Ty2::Closure {
                 captures: capture_types,
                 ..
             } = &typed_expr.ty
@@ -1357,11 +1357,11 @@ impl<'a> Lowerer<'a> {
                                 // This is gnarly
                                 let sym = capture_types[i];
                                 let Some(info) = self.symbol_table.get(&sym) else {
-                                    return Scheme::new(Ty::Void, vec![], vec![]);
+                                    return Scheme::new(Ty2::Void, vec![], vec![]);
                                 };
                                 let Some(typed_expr) = self.source_file.typed_expr(info.expr_id)
                                 else {
-                                    return Scheme::new(Ty::Void, vec![], vec![]);
+                                    return Scheme::new(Ty2::Void, vec![], vec![]);
                                 };
 
                                 Scheme::new(typed_expr.ty.clone(), vec![], vec![])
@@ -1463,7 +1463,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         scrutinee: &TypedExpr,
         arms: &[TypedExpr],
-        ty: &Ty,
+        ty: &Ty2,
     ) -> Option<Register> {
         let scrutinee_reg = self.lower_expr(scrutinee)?;
         let merge_block_id = self.new_basic_block();
@@ -1611,7 +1611,7 @@ impl<'a> Lowerer<'a> {
                 // Get struct type info
                 let struct_ty = &pattern_typed_expr.ty;
                 match struct_ty {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id,
                         kind: RowKind::Struct | RowKind::Record,
                         ..
@@ -1638,7 +1638,7 @@ impl<'a> Lowerer<'a> {
                                 }
                             } else {
                                 // Record - fields are in sorted order
-                                if let Ty::Row {
+                                if let Ty2::Row {
                                     fields: row_fields, ..
                                 } = struct_ty
                                 {
@@ -1691,7 +1691,7 @@ impl<'a> Lowerer<'a> {
                 ..
             } => {
                 // Get enum info
-                if let Ty::Row {
+                if let Ty2::Row {
                     nominal_id: Some(enum_id),
                     generics: enum_generics,
                     kind: RowKind::Enum,
@@ -1706,16 +1706,16 @@ impl<'a> Lowerer<'a> {
 
                     // Handle variant fields
                     let variant_field_types = match &variant.ty {
-                        Ty::Func(params, _, _) => params.clone(),
+                        Ty2::Func(params, _, _) => params.clone(),
                         _ => vec![],
                     };
 
                     for (i, field_pattern) in fields.iter().enumerate() {
                         let field_reg = self.allocate_register();
-                        let mut field_ty = variant_field_types.get(i).cloned().unwrap_or(Ty::Void);
+                        let mut field_ty = variant_field_types.get(i).cloned().unwrap_or(Ty2::Void);
 
                         // Substitute type variables with concrete types from the enum generics
-                        if let Ty::TypeVar(var) = &field_ty {
+                        if let Ty2::TypeVar(var) = &field_ty {
                             // Find the position of this type variable in the enum's type parameters
                             if let Some(generic_pos) = enum_def
                                 .type_parameters
@@ -2054,7 +2054,7 @@ impl<'a> Lowerer<'a> {
                 fields,
                 ..
             } => {
-                let Ty::Row {
+                let Ty2::Row {
                     nominal_id: Some(enum_id),
                     kind: RowKind::Enum,
                     ..
@@ -2079,8 +2079,8 @@ impl<'a> Lowerer<'a> {
 
                 let dest = self.allocate_register();
                 let values = match &variant.ty {
-                    Ty::Func(params, _, _) => params,
-                    Ty::Row {
+                    Ty2::Func(params, _, _) => params,
+                    Ty2::Row {
                         kind: RowKind::Enum,
                         ..
                     } => {
@@ -2122,7 +2122,7 @@ impl<'a> Lowerer<'a> {
     fn generate_field_access(
         &mut self,
         receiver_reg: Register,
-        receiver_ty: &Ty,
+        receiver_ty: &Ty2,
         field_index: usize,
         typed_expr: &TypedExpr,
         is_lvalue: bool,
@@ -2156,7 +2156,7 @@ impl<'a> Lowerer<'a> {
         name: &str,
         is_lvalue: bool,
     ) -> Option<Register> {
-        if let Ty::Row {
+        if let Ty2::Row {
             nominal_id: Some(sym),
             kind: RowKind::Enum,
             ..
@@ -2181,7 +2181,7 @@ impl<'a> Lowerer<'a> {
         };
 
         match &receiver.ty {
-            Ty::Row {
+            Ty2::Row {
                 fields, nominal_id, ..
             } => {
                 // Handle nominal rows (structs/protocols)
@@ -2240,7 +2240,7 @@ impl<'a> Lowerer<'a> {
         typed_expr: &TypedExpr,
         enum_id: SymbolID,
         variant_name: &str,
-        ty: &Ty,
+        ty: &Ty2,
         args: &[TypedRegister],
     ) -> Option<Register> {
         let Some(type_def) = self.env.lookup_enum(&enum_id).cloned() else {
@@ -2530,7 +2530,7 @@ impl<'a> Lowerer<'a> {
     fn lower_call(
         &mut self,
         callee_typed_expr: &TypedExpr,
-        ret_ty: &Ty,
+        ret_ty: &Ty2,
         args: &[TypedExpr],
     ) -> Option<Register> {
         let mut arg_registers = vec![];
@@ -2559,7 +2559,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle struct construction
-        if let Ty::Row {
+        if let Ty2::Row {
             nominal_id: Some(struct_id),
             ..
         } = &callee_typed_expr.ty
@@ -2567,12 +2567,12 @@ impl<'a> Lowerer<'a> {
             return self.lower_init_call(struct_id, &callee_typed_expr.ty, arg_registers, &arg_tys);
         }
 
-        let (Ty::Func(_params, _, _)
-        | Ty::Closure {
-            func: box Ty::Func(_params, _, _),
+        let (Ty2::Func(_params, _, _)
+        | Ty2::Closure {
+            func: box Ty2::Func(_params, _, _),
             ..
         }
-        | Ty::Init(_, _params)) = &callee_typed_expr.ty
+        | Ty2::Init(_, _params)) = &callee_typed_expr.ty
         else {
             tracing::error!("didn't get callable: {callee_typed_expr:?}");
             return None;
@@ -2598,7 +2598,7 @@ impl<'a> Lowerer<'a> {
         }
 
         // Handle enum variant construction
-        if let Ty::Row {
+        if let Ty2::Row {
             nominal_id: Some(enum_id),
             kind: RowKind::Enum,
             ..
@@ -2674,8 +2674,8 @@ impl<'a> Lowerer<'a> {
         {
             // Determine the underlying function type, whether it's a direct function or a closure.
             let (func_ty, is_closure) = match &callee_typed_expr.ty {
-                Ty::Closure { func, .. } => (func.as_ref(), true),
-                ty @ Ty::Func(..) => (ty, false),
+                Ty2::Closure { func, .. } => (func.as_ref(), true),
+                ty @ Ty2::Func(..) => (ty, false),
                 _ => {
                     self.push_err(
                         "Callee variable is not a function or closure",
@@ -2805,9 +2805,9 @@ impl<'a> Lowerer<'a> {
     fn lower_init_call(
         &mut self,
         struct_id: &SymbolID,
-        ty: &Ty,
+        ty: &Ty2,
         mut arg_registers: Vec<TypedRegister>,
-        _arg_tys: &[Ty],
+        _arg_tys: &[Ty2],
     ) -> Option<Register> {
         let Some(type_def) = self.env.lookup_type(struct_id).cloned() else {
             unreachable!()
@@ -2876,7 +2876,7 @@ impl<'a> Lowerer<'a> {
         );
 
         let callee_name = match &receiver_ty.ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 ..
             } => {
@@ -2884,13 +2884,13 @@ impl<'a> Lowerer<'a> {
                 let method = type_def.find_method(name)?;
                 Some(type_def.method_fn_name(&method.name))
             }
-            Ty::TypeVar(_type_var)
+            Ty2::TypeVar(_type_var)
                 if let conformances = self
                     .env
                     .constraints()
                     .iter()
                     .filter_map(|c| {
-                        if let Constraint::ConformsTo { conformance, .. } = c {
+                        if let Constraint2::ConformsTo { conformance, .. } = c {
                             Some(conformance)
                         } else {
                             None
@@ -3167,7 +3167,7 @@ fn find_or_create_main(
         body: Box::new(TypedExpr {
             id: ExprID(0),
             expr: body_expr,
-            ty: Ty::Void,
+            ty: Ty2::Void,
         }),
         ret: None,
         captures: vec![],
@@ -3176,7 +3176,7 @@ fn find_or_create_main(
     let typed_expr = TypedExpr {
         id: ExprID(SymbolID::GENERATED_MAIN.0),
         expr: func_expr.clone(),
-        ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+        ty: Ty2::Func(vec![], Box::new(Ty2::Void), vec![]),
     };
 
     // source_file.roots_mut().insert(0, typed_expr.clone());

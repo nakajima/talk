@@ -1,5 +1,5 @@
 use crate::{
-    SymbolID, compiling::compiled_module::ImportedSymbol, ty::Ty, type_checker::TypeError,
+    SymbolID, compiling::compiled_module::ImportedSymbol, ty::Ty2, type_checker::TypeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -15,7 +15,7 @@ pub enum Name {
 pub struct ResolvedName(pub SymbolID, pub String);
 
 impl ResolvedName {
-    pub fn mangled(&self, _ty: &Ty) -> String {
+    pub fn mangled(&self, _ty: &Ty2) -> String {
         if self.1 == "main" {
             "@main".into()
         } else {

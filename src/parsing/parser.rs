@@ -98,11 +98,11 @@ impl ParserError {
     }
 }
 
-pub fn parse(code: &str, file_path: PathBuf) -> SourceFile {
+pub fn parse(code: &str, file_path: impl Into<PathBuf>) -> SourceFile {
     let lexer = Lexer::new(code);
     let mut env = Environment::default();
     let session = SharedCompilationSession::default();
-    let mut parser = Parser::new(session.clone(), lexer, file_path, &mut env);
+    let mut parser = Parser::new(session.clone(), lexer, file_path.into(), &mut env);
 
     parser.parse();
     parser.parse_tree

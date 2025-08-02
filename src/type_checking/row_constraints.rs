@@ -6,12 +6,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
-    constraint::Constraint,
+    constraint::Constraint2,
     environment::Environment,
     expr_id::ExprID,
     row::{FieldInfo, Label, LabelSet, RowConstraint, RowSpec},
     substitutions::Substitutions,
-    ty::Ty,
+    ty::Ty2,
     type_checker::TypeError,
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -20,7 +20,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtendedConstraint {
     /// Standard type constraint
-    Base(Constraint),
+    Base(Constraint2),
     /// Row-specific constraint
     Row(RowConstraint),
 }
@@ -115,7 +115,7 @@ impl<'a> RowConstraintSolver<'a> {
         &mut self,
         type_var: &TypeVarID,
         label: &Label,
-        field_ty: &Ty,
+        field_ty: &Ty2,
         metadata: &crate::row::FieldMetadata,
         expr_id: ExprID,
     ) -> Result<(), TypeError> {
@@ -587,7 +587,7 @@ pub trait ConstraintExtensions {
     fn to_extended(self) -> ExtendedConstraint;
 }
 
-impl ConstraintExtensions for Constraint {
+impl ConstraintExtensions for Constraint2 {
     fn to_extended(self) -> ExtendedConstraint {
         ExtendedConstraint::Base(self)
     }
@@ -627,7 +627,7 @@ mod tests {
         let constraint = RowConstraint::HasField {
             type_var: tv.clone(),
             label: "x".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -665,7 +665,7 @@ mod tests {
         let field_constraint = RowConstraint::HasField {
             type_var: tv,
             label: "x".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty2::Int,
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,

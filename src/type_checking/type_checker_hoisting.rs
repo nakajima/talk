@@ -3,13 +3,13 @@ use tracing::info_span;
 use crate::{
     SymbolID, builtin_type,
     conformance::Conformance,
-    constraint::Constraint,
+    constraint::Constraint2,
     environment::{Environment, RawTypeParameter, TypeParameter, free_type_vars},
     name::Name,
     parsed_expr::ParsedExpr,
     parsing::expr_id::ExprID,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::Ty2,
     type_checker::{Scheme, TypeChecker, TypeError},
     type_def::{EnumVariant, Initializer, Method, Property, TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
@@ -78,7 +78,7 @@ impl<'a> TypeChecker<'a> {
                     let new_type_var =
                         env.new_type_variable(t.type_var.kind.clone(), t.type_var.expr_id);
 
-                    substitutions.insert(t.type_var.clone(), Ty::TypeVar(new_type_var.clone()));
+                    substitutions.insert(t.type_var.clone(), Ty2::TypeVar(new_type_var.clone()));
 
                     our_type_parameters.push(TypeParameter {
                         id: *self.symbol_table.find_imported(type_symbol).ok_or(
@@ -96,7 +96,7 @@ impl<'a> TypeChecker<'a> {
                     for type_var in free_type_vars(member.ty()) {
                         substitutions.insert(
                             type_var.clone(),
-                            Ty::TypeVar(
+                            Ty2::TypeVar(
                                 env.new_type_variable(type_var.kind.clone(), type_var.expr_id),
                             ),
                         )
@@ -188,7 +188,7 @@ impl<'a> TypeChecker<'a> {
                 env.declare(
                     *symbol_id,
                     Scheme::new(
-                        Ty::TypeVar(type_param.clone()),
+                        Ty2::TypeVar(type_param.clone()),
                         vec![type_param.clone()],
                         vec![],
                     ),
@@ -206,24 +206,24 @@ impl<'a> TypeChecker<'a> {
                 .iter()
                 .map(|t| t.placeholder.clone())
                 .collect();
-            let canonical_types: Vec<Ty> = unbound_vars
+            let canonical_types: Vec<Ty2> = unbound_vars
                 .iter()
-                .map(|t| Ty::TypeVar(t.clone()))
+                .map(|t| Ty2::TypeVar(t.clone()))
                 .collect();
 
             // The type, using the canonical placeholders.
             let ty = match expr_ids.kind {
-                PredeclarationKind::Struct => Ty::struct_type(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Struct => Ty2::struct_type(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Extension => {
                     // For extensions, use the existing type
                     env.lookup_type(symbol_id)
                         .map(|td| td.ty())
-                        .unwrap_or_else(|| Ty::struct_type(*symbol_id, canonical_types.clone()))
+                        .unwrap_or_else(|| Ty2::struct_type(*symbol_id, canonical_types.clone()))
                 }
-                PredeclarationKind::Enum => Ty::enum_type(*symbol_id, canonical_types.clone()),
+                PredeclarationKind::Enum => Ty2::enum_type(*symbol_id, canonical_types.clone()),
                 PredeclarationKind::Protocol => {
                     // Use the protocol_type helper
-                    Ty::protocol_type(*symbol_id, canonical_types.clone())
+                    Ty2::protocol_type(*symbol_id, canonical_types.clone())
                 }
                 PredeclarationKind::Builtin(symbol_id) =>
                 {
@@ -259,7 +259,7 @@ impl<'a> TypeChecker<'a> {
                         default_value,
                         ..
                     } if expr_ids.kind != PredeclarationKind::Enum => {
-                        let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
+                        let ref placeholder @ Ty2::TypeVar(ref type_var) = env.placeholder(
                             &body_expr.id,
                             format!("predecl[{name_str}]"),
                             prop_id,
@@ -294,7 +294,7 @@ impl<'a> TypeChecker<'a> {
                             unreachable!("didn't get resolved init: {:?}", func_expr.expr)
                         };
 
-                        let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
+                        let ref placeholder @ Ty2::TypeVar(ref type_var) = env.placeholder(
                             &func_expr.id,
                             format!("predecl[{name}]"),
                             symbol_id,
@@ -328,7 +328,7 @@ impl<'a> TypeChecker<'a> {
                         name: Some(Name::Resolved(func_id, name_str)),
                         ..
                     } => {
-                        let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
+                        let ref placeholder @ Ty2::TypeVar(ref type_var) = env.placeholder(
                             &body_expr.id,
                             format!("predecl[{name_str}]"),
                             func_id,
@@ -351,7 +351,7 @@ impl<'a> TypeChecker<'a> {
                         name: Name::Resolved(func_id, name_str),
                         ..
                     } => {
-                        let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
+                        let ref placeholder @ Ty2::TypeVar(ref type_var) = env.placeholder(
                             &body_expr.id,
                             format!("predecl[{name_str}]"),
                             func_id,
@@ -563,7 +563,7 @@ impl<'a> TypeChecker<'a> {
                         .infer_node(
                             variant.expr,
                             env,
-                            &Some(Ty::enum_type(def.symbol_id(), vec![])),
+                            &Some(Ty2::enum_type(def.symbol_id(), vec![])),
                         )
                         .map_err(|e| (variant.expr.id, e))?;
                     variants.push(EnumVariant {
@@ -587,13 +587,13 @@ impl<'a> TypeChecker<'a> {
 
                 // Protocols are now represented as Row types
                 let (name, associated_types) = match &typed_expr.ty {
-                    Ty::Row {
+                    Ty2::Row {
                         nominal_id: Some(name),
                         generics,
                         kind: crate::ty::RowKind::Protocol,
                         ..
                     } => (*name, generics.clone()),
-                    Ty::Row { kind, .. } => {
+                    Ty2::Row { kind, .. } => {
                         tracing::error!("Expected protocol but got {:?}: {typed_expr:?}", kind);
                         continue;
                     }
@@ -605,7 +605,7 @@ impl<'a> TypeChecker<'a> {
 
                 let conformance = Conformance::new(name, associated_types);
                 conformances.push(conformance.clone());
-                conformance_constraints.push(Constraint::ConformsTo {
+                conformance_constraints.push(Constraint2::ConformsTo {
                     expr_id: conformance_expr.id,
                     ty: def.ty(),
                     conformance,
@@ -648,7 +648,7 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let ref placeholder @ Ty::TypeVar(ref type_var) = env.placeholder(
+            let ref placeholder @ Ty2::TypeVar(ref type_var) = env.placeholder(
                 &func_expr.id,
                 format!("predecl[{name_str}]"),
                 symbol_id,
@@ -670,13 +670,13 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         func_ids: &[(&'a ParsedExpr, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
-    ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
+    ) -> Result<Vec<(SymbolID, Ty2)>, TypeError> {
         let mut placeholder_substitutions = Substitutions::new();
         let mut results = vec![];
 
         for (func_expr, symbol_id, placeholder) in func_ids {
             let typed_expr =
-                self.infer_node(func_expr, env, &Some(Ty::TypeVar(placeholder.clone())))?;
+                self.infer_node(func_expr, env, &Some(Ty2::TypeVar(placeholder.clone())))?;
             env.declare(
                 **symbol_id,
                 Scheme::new(typed_expr.ty.clone(), vec![], vec![]),
@@ -711,7 +711,7 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
 
-            let ref placeholder @ Ty::TypeVar(ref type_var) =
+            let ref placeholder @ Ty2::TypeVar(ref type_var) =
                 env.placeholder(&lhs.id, format!("predecl[{name_str}]"), symbol_id, vec![])
             else {
                 unreachable!()
@@ -729,7 +729,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         let_ids: &[(&'a ParsedExpr, &'a SymbolID, TypeVarID)],
         env: &mut Environment,
-    ) -> Result<Vec<(SymbolID, Ty)>, TypeError> {
+    ) -> Result<Vec<(SymbolID, Ty2)>, TypeError> {
         tracing::trace!("infer lets");
 
         let mut placeholder_substitutions = Substitutions::new();

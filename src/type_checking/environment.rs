@@ -4,15 +4,15 @@ use tracing::debug_span;
 
 use crate::{
     ExprMetaStorage, SymbolID,
-    constraint::Constraint,
+    constraint::Constraint2,
     constraint_solver::{ConstraintSolver, ConstraintSolverSolution},
     parsing::expr_id::ExprID,
     semantic_index::SemanticIndex,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::Ty2,
     type_checker::TypeError,
     type_def::{TypeDef, TypeDefKind},
-    type_var_context::{TypeVarContext, UnificationEntry},
+    type_var_context::{TypeVarContext2, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -38,24 +38,24 @@ pub type TypedExprs = BTreeMap<ExprID, TypedExpr>;
 #[derive(Debug, Clone)]
 pub struct Environment {
     pub typed_exprs: TypedExprs,
-    constraints: Vec<Constraint>,
+    constraints: Vec<Constraint2>,
     pub scopes: Vec<Scope>,
     pub types: BTreeMap<SymbolID, TypeDef>,
-    pub selfs: Vec<Ty>,
-    pub context: TypeVarContext,
+    pub selfs: Vec<Ty2>,
+    pub context: TypeVarContext2,
     next_id: i32,
     generation: u32,
     /// Row constraints collected during type checking
     pub row_constraints: Vec<crate::row::RowConstraint>,
     /// Deferred exhaustiveness checks (match_id, scrutinee_type, patterns)
-    pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty, Vec<crate::typed_expr::Pattern>)>,
+    pub deferred_exhaustiveness_checks: Vec<(ExprID, Ty2, Vec<crate::typed_expr::Pattern>)>,
     /// Semantic index for query-based lookups
     pub semantic_index: SemanticIndex,
 }
 
 impl Default for Environment {
     fn default() -> Self {
-        let mut context = TypeVarContext::default();
+        let mut context = TypeVarContext2::default();
         context.import_builtins();
 
         Self {
@@ -94,12 +94,12 @@ impl Environment {
         expr_id: &ExprID,
         name: String,
         symbol_id: &SymbolID,
-        constraints: Vec<Constraint>,
-    ) -> Ty {
+        constraints: Vec<Constraint2>,
+    ) -> Ty2 {
         let type_var = self.new_type_variable(TypeVarKind::Placeholder(name.clone()), *expr_id);
-        let usage_placeholder = Ty::TypeVar(type_var);
+        let usage_placeholder = Ty2::TypeVar(type_var);
 
-        self.constrain(Constraint::InstanceOf {
+        self.constrain(Constraint2::InstanceOf {
             scheme: Scheme::new(usage_placeholder.clone(), vec![], constraints),
             expr_id: *expr_id,
             ty: usage_placeholder.clone(),
@@ -111,12 +111,12 @@ impl Environment {
         usage_placeholder
     }
 
-    pub fn constraints(&self) -> Vec<Constraint> {
+    pub fn constraints(&self) -> Vec<Constraint2> {
         self.constraints.clone()
     }
 
     #[cfg_attr(test, track_caller)]
-    pub fn constrain(&mut self, constraint: Constraint) {
+    pub fn constrain(&mut self, constraint: Constraint2) {
         if !constraint.needs_solving() {
             return;
         }
@@ -148,7 +148,7 @@ impl Environment {
     pub fn defer_exhaustiveness_check(
         &mut self,
         match_id: ExprID,
-        scrutinee_ty: Ty,
+        scrutinee_ty: Ty2,
         patterns: &[crate::typed_expr::Pattern],
     ) {
         self.deferred_exhaustiveness_checks
@@ -246,7 +246,7 @@ impl Environment {
     /// Take a monotype `t` and produce a Scheme ∀αᵢ. t,
     /// quantifying exactly those vars not free elsewhere in the env.
     #[tracing::instrument(level = "DEBUG", skip(self))]
-    pub fn generalize(&mut self, t: &Ty, symbol_id: &SymbolID) -> Scheme {
+    pub fn generalize(&mut self, t: &Ty2, symbol_id: &SymbolID) -> Scheme {
         let ftv_t = free_type_vars(t);
         let ftv_env = free_type_vars_in_env(&self.scopes, *symbol_id);
         let unbound_vars: Vec<TypeVarID> = ftv_t.difference(&ftv_env).cloned().collect();
@@ -257,21 +257,21 @@ impl Environment {
             let collected = self
                 .constraints
                 .iter()
-                .filter(|c| c.contains(|ty| ty == &Ty::TypeVar(var.clone())))
+                .filter(|c| c.contains(|ty| ty == &Ty2::TypeVar(var.clone())))
                 .cloned()
-                .collect::<Vec<Constraint>>();
+                .collect::<Vec<Constraint2>>();
             constraints.extend(collected);
         }
 
         Scheme::new(t.clone(), unbound_vars, constraints)
     }
 
-    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty {
+    pub fn instantiate(&mut self, scheme: &Scheme) -> Ty2 {
         self.instantiate_with_args(scheme, Default::default())
     }
 
     #[tracing::instrument(skip(self, args, scheme), fields(result))]
-    pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty {
+    pub fn instantiate_with_args(&mut self, scheme: &Scheme, args: Substitutions) -> Ty2 {
         let mut var_map = Substitutions::new();
         for old in &scheme.unbound_vars() {
             if let Some(arg_ty) = args.get(old) {
@@ -281,10 +281,10 @@ impl Environment {
                 self.context.history.push(UnificationEntry::Instantiated {
                     expr_id: old.expr_id,
                     canonical: old.clone(),
-                    instantiated: Ty::TypeVar(fresh.clone()),
+                    instantiated: Ty2::TypeVar(fresh.clone()),
                     generation: self.generation,
                 });
-                var_map.insert(old.clone(), Ty::TypeVar(fresh));
+                var_map.insert(old.clone(), Ty2::TypeVar(fresh));
             }
         }
 
@@ -307,8 +307,8 @@ impl Environment {
         id: &ExprID,
         name: String,
         symbol_id: &SymbolID,
-        constraints: &[Constraint],
-    ) -> Ty {
+        constraints: &[Constraint2],
+    ) -> Ty2 {
         let ret = if let Ok(scheme) = self.lookup_symbol(symbol_id).cloned() {
             if !constraints.is_empty() {
                 tracing::warn!("-> Ditching constraints: {constraints:?}");
@@ -327,7 +327,7 @@ impl Environment {
     pub fn new_type_variable(&mut self, kind: TypeVarKind, expr_id: ExprID) -> TypeVarID {
         let type_var_id = self.context.new_var(kind, expr_id, self.generation);
 
-        tracing::trace!("+ {:?}", Ty::TypeVar(type_var_id.clone()),);
+        tracing::trace!("+ {:?}", Ty2::TypeVar(type_var_id.clone()),);
 
         type_var_id
     }
@@ -487,42 +487,46 @@ impl Environment {
     }
 }
 
-fn walk(ty: &Ty, map: &Substitutions) -> Ty {
+fn walk(ty: &Ty2, map: &Substitutions) -> Ty2 {
     match ty {
-        Ty::TypeVar(tv) => {
+        Ty2::TypeVar(tv) => {
             if let Some(new_tv) = map.get(tv).cloned() {
                 new_tv
             } else {
-                Ty::TypeVar(tv.clone())
+                Ty2::TypeVar(tv.clone())
             }
         }
-        Ty::Func(params, ret, generics) => {
+        Ty2::Func(params, ret, generics) => {
             let new_params = params.iter().map(|p| walk(p, map)).collect();
             let new_ret = Box::new(walk(ret, map));
             let new_generics = generics.iter().map(|g| walk(g, map)).collect();
-            Ty::Func(new_params, new_ret, new_generics)
+            Ty2::Func(new_params, new_ret, new_generics)
         }
-        Ty::Init(struct_id, params) => {
+        Ty2::Init(struct_id, params) => {
             let new_params = params.iter().map(|p| walk(p, map)).collect();
-            Ty::Init(*struct_id, new_params)
+            Ty2::Init(*struct_id, new_params)
         }
-        Ty::Method { self_ty, func } => Ty::Method {
+        Ty2::Method { self_ty, func } => Ty2::Method {
             self_ty: walk(self_ty, map).into(),
             func: walk(func, map).into(),
         },
-        Ty::Closure { func, captures } => {
+        Ty2::Closure { func, captures } => {
             let func = Box::new(walk(func, map));
-            Ty::Closure {
+            Ty2::Closure {
                 func,
                 captures: captures.clone(),
             }
         }
-        Ty::Array(ty) => Ty::Array(Box::new(walk(ty, map))),
-        Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
-        Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
-            ty.clone()
-        }
-        Ty::Row {
+        Ty2::Array(ty) => Ty2::Array(Box::new(walk(ty, map))),
+        Ty2::Tuple(types) => Ty2::Tuple(types.iter().map(|p| walk(p, map)).collect()),
+        Ty2::Void
+        | Ty2::Pointer
+        | Ty2::Int
+        | Ty2::Float
+        | Ty2::Bool
+        | Ty2::SelfType
+        | Ty2::Byte => ty.clone(),
+        Ty2::Row {
             fields,
             row,
             nominal_id,
@@ -534,7 +538,7 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
                 .map(|(name, field_ty)| (name.clone(), walk(field_ty, map)))
                 .collect();
             let new_row = row.as_ref().map(|r| Box::new(walk(r, map)));
-            Ty::Row {
+            Ty2::Row {
                 fields: new_fields,
                 row: new_row,
                 nominal_id: *nominal_id,
@@ -546,22 +550,22 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
 }
 
 /// Collect all type-variables occurring free in a single monotype.
-pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
+pub fn free_type_vars(ty: &Ty2) -> HashSet<TypeVarID> {
     let mut s = HashSet::new();
     match ty {
-        Ty::TypeVar(v) => {
+        Ty2::TypeVar(v) => {
             s.insert(v.clone());
         }
-        Ty::Init(_, params) => {
+        Ty2::Init(_, params) => {
             for param in params {
                 s.extend(free_type_vars(param));
             }
         }
-        Ty::Method { self_ty, func } => {
+        Ty2::Method { self_ty, func } => {
             s.extend(free_type_vars(self_ty));
             s.extend(free_type_vars(func));
         }
-        Ty::Func(params, ret, generics) => {
+        Ty2::Func(params, ret, generics) => {
             for param in params {
                 s.extend(free_type_vars(param));
             }
@@ -570,21 +574,27 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
             }
             s.extend(free_type_vars(ret));
         }
-        Ty::Closure { func, .. } => {
+        Ty2::Closure { func, .. } => {
             s.extend(free_type_vars(func));
         }
-        Ty::Tuple(items) => {
+        Ty2::Tuple(items) => {
             for item in items {
                 s.extend(free_type_vars(item));
             }
         }
-        Ty::Array(ty) => {
+        Ty2::Array(ty) => {
             s.extend(free_type_vars(ty));
         }
-        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
+        Ty2::Void
+        | Ty2::Int
+        | Ty2::Bool
+        | Ty2::Float
+        | Ty2::Pointer
+        | Ty2::SelfType
+        | Ty2::Byte => {
             // These types contain no nested types, so there's nothing to do.
         }
-        Ty::Row {
+        Ty2::Row {
             fields,
             row,
             generics,
@@ -640,7 +650,7 @@ mod generalize_tests {
         SymbolID,
         environment::{Environment, Scope},
         expr_id::ExprID,
-        ty::Ty,
+        ty::Ty2,
         type_checker::Scheme,
         type_var_id::{TypeVarID, TypeVarKind},
     };
@@ -652,8 +662,8 @@ mod generalize_tests {
     }
 
     // Helper to create a Ty::TypeVar.
-    fn ty_var(id: u32) -> Ty {
-        Ty::TypeVar(new_tv(id))
+    fn ty_var(id: u32) -> Ty2 {
+        Ty2::TypeVar(new_tv(id))
     }
 
     #[test]
@@ -661,7 +671,7 @@ mod generalize_tests {
         // In an empty environment, generalize(a -> b) should produce `forall a, b. a -> b`.
         // All type variables in the type are free and should be bound.
         let mut env = Environment::default();
-        let ty_to_generalize = Ty::Func(vec![ty_var(1)], Box::new(ty_var(2)), vec![]);
+        let ty_to_generalize = Ty2::Func(vec![ty_var(1)], Box::new(ty_var(2)), vec![]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
@@ -684,12 +694,15 @@ mod generalize_tests {
         let mut initial_scope = Scope::new();
         initial_scope.insert(
             SymbolID(0),
-            Scheme::new(Ty::TypeVar(tv_a.clone()), vec![], vec![]),
+            Scheme::new(Ty2::TypeVar(tv_a.clone()), vec![], vec![]),
         );
         env.scopes = vec![initial_scope];
 
-        let ty_to_generalize =
-            Ty::Func(vec![Ty::TypeVar(tv_a.clone())], Box::new(ty_var(2)), vec![]);
+        let ty_to_generalize = Ty2::Func(
+            vec![Ty2::TypeVar(tv_a.clone())],
+            Box::new(ty_var(2)),
+            vec![],
+        );
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should only bind `b` (tv2). `a` remains free.
@@ -709,9 +722,9 @@ mod generalize_tests {
 
         // Create a scheme for `id: forall a. a -> a`.
         let id_scheme = Scheme::new(
-            Ty::Func(
-                vec![Ty::TypeVar(tv_a.clone())],
-                Box::new(Ty::TypeVar(tv_a.clone())),
+            Ty2::Func(
+                vec![Ty2::TypeVar(tv_a.clone())],
+                Box::new(Ty2::TypeVar(tv_a.clone())),
                 vec![],
             ),
             vec![tv_a.clone()],
@@ -722,7 +735,7 @@ mod generalize_tests {
         initial_scope.insert(SymbolID(0), id_scheme);
         env.scopes = vec![initial_scope];
 
-        let ty_to_generalize = Ty::Func(vec![ty_var(2)], Box::new(ty_var(3)), vec![]);
+        let ty_to_generalize = Ty2::Func(vec![ty_var(2)], Box::new(ty_var(3)), vec![]);
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should bind `b` (tv2) and `c` (tv3).
@@ -742,11 +755,11 @@ mod generalize_tests {
         let mut initial_scope = Scope::new();
         initial_scope.insert(
             SymbolID(0),
-            Scheme::new(Ty::TypeVar(tv_a.clone()), vec![], vec![]),
+            Scheme::new(Ty2::TypeVar(tv_a.clone()), vec![], vec![]),
         );
         env.scopes = vec![initial_scope];
 
-        let ty_to_generalize = Ty::TypeVar(tv_a.clone());
+        let ty_to_generalize = Ty2::TypeVar(tv_a.clone());
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
         // The scheme should bind nothing new.
@@ -758,7 +771,7 @@ mod generalize_tests {
     fn test_generalize_tuple_type() {
         // generalize((a, b)) -> forall a, b. (a, b)
         let mut env = Environment::default();
-        let ty_to_generalize = Ty::Tuple(vec![ty_var(1), ty_var(2)]);
+        let ty_to_generalize = Ty2::Tuple(vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
@@ -771,7 +784,7 @@ mod generalize_tests {
     fn test_generalize_array_type() {
         // generalize(Array<a>) -> forall a. Array<a>
         let mut env = Environment::default();
-        let ty_to_generalize = Ty::Array(Box::new(ty_var(1)));
+        let ty_to_generalize = Ty2::Array(Box::new(ty_var(1)));
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
@@ -784,7 +797,7 @@ mod generalize_tests {
     fn test_generalize_struct_type() {
         // generalize(Struct<a, b>) -> forall a, b. Struct<a, b>
         let mut env = Environment::default();
-        let ty_to_generalize = Ty::struct_type(SymbolID(100), vec![ty_var(1), ty_var(2)]);
+        let ty_to_generalize = Ty2::struct_type(SymbolID(100), vec![ty_var(1), ty_var(2)]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 
@@ -822,13 +835,13 @@ mod generalize_tests {
         let mut initial_scope = Scope::new();
         initial_scope.insert(
             SymbolID(0),
-            Scheme::new(Ty::TypeVar(tv_a.clone()), vec![], vec![]),
+            Scheme::new(Ty2::TypeVar(tv_a.clone()), vec![], vec![]),
         );
         env.scopes = vec![initial_scope];
 
-        let array_b = Ty::Array(Box::new(ty_var(2))); // b
-        let tuple = Ty::Tuple(vec![array_b, ty_var(3)]); // c
-        let ty_to_generalize = Ty::Func(vec![], Box::new(tuple), vec![]);
+        let array_b = Ty2::Array(Box::new(ty_var(2))); // b
+        let tuple = Ty2::Tuple(vec![array_b, ty_var(3)]); // c
+        let ty_to_generalize = Ty2::Func(vec![], Box::new(tuple), vec![]);
 
         let scheme = env.generalize(&ty_to_generalize, &SymbolID(1));
 

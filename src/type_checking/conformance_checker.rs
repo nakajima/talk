@@ -5,14 +5,14 @@ use crate::{
     conformance::Conformance,
     environment::{Environment, free_type_vars},
     substitutions::Substitutions,
-    ty::Ty,
+    ty::Ty2,
     type_checker::TypeError,
     type_def::{Property, TypeDef},
     type_var_id::TypeVarKind,
 };
 
 pub struct ConformanceChecker<'a> {
-    ty: &'a Ty,
+    ty: &'a Ty2,
     conformance: &'a Conformance,
     errors: Vec<ConformanceError>,
     env: &'a mut Environment,
@@ -23,14 +23,14 @@ pub enum ConformanceError {
     TypeCannotConform(String),
     TypeDoesNotConform(String, String),
     MemberNotImplemented {
-        ty: Box<Ty>,
+        ty: Box<Ty2>,
         protocol: SymbolID,
         member: String,
     },
 }
 
 impl<'a> ConformanceChecker<'a> {
-    pub fn new(ty: &'a Ty, conformance: &'a Conformance, env: &'a mut Environment) -> Self {
+    pub fn new(ty: &'a Ty2, conformance: &'a Conformance, env: &'a mut Environment) -> Self {
         Self {
             ty,
             conformance,
@@ -40,7 +40,7 @@ impl<'a> ConformanceChecker<'a> {
     }
 
     #[tracing::instrument(level = Level::TRACE, skip(self), fields(result))]
-    pub fn check(mut self) -> Result<Vec<(Ty, Ty)>, TypeError> {
+    pub fn check(mut self) -> Result<Vec<(Ty2, Ty2)>, TypeError> {
         let Some(protocol) = self
             .env
             .lookup_protocol(&self.conformance.protocol_id)
@@ -65,7 +65,7 @@ impl<'a> ConformanceChecker<'a> {
             return Err(TypeError::ConformanceError(self.errors));
         };
 
-        let mut unifications: Vec<(Ty, Ty)> = type_def_conformance
+        let mut unifications: Vec<(Ty2, Ty2)> = type_def_conformance
             .associated_types
             .iter()
             .cloned()
@@ -87,7 +87,7 @@ impl<'a> ConformanceChecker<'a> {
             // our concrete type
             for type_var in free_type_vars(&ty_method) {
                 if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
-                    unifications.push((Ty::TypeVar(type_var), self.ty.clone()));
+                    unifications.push((Ty2::TypeVar(type_var), self.ty.clone()));
                 }
             }
 
@@ -116,7 +116,7 @@ impl<'a> ConformanceChecker<'a> {
             // our concrete type
             for type_var in free_type_vars(&ty_method) {
                 if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
-                    unifications.push((Ty::TypeVar(type_var), self.ty.clone()));
+                    unifications.push((Ty2::TypeVar(type_var), self.ty.clone()));
                 }
             }
 
@@ -139,7 +139,7 @@ impl<'a> ConformanceChecker<'a> {
             // our concrete type
             for type_var in free_type_vars(&ty_property.ty) {
                 if matches!(type_var.kind, TypeVarKind::SelfVar(_)) {
-                    unifications.push((Ty::TypeVar(type_var), self.ty.clone()));
+                    unifications.push((Ty2::TypeVar(type_var), self.ty.clone()));
                 }
             }
 
@@ -179,15 +179,15 @@ impl<'a> ConformanceChecker<'a> {
         &mut self,
         protocol: &TypeDef,
         method_name: &str,
-    ) -> Result<Ty, ConformanceError> {
+    ) -> Result<Ty2, ConformanceError> {
         if let Some(ty) = self
             .type_def()
             .cloned()
             .map(|t| t.member_ty_with_conformances(method_name, self.env))
-            && let Some(ty @ Ty::Method { .. }) = ty
+            && let Some(ty @ Ty2::Method { .. }) = ty
         {
             Ok(ty)
-        } else if let Ty::TypeVar(_var) = &self.ty {
+        } else if let Ty2::TypeVar(_var) = &self.ty {
             protocol
                 .member_ty(method_name)
                 .cloned()
@@ -207,14 +207,14 @@ impl<'a> ConformanceChecker<'a> {
 
     fn type_def(&self) -> Option<&TypeDef> {
         match self.ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(symbol_id),
                 ..
             } => self.env.lookup_type(symbol_id),
-            Ty::Int => self.env.lookup_type(&SymbolID::INT),
-            Ty::Float => self.env.lookup_type(&SymbolID::FLOAT),
-            Ty::Bool => self.env.lookup_type(&SymbolID::BOOL),
-            Ty::Pointer => self.env.lookup_type(&SymbolID::POINTER),
+            Ty2::Int => self.env.lookup_type(&SymbolID::INT),
+            Ty2::Float => self.env.lookup_type(&SymbolID::FLOAT),
+            Ty2::Bool => self.env.lookup_type(&SymbolID::BOOL),
+            Ty2::Pointer => self.env.lookup_type(&SymbolID::POINTER),
             _ => None,
         }
     }
@@ -261,7 +261,7 @@ mod tests {
             .unwrap();
 
         let conformance = Conformance::new(protocol.symbol_id(), vec![]);
-        let checker = ConformanceChecker::new(&Ty::Int, &conformance, &mut setup.env);
+        let checker = ConformanceChecker::new(&Ty2::Int, &conformance, &mut setup.env);
         let result = checker.check();
         assert!(result.is_ok(), "{result:?}");
     }
@@ -283,7 +283,7 @@ mod tests {
             .unwrap();
 
         let conformance = Conformance::new(protocol.symbol_id(), vec![]);
-        let checker = ConformanceChecker::new(&Ty::Int, &conformance, &mut setup.env);
+        let checker = ConformanceChecker::new(&Ty2::Int, &conformance, &mut setup.env);
         let result = checker.check();
         assert!(result.is_err(), "{result:?}");
     }

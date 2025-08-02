@@ -3,15 +3,15 @@ use std::collections::{BTreeMap, HashMap};
 use tracing::Level;
 
 use crate::{
-    ty::Ty,
+    ty::Ty2,
     type_checker::TypeError,
-    type_var_context::{TypeVarContext, UnificationEntry},
+    type_var_context::{TypeVarContext2, UnificationEntry},
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
 #[derive(Default, Debug, Clone)]
 pub struct Substitutions {
-    storage: HashMap<TypeVarID, Ty>,
+    storage: HashMap<TypeVarID, Ty2>,
 }
 
 impl Substitutions {
@@ -19,19 +19,19 @@ impl Substitutions {
         Self::default()
     }
 
-    pub fn insert(&mut self, type_var: TypeVarID, ty: Ty) {
+    pub fn insert(&mut self, type_var: TypeVarID, ty: Ty2) {
         self.storage.insert(type_var, ty);
     }
 
-    pub fn get(&self, type_var: &TypeVarID) -> Option<&Ty> {
+    pub fn get(&self, type_var: &TypeVarID) -> Option<&Ty2> {
         self.storage.get(type_var)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&TypeVarID, &Ty)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&TypeVarID, &Ty2)> {
         self.storage.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&TypeVarID, &mut Ty)> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&TypeVarID, &mut Ty2)> {
         self.storage.iter_mut()
     }
 
@@ -47,13 +47,13 @@ impl Substitutions {
         &mut self,
         lhs: TypeVarID,
         rhs: TypeVarID,
-        context: &mut TypeVarContext,
+        context: &mut TypeVarContext2,
         generation: u32,
     ) {
         context.unify(lhs, rhs, generation);
     }
 
-    pub fn apply(&mut self, ty: &Ty, depth: u32, context: &mut TypeVarContext) -> Ty {
+    pub fn apply(&mut self, ty: &Ty2, depth: u32, context: &mut TypeVarContext2) -> Ty2 {
         if depth > 20 {
             tracing::warn!("Hit 20 recursive applications for {ty:#?}, bailing.");
             return ty.clone();
@@ -62,20 +62,20 @@ impl Substitutions {
         // tracing::trace!("Applying:\n{:#?}\n---\n{:?}", ty);
 
         match ty {
-            Ty::Pointer => ty.clone(),
-            Ty::Int => ty.clone(),
-            Ty::Byte => ty.clone(),
-            Ty::Float => ty.clone(),
-            Ty::Bool => ty.clone(),
-            Ty::SelfType => ty.clone(),
-            Ty::Func(params, returning, generics) => {
+            Ty2::Pointer => ty.clone(),
+            Ty2::Int => ty.clone(),
+            Ty2::Byte => ty.clone(),
+            Ty2::Float => ty.clone(),
+            Ty2::Bool => ty.clone(),
+            Ty2::SelfType => ty.clone(),
+            Ty2::Func(params, returning, generics) => {
                 let applied_params = self.apply_multiple(params, depth + 1, context);
                 let applied_return = self.apply(returning, depth + 1, context);
                 let applied_generics = self.apply_multiple(generics, depth + 1, context);
 
-                Ty::Func(applied_params, Box::new(applied_return), applied_generics)
+                Ty2::Func(applied_params, Box::new(applied_return), applied_generics)
             }
-            Ty::TypeVar(type_var) => {
+            Ty2::TypeVar(type_var) => {
                 let type_var = self.normalize(type_var, context);
 
                 if let Some(ty) = self.get(&type_var).cloned() {
@@ -95,39 +95,39 @@ impl Substitutions {
                 // {
                 //     Ty::TypeVar(TypeVarID::new(i, TypeVarKind::Instantiated(type_var.id)))
                 } else {
-                    Ty::TypeVar(type_var)
+                    Ty2::TypeVar(type_var)
                 }
             }
-            Ty::Tuple(types) => Ty::Tuple(
+            Ty2::Tuple(types) => Ty2::Tuple(
                 types
                     .iter()
                     .map(|variant| self.apply(variant, depth + 1, context))
                     .collect(),
             ),
-            Ty::Closure { func, captures } => {
+            Ty2::Closure { func, captures } => {
                 let func = self.apply(func, depth + 1, context).into();
-                Ty::Closure {
+                Ty2::Closure {
                     func,
                     captures: captures.clone(),
                 }
             }
-            Ty::Array(ty) => Ty::Array(self.apply(ty, depth + 1, context).into()),
-            Ty::Init(struct_id, params) => {
-                Ty::Init(*struct_id, self.apply_multiple(params, depth + 1, context))
+            Ty2::Array(ty) => Ty2::Array(self.apply(ty, depth + 1, context).into()),
+            Ty2::Init(struct_id, params) => {
+                Ty2::Init(*struct_id, self.apply_multiple(params, depth + 1, context))
             }
-            Ty::Method { self_ty, func } => Ty::Method {
+            Ty2::Method { self_ty, func } => Ty2::Method {
                 self_ty: self.apply(self_ty, depth + 1, context).into(),
                 func: self.apply(func, depth + 1, context).into(),
             },
-            Ty::Void => ty.clone(),
-            Ty::Row {
+            Ty2::Void => ty.clone(),
+            Ty2::Row {
                 fields,
                 row,
                 nominal_id,
                 generics,
                 kind,
             } => {
-                let applied_fields: Vec<(String, Ty)> = fields
+                let applied_fields: Vec<(String, Ty2)> = fields
                     .iter()
                     .map(|(name, field_ty)| {
                         (name.clone(), self.apply(field_ty, depth + 1, context))
@@ -136,7 +136,7 @@ impl Substitutions {
                 let applied_row = row
                     .as_ref()
                     .map(|r| Box::new(self.apply(r, depth + 1, context)));
-                Ty::Row {
+                Ty2::Row {
                     fields: applied_fields,
                     row: applied_row,
                     nominal_id: *nominal_id,
@@ -149,26 +149,26 @@ impl Substitutions {
 
     pub fn apply_multiple(
         &mut self,
-        types: &[Ty],
+        types: &[Ty2],
         depth: u32,
-        context: &mut TypeVarContext,
-    ) -> Vec<Ty> {
+        context: &mut TypeVarContext2,
+    ) -> Vec<Ty2> {
         types
             .iter()
             .map(|ty| self.apply(ty, depth, context))
             .collect()
     }
 
-    fn normalize(&self, type_var: &TypeVarID, context: &mut TypeVarContext) -> TypeVarID {
+    fn normalize(&self, type_var: &TypeVarID, context: &mut TypeVarContext2) -> TypeVarID {
         context.find(type_var)
     }
 
-    pub fn unifiable(&mut self, lhs: &Ty, rhs: &Ty, context: &mut TypeVarContext) -> bool {
+    pub fn unifiable(&mut self, lhs: &Ty2, rhs: &Ty2, context: &mut TypeVarContext2) -> bool {
         let lhs = self.apply(lhs, 0, context);
         let rhs = self.apply(rhs, 0, context);
 
         match (&lhs, &rhs) {
-            (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => true,
+            (Ty2::TypeVar(_), _) | (_, Ty2::TypeVar(_)) => true,
             _ => lhs == rhs,
         }
     }
@@ -176,9 +176,9 @@ impl Substitutions {
     #[tracing::instrument(level = Level::TRACE, skip(self, context), fields(result))]
     pub fn unify(
         &mut self,
-        lhs: &Ty,
-        rhs: &Ty,
-        context: &mut TypeVarContext,
+        lhs: &Ty2,
+        rhs: &Ty2,
+        context: &mut TypeVarContext2,
         generation: u32,
     ) -> Result<(), TypeError> {
         let lhs = self.apply(lhs, 0, context);
@@ -194,20 +194,20 @@ impl Substitutions {
             // They're the same, sick.
             (a, b) if a == b => Ok(()),
 
-            (Ty::TypeVar(v1), Ty::TypeVar(v2)) => {
+            (Ty2::TypeVar(v1), Ty2::TypeVar(v2)) => {
                 self.merge_type_vars(v1, v2, context, generation);
 
                 Ok(())
             }
 
-            (Ty::TypeVar(v), ty) | (ty, Ty::TypeVar(v)) => {
+            (Ty2::TypeVar(v), ty) | (ty, Ty2::TypeVar(v)) => {
                 let v = self.normalize(&v, context);
 
                 // Canonical type parameters (quantified variables) must not be unified with
                 // concrete types. They should be instantiated instead at the use-site.
                 if matches!(v.kind, TypeVarKind::CanonicalTypeParameter(_)) {
                     // If both sides are *the same* canonical parameter, consider it trivially unified.
-                    if let Ty::TypeVar(other_v) = &ty {
+                    if let Ty2::TypeVar(other_v) = &ty {
                         let other_v = self.normalize(other_v, context);
                         if v == other_v {
                             return Ok(());
@@ -227,7 +227,7 @@ impl Substitutions {
                 } else {
                     context.history.push(UnificationEntry::Unify {
                         expr_id: v.expr_id,
-                        before: Ty::TypeVar(v.clone()),
+                        before: Ty2::TypeVar(v.clone()),
                         after: ty.clone(),
                         generation,
                     });
@@ -236,8 +236,8 @@ impl Substitutions {
                 }
             }
             (
-                Ty::Func(lhs_params, lhs_returning, lhs_gen),
-                Ty::Func(rhs_params, rhs_returning, rhs_gen),
+                Ty2::Func(lhs_params, lhs_returning, lhs_gen),
+                Ty2::Func(rhs_params, rhs_returning, rhs_gen),
             ) if lhs_params.len() == rhs_params.len() => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
                     self.unify(lhs, &rhs, context, generation)?;
@@ -251,17 +251,17 @@ impl Substitutions {
 
                 Ok(())
             }
-            (Ty::Closure { func: lhs_func, .. }, Ty::Closure { func: rhs_func, .. }) => {
+            (Ty2::Closure { func: lhs_func, .. }, Ty2::Closure { func: rhs_func, .. }) => {
                 self.unify(&lhs_func, &rhs_func, context, generation)?;
 
                 Ok(())
             }
             (
-                Ty::Method {
+                Ty2::Method {
                     func: lhs_func,
                     self_ty: lhs_self_ty,
                 },
-                Ty::Method {
+                Ty2::Method {
                     func: rhs_func,
                     self_ty: rhs_self_ty,
                 },
@@ -274,7 +274,7 @@ impl Substitutions {
                 // Only unify self_ty if at least one is a TypeVar (for inference)
                 // or if they're the same type (for exact matches)
                 match (lhs_self_ty.as_ref(), rhs_self_ty.as_ref()) {
-                    (Ty::TypeVar(_), _) | (_, Ty::TypeVar(_)) => {
+                    (Ty2::TypeVar(_), _) | (_, Ty2::TypeVar(_)) => {
                         self.unify(&lhs_self_ty, &rhs_self_ty, context, generation)?;
                     }
                     (lhs, rhs) if lhs == rhs => {
@@ -288,15 +288,15 @@ impl Substitutions {
 
                 Ok(())
             }
-            (func @ Ty::Func { .. }, Ty::Method { func: method, .. })
-            | (Ty::Method { func: method, .. }, func @ Ty::Func { .. }) => {
+            (func @ Ty2::Func { .. }, Ty2::Method { func: method, .. })
+            | (Ty2::Method { func: method, .. }, func @ Ty2::Func { .. }) => {
                 self.unify(&func, &method, context, generation)?;
 
                 Ok(())
             }
-            (func, Ty::Closure { func: closure, .. })
-            | (Ty::Closure { func: closure, .. }, func)
-                if matches!(func, Ty::Func(_, _, _)) =>
+            (func, Ty2::Closure { func: closure, .. })
+            | (Ty2::Closure { func: closure, .. }, func)
+                if matches!(func, Ty2::Func(_, _, _)) =>
             {
                 self.unify(&func, &closure, context, generation)?;
 
@@ -304,12 +304,12 @@ impl Substitutions {
             }
             // Handle Row types - check nominal_id and unify generics
             (
-                Ty::Row {
+                Ty2::Row {
                     nominal_id: Some(id1),
                     generics: gen1,
                     ..
                 },
-                Ty::Row {
+                Ty2::Row {
                     nominal_id: Some(id2),
                     generics: gen2,
                     ..
@@ -329,13 +329,13 @@ impl Substitutions {
             }
             // Handle records
             (
-                Ty::Row {
+                Ty2::Row {
                     nominal_id: None,
                     generics: lhs_generics,
                     fields: lhs_fields,
                     ..
                 },
-                Ty::Row {
+                Ty2::Row {
                     nominal_id: None,
                     generics: rhs_generics,
                     fields: rhs_fields,
@@ -348,8 +348,8 @@ impl Substitutions {
                     self.unify(g1, &g2, context, generation)?;
                 }
 
-                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
-                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
+                let lhs_fields: BTreeMap<String, Ty2> = BTreeMap::from_iter(lhs_fields.clone());
+                let rhs_fields: BTreeMap<String, Ty2> = BTreeMap::from_iter(rhs_fields.clone());
 
                 for (label, ty) in lhs_fields.iter() {
                     let Some(rhs_ty) = rhs_fields.get(label) else {
@@ -381,13 +381,13 @@ impl Substitutions {
     }
 
     /// Returns true if `v` occurs inside `ty`
-    fn occurs_check(&mut self, v: &TypeVarID, ty: &Ty, context: &mut TypeVarContext) -> bool {
+    fn occurs_check(&mut self, v: &TypeVarID, ty: &Ty2, context: &mut TypeVarContext2) -> bool {
         let ty = self.apply(ty, 0, context);
         match &ty {
-            Ty::TypeVar(tv) => tv == v,
-            Ty::Func(params, returning, generics)
-            | Ty::Closure {
-                func: box Ty::Func(params, returning, generics),
+            Ty2::TypeVar(tv) => tv == v,
+            Ty2::Func(params, returning, generics)
+            | Ty2::Closure {
+                func: box Ty2::Func(params, returning, generics),
                 ..
             } => {
                 // check each parameter and the return type
@@ -409,8 +409,8 @@ impl Substitutions {
     }
 }
 
-impl FromIterator<(TypeVarID, Ty)> for Substitutions {
-    fn from_iter<T: IntoIterator<Item = (TypeVarID, Ty)>>(iter: T) -> Self {
+impl FromIterator<(TypeVarID, Ty2)> for Substitutions {
+    fn from_iter<T: IntoIterator<Item = (TypeVarID, Ty2)>>(iter: T) -> Self {
         Substitutions {
             storage: HashMap::from_iter(iter),
         }

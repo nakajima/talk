@@ -24,58 +24,58 @@ pub enum RowKind {
     Enum,
 }
 
-impl_option_eq!(Ty);
+impl_option_eq!(Ty2);
 
 #[derive(Clone, PartialEq, Debug, Drive)]
-pub enum Ty {
+pub enum Ty2 {
     Void,
     Int,
     Bool,
     Float,
-    Init(#[drive(skip)] SymbolID, Vec<Ty> /* params */),
+    Init(#[drive(skip)] SymbolID, Vec<Ty2> /* params */),
     Method {
-        self_ty: Box<Ty>,
-        func: Box<Ty>,
+        self_ty: Box<Ty2>,
+        func: Box<Ty2>,
     },
     Func(
         FuncParams,    /* params */
         FuncReturning, /* returning */
-        Vec<Ty>,       /* generics */
+        Vec<Ty2>,      /* generics */
     ),
     Closure {
-        func: Box<Ty>, // the func
+        func: Box<Ty2>, // the func
         #[drive(skip)]
         captures: Vec<SymbolID>,
     },
     TypeVar(#[drive(skip)] TypeVarID),
-    Tuple(Vec<Ty>),
-    Array(Box<Ty>),
+    Tuple(Vec<Ty2>),
+    Array(Box<Ty2>),
     Byte,
     Pointer,
     SelfType,
     // Unified row type that can represent structs, protocols, and records
     Row {
         #[drive(skip)]
-        fields: Vec<(String, Ty)>, // field name -> type pairs, in canonical order
-        row: Option<Box<Ty>>, // Optional row variable for extensible rows
+        fields: Vec<(String, Ty2)>, // field name -> type pairs, in canonical order
+        row: Option<Box<Ty2>>, // Optional row variable for extensible rows
         #[drive(skip)]
         nominal_id: Option<SymbolID>, // Some for nominal types (structs/protocols), None for structural (records)
-        generics: Vec<Ty>, // Generic type arguments (for nominal types)
+        generics: Vec<Ty2>, // Generic type arguments (for nominal types)
         #[drive(skip)]
         kind: RowKind, // Distinguishes between struct/protocol/record
     },
 }
 
-impl Display for Ty {
+impl Display for Ty2 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Ty::Byte => write!(f, "byte"),
-            Ty::Void => write!(f, "void"),
-            Ty::Int => write!(f, "Int"),
-            Ty::Bool => write!(f, "Bool"),
-            Ty::Float => write!(f, "Float"),
-            Ty::SelfType => write!(f, "Self"),
-            Ty::Init(_, params) => write!(
+            Ty2::Byte => write!(f, "byte"),
+            Ty2::Void => write!(f, "void"),
+            Ty2::Int => write!(f, "Int"),
+            Ty2::Bool => write!(f, "Bool"),
+            Ty2::Float => write!(f, "Float"),
+            Ty2::SelfType => write!(f, "Self"),
+            Ty2::Init(_, params) => write!(
                 f,
                 "init({})",
                 params
@@ -84,8 +84,8 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Ty::Method {
-                func: box Ty::Func(params, _, _),
+            Ty2::Method {
+                func: box Ty2::Func(params, _, _),
                 ..
             } => write!(
                 f,
@@ -96,7 +96,7 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Ty::Func(params, ty, _) => write!(
+            Ty2::Func(params, ty, _) => write!(
                 f,
                 "func({}) -> {ty}",
                 params
@@ -105,9 +105,9 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Ty::Closure { func, .. } => write!(f, "{func}"),
-            Ty::TypeVar(type_var_id) => write!(f, "{type_var_id:?}"),
-            Ty::Tuple(items) => write!(
+            Ty2::Closure { func, .. } => write!(f, "{func}"),
+            Ty2::TypeVar(type_var_id) => write!(f, "{type_var_id:?}"),
+            Ty2::Tuple(items) => write!(
                 f,
                 "({})",
                 items
@@ -116,9 +116,9 @@ impl Display for Ty {
                     .collect::<Vec<String>>()
                     .join(", ")
             ),
-            Ty::Array(ty) => write!(f, "Array<{ty}>"),
-            Ty::Pointer => write!(f, "pointer"),
-            Ty::Row {
+            Ty2::Array(ty) => write!(f, "Array<{ty}>"),
+            Ty2::Pointer => write!(f, "pointer"),
+            Ty2::Row {
                 fields,
                 row,
                 nominal_id,
@@ -161,29 +161,29 @@ impl Display for Ty {
     }
 }
 
-impl std::hash::Hash for Ty {
+impl std::hash::Hash for Ty2 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         format!("{self:?}").hash(state);
     }
 }
 
-impl Eq for Ty {}
+impl Eq for Ty2 {}
 
-impl Ty {
+impl Ty2 {
     /// Check if this type is a protocol
     pub fn is_protocol(&self) -> bool {
         matches!(
             self,
-            Ty::Row {
+            Ty2::Row {
                 kind: RowKind::Protocol,
                 ..
             }
         )
     }
 
-    pub fn string() -> Ty {
+    pub fn string() -> Ty2 {
         // String is a builtin struct type without fields
-        Ty::Row {
+        Ty2::Row {
             fields: vec![], // String has no exposed fields
             row: None,
             nominal_id: Some(SymbolID::STRING),
@@ -193,9 +193,9 @@ impl Ty {
     }
 
     /// Create a struct type using Row representation
-    pub fn struct_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
+    pub fn struct_type(symbol_id: SymbolID, generics: Vec<Ty2>) -> Ty2 {
         // Create Row type for structs
-        Ty::Row {
+        Ty2::Row {
             fields: vec![], // Fields are stored in TypeDef
             row: None,      // TODO: Get row var from TypeDef
             nominal_id: Some(symbol_id),
@@ -205,8 +205,8 @@ impl Ty {
     }
 
     /// Create a protocol type using Row representation
-    pub fn protocol_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
-        Ty::Row {
+    pub fn protocol_type(symbol_id: SymbolID, generics: Vec<Ty2>) -> Ty2 {
+        Ty2::Row {
             fields: vec![], // Protocol members are stored in TypeDef
             row: None,
             nominal_id: Some(symbol_id),
@@ -216,8 +216,8 @@ impl Ty {
     }
 
     /// Create an enum type using Row representation
-    pub fn enum_type(symbol_id: SymbolID, generics: Vec<Ty>) -> Ty {
-        Ty::Row {
+    pub fn enum_type(symbol_id: SymbolID, generics: Vec<Ty2>) -> Ty2 {
+        Ty2::Row {
             fields: vec![], // Enum variants are stored in TypeDef
             row: None,
             nominal_id: Some(symbol_id),
@@ -226,25 +226,25 @@ impl Ty {
         }
     }
 
-    pub fn optional(&self) -> Ty {
-        Ty::enum_type(SymbolID::OPTIONAL, vec![self.clone()])
+    pub fn optional(&self) -> Ty2 {
+        Ty2::enum_type(SymbolID::OPTIONAL, vec![self.clone()])
     }
 
     pub fn is_concrete(&self) -> bool {
-        !matches!(self, Ty::TypeVar(_))
+        !matches!(self, Ty2::TypeVar(_))
     }
 
-    pub fn equal_to(&self, other: &Ty) -> bool {
+    pub fn equal_to(&self, other: &Ty2) -> bool {
         match (self, other) {
             (
-                Ty::Row {
+                Ty2::Row {
                     fields: lhs_fields,
                     row: lhs_row,
                     nominal_id: lhs_nominal_id,
                     generics: lhs_generics,
                     kind: lhs_kind,
                 },
-                Ty::Row {
+                Ty2::Row {
                     fields: rhs_fields,
                     row: rhs_row,
                     nominal_id: rhs_nominal_id,
@@ -280,8 +280,8 @@ impl Ty {
                     return false;
                 }
 
-                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
-                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
+                let lhs_fields: BTreeMap<String, Ty2> = BTreeMap::from_iter(lhs_fields.clone());
+                let rhs_fields: BTreeMap<String, Ty2> = BTreeMap::from_iter(rhs_fields.clone());
 
                 for (field, ty) in &lhs_fields {
                     let Some(rhs_ty) = rhs_fields.get(field) else {
@@ -301,27 +301,27 @@ impl Ty {
 
     pub fn type_def<'a>(&self, env: &'a Environment) -> Option<&'a TypeDef> {
         let sym = match self {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(sym),
                 ..
             } => *sym,
-            Ty::Int => SymbolID::INT,
-            Ty::Float => SymbolID::FLOAT,
-            Ty::Bool => SymbolID::BOOL,
-            Ty::Pointer => SymbolID::POINTER,
+            Ty2::Int => SymbolID::INT,
+            Ty2::Float => SymbolID::FLOAT,
+            Ty2::Bool => SymbolID::BOOL,
+            Ty2::Pointer => SymbolID::POINTER,
             _ => return None,
         };
 
         env.lookup_type(&sym)
     }
 
-    pub fn replace<F: Fn(&Ty) -> bool>(&self, replacement: Ty, f: &F) -> Ty {
+    pub fn replace<F: Fn(&Ty2) -> bool>(&self, replacement: Ty2, f: &F) -> Ty2 {
         match &self {
-            Ty::Init(sym, items) => {
+            Ty2::Init(sym, items) => {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Init(
+                    Ty2::Init(
                         *sym,
                         items
                             .iter()
@@ -330,11 +330,11 @@ impl Ty {
                     )
                 }
             }
-            Ty::Func(items, ty, items1) => {
+            Ty2::Func(items, ty, items1) => {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Func(
+                    Ty2::Func(
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -347,28 +347,28 @@ impl Ty {
                     )
                 }
             }
-            Ty::Closure { func, captures } => {
+            Ty2::Closure { func, captures } => {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Closure {
+                    Ty2::Closure {
                         func: func.replace(replacement.clone(), f).into(),
                         captures: captures.clone(),
                     }
                 }
             }
-            Ty::TypeVar(_) => {
+            Ty2::TypeVar(_) => {
                 if f(self) {
                     replacement
                 } else {
                     self.clone()
                 }
             }
-            Ty::Tuple(items) => {
+            Ty2::Tuple(items) => {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Tuple(
+                    Ty2::Tuple(
                         items
                             .iter()
                             .map(|t| t.replace(replacement.clone(), f))
@@ -376,14 +376,14 @@ impl Ty {
                     )
                 }
             }
-            Ty::Array(ty) => {
+            Ty2::Array(ty) => {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Array(ty.replace(replacement.clone(), f).into())
+                    Ty2::Array(ty.replace(replacement.clone(), f).into())
                 }
             }
-            Ty::Row {
+            Ty2::Row {
                 fields,
                 row,
                 nominal_id,
@@ -393,7 +393,7 @@ impl Ty {
                 if f(self) {
                     replacement
                 } else {
-                    Ty::Row {
+                    Ty2::Row {
                         fields: fields
                             .iter()
                             .map(|(name, ty)| (name.clone(), ty.replace(replacement.clone(), f)))

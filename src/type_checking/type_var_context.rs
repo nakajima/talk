@@ -3,7 +3,7 @@ use ena::unify::{InPlace, InPlaceUnificationTable, NoError, Snapshot, UnifyKey, 
 use crate::{
     builtins,
     expr_id::ExprID,
-    ty::Ty,
+    ty::Ty2,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -11,7 +11,7 @@ use crate::{
 pub struct VarKey(u32); // Only used with ena
 
 impl UnifyKey for VarKey {
-    type Value = Ty;
+    type Value = Ty2;
 
     fn index(&self) -> u32 {
         self.0
@@ -26,17 +26,17 @@ impl UnifyKey for VarKey {
     }
 }
 
-impl UnifyValue for Ty {
+impl UnifyValue for Ty2 {
     type Error = NoError;
 
     fn unify_values(a: &Self, b: &Self) -> Result<Self, NoError> {
         match (a, b) {
-            (Ty::TypeVar(_), _) => Ok(b.clone()),
-            (_, Ty::TypeVar(_)) => Ok(a.clone()),
+            (Ty2::TypeVar(_), _) => Ok(b.clone()),
+            (_, Ty2::TypeVar(_)) => Ok(a.clone()),
             _ if a == b => Ok(a.clone()),
             _ => {
                 tracing::error!("unable to unify values: {a:?}, {b:?}");
-                Ok(Ty::Void)
+                Ok(Ty2::Void)
             }
         }
     }
@@ -46,36 +46,36 @@ impl UnifyValue for Ty {
 pub enum UnificationEntry {
     Create {
         expr_id: ExprID,
-        ty: Ty,
+        ty: Ty2,
         generation: u32,
     },
     Instantiated {
         expr_id: ExprID,
         canonical: TypeVarID,
-        instantiated: Ty,
+        instantiated: Ty2,
         generation: u32,
     },
     Unify {
         expr_id: ExprID,
-        before: Ty,
-        after: Ty,
+        before: Ty2,
+        after: Ty2,
         generation: u32,
     },
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TypeVarContext {
+pub struct TypeVarContext2 {
     table: InPlaceUnificationTable<VarKey>,
     kinds: Vec<(TypeVarKind, ExprID)>, // indexed by VarKey.0
     pub history: Vec<UnificationEntry>,
 }
 
-impl TypeVarContext {
+impl TypeVarContext2 {
     pub fn import_builtins(&mut self) {
         for builtin in builtins::builtins() {
             for var in builtin.unbound_vars {
                 let kind = &var.kind;
-                let key = self.table.new_key(Ty::TypeVar(TypeVarID {
+                let key = self.table.new_key(Ty2::TypeVar(TypeVarID {
                     id: self.kinds.len() as u32,
                     kind: kind.clone(),
                     expr_id: var.expr_id,
@@ -92,7 +92,7 @@ impl TypeVarContext {
     }
 
     pub fn new_var(&mut self, kind: TypeVarKind, expr_id: ExprID, generation: u32) -> TypeVarID {
-        let type_var = Ty::TypeVar(TypeVarID {
+        let type_var = Ty2::TypeVar(TypeVarID {
             id: self.kinds.len() as u32,
             kind: kind.clone(),
             expr_id,
@@ -123,7 +123,7 @@ impl TypeVarContext {
         self.table.len() == 0
     }
 
-    pub fn iter(&mut self) -> impl Iterator<Item = (TypeVarID, Ty)> {
+    pub fn iter(&mut self) -> impl Iterator<Item = (TypeVarID, Ty2)> {
         self.kinds.iter().enumerate().map(|(id, (kind, expr_id))| {
             (
                 TypeVarID::new(id as u32, kind.clone(), *expr_id),
@@ -144,7 +144,7 @@ impl TypeVarContext {
         self.table.rollback_to(snapshot);
     }
 
-    pub fn try_probe(&mut self, var: &TypeVarID) -> Option<&Ty> {
+    pub fn try_probe(&mut self, var: &TypeVarID) -> Option<&Ty2> {
         self.table.try_probe_value(VarKey(var.id))
     }
 
@@ -166,7 +166,7 @@ impl TypeVarContext {
         TypeVarID::new(id.0, kind, expr_id)
     }
 
-    pub fn probe(&mut self, var: &TypeVarID) -> Ty {
+    pub fn probe(&mut self, var: &TypeVarID) -> Ty2 {
         self.table.probe_value(VarKey(var.id))
     }
 
@@ -192,15 +192,15 @@ impl TypeVarContext {
             if found == VarKey(a.id) {
                 self.history.push(UnificationEntry::Unify {
                     expr_id: a.expr_id,
-                    before: Ty::TypeVar(a.clone()),
-                    after: Ty::TypeVar(b.clone()),
+                    before: Ty2::TypeVar(a.clone()),
+                    after: Ty2::TypeVar(b.clone()),
                     generation,
                 })
             } else {
                 self.history.push(UnificationEntry::Unify {
                     expr_id: b.expr_id,
-                    before: Ty::TypeVar(b.clone()),
-                    after: Ty::TypeVar(a.clone()),
+                    before: Ty2::TypeVar(b.clone()),
+                    after: Ty2::TypeVar(a.clone()),
                     generation,
                 })
             }
@@ -231,7 +231,7 @@ mod tests {
         ";
         let checked = crate::check(source).unwrap();
 
-        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(3).unwrap(), Ty2::Int);
         // dump_unification_dot(
         //     &checked.type_var_context.history,
         //     "unification.dot",

@@ -1,5 +1,5 @@
 #[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Default, Clone, Copy, Hash, Eq)]
+#[derive(Default, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
 pub struct ExprID(pub i32);
 
 impl ExprID {

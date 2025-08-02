@@ -1284,7 +1284,6 @@ mod tests {
             driver::Driver,
         },
         diagnostic::DiagnosticKind,
-        lowering::ir_module::IRModule,
         parsed_expr::Expr,
     };
 
@@ -2088,10 +2087,6 @@ mod tests {
                 symbols,
                 types: Default::default(),
                 typed_symbols: Default::default(),
-                ir_module: IRModule {
-                    functions: vec![],
-                    constants: vec![],
-                },
             }],
             "
         import Imported

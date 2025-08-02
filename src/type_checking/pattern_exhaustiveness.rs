@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     environment::Environment,
     parsed_expr::Pattern,
-    ty::{RowKind, Ty},
+    ty::{RowKind, Ty2},
     type_var_id::TypeVarID,
 };
 
@@ -46,7 +46,7 @@ impl<'a> ExhaustivenessChecker<'a> {
     }
 
     /// Check if a match expression is exhaustive
-    pub fn check_match(&self, scrutinee_ty: &Ty, patterns: &[Pattern]) -> ExhaustivenessResult {
+    pub fn check_match(&self, scrutinee_ty: &Ty2, patterns: &[Pattern]) -> ExhaustivenessResult {
         // First check if there's a wildcard or catch-all variable pattern
         if patterns
             .iter()
@@ -56,13 +56,13 @@ impl<'a> ExhaustivenessChecker<'a> {
         }
 
         match scrutinee_ty {
-            Ty::Row {
+            Ty2::Row {
                 nominal_id: Some(enum_id),
                 kind: RowKind::Enum,
                 ..
             } => self.check_enum_exhaustiveness(enum_id, patterns),
-            Ty::TypeVar(type_var) => self.check_type_var_exhaustiveness(type_var, patterns),
-            Ty::Bool => self.check_bool_exhaustiveness(patterns),
+            Ty2::TypeVar(type_var) => self.check_type_var_exhaustiveness(type_var, patterns),
+            Ty2::Bool => self.check_bool_exhaustiveness(patterns),
             _ => {
                 // For other types, we can't determine exhaustiveness without a wildcard
                 ExhaustivenessResult::NonExhaustive(vec![])
@@ -205,7 +205,7 @@ pub trait ExhaustivenessExt {
     /// Check pattern exhaustiveness in the current environment
     fn check_pattern_exhaustiveness(
         &self,
-        scrutinee_ty: &Ty,
+        scrutinee_ty: &Ty2,
         patterns: &[Pattern],
     ) -> ExhaustivenessResult;
 }
@@ -213,7 +213,7 @@ pub trait ExhaustivenessExt {
 impl ExhaustivenessExt for Environment {
     fn check_pattern_exhaustiveness(
         &self,
-        scrutinee_ty: &Ty,
+        scrutinee_ty: &Ty2,
         patterns: &[Pattern],
     ) -> ExhaustivenessResult {
         let checker = ExhaustivenessChecker::new(self);
@@ -233,17 +233,17 @@ mod tests {
 
         // Both true and false - exhaustive
         let patterns = vec![Pattern::LiteralTrue, Pattern::LiteralFalse];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty2::Bool, &patterns);
         assert_eq!(result, ExhaustivenessResult::Exhaustive);
 
         // Only true - not exhaustive
         let patterns = vec![Pattern::LiteralTrue];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty2::Bool, &patterns);
         assert!(matches!(result, ExhaustivenessResult::NonExhaustive(_)));
 
         // Wildcard - exhaustive
         let patterns = vec![Pattern::LiteralTrue, Pattern::Wildcard];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty2::Bool, &patterns);
         assert_eq!(result, ExhaustivenessResult::Exhaustive);
     }
 
@@ -253,7 +253,7 @@ mod tests {
         let checker = ExhaustivenessChecker::new(&env);
 
         let patterns = vec![Pattern::Wildcard];
-        let result = checker.check_match(&Ty::Int, &patterns);
+        let result = checker.check_match(&Ty2::Int, &patterns);
         assert_eq!(result, ExhaustivenessResult::Exhaustive);
     }
 
@@ -263,7 +263,7 @@ mod tests {
         let checker = ExhaustivenessChecker::new(&env);
 
         let patterns = vec![Pattern::Bind(Name::Raw("x".to_string()))];
-        let result = checker.check_match(&Ty::Int, &patterns);
+        let result = checker.check_match(&Ty2::Int, &patterns);
         assert_eq!(result, ExhaustivenessResult::Exhaustive);
     }
 }

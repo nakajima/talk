@@ -6,57 +6,57 @@ use crate::{
     parsing::expr_id::ExprID,
     row::RowConstraint,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::Ty2,
     type_checker::Scheme,
-    type_var_context::TypeVarContext,
+    type_var_context::TypeVarContext2,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
 #[derive(Visitor)]
-#[visitor(Ty(enter))]
+#[visitor(Ty2(enter))]
 struct TypeVarVisitor {
     contains_type_var: bool,
 }
 
 impl TypeVarVisitor {
-    fn enter_ty(&mut self, ty: &Ty) {
+    fn enter_ty_2(&mut self, ty: &Ty2) {
         if self.contains_type_var {
             return;
         }
 
-        self.contains_type_var = matches!(ty, Ty::TypeVar(_))
+        self.contains_type_var = matches!(ty, Ty2::TypeVar(_))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Constraint {
-    Equality(ExprID, Ty, Ty),
-    MemberAccess(ExprID, Ty, String, Ty), // receiver_ty, member_name, result_ty
-    UnqualifiedMember(ExprID, String, Ty), // member name, expected type
+pub enum Constraint2 {
+    Equality(ExprID, Ty2, Ty2),
+    MemberAccess(ExprID, Ty2, String, Ty2), // receiver_ty, member_name, result_ty
+    UnqualifiedMember(ExprID, String, Ty2), // member name, expected type
     InitializerCall {
         expr_id: ExprID,
         initializes_id: SymbolID,
-        args: Vec<Ty>,
-        func_ty: Ty,
-        result_ty: Ty,
-        type_args: Vec<Ty>,
+        args: Vec<Ty2>,
+        func_ty: Ty2,
+        result_ty: Ty2,
+        type_args: Vec<Ty2>,
     },
     VariantMatch {
         expr_id: ExprID,
-        scrutinee_ty: Ty, // The type of the value being matched (the `expected` type)
+        scrutinee_ty: Ty2, // The type of the value being matched (the `expected` type)
         variant_name: String,
         // The list of fresh TypeVars created for each field in the pattern.
-        field_tys: Vec<Ty>,
+        field_tys: Vec<Ty2>,
     },
     InstanceOf {
         scheme: Scheme,
         expr_id: ExprID,
-        ty: Ty,
+        ty: Ty2,
         symbol_id: SymbolID,
     },
     ConformsTo {
         expr_id: ExprID,
-        ty: Ty,
+        ty: Ty2,
         conformance: Conformance,
     },
     /// Row-specific constraint
@@ -64,10 +64,10 @@ pub enum Constraint {
         expr_id: ExprID,
         constraint: RowConstraint,
     },
-    Retry(Box<Constraint>, usize),
+    Retry(Box<Constraint2>, usize),
 }
 
-impl Constraint {
+impl Constraint2 {
     pub fn expr_id(&self) -> &ExprID {
         match self {
             Self::Equality(id, _, _) => id,
@@ -82,31 +82,31 @@ impl Constraint {
         }
     }
 
-    pub fn contains_ty(&self, ty: &Ty) -> bool {
+    pub fn contains_ty(&self, ty: &Ty2) -> bool {
         self.contains(|t| t == ty)
     }
 
-    pub fn contains<F: Fn(&Ty) -> bool>(&self, f: F) -> bool {
+    pub fn contains<F: Fn(&Ty2) -> bool>(&self, f: F) -> bool {
         match self {
-            Constraint::Equality(_, ty, ty1) => f(ty) || f(ty1),
-            Constraint::MemberAccess(_, ty, _, ty1) => f(ty) || f(ty1),
-            Constraint::UnqualifiedMember(_, _, ty) => f(ty),
-            Constraint::InitializerCall {
+            Constraint2::Equality(_, ty, ty1) => f(ty) || f(ty1),
+            Constraint2::MemberAccess(_, ty, _, ty1) => f(ty) || f(ty1),
+            Constraint2::UnqualifiedMember(_, _, ty) => f(ty),
+            Constraint2::InitializerCall {
                 args,
                 func_ty,
                 result_ty,
                 ..
             } => args.iter().any(&f) || f(func_ty) || f(result_ty),
-            Constraint::VariantMatch {
+            Constraint2::VariantMatch {
                 scrutinee_ty,
                 field_tys,
                 ..
             } => f(scrutinee_ty) || field_tys.iter().any(f),
-            Constraint::InstanceOf { scheme, ty, .. } => f(&scheme.ty()) || f(ty),
-            Constraint::ConformsTo {
+            Constraint2::InstanceOf { scheme, ty, .. } => f(&scheme.ty()) || f(ty),
+            Constraint2::ConformsTo {
                 ty, conformance, ..
             } => f(ty) || conformance.associated_types.iter().any(f),
-            Constraint::Row { constraint, .. } => {
+            Constraint2::Row { constraint, .. } => {
                 use crate::row::RowConstraint;
                 match constraint {
                     RowConstraint::HasField { field_ty, .. } => f(field_ty),
@@ -125,14 +125,14 @@ impl Constraint {
 
     pub fn contains_canonical_type_parameter(&self) -> bool {
         match self {
-            Constraint::Equality(_, ty, ty1) => {
+            Constraint2::Equality(_, ty, ty1) => {
                 has_canonical_type_var(ty) || has_canonical_type_var(ty1)
             }
-            Constraint::MemberAccess(_, ty, _, ty1) => {
+            Constraint2::MemberAccess(_, ty, _, ty1) => {
                 has_canonical_type_var(ty) || has_canonical_type_var(ty1)
             }
-            Constraint::UnqualifiedMember(_, _, ty) => has_canonical_type_var(ty),
-            Constraint::InitializerCall {
+            Constraint2::UnqualifiedMember(_, _, ty) => has_canonical_type_var(ty),
+            Constraint2::InitializerCall {
                 args,
                 func_ty,
                 result_ty,
@@ -142,17 +142,17 @@ impl Constraint {
                     || has_canonical_type_var(func_ty)
                     || has_canonical_type_var(result_ty)
             }
-            Constraint::VariantMatch {
+            Constraint2::VariantMatch {
                 scrutinee_ty,
                 field_tys,
                 ..
             } => {
                 has_canonical_type_var(scrutinee_ty) || field_tys.iter().any(has_canonical_type_var)
             }
-            Constraint::InstanceOf { scheme, ty, .. } => {
+            Constraint2::InstanceOf { scheme, ty, .. } => {
                 has_canonical_type_var(&scheme.ty()) || has_canonical_type_var(ty)
             }
-            Constraint::ConformsTo { conformance, .. } => conformance
+            Constraint2::ConformsTo { conformance, .. } => conformance
                 .associated_types
                 .iter()
                 .any(has_canonical_type_var),
@@ -162,8 +162,8 @@ impl Constraint {
 
     pub fn needs_solving(&self) -> bool {
         match self {
-            Constraint::Equality(_, ty, ty1) => ty != ty1,
-            Constraint::InstanceOf { scheme, ty, .. } => {
+            Constraint2::Equality(_, ty, ty1) => ty != ty1,
+            Constraint2::InstanceOf { scheme, ty, .. } => {
                 !scheme.unbound_vars().is_empty() || &scheme.ty() != ty
             }
             _ => true,
@@ -172,7 +172,7 @@ impl Constraint {
 
     pub fn is_impossible(&self) -> bool {
         match self {
-            Constraint::Equality(_, lhs, rhs) => {
+            Constraint2::Equality(_, lhs, rhs) => {
                 let mut visitor = TypeVarVisitor {
                     contains_type_var: false,
                 };
@@ -193,33 +193,33 @@ impl Constraint {
     pub fn replacing(
         &self,
         substitutions: &mut Substitutions,
-        context: &mut TypeVarContext,
-    ) -> Constraint {
+        context: &mut TypeVarContext2,
+    ) -> Constraint2 {
         match self {
-            Constraint::Equality(id, ty, ty1) => Constraint::Equality(
+            Constraint2::Equality(id, ty, ty1) => Constraint2::Equality(
                 *id,
                 substitutions.apply(ty, 0, context),
                 substitutions.apply(ty1, 0, context),
             ),
-            Constraint::MemberAccess(id, ty, name, ty1) => Constraint::MemberAccess(
+            Constraint2::MemberAccess(id, ty, name, ty1) => Constraint2::MemberAccess(
                 *id,
                 substitutions.apply(ty, 0, context),
                 name.clone(),
                 substitutions.apply(ty1, 0, context),
             ),
-            Constraint::UnqualifiedMember(id, name, ty) => Constraint::UnqualifiedMember(
+            Constraint2::UnqualifiedMember(id, name, ty) => Constraint2::UnqualifiedMember(
                 *id,
                 name.clone(),
                 substitutions.apply(ty, 0, context),
             ),
-            Constraint::InitializerCall {
+            Constraint2::InitializerCall {
                 expr_id,
                 initializes_id,
                 args,
                 func_ty,
                 result_ty,
                 type_args,
-            } => Constraint::InitializerCall {
+            } => Constraint2::InitializerCall {
                 expr_id: *expr_id,
                 initializes_id: *initializes_id,
                 args: args
@@ -230,12 +230,12 @@ impl Constraint {
                 result_ty: substitutions.apply(result_ty, 0, context),
                 type_args: substitutions.apply_multiple(type_args, 0, context),
             },
-            Constraint::VariantMatch {
+            Constraint2::VariantMatch {
                 expr_id,
                 scrutinee_ty,
                 variant_name,
                 field_tys,
-            } => Constraint::VariantMatch {
+            } => Constraint2::VariantMatch {
                 expr_id: *expr_id,
                 scrutinee_ty: substitutions.apply(scrutinee_ty, 0, context),
                 variant_name: variant_name.clone(),
@@ -244,12 +244,12 @@ impl Constraint {
                     .map(|ty| substitutions.apply(ty, 0, context))
                     .collect(),
             },
-            Constraint::InstanceOf {
+            Constraint2::InstanceOf {
                 expr_id,
                 ty,
                 symbol_id,
                 scheme,
-            } => Constraint::InstanceOf {
+            } => Constraint2::InstanceOf {
                 expr_id: *expr_id,
                 ty: substitutions.apply(ty, 0, context),
                 symbol_id: *symbol_id,
@@ -259,11 +259,11 @@ impl Constraint {
                     scheme.constraints().clone(),
                 ),
             },
-            Constraint::ConformsTo {
+            Constraint2::ConformsTo {
                 expr_id,
                 ty,
                 conformance,
-            } => Constraint::ConformsTo {
+            } => Constraint2::ConformsTo {
                 expr_id: *expr_id,
                 ty: substitutions.apply(ty, 0, context),
                 conformance: Conformance {
@@ -275,10 +275,10 @@ impl Constraint {
                         .collect(),
                 },
             },
-            Constraint::Retry(c, retries) => {
-                Constraint::Retry(c.replacing(substitutions, context).clone().into(), *retries)
+            Constraint2::Retry(c, retries) => {
+                Constraint2::Retry(c.replacing(substitutions, context).clone().into(), *retries)
             }
-            Constraint::Row {
+            Constraint2::Row {
                 expr_id,
                 constraint,
             } => {
@@ -317,7 +317,7 @@ impl Constraint {
                     }
                     other => other.clone(),
                 };
-                Constraint::Row {
+                Constraint2::Row {
                     expr_id: *expr_id,
                     constraint: new_constraint,
                 }
@@ -326,10 +326,10 @@ impl Constraint {
     }
 }
 
-fn has_canonical_type_var(ty: &Ty) -> bool {
+fn has_canonical_type_var(ty: &Ty2) -> bool {
     if matches!(
         ty,
-        Ty::TypeVar(TypeVarID {
+        Ty2::TypeVar(TypeVarID {
             kind: TypeVarKind::CanonicalTypeParameter(_),
             ..
         })

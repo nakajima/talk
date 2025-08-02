@@ -13,7 +13,6 @@ use crate::{
     diagnostic::Diagnostic,
     environment::Environment,
     lexer::{Lexer, LexerError},
-    lowering::{ir_error::IRError, ir_module::IRModule, lowerer::Lowerer},
     name_resolver::{NameResolver, Scope},
     parser::{Parser, ParserError},
     source_file,
@@ -31,7 +30,6 @@ pub enum CompilationError {
     LexerError(LexerError),
     ParserError(ParserError),
     TypeError(TypeError),
-    IRError(IRError),
     IOError(std::io::Error),
     UnknownError(&'static str),
 }
@@ -137,18 +135,18 @@ impl CompilationUnit<Raw> {
         }
     }
 
-    pub fn lower(
-        self,
-        symbol_table: &mut SymbolTable,
-        driver_config: &DriverConfig,
-        module: IRModule,
-        module_env: &ModuleEnvironment,
-    ) -> CompilationUnit<Lowered> {
-        let parsed = self.parse(driver_config.include_comments);
-        let resolved = parsed.resolved(symbol_table, driver_config, module_env);
-        let typed = resolved.typed(symbol_table, driver_config, module_env);
-        typed.lower(symbol_table, driver_config, module, module_env)
-    }
+    // pub fn lower(
+    //     self,
+    //     symbol_table: &mut SymbolTable,
+    //     driver_config: &DriverConfig,
+    //     module: IRModule,
+    //     module_env: &ModuleEnvironment,
+    // ) -> CompilationUnit<Lowered> {
+    //     let parsed = self.parse(driver_config.include_comments);
+    //     let resolved = parsed.resolved(symbol_table, driver_config, module_env);
+    //     let typed = resolved.typed(symbol_table, driver_config, module_env);
+    //     typed.lower(symbol_table, driver_config, module, module_env)
+    // }
 }
 
 #[derive(Debug)]
@@ -330,57 +328,38 @@ impl StageTrait for Typed {
 }
 
 impl CompilationUnit<Typed> {
-    pub fn lower(
-        mut self,
-        symbol_table: &mut SymbolTable,
-        driver_config: &DriverConfig,
-        mut module: IRModule,
-        module_env: &ModuleEnvironment,
-    ) -> CompilationUnit<Lowered> {
-        let mut files = vec![];
-        for file in self.stage.files {
-            let lowered = Lowerer::new(
-                file,
-                symbol_table,
-                &mut self.env,
-                self.session.clone(),
-                module_env,
-            )
-            .lower(&mut module, driver_config);
-            files.push(lowered);
-        }
+    // pub fn lower(
+    //     mut self,
+    //     symbol_table: &mut SymbolTable,
+    //     driver_config: &DriverConfig,
+    //     mut module: IRModule,
+    //     module_env: &ModuleEnvironment,
+    // ) -> CompilationUnit<Lowered> {
+    //     let mut files = vec![];
+    //     for file in self.stage.files {
+    //         let lowered = Lowerer::new(
+    //             file,
+    //             symbol_table,
+    //             &mut self.env,
+    //             self.session.clone(),
+    //             module_env,
+    //         )
+    //         .lower(&mut module, driver_config);
+    //         files.push(lowered);
+    //     }
 
-        CompilationUnit {
-            name: self.name,
-            src_cache: self.src_cache,
-            input: self.input,
-            stage: Lowered {
-                module: module.clone(),
-                files,
-            },
-            env: self.env,
-            session: self.session,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Lowered {
-    pub module: IRModule,
-    pub files: Vec<SourceFile<source_file::Lowered>>,
-}
-
-impl StageTrait for Lowered {
-    type SourceFilePhase = source_file::Lowered;
-    fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Lowered>> {
-        self.files.iter().find(|f| f.path == *path)
-    }
-}
-
-impl CompilationUnit<Lowered> {
-    pub fn module(&self) -> IRModule {
-        self.stage.module.clone()
-    }
+    //     CompilationUnit {
+    //         name: self.name,
+    //         src_cache: self.src_cache,
+    //         input: self.input,
+    //         stage: Lowered {
+    //             module: module.clone(),
+    //             files,
+    //         },
+    //         env: self.env,
+    //         session: self.session,
+    //     }
+    // }
 
     pub fn meta_for(&self, path: &PathBuf) -> Option<Ref<'_, ExprMetaStorage>> {
         for file in &self.stage.files {
@@ -392,3 +371,32 @@ impl CompilationUnit<Lowered> {
         None
     }
 }
+
+// #[derive(Debug)]
+// pub struct Lowered {
+//     pub module: IRModule,
+//     pub files: Vec<SourceFile<source_file::Lowered>>,
+// }
+
+// impl StageTrait for Lowered {
+//     type SourceFilePhase = source_file::Lowered;
+//     fn source_file(&self, path: &Path) -> Option<&SourceFile<source_file::Lowered>> {
+//         self.files.iter().find(|f| f.path == *path)
+//     }
+// }
+
+// impl CompilationUnit<Lowered> {
+//     pub fn module(&self) -> IRModule {
+//         self.stage.module.clone()
+//     }
+
+//     pub fn meta_for(&self, path: &PathBuf) -> Option<Ref<'_, ExprMetaStorage>> {
+//         for file in &self.stage.files {
+//             if &file.path == path {
+//                 return Some(file.meta.borrow());
+//             }
+//         }
+
+//         None
+//     }
+// }

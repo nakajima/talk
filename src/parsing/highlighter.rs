@@ -62,7 +62,7 @@ pub struct Higlighter<'a> {
 
 impl<'a> Higlighter<'a> {
     pub fn new(source: &'a str) -> Self {
-        let source_file = parse(source, "-".into());
+        let source_file = parse(source, "-");
 
         Self {
             source,

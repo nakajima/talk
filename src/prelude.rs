@@ -6,13 +6,12 @@ use crate::{
     SymbolID, SymbolTable,
     compiling::driver::{Driver, DriverConfig},
     environment::Environment,
-    lowering::ir_module::IRModule,
 };
 
 pub struct Prelude {
     pub symbols: SymbolTable,
     pub environment: Environment,
-    pub module: IRModule,
+    // pub module: IRModule,
     pub global_scope: BTreeMap<String, SymbolID>,
 }
 
@@ -80,16 +79,9 @@ pub fn _compile_prelude() -> Prelude {
         &driver.module_env,
     );
     let global_scope = resolved.stage.global_scope.clone();
-    let unit = resolved
-        .typed(&mut driver.symbol_table, &driver.config, &driver.module_env)
-        .lower(
-            &mut driver.symbol_table,
-            &driver.config,
-            IRModule::new(),
-            &driver.module_env,
-        );
+    let unit = resolved.typed(&mut driver.symbol_table, &driver.config, &driver.module_env);
+
     let mut environment = unit.env.clone();
-    let module = unit.module();
     let symbols = &driver.symbol_table;
 
     #[allow(clippy::panic)]
@@ -150,24 +142,12 @@ pub fn _compile_prelude() -> Prelude {
         exit(0)
     }
 
-    // Populate type members from row constraints before clearing constraints
-    // This ensures prelude types have all their members available when imported
-    let type_ids: Vec<SymbolID> = environment.types.keys().cloned().collect();
-    for type_id in type_ids {
-        if let Some(mut type_def) = environment.types.remove(&type_id) {
-            type_def.populate_from_rows(&environment);
-
-            environment.types.insert(type_id, type_def);
-        }
-    }
-
     environment.clear_constraints();
 
     Prelude {
         symbols: symbols.clone(),
         environment,
         global_scope,
-        module,
     }
 }
 

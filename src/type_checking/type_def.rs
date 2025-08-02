@@ -7,7 +7,7 @@ use crate::{
     environment::{Environment, TypeParameter},
     expr_id::ExprID,
     substitutions::Substitutions,
-    ty::Ty,
+    ty::Ty2,
     type_checker::Scheme,
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -17,13 +17,13 @@ pub struct Property {
     pub index: usize,
     pub name: String,
     pub expr_id: ExprID,
-    pub ty: Ty,
+    pub ty: Ty2,
     pub has_default: bool,
     pub symbol_id: Option<SymbolID>,
 }
 
 impl Property {
-    pub fn new(index: usize, name: String, expr_id: ExprID, ty: Ty, has_default: bool) -> Self {
+    pub fn new(index: usize, name: String, expr_id: ExprID, ty: Ty2, has_default: bool) -> Self {
         Self {
             index,
             name,
@@ -39,19 +39,19 @@ impl Property {
 pub struct Initializer {
     pub name: String,
     pub expr_id: ExprID,
-    pub ty: Ty,
+    pub ty: Ty2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Method {
     pub name: String,
     pub expr_id: ExprID,
-    pub ty: Ty,
+    pub ty: Ty2,
     pub symbol_id: Option<SymbolID>,
 }
 
 impl Method {
-    pub fn new(name: String, expr_id: ExprID, ty: Ty) -> Self {
+    pub fn new(name: String, expr_id: ExprID, ty: Ty2) -> Self {
         Self {
             name,
             expr_id,
@@ -65,7 +65,7 @@ impl Method {
 pub struct EnumVariant {
     pub tag: usize,
     pub name: String,
-    pub ty: Ty,
+    pub ty: Ty2,
 }
 
 pub type TypeParams = Vec<TypeParameter>;
@@ -80,7 +80,7 @@ pub enum TypeMember {
 }
 
 impl TypeMember {
-    pub fn ty(&self) -> &Ty {
+    pub fn ty(&self) -> &Ty2 {
         match self {
             TypeMember::Method(method) => &method.ty,
             TypeMember::MethodRequirement(method) => &method.ty,
@@ -119,7 +119,7 @@ pub enum TypeDefKind {
     Enum,
     // Builtins can actually be structs/protocols/enums but we want to keep
     // them handled separately since their actual definitions are builtin.
-    Builtin(Ty),
+    Builtin(Ty2),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,16 +184,16 @@ impl TypeDef {
         self.row_managed_members.clear();
     }
 
-    pub fn ty(&self) -> Ty {
+    pub fn ty(&self) -> Ty2 {
         match &self.kind {
-            TypeDefKind::Enum => Ty::enum_type(self.symbol_id, self.canonical_type_parameters()),
+            TypeDefKind::Enum => Ty2::enum_type(self.symbol_id, self.canonical_type_parameters()),
             TypeDefKind::Struct => {
                 // Use the struct_type helper
-                Ty::struct_type(self.symbol_id, self.canonical_type_parameters())
+                Ty2::struct_type(self.symbol_id, self.canonical_type_parameters())
             }
             TypeDefKind::Protocol => {
                 // Use the protocol_type helper
-                Ty::protocol_type(self.symbol_id, self.canonical_type_parameters())
+                Ty2::protocol_type(self.symbol_id, self.canonical_type_parameters())
             }
             TypeDefKind::Builtin(ty) => ty.clone(),
         }
@@ -216,10 +216,10 @@ impl TypeDef {
             .collect()
     }
 
-    pub fn canonical_type_parameters(&self) -> Vec<Ty> {
+    pub fn canonical_type_parameters(&self) -> Vec<Ty2> {
         self.type_parameters
             .iter()
-            .map(|p| Ty::TypeVar(p.type_var.clone()))
+            .map(|p| Ty2::TypeVar(p.type_var.clone()))
             .collect()
     }
 
@@ -231,7 +231,7 @@ impl TypeDef {
         format!("@_{}_{}_{name}", self.symbol_id().0, self.name())
     }
 
-    pub fn instantiate(&self, env: &mut Environment) -> Ty {
+    pub fn instantiate(&self, env: &mut Environment) -> Ty2 {
         let scheme = Scheme::new(
             self.ty(),
             self.type_parameters()
@@ -244,7 +244,7 @@ impl TypeDef {
         env.instantiate(&scheme)
     }
 
-    pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty> {
+    pub fn member_ty_with_conformances(&self, name: &str, env: &mut Environment) -> Option<Ty2> {
         // First check the members HashMap
         // This handles:
         // 1. Post-constraint-solving access (members populated from rows)
@@ -259,7 +259,7 @@ impl TypeDef {
         if let Some(row_var) = self.row_var.clone() {
             // Look through constraints to find HasField constraints for this row variable
             for constraint in env.constraints() {
-                if let crate::constraint::Constraint::Row {
+                if let crate::constraint::Constraint2::Row {
                     constraint: ref row_constraint,
                     ..
                 } = constraint
@@ -304,7 +304,7 @@ impl TypeDef {
         None
     }
 
-    pub fn member_ty(&self, name: &str) -> Option<&Ty> {
+    pub fn member_ty(&self, name: &str) -> Option<&Ty2> {
         self.members.get(name).map(|t| t.ty())
     }
 
@@ -473,11 +473,11 @@ impl TypeDef {
         // Also add row constraints for row polymorphism within this compilation unit
         let row_var = self.ensure_row_var(env);
 
-        use crate::constraint::Constraint;
+        use crate::constraint::Constraint2;
         use crate::row::{FieldMetadata, RowConstraint};
 
         for property in properties {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: property.expr_id,
                 constraint: RowConstraint::HasField {
                     type_var: row_var.clone(),
@@ -511,11 +511,11 @@ impl TypeDef {
         // Also add row constraints for row polymorphism within this compilation unit
         let row_var = self.ensure_row_var(env);
 
-        use crate::constraint::Constraint;
+        use crate::constraint::Constraint2;
         use crate::row::{FieldMetadata, RowConstraint};
 
         for method in methods {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: method.expr_id,
                 constraint: RowConstraint::HasField {
                     type_var: row_var.clone(),
@@ -549,11 +549,11 @@ impl TypeDef {
         // Also add row constraints for row polymorphism within this compilation unit
         let row_var = self.ensure_row_var(env);
 
-        use crate::constraint::Constraint;
+        use crate::constraint::Constraint2;
         use crate::row::{FieldMetadata, RowConstraint};
 
         for initializer in initializers {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: initializer.expr_id,
                 constraint: RowConstraint::HasField {
                     type_var: row_var.clone(),
@@ -581,11 +581,11 @@ impl TypeDef {
         // Also add row constraints for row polymorphism
         let row_var = self.ensure_row_var(env);
 
-        use crate::constraint::Constraint;
+        use crate::constraint::Constraint2;
         use crate::row::{FieldMetadata, RowConstraint};
 
         for variant in variants {
-            env.constrain(Constraint::Row {
+            env.constrain(Constraint2::Row {
                 expr_id: ExprID(0), // TODO: variants don't have expr_id
                 constraint: RowConstraint::HasField {
                     type_var: row_var.clone(),
@@ -620,7 +620,7 @@ impl TypeDef {
         // First, check if there are any row constraints for this type
         let mut has_row_constraints = false;
         for constraint in env.constraints() {
-            if let crate::constraint::Constraint::Row {
+            if let crate::constraint::Constraint2::Row {
                 constraint: row_constraint,
                 ..
             } = constraint
@@ -664,7 +664,7 @@ impl TypeDef {
         // Collect all member names that are defined by row constraints
         let mut row_defined_members = std::collections::HashSet::new();
         for constraint in env.constraints() {
-            if let crate::constraint::Constraint::Row {
+            if let crate::constraint::Constraint2::Row {
                 constraint: row_constraint,
                 ..
             } = constraint
@@ -712,7 +712,7 @@ impl TypeDef {
 
         // Collect all fields from row constraints
         for constraint in env.constraints() {
-            if let crate::constraint::Constraint::Row {
+            if let crate::constraint::Constraint2::Row {
                 constraint: row_constraint,
                 expr_id,
             } = constraint

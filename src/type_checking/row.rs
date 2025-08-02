@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::{expr_id::ExprID, substitutions::Substitutions, ty::Ty, type_var_id::TypeVarID};
+use crate::{expr_id::ExprID, substitutions::Substitutions, ty::Ty2, type_var_id::TypeVarID};
 
 /// A label for a field/variant in a row
 pub type Label = String;
@@ -23,7 +23,7 @@ pub enum RowConstraint {
     HasField {
         type_var: TypeVarID,
         label: Label,
-        field_ty: Ty,
+        field_ty: Ty2,
         metadata: FieldMetadata,
     },
 
@@ -63,7 +63,7 @@ pub enum RowConstraint {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldInfo {
     /// The type of this field
-    pub ty: Ty,
+    pub ty: Ty2,
     /// Expression ID where defined
     pub expr_id: ExprID,
     /// Additional metadata
@@ -251,7 +251,7 @@ pub fn has_field_constraint<'a>(
     type_var: &TypeVarID,
     label: &Label,
     constraints: &'a [RowConstraint],
-) -> Option<&'a Ty> {
+) -> Option<&'a Ty2> {
     for constraint in constraints {
         match constraint {
             RowConstraint::HasField {
@@ -300,7 +300,7 @@ impl RowConstraintBuilder {
         mut self,
         type_var: TypeVarID,
         label: Label,
-        field_ty: Ty,
+        field_ty: Ty2,
         metadata: FieldMetadata,
     ) -> Self {
         self.constraints.push(RowConstraint::HasField {
@@ -352,7 +352,7 @@ mod tests {
         let row1 = RowSpec::empty().with_field(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty2::Int,
                 expr_id: ExprID(0),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -365,7 +365,7 @@ mod tests {
         let row2 = RowSpec::empty().with_field(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Float,
+                ty: Ty2::Float,
                 expr_id: ExprID(1),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -399,7 +399,7 @@ mod tests {
             .has_field(
                 tv.clone(),
                 "x".to_string(),
-                Ty::Int,
+                Ty2::Int,
                 FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -410,7 +410,7 @@ mod tests {
 
         assert_eq!(
             has_field_constraint(&tv, &"x".to_string(), &constraints),
-            Some(&Ty::Int)
+            Some(&Ty2::Int)
         );
         assert_eq!(
             has_field_constraint(&tv, &"y".to_string(), &constraints),

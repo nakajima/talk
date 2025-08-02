@@ -7,16 +7,15 @@ use crate::{
     SourceFile, SymbolID, SymbolInfo, SymbolKind, SymbolTable,
     compiling::{
         compilation_session::{CompilationSession, SharedCompilationSession},
-        compilation_unit::{CompilationError, CompilationUnit, Lowered, Parsed, Typed},
+        compilation_unit::{CompilationError, CompilationUnit, Parsed, Typed},
         compiled_module::{CompiledModule, ImportedSymbol, ImportedSymbolKind},
     },
     diagnostic::{Diagnostic, Position},
     environment::Environment,
-    lowering::ir_module::IRModule,
     name::ResolvedName,
     semantic_index::QueryDatabase,
     source_file,
-    ty::Ty,
+    ty::Ty2,
     typed_expr::TypedExpr,
 };
 
@@ -132,31 +131,6 @@ impl Driver {
         result
     }
 
-    pub fn lower(&mut self) -> Vec<CompilationUnit<Lowered>> {
-        let mut result = vec![];
-
-        for unit in self.units.clone() {
-            let parsed = unit.parse(self.config.include_comments);
-            let resolved = parsed.resolved(&mut self.symbol_table, &self.config, &self.module_env);
-            let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
-
-            let module = if self.config.include_prelude {
-                crate::prelude::compile_prelude().module.clone()
-            } else {
-                IRModule::new()
-            };
-
-            result.push(typed.lower(
-                &mut self.symbol_table,
-                &self.config,
-                module,
-                &self.module_env,
-            ));
-        }
-
-        result
-    }
-
     pub fn check(&mut self) -> Vec<CompilationUnit<Typed>> {
         let mut result = vec![];
         let mut new_units = vec![];
@@ -240,7 +214,7 @@ impl Driver {
             tracing::error!("Unable to clear diagnostics")
         }
 
-        self.lower();
+        self.check();
 
         #[allow(clippy::unwrap_used)]
         match self.session.lock() {
@@ -370,7 +344,7 @@ impl Driver {
 
             let typed = resolved.typed(&mut self.symbol_table, &self.config, &self.module_env);
 
-            let mut typed_symbols = HashMap::<SymbolID, Ty>::new();
+            let mut typed_symbols = HashMap::<SymbolID, Ty2>::new();
             for (_, imported) in symbols.iter() {
                 let info = self
                     .symbol_table
@@ -388,35 +362,14 @@ impl Driver {
 
             let types = typed.env.types.clone();
 
-            let lowered = typed
-                .lower(
-                    &mut self.symbol_table,
-                    &self.config,
-                    IRModule::new(),
-                    &self.module_env,
-                )
-                .module();
-
             // Go back and fill in indexes
             // TODO: This too, will be slow
-            for (i, function) in lowered.functions.iter().enumerate() {
-                for symbol in symbols.values_mut() {
-                    if ResolvedName(symbol.symbol, symbol.name.clone())
-                        .mangled(typed_symbols.get(&symbol.symbol).expect("how tho"))
-                        == function.name
-                        && let ImportedSymbolKind::Function { index } = &mut symbol.kind
-                    {
-                        *index = i;
-                    }
-                }
-            }
 
             let module = CompiledModule {
                 module_name: unit.name.clone(),
                 symbols,
                 types,
                 typed_symbols,
-                ir_module: lowered,
             };
 
             modules.push(module);
@@ -434,7 +387,7 @@ mod tests {
             compiled_module::{ImportedSymbol, ImportedSymbolKind},
             driver::Driver,
         },
-        ty::Ty,
+        ty::Ty2,
     };
 
     #[test]
@@ -471,12 +424,12 @@ mod tests {
 
         assert_eq!(
             module.typed_symbols.get(&SymbolID::resolved(1)).unwrap(),
-            &Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+            &Ty2::Func(vec![Ty2::Int], Ty2::Int.into(), vec![])
         );
 
         assert_eq!(
             module.typed_symbols.get(&SymbolID::resolved(2)).unwrap(),
-            &Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
+            &Ty2::Func(vec![Ty2::Float], Ty2::Float.into(), vec![])
         );
     }
 }

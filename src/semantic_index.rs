@@ -1,5 +1,5 @@
 use crate::{
-    expr_id::ExprID, lexing::span::Span, span_index::SpanIndex, symbol_table::SymbolID, ty::Ty,
+    expr_id::ExprID, lexing::span::Span, span_index::SpanIndex, symbol_table::SymbolID, ty::Ty2,
 };
 use std::collections::HashMap;
 
@@ -8,24 +8,24 @@ use std::collections::HashMap;
 pub enum ResolvedExpr {
     Variable {
         symbol: SymbolID,
-        ty: Ty,
+        ty: Ty2,
     },
     MemberAccess {
         receiver: ExprID,
         member_name: String,
         resolved_symbol: Option<SymbolID>,
-        ty: Ty,
+        ty: Ty2,
     },
     FunctionCall {
         func: ExprID,
         args: Vec<ExprID>,
-        ty: Ty,
+        ty: Ty2,
     },
     Literal {
-        ty: Ty,
+        ty: Ty2,
     },
     TypeExpression {
-        ty: Ty,
+        ty: Ty2,
     },
 }
 
@@ -47,7 +47,7 @@ pub struct TypeInfo {
 pub struct MemberInfo {
     pub name: String,
     pub symbol: SymbolID,
-    pub ty: Ty,
+    pub ty: Ty2,
     pub kind: MemberKind,
 }
 
@@ -173,7 +173,7 @@ impl SemanticIndex {
 /// Query interface for the semantic index
 pub trait QueryDatabase {
     /// What type does this expression have?
-    fn expr_type(&self, expr: ExprID) -> Option<Ty>;
+    fn expr_type(&self, expr: ExprID) -> Option<Ty2>;
 
     /// What symbol does this expression resolve to?
     fn expr_symbol(&self, expr: ExprID) -> Option<SymbolID>;
@@ -189,7 +189,7 @@ pub trait QueryDatabase {
 }
 
 impl QueryDatabase for SemanticIndex {
-    fn expr_type(&self, expr: ExprID) -> Option<Ty> {
+    fn expr_type(&self, expr: ExprID) -> Option<Ty2> {
         self.expressions.get(&expr).map(|resolved| match resolved {
             ResolvedExpr::Variable { ty, .. } => ty.clone(),
             ResolvedExpr::MemberAccess { ty, .. } => ty.clone(),

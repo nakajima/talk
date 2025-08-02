@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::{SymbolID, lowering::ir_module::IRModule, ty::Ty, type_def::TypeDef};
+use crate::{SymbolID, ty::Ty2, type_def::TypeDef};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImportedSymbolKind {
@@ -20,9 +20,8 @@ pub struct ImportedSymbol {
 pub struct CompiledModule {
     pub module_name: String,
     pub symbols: HashMap<String, ImportedSymbol>,
-    pub typed_symbols: HashMap<SymbolID, Ty>,
+    pub typed_symbols: HashMap<SymbolID, Ty2>,
     pub types: BTreeMap<SymbolID, TypeDef>,
-    pub ir_module: IRModule,
 }
 
 #[cfg(test)]

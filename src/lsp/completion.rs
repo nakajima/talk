@@ -3,7 +3,7 @@ use crate::Typed;
 use crate::compiling::driver::Driver;
 use crate::environment::Environment;
 use crate::symbol_table::SymbolKind;
-use crate::type_checking::ty::Ty;
+use crate::type_checking::ty::Ty2;
 use crate::type_def::TypeMember;
 use async_lsp::lsp_types::CompletionItem;
 use async_lsp::lsp_types::CompletionItemKind;
@@ -90,11 +90,11 @@ impl<'a> CompletionContext<'a> {
     }
 
     /// Get completions for a specific type (handles both records and typedefs)
-    fn get_completions_for_type(&self, ty: &Ty) -> Vec<CompletionItem> {
+    fn get_completions_for_type(&self, ty: &Ty2) -> Vec<CompletionItem> {
         match ty {
             // Enums are now represented as Row types
             // Handle unified row types
-            Ty::Row {
+            Ty2::Row {
                 fields, nominal_id, ..
             } => {
                 if let Some(id) = nominal_id {

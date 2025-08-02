@@ -1,0 +1,33 @@
+use crate::types::ty::Ty;
+
+#[derive(Debug)]
+pub enum Direction {
+    Left,
+    Right,
+}
+
+pub type Label = String;
+
+#[derive(Debug, Clone)]
+pub struct RowCombination {
+    pub left: Row,
+    pub right: Row,
+    pub goal: Row,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowVar(pub u32);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Row {
+    Open(RowVar),
+    Closed(ClosedRow),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosedRow {
+    // Sorted lexographically
+    pub fields: Vec<Label>,
+    // One type for each field in fields
+    pub values: Vec<Ty>,
+}
