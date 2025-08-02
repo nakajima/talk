@@ -369,6 +369,42 @@ impl Environment {
 
         Ok(scheme)
     }
+
+    /// Look up an enum type by its symbol ID
+    pub fn lookup_enum(&self, id: &SymbolID) -> Option<Ty> {
+        self.lookup_symbol(id).and_then(|scheme| {
+            match &scheme.ty {
+                ty @ Ty::Row { kind: RowKind::Enum(..), .. } => Some(ty.clone()),
+                _ => None,
+            }
+        })
+    }
+
+    /// Look up a struct type by its symbol ID
+    pub fn lookup_struct(&self, id: &SymbolID) -> Option<Ty> {
+        self.lookup_symbol(id).and_then(|scheme| {
+            match &scheme.ty {
+                ty @ Ty::Row { kind: RowKind::Struct(..), .. } => Some(ty.clone()),
+                _ => None,
+            }
+        })
+    }
+
+    /// Look up a protocol type by its symbol ID
+    pub fn lookup_protocol(&self, id: &SymbolID) -> Option<Ty> {
+        self.lookup_symbol(id).and_then(|scheme| {
+            match &scheme.ty {
+                ty @ Ty::Row { kind: RowKind::Protocol(..), .. } => Some(ty.clone()),
+                _ => None,
+            }
+        })
+    }
+
+    /// Look up any type by its symbol ID
+    pub fn lookup_type(&self, id: &SymbolID) -> Option<Ty> {
+        self.lookup_symbol(id).map(|scheme| scheme.ty.clone())
+    }
+
 }
 
 fn walk(ty: &Ty, map: &Substitutions) -> Ty {
@@ -405,19 +441,16 @@ fn walk(ty: &Ty, map: &Substitutions) -> Ty {
         Ty::Tuple(types) => Ty::Tuple(types.iter().map(|p| walk(p, map)).collect()),
         Ty::SelfType | Ty::Primitive(_) => ty.clone(),
         Ty::Row {
-            fields,
-            row,
+            type_var,
+            constraints,
             generics,
             kind,
         } => {
-            let new_fields = fields
-                .iter()
-                .map(|(name, field_ty)| (name.clone(), walk(field_ty, map)))
-                .collect();
-            let new_row = row.as_ref().map(|r| Box::new(walk(r, map)));
+            // TODO: Also walk types within constraints
+            let new_constraints = constraints.clone(); // For now, just clone
             Ty::Row {
-                fields: new_fields,
-                row: new_row,
+                type_var: type_var.clone(),
+                constraints: new_constraints,
                 generics: generics.iter().map(|g| walk(g, map)).collect(),
                 kind: kind.clone(),
             }
@@ -461,20 +494,20 @@ pub fn free_type_vars(ty: &Ty) -> HashSet<TypeVarID> {
         Ty::Array(ty) => {
             s.extend(free_type_vars(ty));
         }
-        Ty::Void | Ty::Int | Ty::Bool | Ty::Float | Ty::Pointer | Ty::SelfType | Ty::Byte => {
+        Ty::Primitive(_) | Ty::SelfType => {
             // These types contain no nested types, so there's nothing to do.
         }
         Ty::Row {
-            fields,
-            row,
+            constraints,
             generics,
             ..
         } => {
-            for (_, field_ty) in fields {
-                s.extend(free_type_vars(field_ty));
-            }
-            if let Some(row_ty) = row {
-                s.extend(free_type_vars(row_ty));
+            // TODO: Also collect free type vars from constraints
+            for constraint in constraints {
+                if let crate::row::RowConstraint::HasField { field_ty, .. } = constraint {
+                    s.extend(free_type_vars(field_ty));
+                }
+                // TODO: Handle other constraint types
             }
             for generic in generics {
                 s.extend(free_type_vars(generic));

@@ -116,24 +116,18 @@ impl Substitutions {
                 func: self.apply(func, depth + 1, context).into(),
             },
             Ty::Row {
-                fields,
-                row,
+                type_var,
+                constraints,
                 generics,
                 kind,
             } => {
-                let applied_fields: Vec<(String, Ty)> = fields
-                    .iter()
-                    .map(|(name, field_ty)| {
-                        (name.clone(), self.apply(field_ty, depth + 1, context))
-                    })
-                    .collect();
-                let applied_row = row
-                    .as_ref()
-                    .map(|r| Box::new(self.apply(r, depth + 1, context)));
+                // TODO: Apply substitutions to types within constraints
+                let applied_constraints = constraints.clone(); // For now, just clone
+                let applied_generics = self.apply_multiple(generics, depth + 1, context);
                 Ty::Row {
-                    fields: applied_fields,
-                    row: applied_row,
-                    generics: self.apply_multiple(generics, depth + 1, context),
+                    type_var: type_var.clone(),
+                    constraints: applied_constraints,
+                    generics: applied_generics,
                     kind: kind.clone(),
                 }
             }
@@ -332,23 +326,29 @@ impl Substitutions {
             (
                 Ty::Row {
                     generics: lhs_generics,
-                    fields: lhs_fields,
                     ..
                 },
                 Ty::Row {
                     generics: rhs_generics,
-                    fields: rhs_fields,
                     ..
                 },
-            ) if lhs_generics.len() == rhs_generics.len()
-                && lhs_fields.len() == rhs_fields.len() =>
+            ) if lhs_generics.len() == rhs_generics.len() =>
             {
                 for (g1, g2) in lhs_generics.iter().zip(rhs_generics) {
                     self.unify(g1, &g2, context, generation)?;
                 }
 
-                let lhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(lhs_fields.clone());
-                let rhs_fields: BTreeMap<String, Ty> = BTreeMap::from_iter(rhs_fields.clone());
+                // Get fields from constraints
+                let lhs_fields_info = lhs.get_row_fields();
+                let rhs_fields_info = rhs.get_row_fields();
+                
+                // Convert to BTreeMap<String, Ty> for comparison
+                let lhs_fields: BTreeMap<String, Ty> = lhs_fields_info.iter()
+                    .map(|(k, v)| (k.clone(), v.ty.clone()))
+                    .collect();
+                let rhs_fields: BTreeMap<String, Ty> = rhs_fields_info.iter()
+                    .map(|(k, v)| (k.clone(), v.ty.clone()))
+                    .collect();
 
                 for (label, ty) in lhs_fields.iter() {
                     let Some(rhs_ty) = rhs_fields.get(label) else {

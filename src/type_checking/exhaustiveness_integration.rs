@@ -7,7 +7,7 @@ use crate::{
     environment::Environment,
     expr_id::ExprID,
     row::{FieldMetadata, RowConstraint},
-    ty::{RowKind, Ty},
+    ty::{Primitive, RowKind, Ty},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{self, Pattern},
 };
@@ -148,7 +148,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
         patterns: &[typed_expr::Pattern],
     ) -> ExhaustivenessResult {
         // Special handling for boolean types to match expected format
-        if matches!(scrutinee_ty, Ty::Bool) {
+        if matches!(scrutinee_ty, Ty::Primitive(Primitive::Bool)) {
             return self.check_bool_exhaustiveness(patterns);
         }
 

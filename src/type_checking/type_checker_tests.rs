@@ -20,7 +20,7 @@ mod tests {
         row_constraints::RowConstraintSolver,
         substitutions::Substitutions,
         token_kind::TokenKind,
-        ty::{RowKind, Ty},
+        ty::{Primitive, RowKind, Ty},
         type_checker::TypeError,
         type_def::{Method, Property, TypeDef, TypeDefKind, TypeMember},
         type_var_id::{TypeVarID, TypeVarKind},
@@ -57,9 +57,9 @@ mod tests {
                     args: vec![any_typed!(
                         Expr::CallArg {
                             label: None,
-                            value: any_typed!(Expr::LiteralInt("123".into()), Ty::Int).into()
+                            value: any_typed!(Expr::LiteralInt("123".into()), Ty::Primitive(Primitive::Int)).into()
                         },
-                        Ty::Int
+                        Ty::Primitive(Primitive::Int)
                     )],
                 },
                 Ty::struct_type(SymbolID::typed(1), "Person".to_string(), vec![])
@@ -106,25 +106,25 @@ mod tests {
                                     type_args: vec![],
                                     args: vec![]
                                 },
-                                Ty::struct_type(SymbolID::ANY, "Person".to_string(), vec![Ty::Int])
+                                Ty::struct_type(SymbolID::ANY, "Person".to_string(), vec![Ty::Primitive(Primitive::Int)])
                             )
                             .into()
                         ),
                         "foo".to_string()
                     ),
-                    Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+                    Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Int).into(), vec![])
                 )
                 .into(),
                 args: vec![any_typed!(
                     Expr::CallArg {
                         label: None,
-                        value: any_typed!(Expr::LiteralInt("1".to_string()), Ty::Int).into()
+                        value: any_typed!(Expr::LiteralInt("1".to_string()), Ty::Primitive(Primitive::Int)).into()
                     },
-                    Ty::Int
+                    Ty::Primitive(Primitive::Int)
                 )],
                 type_args: vec![]
             },
-            Ty::Int
+            Ty::Primitive(Primitive::Int)
         );
 
         let expected_float = any_typed!(
@@ -152,26 +152,26 @@ mod tests {
                                 Ty::struct_type(
                                     SymbolID::ANY,
                                     "Person".to_string(),
-                                    vec![Ty::Float]
+                                    vec![Ty::Primitive(Primitive::Float)]
                                 )
                             )
                             .into()
                         ),
                         "foo".to_string()
                     ),
-                    Ty::Func(vec![Ty::Float], Ty::Float.into(), vec![])
+                    Ty::Func(vec![Ty::Primitive(Primitive::Float)], Ty::Primitive(Primitive::Float).into(), vec![])
                 )
                 .into(),
                 args: vec![any_typed!(
                     Expr::CallArg {
                         label: None,
-                        value: any_typed!(Expr::LiteralFloat("1.23".to_string()), Ty::Float).into()
+                        value: any_typed!(Expr::LiteralFloat("1.23".to_string()), Ty::Primitive(Primitive::Float)).into()
                     },
-                    Ty::Float
+                    Ty::Primitive(Primitive::Float)
                 )],
                 type_args: vec![]
             },
-            Ty::Float
+            Ty::Primitive(Primitive::Float)
         );
 
         assert_eq_diff!(checked.roots()[1], expected_int);
@@ -191,7 +191,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -211,7 +211,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -282,13 +282,13 @@ mod tests {
     #[test]
     fn checks_an_int() {
         let checker = check("123").unwrap();
-        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
     fn checks_a_float() {
         let checker = check("123.0").unwrap();
-        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(checker.root_ids()[0]).unwrap(), Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -352,8 +352,8 @@ mod tests {
             );
         };
 
-        assert_eq!(params, vec![Ty::Int]);
-        assert_eq!(*return_type, Ty::Int);
+        assert_eq!(params, vec![Ty::Primitive(Primitive::Int)]);
+        assert_eq!(*return_type, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -366,14 +366,14 @@ mod tests {
         )
         .unwrap();
         let root_id = checker.root_ids()[1];
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
     fn checks_a_let_assignment() {
         let checker = check("let count = 123\ncount").unwrap();
         let root_id = checker.root_ids()[1];
-        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(root_id).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -423,8 +423,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Bool);
+        assert_eq!(checked.type_for(checked.root_ids()[1]).unwrap(), Ty::Primitive(Primitive::Int));
+        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Primitive(Primitive::Bool));
     }
 
     #[test]
@@ -543,8 +543,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Primitive(Primitive::Int));
+        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -576,8 +576,8 @@ mod tests {
             } => {
                 assert_eq!(params.len(), 1);
                 // both even and odd must have the same input and output type
-                assert_eq!(*ret, Ty::Int);
-                assert_eq!(params[0].clone(), Ty::Int);
+                assert_eq!(*ret, Ty::Primitive(Primitive::Int));
+                assert_eq!(params[0].clone(), Ty::Primitive(Primitive::Int));
             }
             other => panic!("expected a function, got {other:?}"),
         }
@@ -599,7 +599,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::enum_type(SymbolID::typed(1), "Maybe".to_string(), vec![Ty::Int]),
+            Ty::enum_type(SymbolID::typed(1), "Maybe".to_string(), vec![Ty::Primitive(Primitive::Int)]),
         );
     }
 
@@ -614,8 +614,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
-        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Float);
+        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Primitive(Primitive::Int));
+        assert_eq!(checker.type_for(checker.root_ids()[2]).unwrap(), Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -628,7 +628,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Int);
+        assert_eq!(checker.type_for(checker.root_ids()[1]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -773,11 +773,11 @@ mod tests {
                                             conformances: vec![],
                                             introduces_type: false
                                         },
-                                        Ty::Int
+                                        Ty::Primitive(Primitive::Int)
                                     )]
                                 ),
                                 Ty::Func(
-                                    vec![Ty::Int],
+                                    vec![Ty::Primitive(Primitive::Int)],
                                     Box::new(Ty::enum_type(
                                         SymbolID::typed(1),
                                         "Fizz".to_string(),
@@ -873,7 +873,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
-                assert_eq!(generics, vec![Ty::Int]);
+                assert_eq!(generics, vec![Ty::Primitive(Primitive::Int)]);
             }
             _ => panic!("Expected Option<Int>, got {call1:?}"),
         }
@@ -887,7 +887,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
-                assert_eq!(generics, vec![Ty::Float]);
+                assert_eq!(generics, vec![Ty::Primitive(Primitive::Float)]);
             }
             _ => panic!("Expected Option<Float>, got {call2:?}"),
         }
@@ -928,7 +928,7 @@ mod tests {
                         ..
                     } => {
                         assert_eq!(*opt_id, SymbolID::typed(1)); // Option enum
-                        assert_eq!(opt_generics, &vec![Ty::Int]);
+                        assert_eq!(opt_generics, &vec![Ty::Primitive(Primitive::Int)]);
                     }
                     _ => panic!("Expected Option<Int> as first generic"),
                 }
@@ -964,7 +964,7 @@ mod tests {
                     params[0],
                     Ty::enum_type(SymbolID::typed(1), "Boolean".to_string(), vec![])
                 ); // Bool
-                assert_eq!(*ret, Ty::Int);
+                assert_eq!(*ret, Ty::Primitive(Primitive::Int));
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
         }
@@ -994,9 +994,9 @@ mod tests {
                 assert_eq!(params.len(), 1);
                 assert_eq!(
                     params[0],
-                    Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![Ty::Int])
+                    Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![Ty::Primitive(Primitive::Int)])
                 ); // Option<Int>
-                assert_eq!(*ret, Ty::Int);
+                assert_eq!(*ret, Ty::Primitive(Primitive::Int));
             }
             _ => panic!("Expected function type, got {func_ty:?}"),
         }
@@ -1104,7 +1104,7 @@ mod tests {
 
         // Call should type check correctly
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(call_result, Ty::Int);
+        assert_eq!(call_result, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1150,7 +1150,7 @@ mod tests {
         let call_result = checker.type_for(checker.root_ids()[2]).unwrap();
         assert_eq!(
             call_result,
-            Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![Ty::Int])
+            Ty::enum_type(SymbolID::typed(1), "Option".to_string(), vec![Ty::Primitive(Primitive::Int)])
         ); // Option<Int>
     }
 
@@ -1180,7 +1180,7 @@ mod tests {
                     Ty::enum_type(
                         SymbolID::typed(1),
                         "Either".to_string(),
-                        vec![Ty::Int, Ty::Float]
+                        vec![Ty::Primitive(Primitive::Int), Ty::Primitive(Primitive::Float)]
                     )
                 );
                 // Output: Either<Float, Int>
@@ -1189,7 +1189,7 @@ mod tests {
                     Ty::enum_type(
                         SymbolID::typed(1),
                         "Either".to_string(),
-                        vec![Ty::Float, Ty::Int]
+                        vec![Ty::Primitive(Primitive::Float), Ty::Primitive(Primitive::Int)]
                     )
                 );
             }
@@ -1218,7 +1218,7 @@ mod tests {
         let x_ty = checker.type_for(checker.root_ids()[0]).unwrap();
         assert_eq!(
             x_ty,
-            Ty::enum_type(SymbolID::OPTIONAL, "Optional".to_string(), vec![Ty::Int])
+            Ty::enum_type(SymbolID::OPTIONAL, "Optional".to_string(), vec![Ty::Primitive(Primitive::Int)])
         );
         match x_ty {
             Ty::Row {
@@ -1227,17 +1227,17 @@ mod tests {
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID
-                assert_eq!(generics, vec![Ty::Int]);
+                assert_eq!(generics, vec![Ty::Primitive(Primitive::Int)]);
             }
             _ => panic!("Expected Optional<Int>, got {x_ty:?}"),
         }
 
         // The match should return Int
         let match_ty = checker.type_for(checker.root_ids()[2]).unwrap();
-        assert_eq!(match_ty, Ty::Int);
+        assert_eq!(match_ty, Ty::Primitive(Primitive::Int));
         assert_eq!(
             checker.type_for(checker.root_ids()[3]).unwrap(),
-            Ty::enum_type(SymbolID::OPTIONAL, "Optional".to_string(), vec![Ty::Int])
+            Ty::enum_type(SymbolID::OPTIONAL, "Optional".to_string(), vec![Ty::Primitive(Primitive::Int)])
         );
     }
 
@@ -1253,7 +1253,7 @@ mod tests {
 
         // x should be Optional<Int>
         let x_ty = checker.type_for(checker.root_ids()[1]).unwrap();
-        assert_eq!(x_ty, Ty::Int.optional());
+        assert_eq!(x_ty, Ty::Primitive(Primitive::Int).optional());
     }
 
     #[test]
@@ -1347,7 +1347,7 @@ mod tests {
             checked
                 .type_for(enum_def.find_method("foo").unwrap().expr_id)
                 .unwrap(),
-            Ty::Func(vec![], Box::new(Ty::Int), vec![])
+            Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Int)), vec![])
         );
     }
 
@@ -1367,7 +1367,7 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
             Ty::Closure {
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into(),
+                func: Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Int).into(), vec![]).into(),
                 captures: vec![SymbolID::typed(2)]
             }
         );
@@ -1384,7 +1384,7 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Primitive(Primitive::Int)])
         );
     }
 
@@ -1400,9 +1400,9 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[0]).unwrap(),
             Ty::Method {
-                self_ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
+                self_ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Primitive(Primitive::Int)])
                     .into(),
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+                func: Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Int).into(), vec![]).into()
             }
         );
     }
@@ -1424,9 +1424,9 @@ mod tests {
                 vec![Ty::struct_type(
                     SymbolID::ARRAY,
                     "Array".to_string(),
-                    vec![Ty::Int]
+                    vec![Ty::Primitive(Primitive::Int)]
                 )],
-                Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int]).into(),
+                Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Primitive(Primitive::Int)]).into(),
                 vec![],
             )
         );
@@ -1448,7 +1448,7 @@ mod tests {
         .unwrap();
 
         assert!(checked.diagnostics().is_empty());
-        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Int));
+        assert_eq!(checked.type_for(checked.root_ids()[1]), Some(Ty::Primitive(Primitive::Int)));
     }
 
     #[test]
@@ -1464,9 +1464,9 @@ mod tests {
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
             Ty::Method {
-                self_ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
+                self_ty: Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Primitive(Primitive::Int)])
                     .into(),
-                func: Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![]).into()
+                func: Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Int).into(), vec![]).into()
             }
         );
     }
@@ -1485,11 +1485,11 @@ mod tests {
 
         assert_eq!(
             checked.type_for(checked.root_ids()[1]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Int])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Primitive(Primitive::Int)])
         );
         assert_eq!(
             checked.type_for(checked.root_ids()[2]).unwrap(),
-            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Float])
+            Ty::struct_type(SymbolID::ARRAY, "Array".to_string(), vec![Ty::Primitive(Primitive::Float)])
         );
     }
 
@@ -1516,19 +1516,19 @@ mod tests {
 
     #[test]
     fn checks_literal_true() {
-        assert_eq!(check("true").unwrap().first_root().ty, Ty::Bool);
+        assert_eq!(check("true").unwrap().first_root().ty, Ty::Primitive(Primitive::Bool));
     }
 
     #[test]
     fn checks_literal_false() {
-        assert_eq!(check("false").unwrap().first_root().ty, Ty::Bool);
+        assert_eq!(check("false").unwrap().first_root().ty, Ty::Primitive(Primitive::Bool));
     }
 
     #[test]
     fn checks_if_expression() {
         assert_eq!(
             check("if true { 1 } else { 0 }").unwrap().first_root().ty,
-            Ty::Int
+            Ty::Primitive(Primitive::Int)
         );
     }
 
@@ -1536,7 +1536,7 @@ mod tests {
     fn checks_if_expression_without_else() {
         assert_eq!(
             check("if true { 1 }").unwrap().first_root().ty,
-            Ty::Int.optional()
+            Ty::Primitive(Primitive::Int).optional()
         );
     }
 
@@ -1556,12 +1556,12 @@ mod tests {
 
     #[test]
     fn checks_loop_expression() {
-        assert_eq!(check("loop { 1 }").unwrap().first_root().ty, Ty::Void);
+        assert_eq!(check("loop { 1 }").unwrap().first_root().ty, Ty::Primitive(Primitive::Void));
     }
 
     #[test]
     fn checks_loop_expression_with_condition() {
-        assert_eq!(check("loop true { 1 }").unwrap().first_root().ty, Ty::Void);
+        assert_eq!(check("loop true { 1 }").unwrap().first_root().ty, Ty::Primitive(Primitive::Void));
     }
 
     #[test]
@@ -1572,7 +1572,7 @@ mod tests {
             checked.diagnostics().contains(&Diagnostic::typing(
                 checked.source_file.path.clone(),
                 (0, 14),
-                TypeError::Mismatch(Ty::Float.to_string(), Ty::Bool.to_string())
+                TypeError::Mismatch(Ty::Primitive(Primitive::Float).to_string(), Ty::Primitive(Primitive::Bool).to_string())
             )),
             "{:?}",
             checked.diagnostics()
@@ -1583,7 +1583,7 @@ mod tests {
     fn checks_tuple_expression() {
         assert_eq!(
             check("(1, true)").unwrap().first_root().ty,
-            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+            Ty::Tuple(vec![Ty::Primitive(Primitive::Int), Ty::Primitive(Primitive::Bool)])
         );
     }
 
@@ -1606,12 +1606,12 @@ mod tests {
 
     #[test]
     fn checks_grouping_expression() {
-        assert_eq!(check("(1)").unwrap().first_root().ty, Ty::Int);
+        assert_eq!(check("(1)").unwrap().first_root().ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
     fn checks_unary_expression() {
-        assert_eq!(check("-1").unwrap().first_root().ty, Ty::Int);
+        assert_eq!(check("-1").unwrap().first_root().ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1624,8 +1624,8 @@ mod tests {
             "1 + 2",
         )
         .unwrap();
-        assert_eq!(checked.first_root().ty, Ty::Int);
-        assert_eq!(check("1.1 + 2.1").unwrap().first_root().ty, Ty::Float);
+        assert_eq!(checked.first_root().ty, Ty::Primitive(Primitive::Int));
+        assert_eq!(check("1.1 + 2.1").unwrap().first_root().ty, Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -1639,7 +1639,7 @@ mod tests {
             .unwrap()
             .first_root()
             .ty,
-            Ty::Void
+            Ty::Primitive(Primitive::Void)
         );
     }
 
@@ -1667,7 +1667,7 @@ mod tests {
             .unwrap()
             .first_root()
             .ty,
-            Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+            Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Int).into(), vec![])
         );
     }
 
@@ -1682,7 +1682,7 @@ mod tests {
             .unwrap()
             .first_root()
             .ty,
-            Ty::Int
+            Ty::Primitive(Primitive::Int)
         );
     }
 
@@ -1704,7 +1704,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[2]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1760,17 +1760,17 @@ mod tests {
         .unwrap();
 
         let Some(person_def) = checked.env.lookup_struct(&SymbolID::typed(4)) else {
-            panic!("didn't get person: {:?}", checked.env.types);
+            panic!("didn't get person struct definition");
         };
 
         let Some(_aged_def) = checked.env.lookup_protocol(&SymbolID::typed(1)) else {
-            panic!("didn't get aged protocol: {:#?}", checked.env.types);
+            panic!("didn't get aged protocol definition");
         };
 
         assert_eq!(person_def.conformances.len(), 1);
         assert_eq!(
             person_def.conformances[0],
-            Conformance::new(SymbolID::typed(1), vec![Ty::Int])
+            Conformance::new(SymbolID::typed(1), vec![Ty::Primitive(Primitive::Int)])
         );
     }
 
@@ -1792,7 +1792,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1813,7 +1813,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[3]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1842,8 +1842,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty::Float);
-        assert_eq!(checked.type_for(checked.root_ids()[5]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty::Primitive(Primitive::Float));
+        assert_eq!(checked.type_for(checked.root_ids()[5]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1877,7 +1877,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty::Int);
+        assert_eq!(checked.type_for(checked.root_ids()[4]).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -1993,7 +1993,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(3).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -2012,7 +2012,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(2).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(2).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -2034,7 +2034,7 @@ mod tests {
                     generics: vec![],
                     params: vec![any_typed!(
                         Expr::Parameter(ResolvedName(SymbolID::typed(2), "x".to_string()), None),
-                        Ty::Int
+                        Ty::Primitive(Primitive::Int)
                     )],
                     body: any_typed!(
                         Expr::Block(vec![any_typed!(
@@ -2044,21 +2044,21 @@ mod tests {
                                         SymbolID::typed(2),
                                         "x".to_string()
                                     )),
-                                    Ty::Int
+                                    Ty::Primitive(Primitive::Int)
                                 )
                                 .into(),
                                 TokenKind::Plus,
-                                any_typed!(Expr::LiteralInt("1".to_string()), Ty::Int).into()
+                                any_typed!(Expr::LiteralInt("1".to_string()), Ty::Primitive(Primitive::Int)).into()
                             ),
-                            Ty::Int
+                            Ty::Primitive(Primitive::Int)
                         )]),
-                        Ty::Int
+                        Ty::Primitive(Primitive::Int)
                     )
                     .into(),
                     ret: None,
                     captures: vec![]
                 },
-                Ty::Func(vec![Ty::Int], Ty::Int.into(), vec![])
+                Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Int).into(), vec![])
             )
         );
     }
@@ -2094,7 +2094,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(checked.nth(1).unwrap(), Ty::Int);
+        assert_eq!(checked.nth(1).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -2148,7 +2148,7 @@ mod tests {
 
         assert_eq!(
             checked.nth(1).unwrap(),
-            Ty::Func(vec![Ty::Int], Ty::Bool.into(), vec![]),
+            Ty::Func(vec![Ty::Primitive(Primitive::Int)], Ty::Primitive(Primitive::Bool).into(), vec![]),
         );
     }
 
@@ -2192,8 +2192,8 @@ mod tests {
             checked.nth(2).unwrap(),
             Ty::struct_type(SymbolID::resolved(1), "ImportedStruct".to_string(), vec![])
         );
-        assert_eq!(checked.nth(3).unwrap(), Ty::Int);
-        assert_eq!(checked.nth(4).unwrap(), Ty::Float);
+        assert_eq!(checked.nth(3).unwrap(), Ty::Primitive(Primitive::Int));
+        assert_eq!(checked.nth(4).unwrap(), Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -2271,8 +2271,8 @@ mod tests {
 
         // Now simulate adding properties using the row-aware method
         let properties = vec![
-            Property::new(0, "x".to_string(), ExprID(2), Ty::Float, false),
-            Property::new(1, "y".to_string(), ExprID(3), Ty::Float, false),
+            Property::new(0, "x".to_string(), ExprID(2), Ty::Primitive(Primitive::Float), false),
+            Property::new(1, "y".to_string(), ExprID(3), Ty::Primitive(Primitive::Float), false),
         ];
 
         type_def.add_properties_with_rows(properties, &mut env);
@@ -2299,7 +2299,7 @@ mod tests {
         let resolved = solution
             .substitutions
             .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
-        assert_eq!(resolved, Ty::Float);
+        assert_eq!(resolved, Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -2336,7 +2336,7 @@ mod tests {
                 tag: 1,
                 name: "Some".to_string(),
                 ty: Ty::Func(
-                    vec![Ty::Int],
+                    vec![Ty::Primitive(Primitive::Int)],
                     Box::new(Ty::enum_type(option_id, "Option".to_string(), vec![])),
                     vec![],
                 ),
@@ -2406,7 +2406,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: point_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2446,7 +2446,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
                 metadata: FieldMetadata::MethodRequirement,
             },
         });
@@ -2464,7 +2464,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
                 metadata: FieldMetadata::Method,
             },
         });
@@ -2475,7 +2475,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "radius".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2502,7 +2502,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(2),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -2514,7 +2514,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(3),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -2540,7 +2540,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: exact_point.clone(),
                 label: "z".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -2573,7 +2573,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -2585,7 +2585,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -2620,7 +2620,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: open_point.clone(),
                 label: "z".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -2653,7 +2653,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: base.clone(),
                 label: "id".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2687,7 +2687,7 @@ mod tests {
         exact_fields.insert(
             "id".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(26),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -2725,7 +2725,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: exact_type,
                 label: "extra".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty::Primitive(Primitive::Bool),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -2771,7 +2771,7 @@ mod tests {
                 0,
                 "field".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty::Primitive(Primitive::Int),
                 false,
             )),
         );
@@ -2802,7 +2802,7 @@ mod tests {
                 0,
                 "x".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty::Primitive(Primitive::Int),
                 false,
             )),
         );
@@ -2823,7 +2823,7 @@ mod tests {
                 1,
                 "y".to_string(),
                 crate::expr_id::ExprID(2),
-                crate::ty::Ty::Float,
+                crate::ty::Ty::Primitive(Primitive::Float),
                 false,
             )),
         );
@@ -2852,7 +2852,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: tv.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2882,7 +2882,7 @@ mod tests {
         let resolved = solution
             .substitutions
             .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
-        assert_eq!(resolved, Ty::Int);
+        assert_eq!(resolved, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -2901,7 +2901,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: t1.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -2916,7 +2916,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: t2.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -2974,8 +2974,8 @@ mod tests {
             .substitutions
             .apply(&Ty::TypeVar(ry), 0, &mut env.context);
 
-        assert_eq!(resolved_x, Ty::Int);
-        assert_eq!(resolved_y, Ty::Float);
+        assert_eq!(resolved_x, Ty::Primitive(Primitive::Int));
+        assert_eq!(resolved_y, Ty::Primitive(Primitive::Float));
     }
 
     /// Test that protocols can define associated types as row constraints
@@ -3045,7 +3045,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3057,7 +3057,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(13),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -3174,7 +3174,7 @@ mod tests {
         time_fields.insert(
             "created".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(35),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -3186,7 +3186,7 @@ mod tests {
         time_fields.insert(
             "updated".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(36),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -3374,7 +3374,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -3388,7 +3388,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -3409,7 +3409,7 @@ mod tests {
                 constraint: RowConstraint::HasField {
                     type_var: color_row.clone(),
                     label: component.to_string(),
-                    field_ty: Ty::Int,
+                    field_ty: Ty::Primitive(Primitive::Int),
                     metadata: FieldMetadata::RecordField {
                         index: i,
                         has_default: false,
@@ -3474,12 +3474,12 @@ mod tests {
         let x_ty = solution
             .substitutions
             .apply(&Ty::TypeVar(x_result), 0, &mut env.context);
-        assert_eq!(x_ty, Ty::Float);
+        assert_eq!(x_ty, Ty::Primitive(Primitive::Float));
 
         let r_ty = solution
             .substitutions
             .apply(&Ty::TypeVar(r_result), 0, &mut env.context);
-        assert_eq!(r_ty, Ty::Int);
+        assert_eq!(r_ty, Ty::Primitive(Primitive::Int));
     }
 
     /// Test row restriction - removing fields from a type
@@ -3495,7 +3495,7 @@ mod tests {
         );
 
         let fields = vec![
-            ("id", Ty::Int),
+            ("id", Ty::Primitive(Primitive::Int)),
             ("name", Ty::string()),
             ("email", Ty::string()),
             ("password", Ty::string()),
@@ -3884,7 +3884,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: basic_errors.clone(),
                 label: "NotFound".to_string(),
-                field_ty: Ty::Void,
+                field_ty: Ty::Primitive(Primitive::Void),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
         });
@@ -3910,7 +3910,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: network_errors.clone(),
                 label: "Timeout".to_string(),
-                field_ty: Ty::Int, // timeout in seconds
+                field_ty: Ty::Primitive(Primitive::Int), // timeout in seconds
                 metadata: FieldMetadata::EnumCase { tag: 2 },
             },
         });
@@ -3920,7 +3920,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: network_errors.clone(),
                 label: "ConnectionRefused".to_string(),
-                field_ty: Ty::Void,
+                field_ty: Ty::Primitive(Primitive::Void),
                 metadata: FieldMetadata::EnumCase { tag: 3 },
             },
         });
@@ -4073,7 +4073,7 @@ mod tests {
         let extension_constraint = RowConstraint::HasField {
             type_var: extension.clone(),
             label: "age".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty::Primitive(Primitive::Int),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4122,7 +4122,7 @@ mod tests {
         exact_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(1),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -4148,7 +4148,7 @@ mod tests {
         let add_field = RowConstraint::HasField {
             type_var: exact.clone(),
             label: "y".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty::Primitive(Primitive::Int),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4182,7 +4182,7 @@ mod tests {
         let add_to_extended = RowConstraint::HasField {
             type_var: extended.clone(),
             label: "y".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty::Primitive(Primitive::Int),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4249,7 +4249,7 @@ mod tests {
         let age_constraint = RowConstraint::HasField {
             type_var: person.clone(),
             label: "age".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty::Primitive(Primitive::Int),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4286,7 +4286,7 @@ mod tests {
         let base_constraint = RowConstraint::HasField {
             type_var: base.clone(),
             label: "a".to_string(),
-            field_ty: Ty::Int,
+            field_ty: Ty::Primitive(Primitive::Int),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4333,7 +4333,7 @@ mod tests {
         let ext2_field = RowConstraint::HasField {
             type_var: ext2.clone(),
             label: "c".to_string(),
-            field_ty: Ty::Bool,
+            field_ty: Ty::Primitive(Primitive::Bool),
             metadata: FieldMetadata::RecordField {
                 index: 0,
                 has_default: false,
@@ -4373,7 +4373,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: left.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4392,7 +4392,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: right.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4445,12 +4445,12 @@ mod tests {
         let x_ty = solution
             .substitutions
             .apply(&Ty::TypeVar(x_access), 0, &mut env.context);
-        assert_eq!(x_ty, Ty::Int);
+        assert_eq!(x_ty, Ty::Primitive(Primitive::Int));
 
         let y_ty = solution
             .substitutions
             .apply(&Ty::TypeVar(y_access), 0, &mut env.context);
-        assert_eq!(y_ty, Ty::Int);
+        assert_eq!(y_ty, Ty::Primitive(Primitive::Int));
     }
 
     /// Test member access on row-restricted type variables
@@ -4628,7 +4628,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: tv.clone(),
                 label: "field".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty::Primitive(Primitive::Bool),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -4645,7 +4645,7 @@ mod tests {
             solution
                 .substitutions
                 .apply(&Ty::TypeVar(field_result), 0, &mut env.context);
-        assert_eq!(field_ty, Ty::Bool);
+        assert_eq!(field_ty, Ty::Primitive(Primitive::Bool));
     }
 
     /// Test exhaustive pattern matching on closed enum
@@ -4995,7 +4995,7 @@ mod tests {
         color_fields.insert(
             "Red".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty::Primitive(Primitive::Void),
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5004,7 +5004,7 @@ mod tests {
         color_fields.insert(
             "Green".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty::Primitive(Primitive::Void),
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
@@ -5013,7 +5013,7 @@ mod tests {
         color_fields.insert(
             "Blue".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty::Primitive(Primitive::Void),
                 expr_id: ExprID(13),
                 metadata: FieldMetadata::EnumCase { tag: 2 },
             },
@@ -5050,7 +5050,7 @@ mod tests {
         closed_fields.insert(
             "A".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(21),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5089,7 +5089,7 @@ mod tests {
         base_fields.insert(
             "X".to_string(),
             FieldInfo {
-                ty: Ty::Bool,
+                ty: Ty::Primitive(Primitive::Bool),
                 expr_id: ExprID(26),
                 metadata: FieldMetadata::EnumCase { tag: 0 },
             },
@@ -5097,7 +5097,7 @@ mod tests {
         base_fields.insert(
             "Y".to_string(),
             FieldInfo {
-                ty: Ty::Float,
+                ty: Ty::Primitive(Primitive::Float),
                 expr_id: ExprID(27),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
@@ -5147,7 +5147,7 @@ mod tests {
         message_fields.insert(
             "Number".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(32),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
@@ -5157,7 +5157,7 @@ mod tests {
         message_fields.insert(
             "Pair".to_string(),
             FieldInfo {
-                ty: Ty::Tuple(vec![Ty::Int, Ty::string()]),
+                ty: Ty::Tuple(vec![Ty::Primitive(Primitive::Int), Ty::string()]),
                 expr_id: ExprID(33),
                 metadata: FieldMetadata::EnumCase { tag: 2 },
             },
@@ -5252,7 +5252,7 @@ mod tests {
         option_fields.insert(
             "None".to_string(),
             FieldInfo {
-                ty: Ty::Void,
+                ty: Ty::Primitive(Primitive::Void),
                 expr_id: ExprID(49),
                 metadata: FieldMetadata::EnumCase { tag: 1 },
             },
@@ -5296,7 +5296,7 @@ mod tests {
         base_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(3),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5326,7 +5326,7 @@ mod tests {
         point2d_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5353,7 +5353,7 @@ mod tests {
         point3d_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(21),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5365,7 +5365,7 @@ mod tests {
         point3d_fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(22),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5377,7 +5377,7 @@ mod tests {
         point3d_fields.insert(
             "z".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(23),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
@@ -5425,7 +5425,7 @@ mod tests {
         required_fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(32),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5437,7 +5437,7 @@ mod tests {
         required_fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(33),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5636,7 +5636,7 @@ mod tests {
         generic_fields.insert(
             "first".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(72),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5648,7 +5648,7 @@ mod tests {
         generic_fields.insert(
             "second".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(73),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5676,7 +5676,7 @@ mod tests {
         concrete_fields.insert(
             "first".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(81),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5688,7 +5688,7 @@ mod tests {
         concrete_fields.insert(
             "second".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(82),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -5700,7 +5700,7 @@ mod tests {
         concrete_fields.insert(
             "third".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(83),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
@@ -5727,7 +5727,7 @@ mod tests {
         extra_fields.insert(
             "third".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(86),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -5780,7 +5780,7 @@ mod tests {
             TypeMember::Method(Method::new(
                 "doSomething".to_string(),
                 ExprID(2),
-                Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
             )),
         );
 
@@ -5792,7 +5792,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5806,7 +5806,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -5835,7 +5835,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "width".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5849,7 +5849,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "height".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -5894,7 +5894,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "id".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5943,7 +5943,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "id".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -5985,7 +5985,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: user_row.clone(),
                 label: "isActive".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty::Primitive(Primitive::Bool),
                 metadata: FieldMetadata::RecordField {
                     index: 3,
                     has_default: true,
@@ -6019,7 +6019,7 @@ mod tests {
         }
 
         if let Some(TypeMember::Property(is_active)) = user_def.members.get("isActive") {
-            assert_eq!(is_active.ty, Ty::Bool);
+            assert_eq!(is_active.ty, Ty::Primitive(Primitive::Bool));
             assert!(is_active.has_default);
         } else {
             panic!("isActive should be a property");
@@ -6051,7 +6051,7 @@ mod tests {
                 0,
                 "oldField1".to_string(),
                 ExprID(2),
-                Ty::Int,
+                Ty::Primitive(Primitive::Int),
                 false,
             )),
         );
@@ -6061,7 +6061,7 @@ mod tests {
                 1,
                 "oldField2".to_string(),
                 ExprID(3),
-                Ty::Int,
+                Ty::Primitive(Primitive::Int),
                 false,
             )),
         );
@@ -6072,7 +6072,7 @@ mod tests {
             TypeMember::Method(Method::new(
                 "someMethod".to_string(),
                 ExprID(4),
-                Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
             )),
         );
 
@@ -6101,7 +6101,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "newField2".to_string(),
-                field_ty: Ty::Bool,
+                field_ty: Ty::Primitive(Primitive::Bool),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6159,7 +6159,7 @@ mod tests {
         fields.insert(
             "x".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(11),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
@@ -6171,7 +6171,7 @@ mod tests {
         fields.insert(
             "y".to_string(),
             FieldInfo {
-                ty: Ty::Int,
+                ty: Ty::Primitive(Primitive::Int),
                 expr_id: ExprID(12),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
@@ -6219,7 +6219,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6233,7 +6233,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6247,7 +6247,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: drawable_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -6280,7 +6280,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6294,7 +6294,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6308,7 +6308,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "radius".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -6322,7 +6322,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: circle_row.clone(),
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
                 metadata: FieldMetadata::RecordField {
                     index: 3,
                     has_default: false,
@@ -6377,7 +6377,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: position_required.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6391,7 +6391,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: position_required.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6411,7 +6411,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: point3d.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -6425,7 +6425,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: point3d.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -6439,7 +6439,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: point3d.clone(),
                 label: "z".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 2,
                     has_default: false,
@@ -6489,8 +6489,8 @@ mod tests {
         let mut struct_def = env.lookup_type(&struct_id).unwrap().clone();
         struct_def.add_properties_with_rows(
             vec![
-                Property::new(0, "x".to_string(), ExprID(1), Ty::Int, false),
-                Property::new(1, "y".to_string(), ExprID(2), Ty::Int, false),
+                Property::new(0, "x".to_string(), ExprID(1), Ty::Primitive(Primitive::Int), false),
+                Property::new(1, "y".to_string(), ExprID(2), Ty::Primitive(Primitive::Int), false),
             ],
             &mut env,
         );
@@ -6537,7 +6537,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: row_var.clone(),
                 label: "port".to_string(),
-                field_ty: Ty::Int,
+                field_ty: Ty::Primitive(Primitive::Int),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: true,
@@ -6637,7 +6637,7 @@ mod tests {
                 0,
                 "field".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty::Primitive(Primitive::Int),
                 false,
             )),
         );
@@ -6667,7 +6667,7 @@ mod tests {
                 0,
                 "x".to_string(),
                 crate::expr_id::ExprID(1),
-                crate::ty::Ty::Int,
+                crate::ty::Ty::Primitive(Primitive::Int),
                 false,
             )),
         );
@@ -6687,7 +6687,7 @@ mod tests {
                 1,
                 "y".to_string(),
                 crate::expr_id::ExprID(2),
-                crate::ty::Ty::Float,
+                crate::ty::Ty::Primitive(Primitive::Float),
                 false,
             )),
         );
@@ -6768,7 +6768,7 @@ mod tests {
         "#;
 
         let result = check(src).unwrap();
-        assert_eq!(result.nth(1).unwrap(), Ty::Int);
+        assert_eq!(result.nth(1).unwrap(), Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -6787,7 +6787,7 @@ mod tests {
         "#;
 
         let result = check(src).unwrap();
-        assert_eq!(result.nth(2).unwrap(), Ty::Bool);
+        assert_eq!(result.nth(2).unwrap(), Ty::Primitive(Primitive::Bool));
     }
 
     #[test]
@@ -6950,7 +6950,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: drawable_row,
                 label: "draw".to_string(),
-                field_ty: Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+                field_ty: Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
                 metadata: FieldMetadata::MethodRequirement,
             },
         });
@@ -6974,9 +6974,9 @@ mod tests {
 
         // Add properties and methods via row constraints
         let properties = vec![
-            Property::new(0, "x".to_string(), ExprID(4), Ty::Float, false),
-            Property::new(1, "y".to_string(), ExprID(5), Ty::Float, false),
-            Property::new(2, "radius".to_string(), ExprID(6), Ty::Float, false),
+            Property::new(0, "x".to_string(), ExprID(4), Ty::Primitive(Primitive::Float), false),
+            Property::new(1, "y".to_string(), ExprID(5), Ty::Primitive(Primitive::Float), false),
+            Property::new(2, "radius".to_string(), ExprID(6), Ty::Primitive(Primitive::Float), false),
         ];
 
         circle_def.add_properties_with_rows(properties, &mut env);
@@ -6984,7 +6984,7 @@ mod tests {
         let methods = vec![Method::new(
             "draw".to_string(),
             ExprID(7),
-            Ty::Func(vec![], Box::new(Ty::Void), vec![]),
+            Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]),
         )];
 
         circle_def.add_methods_with_rows(methods, &mut env);
@@ -7022,13 +7022,13 @@ mod tests {
             solution
                 .substitutions
                 .apply(&Ty::TypeVar(radius_result), 0, &mut env.context);
-        assert_eq!(resolved_radius, Ty::Float);
+        assert_eq!(resolved_radius, Ty::Primitive(Primitive::Float));
 
         let resolved_draw =
             solution
                 .substitutions
                 .apply(&Ty::TypeVar(draw_result), 0, &mut env.context);
-        assert_eq!(resolved_draw, Ty::Func(vec![], Box::new(Ty::Void), vec![]));
+        assert_eq!(resolved_draw, Ty::Func(vec![], Box::new(Ty::Primitive(Primitive::Void)), vec![]));
     }
 
     /// Test row concatenation for type composition
@@ -7045,7 +7045,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -7059,7 +7059,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: position_row.clone(),
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7076,7 +7076,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: size_row.clone(),
                 label: "width".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -7090,7 +7090,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: size_row.clone(),
                 label: "height".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7143,8 +7143,8 @@ mod tests {
                 .substitutions
                 .apply(&Ty::TypeVar(width_result), 0, &mut env.context);
 
-        assert_eq!(resolved_x, Ty::Float);
-        assert_eq!(resolved_width, Ty::Float);
+        assert_eq!(resolved_x, Ty::Primitive(Primitive::Float));
+        assert_eq!(resolved_width, Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -7175,7 +7175,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: point_row.clone(),
                 label: "x".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 0,
                     has_default: false,
@@ -7189,7 +7189,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: point_row,
                 label: "y".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7218,7 +7218,7 @@ mod tests {
         let resolved = solution
             .substitutions
             .apply(&Ty::TypeVar(result_tv), 0, &mut env.context);
-        assert_eq!(resolved, Ty::Float);
+        assert_eq!(resolved, Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -7251,7 +7251,7 @@ mod tests {
                 index: 0,
                 name: "width".to_string(),
                 expr_id: ExprID(11),
-                ty: Ty::Float,
+                ty: Ty::Primitive(Primitive::Float),
                 has_default: false,
                 symbol_id: None,
             }),
@@ -7265,7 +7265,7 @@ mod tests {
             constraint: RowConstraint::HasField {
                 type_var: rect_row,
                 label: "height".to_string(),
-                field_ty: Ty::Float,
+                field_ty: Ty::Primitive(Primitive::Float),
                 metadata: FieldMetadata::RecordField {
                     index: 1,
                     has_default: false,
@@ -7310,8 +7310,8 @@ mod tests {
                 .substitutions
                 .apply(&Ty::TypeVar(height_result), 0, &mut env.context);
 
-        assert_eq!(resolved_width, Ty::Float);
-        assert_eq!(resolved_height, Ty::Float);
+        assert_eq!(resolved_width, Ty::Primitive(Primitive::Float));
+        assert_eq!(resolved_height, Ty::Primitive(Primitive::Float));
     }
 
     #[test]
@@ -7324,7 +7324,7 @@ r.x
 
         // The result should be Int (type of field x)
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -7339,7 +7339,7 @@ b
 
         // The result should be Int (type of field y)
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -7374,7 +7374,7 @@ outer.inner.x
 
         // The result should be Int (type of inner.x)
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -7389,7 +7389,7 @@ makePoint()
         ";
         let checked = check(src).unwrap();
         let last_expr = checked.roots().last().unwrap();
-        assert_eq!(last_expr.ty, Ty::Int);
+        assert_eq!(last_expr.ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -7652,8 +7652,8 @@ makePoint()
 
         // Add properties using row-aware method (should NOT populate members)
         let properties = vec![
-            Property::new(0, "x".to_string(), ExprID(1), Ty::Float, false),
-            Property::new(1, "y".to_string(), ExprID(2), Ty::Float, false),
+            Property::new(0, "x".to_string(), ExprID(1), Ty::Primitive(Primitive::Float), false),
+            Property::new(1, "y".to_string(), ExprID(2), Ty::Primitive(Primitive::Float), false),
         ];
 
         struct_def.add_properties_with_rows(properties, &mut env);
@@ -7666,8 +7666,10 @@ makePoint()
             "Members are populated immediately for cross-compilation support"
         );
 
-        // Update the type in environment
-        env.types.insert(struct_id, struct_def);
+        // TODO: Update the type in environment
+        // env.types.insert(struct_id, struct_def);
+        // For now, use register method
+        env.register(&struct_def).unwrap();
 
         // Run constraint solving
         let solution = env.flush_constraints(&meta).unwrap();
@@ -7684,12 +7686,12 @@ makePoint()
         // Verify the properties are correct
         let x_prop = struct_def.find_property("x").unwrap();
         assert_eq!(x_prop.name, "x");
-        assert_eq!(x_prop.ty, Ty::Float);
+        assert_eq!(x_prop.ty, Ty::Primitive(Primitive::Float));
         assert_eq!(x_prop.index, 0);
 
         let y_prop = struct_def.find_property("y").unwrap();
         assert_eq!(y_prop.name, "y");
-        assert_eq!(y_prop.ty, Ty::Float);
+        assert_eq!(y_prop.ty, Ty::Primitive(Primitive::Float));
         assert_eq!(y_prop.index, 1);
     }
 
@@ -7712,8 +7714,8 @@ makePoint()
         // Add properties via row constraints only
         struct_def.add_properties_with_rows(
             vec![
-                Property::new(0, "width".to_string(), ExprID(10), Ty::Float, false),
-                Property::new(1, "height".to_string(), ExprID(11), Ty::Float, false),
+                Property::new(0, "width".to_string(), ExprID(10), Ty::Primitive(Primitive::Float), false),
+                Property::new(1, "height".to_string(), ExprID(11), Ty::Primitive(Primitive::Float), false),
             ],
             &mut env,
         );
@@ -7730,7 +7732,10 @@ makePoint()
             )),
         );
 
-        env.types.insert(struct_id, struct_def);
+        // TODO: Update the type in environment
+        // env.types.insert(struct_id, struct_def);
+        // For now, use register method
+        env.register(&struct_def).unwrap();
 
         // Solve constraints - this should repopulate members from rows
         env.flush_constraints(&meta).unwrap();
@@ -7908,7 +7913,7 @@ makePoint()
                 &params[0],
                 Ty::Row { kind: RowKind::Record, .. }
             ));
-            assert_eq_diff!(ret_ty.as_ref(), &Ty::Int);
+            assert_eq_diff!(ret_ty.as_ref(), &Ty::Primitive(Primitive::Int));
         } else {
             panic!("Expected function type");
         }
@@ -7931,26 +7936,23 @@ makePoint()
         // Check that point3d has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row {
-                    fields,
-                    generics: _,
-                    ..
-                } => {
+                Ty::Row { .. } => {
+                    let fields = roots[1].ty.get_row_fields();
                     assert_eq!(fields.len(), 3);
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "x" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "y" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "z" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                 }
                 _ => panic!("Expected record type for point3d"),
@@ -7978,7 +7980,7 @@ makePoint()
         .unwrap();
 
         // Verify the last expression (distance calculation) has Int type
-        assert_eq_diff!(checked.roots().last().unwrap().ty, Ty::Int);
+        assert_eq_diff!(checked.roots().last().unwrap().ty, Ty::Primitive(Primitive::Int));
     }
 
     #[test]
@@ -8006,7 +8008,7 @@ makePoint()
         .unwrap();
 
         // All results should be tuples of (Int, Int)
-        let tuple_ty = Ty::Tuple(vec![Ty::Int, Ty::Int]);
+        let tuple_ty = Ty::Tuple(vec![Ty::Primitive(Primitive::Int), Ty::Primitive(Primitive::Int)]);
 
         // Find the let bindings and check their types
         for expr in checked.roots() {
@@ -8037,16 +8039,13 @@ makePoint()
 
         // The result should have at least an id field
         if let Some(last) = checked.roots().last()
-            && let Ty::Row {
-                fields,
-                generics: _,
-                ..
-            } = &last.ty
+            && let Ty::Row { .. } = &last.ty
         {
+            let fields = last.ty.get_row_fields();
             assert!(
                 fields
                     .iter()
-                    .any(|(name, ty)| name == "id" && *ty == Ty::Int)
+                    .any(|(name, info)| name == "id" && info.ty == Ty::Primitive(Primitive::Int))
             );
         }
     }
@@ -8116,26 +8115,23 @@ makePoint()
         // Check that spread has type {x: Int, y: Int, z: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row {
-                    fields,
-                    generics: _,
-                    ..
-                } => {
+                Ty::Row { .. } => {
+                    let fields = roots[1].ty.get_row_fields();
                     assert_eq!(fields.len(), 3);
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "x" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "y" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "z" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                 }
                 _ => panic!("Expected record type for spread"),
@@ -8159,21 +8155,18 @@ makePoint()
         // Check that overridden has type {x: String, y: Int}
         if let Expr::Variable(_) = &roots[1].expr {
             match &roots[1].ty {
-                Ty::Row {
-                    fields,
-                    generics: _,
-                    ..
-                } => {
+                Ty::Row { .. } => {
+                    let fields = roots[1].ty.get_row_fields();
                     assert_eq!(fields.len(), 2);
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::string())
+                            .any(|(name, info)| name == "x" && info.ty == Ty::string())
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "y" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                 }
                 _ => panic!("Expected record type for overridden"),
@@ -8198,31 +8191,28 @@ makePoint()
         // Check that combined has type {x: Int, y: String, z: Bool, w: Float}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Row {
-                    fields,
-                    generics: _,
-                    ..
-                } => {
+                Ty::Row { .. } => {
+                    let fields = roots[2].ty.get_row_fields();
                     assert_eq!(fields.len(), 4);
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "x" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::string())
+                            .any(|(name, info)| name == "y" && info.ty == Ty::string())
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::Bool)
+                            .any(|(name, info)| name == "z" && info.ty == Ty::Primitive(Primitive::Bool))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "w" && *ty == Ty::Float)
+                            .any(|(name, info)| name == "w" && info.ty == Ty::Primitive(Primitive::Float))
                     );
                 }
                 _ => panic!("Expected record type for combined"),
@@ -8250,26 +8240,23 @@ makePoint()
         // Check that extended has type {x: Int, y: Bool, z: String}
         if let Expr::Variable(_) = &roots[2].expr {
             match &roots[2].ty {
-                Ty::Row {
-                    fields,
-                    generics: _,
-                    ..
-                } => {
+                Ty::Row { .. } => {
+                    let fields = roots[2].ty.get_row_fields();
                     assert_eq!(fields.len(), 3);
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "x" && *ty == Ty::Int)
+                            .any(|(name, info)| name == "x" && info.ty == Ty::Primitive(Primitive::Int))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "y" && *ty == Ty::Bool)
+                            .any(|(name, info)| name == "y" && info.ty == Ty::Primitive(Primitive::Bool))
                     );
                     assert!(
                         fields
                             .iter()
-                            .any(|(name, ty)| name == "z" && *ty == Ty::string())
+                            .any(|(name, info)| name == "z" && info.ty == Ty::string())
                     );
                 }
                 _ => panic!("Expected record type for extended"),

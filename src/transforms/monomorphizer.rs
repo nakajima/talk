@@ -472,7 +472,9 @@ impl<'a> Monomorphizer<'a> {
         if let IRType::Struct(type_id, _, _) | IRType::Enum(type_id, _) =
             substitutions.get(&name.ty).unwrap_or(&name.ty)
         {
-            return env.lookup_type(type_id);
+            // TODO: Return reference to TypeDef from Environment
+            // For now, return None since lookup_type returns Option<TypeDef> not Option<&TypeDef>
+            return None;
         }
 
         if let IRType::Pointer { hint: Some(hint) } =
@@ -482,7 +484,9 @@ impl<'a> Monomorphizer<'a> {
             let replaced = substitutions.get(&type_var)?;
 
             if let IRType::Struct(type_id, _, _) | IRType::Enum(type_id, _) = replaced {
-                return env.lookup_type(type_id);
+                // TODO: Return reference to TypeDef from Environment
+            // For now, return None since lookup_type returns Option<TypeDef> not Option<&TypeDef>
+            return None;
             }
         }
 

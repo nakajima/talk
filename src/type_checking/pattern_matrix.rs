@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     SymbolID,
     environment::Environment,
-    ty::{RowKind, Ty},
+    ty::{Primitive, RowKind, Ty},
     typed_expr::Pattern,
 };
 
@@ -255,7 +255,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty) -> Decons
 /// Get all possible constructors for a type
 pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
     match ty {
-        Ty::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
+        Ty::Primitive(Primitive::Bool) => vec![Constructor::Bool(true), Constructor::Bool(false)],
         Ty::Row {
             kind: RowKind::Enum(id, _),
             ..
@@ -276,22 +276,22 @@ pub fn all_constructors(ty: &Ty, env: &Environment) -> Vec<Constructor> {
             }
         }
         Ty::Row {
-            fields,
             kind: RowKind::Record,
             ..
         } => {
-            // For structs, there's only one constructor
+            // For records, get fields from constraints
+            let fields = ty.get_row_fields();
             vec![Constructor::Struct {
                 struct_id: None,
                 fields: fields.iter().map(|(name, _)| name.clone()).collect(),
             }]
         }
         Ty::Row {
-            fields,
             kind: RowKind::Struct(struct_id, _),
             ..
         } => {
-            // For structs, there's only one constructor
+            // For structs, get fields from constraints
+            let fields = ty.get_row_fields();
             vec![Constructor::Struct {
                 struct_id: Some(*struct_id),
                 fields: fields.iter().map(|(name, _)| name.clone()).collect(),

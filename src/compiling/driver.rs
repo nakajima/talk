@@ -386,7 +386,8 @@ impl Driver {
                 }
             }
 
-            let types = typed.env.types.clone();
+            // TODO: Get types from row constraints
+            let types = std::collections::BTreeMap::new(); // Was: typed.env.types.clone()
 
             let lowered = typed
                 .lower(

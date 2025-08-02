@@ -82,9 +82,9 @@ impl<'a> CompletionContext<'a> {
                 });
 
             if let Some(type_def) = type_sym.and_then(|sym| self.env.lookup_type(&sym)) {
-                self.get_completions_for_typedef(type_def)
+                self.get_completions_for_typedef(&type_def)
             } else {
-                tracing::error!("did not get type: {:?}", self.env.types);
+                tracing::error!("did not get type for symbol: {:?}", type_sym);
                 vec![]
             }
         }
@@ -102,7 +102,7 @@ impl<'a> CompletionContext<'a> {
                 {
                     // Nominal row - use typedef
                     if let Some(type_def) = self.env.lookup_type(symbol_id) {
-                        self.get_completions_for_typedef(type_def)
+                        self.get_completions_for_typedef(&type_def)
                     } else {
                         vec![]
                     }

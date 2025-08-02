@@ -23,6 +23,7 @@ pub mod pattern_exhaustiveness;
 pub mod pattern_matrix;
 pub mod row;
 pub mod row_constraints;
+pub mod row_utils;
 pub mod scope_tree;
 pub mod substitutions;
 pub mod synthesis;

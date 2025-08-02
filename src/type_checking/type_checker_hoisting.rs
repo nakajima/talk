@@ -421,25 +421,21 @@ impl<'a> TypeChecker<'a> {
         // Sick, all the names are declared. Now let's actually infer.
         for (sym, placeholders) in &mut placeholders.into_iter() {
             let t = env.lookup_symbol(&sym).cloned();
-            let Ok(Scheme {
-                ty:
-                    ty @ Ty::Row {
-                        fields,
-                        row,
-                        generics,
-                        kind,
-                    },
-                ..
-            }) = t.as_ref()
-            else {
+            let Ok(scheme) = t.as_ref() else {
                 continue;
+            };
+            
+            let ty = scheme.ty();
+            let (generics, kind) = match &ty {
+                Ty::Row { generics, kind, .. } => (generics.clone(), kind.clone()),
+                _ => continue,
             };
 
             let mut spec = RowSpec::empty();
 
             env.selfs.push(ty.clone());
 
-            if !matches!(kind, RowKind::Enum(_, _)) {
+            if !matches!(&kind, RowKind::Enum(_, _)) {
                 for (i, property) in placeholders.properties.into_iter().enumerate() {
                     let typed_expr = self
                         .infer_node(property.expr, env, &None)
@@ -498,7 +494,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            if !matches!(kind, RowKind::Enum(_, _)) {
+            if !matches!(&kind, RowKind::Enum(_, _)) {
                 for initializer in placeholders.initializers {
                     let typed_expr = self
                         .infer_node(initializer.expr, env, &None)
@@ -517,7 +513,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            if let RowKind::Enum(symbol_id, name_str) = kind {
+            if let RowKind::Enum(symbol_id, name_str) = &kind {
                 for (i, variant) in placeholders.variants.into_iter().enumerate() {
                     let typed_expr = self
                         .infer_node(
@@ -564,11 +560,25 @@ impl<'a> TypeChecker<'a> {
 
                 let conformance = Conformance::new(name, associated_types);
                 conformances.push(conformance.clone());
+                // Create a type variable for the row
+                let type_var = env.new_type_variable(TypeVarKind::Row, conformance_expr.id);
+                
+                // Create constraints from spec fields
+                let mut constraints = vec![];
+                for (label, field_info) in spec.fields.iter() {
+                    constraints.push(crate::row::RowConstraint::HasField {
+                        type_var: type_var.clone(),
+                        label: label.clone(),
+                        field_ty: field_info.ty.clone(),
+                        metadata: field_info.metadata.clone(),
+                    });
+                }
+                
                 conformance_constraints.push(Constraint::ConformsTo {
                     expr_id: conformance_expr.id,
                     ty: Ty::Row {
-                        fields: spec.fields.clone(),
-                        row: None,
+                        type_var,
+                        constraints,
                         generics: generics.clone(),
                         kind: kind.clone(),
                     },
@@ -582,7 +592,7 @@ impl<'a> TypeChecker<'a> {
 
             if let RowKind::Struct(symbol_id, _)
             | RowKind::Enum(symbol_id, _)
-            | RowKind::Protocol(symbol_id, _) = kind
+            | RowKind::Protocol(symbol_id, _) = &kind
             {
                 env.declare(
                     *symbol_id,

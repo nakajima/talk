@@ -18,8 +18,10 @@ use crate::{
     row_constraints::RowConstraintSolver,
     semantic_index::ResolvedExpr,
     substitutions::Substitutions,
+    ty::Primitive,
     ty::{RowKind, Ty},
     type_checker::{Scheme, TypeError},
+    type_def::TypeDef,
     type_var_id::{TypeVarID, TypeVarKind},
 };
 
@@ -512,12 +514,12 @@ impl<'a> ConstraintSolver<'a> {
         if initializers.is_empty() {
             return Err(TypeError::Unknown(format!(
                 "No initializers found for struct {}",
-                struct_def.name_str
+                struct_def.name().unwrap_or("<unknown>")
             )));
         }
 
         let initializer = &initializers[0];
-        let Ty::Init(_, params) = &initializer.ty else {
+        let Ty::Init(_, params) = initializer else {
             return Err(TypeError::Unknown("Invalid initializer type".into()));
         };
 
@@ -539,7 +541,7 @@ impl<'a> ConstraintSolver<'a> {
 
         // Unify initializer type with function type
         substitutions.unify(
-            &initializer.ty,
+            initializer,
             func_ty,
             &mut self.env.context,
             self.generation,
@@ -590,12 +592,12 @@ impl<'a> ConstraintSolver<'a> {
             .lookup_enum(enum_id)
             .ok_or_else(|| TypeError::Unknown("Enum definition not found".into()))?;
 
-        let variant_def = enum_def
+        let (variant_tag, variant_ty) = enum_def
             .find_variant(variant_name)
             .ok_or_else(|| TypeError::UnknownVariant(Name::Raw(variant_name.to_string())))?;
 
         // Extract the generic field types from the variant's definition
-        let generic_field_tys = match &variant_def.ty {
+        let generic_field_tys = match &variant_ty {
             Ty::Func(params, _, _) => params.clone(),
             Ty::Row {
                 kind: RowKind::Enum(_, _),
@@ -703,7 +705,7 @@ impl<'a> ConstraintSolver<'a> {
             member_name
         );
         match receiver_ty {
-            builtin @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Pointer) => {
+            builtin @ Ty::Primitive(_) => {
                 self.resolve_builtin_member(builtin, member_name)
             }
             Ty::Row {
@@ -719,7 +721,6 @@ impl<'a> ConstraintSolver<'a> {
                 result
             }
             Ty::Row {
-                fields,
                 kind,
                 generics,
                 ..
@@ -731,16 +732,15 @@ impl<'a> ConstraintSolver<'a> {
                     // Nominal row - use typedef resolution
                     self.resolve_type_member(type_id, member_name, generics, substitutions, expr_id)
                 } else {
-                    // Structural row - look up field directly
-                    for (field_name, field_ty) in fields {
-                        if field_name == member_name {
-                            return Ok((field_ty.clone(), vec![], vec![]));
-                        }
+                    // Structural row - look up field directly from constraints
+                    if let Some(field_ty) = receiver_ty.get_row_field_type(member_name) {
+                        Ok((field_ty, vec![], vec![]))
+                    } else {
+                        Err(TypeError::MemberNotFound(
+                            receiver_ty.to_string(),
+                            member_name.to_string(),
+                        ))
                     }
-                    Err(TypeError::MemberNotFound(
-                        receiver_ty.to_string(),
-                        member_name.to_string(),
-                    ))
                 }
             }
             _ => Err(TypeError::MemberNotFound(
@@ -756,10 +756,10 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         let symbol_id = match builtin {
-            Ty::Int => SymbolID::INT,
-            Ty::Float => SymbolID::FLOAT,
-            Ty::Bool => SymbolID::BOOL,
-            Ty::Pointer => SymbolID::POINTER,
+            Ty::Primitive(Primitive::Int) => SymbolID::INT,
+            Ty::Primitive(Primitive::Float) => SymbolID::FLOAT,
+            Ty::Primitive(Primitive::Bool) => SymbolID::BOOL,
+            Ty::Primitive(Primitive::Pointer) => SymbolID::POINTER,
             _ => unreachable!("Invalid builtin type"),
         };
 
@@ -777,41 +777,7 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(Ty, Vec<TypeParameter>, Vec<Ty>), TypeError> {
         // TODO: Get type info from row constraints instead of type def
         // For now, return an error
-        return Err(TypeError::Unknown("Type member lookup not yet implemented for constraint-based rows".into()));
-        
-        #[allow(unreachable_code)]
-        {
-            (
-                type_def.name().to_string(),
-                type_def.type_parameters().clone(),
-            )
-        };
-
-        // Then look up the member with mutable env access
-        let type_def = self
-            .env
-            .lookup_type(type_id)
-            .ok_or_else(|| {
-                TypeError::Unknown(format!("Unable to resolve type with id: {type_id:?}"))
-            })?
-            .clone();
-
-        // Check if this type uses row-based members
-        if let Some(row_var) = &type_def.row_var {
-            // Try to resolve through row constraints
-            if let Ok((ty, params, assoc)) =
-                self.resolve_type_var_member(row_var, member_name, substitutions, expr_id)
-            {
-                return Ok((ty, params, assoc));
-            }
-        }
-
-        // Fall back to traditional member lookup
-        let member_ty = type_def
-            .member_ty_with_conformances(member_name, self.env)
-            .ok_or_else(|| TypeError::MemberNotFound(type_name, member_name.to_string()))?;
-
-        Ok((member_ty, type_params, generics.to_vec()))
+        Err(TypeError::Unknown("Type member lookup not yet implemented for constraint-based rows".into()))
     }
 
     fn resolve_enum_member(
@@ -827,7 +793,7 @@ impl<'a> ConstraintSolver<'a> {
         let member_ty = enum_def.member_ty(member_name).ok_or_else(|| {
             TypeError::Unknown(format!(
                 "Member not found for enum {}: {}",
-                enum_def.name_str, member_name
+                enum_def.name().unwrap_or("<unknown>"), member_name
             ))
         })?;
 
@@ -901,23 +867,11 @@ impl<'a> ConstraintSolver<'a> {
                 Constraint::InstanceOf {
                     symbol_id, scheme, ..
                 } => {
-                    let type_def = self.env.lookup_type(symbol_id).ok_or_else(|| {
-                        TypeError::Unknown(format!("Type not found: {symbol_id:?}"))
-                    })?;
-
-                    if let Some(ty) = type_def.member_ty(member_name) {
-                        let associated_types = scheme
-                            .unbound_vars()
-                            .iter()
-                            .map(|t| Ty::TypeVar(t.clone()))
-                            .collect();
-
-                        return Ok((
-                            ty.clone(),
-                            type_def.type_parameters().clone(),
-                            associated_types,
-                        ));
-                    }
+                    // TODO: Look up type members from row constraints
+                    // For now, return an error
+                    return Err(TypeError::Unknown(
+                        "Type member lookup not yet implemented for constraint-based types".into()
+                    ));
                 }
                 _ => (),
             }
@@ -980,27 +934,9 @@ impl<'a> ConstraintSolver<'a> {
         member_name: &str,
         associated_types: &[Ty],
     ) -> Result<Option<(Ty, Vec<TypeParameter>, Vec<Ty>)>, TypeError> {
-        let protocol_def = self
-            .env
-            .lookup_protocol(protocol_id)
-            .ok_or_else(|| TypeError::Unknown(format!("Protocol not found: {protocol_id:?}")))?
-            .clone();
-
-        if let Some(ty) = protocol_def.member_ty(member_name) {
-            tracing::debug!(
-                "resolve_protocol_member: protocol_id = {:?}, member = {}, ty = {:?}",
-                protocol_id,
-                member_name,
-                ty
-            );
-            Ok(Some((
-                ty.clone(),
-                protocol_def.type_parameters(),
-                associated_types.to_vec(),
-            )))
-        } else {
-            Ok(None)
-        }
+        // TODO: Get protocol info from row constraints
+        // For now, return None since we don't have protocol definitions
+        Ok(None)
     }
 
     fn solve_type_var_conformance(
@@ -1036,30 +972,10 @@ impl<'a> ConstraintSolver<'a> {
         conformance: &Conformance,
         substitutions: &mut Substitutions,
     ) -> Result<Vec<(Ty, Vec<(Ty, Ty)>, Conformance)>, TypeError> {
-        let types: Vec<_> = self
-            .env
-            .types
-            .values()
-            .filter_map(|t| {
-                let c = t
-                    .conformances()
-                    .iter()
-                    .find(|c| c.protocol_id == conformance.protocol_id)?;
-
-                if conformance
-                    .associated_types
-                    .iter()
-                    .zip(c.associated_types.iter())
-                    .all(|(provided, required)| {
-                        substitutions.unifiable(provided, required, &mut self.env.context)
-                    })
-                {
-                    Some((t.clone(), c.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // TODO: Replace with constraint-based type lookup
+        let types: Vec<(TypeDef, Conformance)> = vec![]; // Placeholder
+        // Was: self.env.types.values().filter_map(|t| ...)
+        // This needs to be reimplemented using row constraints
 
         tracing::trace!("Possible conforming types: {types:?}");
 
@@ -1162,8 +1078,8 @@ impl<'a> ConstraintSolver<'a> {
                 }
             }
             Ty::Row {
-                fields,
-                row,
+                type_var,
+                constraints,
                 generics,
                 kind,
             } => {
@@ -1171,9 +1087,10 @@ impl<'a> ConstraintSolver<'a> {
                     .iter()
                     .map(|g| Self::substitute_ty_with_map(g, substitutions))
                     .collect();
+                // TODO: Also substitute types within constraints
                 Ty::Row {
-                    fields: fields.clone(),
-                    row: row.clone(),
+                    type_var: type_var.clone(),
+                    constraints: constraints.clone(),
                     generics: applied_generics,
                     kind: kind.clone(),
                 }
@@ -1185,7 +1102,7 @@ impl<'a> ConstraintSolver<'a> {
                     .collect(),
             ),
             Ty::Array(ty) => Ty::Array(Self::substitute_ty_with_map(ty, substitutions).into()),
-            Ty::Void | Ty::Pointer | Ty::Int | Ty::Float | Ty::Bool | Ty::SelfType | Ty::Byte => {
+            Ty::Primitive(_) | Ty::SelfType => {
                 ty.clone()
             }
         }
@@ -1201,26 +1118,11 @@ impl<'a> ConstraintSolver<'a> {
                     | RowKind::Enum(type_id, _),
                 ..
             } => {
-                // Look up the type definition using just the type_id, ignoring type parameters
-                let type_def = self.env.types.get(type_id)?;
-
-                // Check if it's a property
-                if let Some(property) = type_def.find_property(member_name) {
-                    return property.symbol_id;
-                }
-
-                // Check if it's a method
-                if let Some(method) = type_def.find_method(member_name) {
-                    return method.symbol_id;
-                }
-
-                // Check if it's an enum variant
-                if let Some(_variant) = type_def.find_variant(member_name) {
-                    // Variants also don't have symbol IDs yet
-                    return None;
-                }
-
+                // TODO: Look up the type definition from row constraints
+                // For now, return None as we don't have type definitions
                 None
+                // Was: let type_def = self.env.types.get(type_id)?;
+                // Then checked for property, method, or variant
             }
             Ty::Row {
                 kind: RowKind::Record,

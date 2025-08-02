@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::{
     environment::Environment,
     parsed_expr::Pattern,
-    ty::{RowKind, Ty},
+    ty::{Primitive, RowKind, Ty},
     type_var_id::TypeVarID,
 };
 
@@ -61,7 +61,7 @@ impl<'a> ExhaustivenessChecker<'a> {
                 ..
             } => self.check_enum_exhaustiveness(enum_id, patterns),
             Ty::TypeVar(type_var) => self.check_type_var_exhaustiveness(type_var, patterns),
-            Ty::Bool => self.check_bool_exhaustiveness(patterns),
+            Ty::Primitive(Primitive::Bool) => self.check_bool_exhaustiveness(patterns),
             _ => {
                 // For other types, we can't determine exhaustiveness without a wildcard
                 ExhaustivenessResult::NonExhaustive(vec![])
@@ -232,17 +232,17 @@ mod tests {
 
         // Both true and false - exhaustive
         let patterns = vec![Pattern::LiteralTrue, Pattern::LiteralFalse];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty::Primitive(Primitive::Bool), &patterns);
         assert_eq!(result, ExhaustivenessResult::Exhaustive);
 
         // Only true - not exhaustive
         let patterns = vec![Pattern::LiteralTrue];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty::Primitive(Primitive::Bool), &patterns);
         assert!(matches!(result, ExhaustivenessResult::NonExhaustive(_)));
 
         // Wildcard - exhaustive
         let patterns = vec![Pattern::LiteralTrue, Pattern::Wildcard];
-        let result = checker.check_match(&Ty::Bool, &patterns);
+        let result = checker.check_match(&Ty::Primitive(Primitive::Bool), &patterns);
         assert_eq!(result, ExhaustivenessResult::Exhaustive);
     }
 
