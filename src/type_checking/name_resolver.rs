@@ -108,7 +108,7 @@ impl<'a> NameResolver<'a> {
     pub fn new(
         initial_scope: Scope,
         session: SharedCompilationSession,
-        path: PathBuf,
+        path: impl Into<PathBuf>,
         imported_modules: &'a ModuleEnvironment,
     ) -> Self {
         NameResolver {
@@ -118,7 +118,7 @@ impl<'a> NameResolver<'a> {
             scope_tree_ids: vec![],
             scope_tree: Default::default(),
             session,
-            path,
+            path: path.into(),
             imported_modules,
         }
     }

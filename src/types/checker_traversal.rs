@@ -1,81 +1,192 @@
+use std::collections::BTreeMap;
+
+use tracing::trace_span;
+
 use crate::{
-    SymbolID,
+    ExprMetaStorage, SymbolID,
+    expr_id::ExprID,
     name::Name,
     parsed_expr::{self, IncompleteExpr, ParsedExpr},
     token_kind::TokenKind,
     type_checker::TypeError,
+    types::{
+        constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
+        constraint_set::ConstraintSet,
+        ty::{Primitive, Ty},
+        type_var::TypeVarDefault,
+        type_var_context::TypeVarContext,
+    },
 };
 
-pub struct Visitor<C> {
-    pub context: C,
+pub type Scope = BTreeMap<SymbolID, Ty>;
+
+#[derive(Debug)]
+struct VisitorContext {
+    scopes: Vec<Scope>,
+}
+
+impl Default for VisitorContext {
+    fn default() -> Self {
+        Self {
+            scopes: vec![Scope::new()], // Default scope
+        }
+    }
+}
+
+impl VisitorContext {
+    fn start_scope(&mut self) {
+        self.scopes.push(Scope::new())
+    }
+
+    fn end_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn lookup(&mut self, name: &Name) -> Result<Ty, TypeError> {
+        if let Some(ty) = self
+            .scopes
+            .last()
+            .ok_or(TypeError::Unknown(format!(
+                "Unable to declare symbol {name:?} without scope"
+            )))?
+            .get(&name.symbol_id()?)
+        {
+            return Ok(ty.clone());
+        }
+
+        Err(TypeError::Unknown(format!(
+            "Undefined symbol: {}",
+            name.name_str()
+        )))
+    }
+
+    fn declare(&mut self, symbol_id: &SymbolID, ty: &Ty) -> Result<(), TypeError> {
+        if let Some(ty) = self
+            .scopes
+            .last()
+            .ok_or(TypeError::Unknown(format!(
+                "Unable to declare symbol {symbol_id:?} without scope"
+            )))?
+            .get(symbol_id)
+        {
+            tracing::warn!("Already declared {symbol_id:?} in scope: {ty:?}");
+        }
+
+        self.scopes
+            .last_mut()
+            .ok_or(TypeError::Unknown(format!(
+                "Unable to declare symbol {symbol_id:?} without scope"
+            )))?
+            .insert(*symbol_id, ty.clone());
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Visitor<'a> {
+    type_var_context: &'a mut TypeVarContext,
+    constraints: &'a mut ConstraintSet,
+    context: VisitorContext,
+    meta: &'a ExprMetaStorage,
 }
 
 #[allow(clippy::todo)]
-impl<C> Visitor<C> {
-    pub fn new(context: C) -> Self {
-        Self { context }
+impl<'a> Visitor<'a> {
+    pub fn new(
+        type_var_context: &'a mut TypeVarContext,
+        constraints: &'a mut ConstraintSet,
+        meta: &'a ExprMetaStorage,
+    ) -> Self {
+        Self {
+            type_var_context,
+            constraints,
+            context: VisitorContext::default(),
+            meta,
+        }
     }
 
-    pub fn visit(&mut self, parsed: ParsedExpr) -> Result<(), TypeError> {
-        match parsed.expr {
+    pub fn constrain(&mut self, expr_id: ExprID, kind: ConstraintKind, cause: ConstraintCause) {
+        let id = self.constraints.next_id();
+        tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
+        self.constraints.add(Constraint {
+            id,
+            expr_id,
+            cause,
+            kind,
+            parent: None,
+            state: ConstraintState::Pending,
+        });
+    }
+
+    pub fn visit(&mut self, parsed: &ParsedExpr) -> Result<Ty, TypeError> {
+        let _s = trace_span!(
+            "visit",
+            expr = crate::formatter::Formatter::format_single_expr(self.meta, parsed)
+        )
+        .entered();
+
+        match &parsed.expr {
             parsed_expr::Expr::Incomplete(incomplete_expr) => {
-                self.visit_incomplete(&incomplete_expr)
+                self.visit_incomplete(parsed, incomplete_expr)
             }
-            parsed_expr::Expr::Attribute(name) => self.visit_attribute(name),
-            parsed_expr::Expr::LiteralArray(parsed_exprs) => self.visit_literal_array(parsed_exprs),
-            parsed_expr::Expr::LiteralInt(value) => self.visit_literal_int(&value),
-            parsed_expr::Expr::LiteralFloat(value) => self.visit_literal_float(&value),
-            parsed_expr::Expr::LiteralTrue => self.visit_literal_true(),
-            parsed_expr::Expr::LiteralFalse => self.visit_literal_false(),
-            parsed_expr::Expr::LiteralString(value) => self.visit_literal_string(value),
-            parsed_expr::Expr::Unary(token_kind, rhs) => self.visit_unary(token_kind, rhs),
+            parsed_expr::Expr::Attribute(name) => self.visit_attribute(parsed, name),
+            parsed_expr::Expr::LiteralArray(parsed_exprs) => {
+                self.visit_literal_array(parsed, parsed_exprs)
+            }
+            parsed_expr::Expr::LiteralInt(value) => self.visit_literal_int(parsed),
+            parsed_expr::Expr::LiteralFloat(value) => self.visit_literal_float(parsed, &value),
+            parsed_expr::Expr::LiteralTrue => self.visit_literal_true(parsed),
+            parsed_expr::Expr::LiteralFalse => self.visit_literal_false(parsed),
+            parsed_expr::Expr::LiteralString(value) => self.visit_literal_string(parsed, value),
+            parsed_expr::Expr::Unary(token_kind, rhs) => self.visit_unary(parsed, token_kind, &rhs),
             parsed_expr::Expr::Binary(lhs, token_kind, rhs) => {
-                self.visit_binary(lhs, token_kind, rhs)
+                self.visit_binary(parsed, &lhs, token_kind, &rhs)
             }
-            parsed_expr::Expr::Tuple(items) => self.visit_tuple(items),
-            parsed_expr::Expr::Block(items) => self.visit_block(items),
+            parsed_expr::Expr::Tuple(items) => self.visit_tuple(parsed, items),
+            parsed_expr::Expr::Block(items) => self.visit_block(parsed, items),
             parsed_expr::Expr::Call {
                 callee,
                 type_args,
                 args,
-            } => self.visit_call(callee, type_args, args),
-            parsed_expr::Expr::ParsedPattern(pattern) => self.visit_parsed_pattern(pattern),
-            parsed_expr::Expr::Return(parsed_expr) => self.visit_return(parsed_expr),
-            parsed_expr::Expr::Break => self.visit_break(),
+            } => self.visit_call(parsed, &callee, type_args, args),
+            parsed_expr::Expr::ParsedPattern(pattern) => self.visit_parsed_pattern(parsed, pattern),
+            parsed_expr::Expr::Return(parsed_expr) => self.visit_return(parsed, parsed_expr),
+            parsed_expr::Expr::Break => self.visit_break(parsed),
             parsed_expr::Expr::Extend {
                 name,
                 generics,
                 conformances,
                 body,
-            } => self.visit_extend(name, generics, conformances, &body),
+            } => self.visit_extend(parsed, name, generics, conformances, &body),
             parsed_expr::Expr::Struct {
                 name,
                 generics,
                 conformances,
                 body,
-            } => self.visit_struct(name, generics, conformances, &body),
+            } => self.visit_struct(parsed, name, generics, conformances, &body),
             parsed_expr::Expr::Property {
                 name,
                 type_repr,
                 default_value,
-            } => self.visit_property(name, type_repr, default_value),
+            } => self.visit_property(parsed, name, type_repr, default_value),
             parsed_expr::Expr::TypeRepr {
                 name,
                 generics,
                 conformances,
                 introduces_type,
-            } => self.visit_type_repr(name, generics, conformances, introduces_type),
+            } => self.visit_type_repr(parsed, name, generics, conformances, *introduces_type),
             parsed_expr::Expr::FuncTypeRepr(params, ret, introduces_type) => {
-                self.visit_func_type_repr(params, ret, introduces_type)
+                self.visit_func_type_repr(parsed, params, &ret, *introduces_type)
             }
             parsed_expr::Expr::TupleTypeRepr(items, introduces_type) => {
-                self.visit_tuple_type_repr(items, introduces_type)
+                self.visit_tuple_type_repr(parsed, items, *introduces_type)
             }
             parsed_expr::Expr::Member(Some(box receiver), name) => {
-                self.visit_member(Some(&receiver), &name)
+                self.visit_member(parsed, Some(&receiver), &name)
             }
-            parsed_expr::Expr::Member(None, name) => self.visit_member(None, &name),
-            parsed_expr::Expr::Init(symbol_id, func) => self.visit_init(symbol_id, func),
+            parsed_expr::Expr::Member(None, name) => self.visit_member(parsed, None, &name),
+            parsed_expr::Expr::Init(symbol_id, func) => self.visit_init(parsed, *symbol_id, &func),
             parsed_expr::Expr::Func {
                 name,
                 generics,
@@ -84,363 +195,499 @@ impl<C> Visitor<C> {
                 ret,
                 captures,
                 attributes,
-            } => self.visit_func(name, generics, params, &body, ret, captures, attributes),
+            } => self.visit_func(
+                parsed, name, generics, params, &body, ret, captures, attributes,
+            ),
             parsed_expr::Expr::Parameter(name, annotation) => {
-                self.visit_parameter(name, annotation)
+                self.visit_parameter(parsed, name, annotation)
             }
-            parsed_expr::Expr::CallArg { label, value } => self.visit_call_arg(label, value),
-            parsed_expr::Expr::Let(name, annotation) => self.visit_let(name, annotation),
-            parsed_expr::Expr::Assignment(lhs, rhs) => self.visit_assignment(lhs, rhs),
-            parsed_expr::Expr::Variable(name) => self.visit_variable(name),
-            parsed_expr::Expr::If(cond, conseq, alt) => self.visit_if(cond, conseq, alt),
-            parsed_expr::Expr::Loop(cond, body) => self.visit_loop(cond, body),
+            parsed_expr::Expr::CallArg { label, value } => {
+                self.visit_call_arg(parsed, label, &value)
+            }
+            parsed_expr::Expr::Let(name, annotation) => self.visit_let(parsed, name, annotation),
+            parsed_expr::Expr::Assignment(lhs, rhs) => self.visit_assignment(parsed, lhs, rhs),
+            parsed_expr::Expr::Variable(name) => self.visit_variable(parsed, name),
+            parsed_expr::Expr::If(cond, conseq, alt) => self.visit_if(parsed, &cond, &conseq, alt),
+            parsed_expr::Expr::Loop(cond, body) => self.visit_loop(parsed, cond, &body),
             parsed_expr::Expr::EnumDecl {
                 name,
                 conformances,
                 generics,
                 body,
-            } => self.visit_enum_decl(name, conformances, generics, &body),
-            parsed_expr::Expr::EnumVariant(name, values) => self.visit_enum_variant(name, values),
-            parsed_expr::Expr::Match(scrutinee, arms) => self.visit_match(scrutinee, arms),
-            parsed_expr::Expr::MatchArm(pattern, body) => self.visit_match_arm(pattern, body),
-            parsed_expr::Expr::PatternVariant(enum_name, variant_name, values) => {
-                self.visit_pattern_variant(enum_name, variant_name, values)
+            } => self.visit_enum_decl(parsed, name, conformances, generics, &body),
+            parsed_expr::Expr::EnumVariant(name, values) => {
+                self.visit_enum_variant(parsed, name, values)
             }
-            parsed_expr::Expr::RecordLiteral(fields) => self.visit_record_literal(fields),
+            parsed_expr::Expr::Match(scrutinee, arms) => self.visit_match(parsed, &scrutinee, arms),
+            parsed_expr::Expr::MatchArm(pattern, body) => {
+                self.visit_match_arm(parsed, &pattern, &body)
+            }
+            parsed_expr::Expr::PatternVariant(enum_name, variant_name, values) => {
+                self.visit_pattern_variant(parsed, enum_name, variant_name, values)
+            }
+            parsed_expr::Expr::RecordLiteral(fields) => self.visit_record_literal(parsed, fields),
             parsed_expr::Expr::RecordField { label, value } => {
-                self.visit_record_field(label, value)
+                self.visit_record_field(parsed, label, &value)
             }
             parsed_expr::Expr::RecordTypeRepr {
                 fields,
                 row_var,
                 introduces_type,
-            } => self.visit_record_type_repr(fields, row_var, introduces_type),
+            } => self.visit_record_type_repr(parsed, fields, row_var, *introduces_type),
             parsed_expr::Expr::RecordTypeField { label, ty } => {
-                self.visit_record_type_field(label, ty)
+                self.visit_record_type_field(parsed, label, &ty)
             }
-            parsed_expr::Expr::RowVariable(name) => self.visit_row_variable(name),
-            parsed_expr::Expr::Spread(parsed_expr) => self.visit_spread(parsed_expr),
+            parsed_expr::Expr::RowVariable(name) => self.visit_row_variable(parsed, name),
+            parsed_expr::Expr::Spread(parsed_expr) => self.visit_spread(parsed, &parsed_expr),
             parsed_expr::Expr::ProtocolDecl {
                 name,
                 associated_types,
                 body,
                 conformances,
-            } => self.visit_protocol_decl(name, associated_types, &body, conformances),
+            } => self.visit_protocol_decl(parsed, name, associated_types, &body, conformances),
             parsed_expr::Expr::FuncSignature {
                 name,
                 params,
                 generics,
                 ret,
-            } => self.visit_func_signature(name, params, generics, ret),
-            parsed_expr::Expr::Import(module_name) => self.visit_import(module_name),
+            } => self.visit_func_signature(parsed, name, params, generics, &ret),
+            parsed_expr::Expr::Import(module_name) => self.visit_import(parsed, module_name),
         }
     }
 
-    fn visit_incomplete(&mut self, incomplete_expr: &IncompleteExpr) -> Result<(), TypeError> {
+    fn visit_incomplete(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _incomplete_expr: &IncompleteExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_attribute(&mut self, name: Name) -> Result<(), TypeError> {
+    fn visit_attribute(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_literal_array(&mut self, parsed_exprs: Vec<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_literal_array(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _parsed_exprs: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_literal_int(&mut self, value: &str) -> Result<(), TypeError> {
+    fn visit_literal_int(&mut self, parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::Int));
+
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::LiteralPrimitive(ty.clone(), Primitive::Int),
+            ConstraintCause::PrimitiveLiteral(parsed_expr.id, Primitive::Int),
+        );
+
+        Ok(ty)
+    }
+
+    fn visit_literal_float(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _value: &str,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_literal_float(&mut self, value: &str) -> Result<(), TypeError> {
+    fn visit_literal_true(&mut self, _parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_literal_true(&mut self) -> Result<(), TypeError> {
+    fn visit_literal_false(&mut self, _parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_literal_false(&mut self) -> Result<(), TypeError> {
-        todo!()
-    }
-
-    fn visit_literal_string(&mut self, value: String) -> Result<(), TypeError> {
+    fn visit_literal_string(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _value: &str,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_unary(
         &mut self,
-        token_kind: TokenKind,
-        rhs: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _token_kind: &TokenKind,
+        _rhs: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_binary(
         &mut self,
-        lhs: Box<ParsedExpr>,
-        token_kind: TokenKind,
-        rhs: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _lhs: &ParsedExpr,
+        _token_kind: &TokenKind,
+        _rhs: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_tuple(&mut self, items: Vec<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_tuple(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _items: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_block(&mut self, items: Vec<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_block(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _items: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_call(
         &mut self,
-        callee: Box<ParsedExpr>,
-        type_args: Vec<ParsedExpr>,
-        args: Vec<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _callee: &ParsedExpr,
+        _type_args: &[ParsedExpr],
+        _args: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_parsed_pattern(&mut self, pattern: parsed_expr::Pattern) -> Result<(), TypeError> {
+    fn visit_parsed_pattern(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _pattern: &parsed_expr::Pattern,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_return(&mut self, parsed_expr: Option<Box<ParsedExpr>>) -> Result<(), TypeError> {
+    fn visit_return(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _ret_expr: &Option<Box<ParsedExpr>>,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_break(&mut self) -> Result<(), TypeError> {
+    fn visit_break(&mut self, _parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_extend(
         &mut self,
-        name: Name,
-        generics: Vec<ParsedExpr>,
-        conformances: Vec<ParsedExpr>,
-        body: &ParsedExpr,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _generics: &[ParsedExpr],
+        _conformances: &[ParsedExpr],
+        _body: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_struct(
         &mut self,
-        name: Name,
-        generics: Vec<ParsedExpr>,
-        conformances: Vec<ParsedExpr>,
-        body: &ParsedExpr,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _generics: &[ParsedExpr],
+        _conformances: &[ParsedExpr],
+        _body: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_property(
         &mut self,
-        name: Name,
-        type_repr: Option<Box<ParsedExpr>>,
-        default_value: Option<Box<ParsedExpr>>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _type_repr: &Option<Box<ParsedExpr>>,
+        _default_value: &Option<Box<ParsedExpr>>,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_type_repr(
         &mut self,
-        name: Name,
-        generics: Vec<ParsedExpr>,
-        conformances: Vec<ParsedExpr>,
-        introduces_type: bool,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _generics: &[ParsedExpr],
+        _conformances: &[ParsedExpr],
+        _introduces_type: bool,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_func_type_repr(
         &mut self,
-        params: Vec<ParsedExpr>,
-        ret: Box<ParsedExpr>,
-        introduces_type: bool,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _params: &[ParsedExpr],
+        _ret: &ParsedExpr,
+        _introduces_type: bool,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_tuple_type_repr(
         &mut self,
-        items: Vec<ParsedExpr>,
-        introduces_type: bool,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _items: &[ParsedExpr],
+        _introduces_type: bool,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_member(&mut self, receiver: Option<&ParsedExpr>, name: &str) -> Result<(), TypeError> {
+    fn visit_member(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _receiver: Option<&ParsedExpr>,
+        _name: &str,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_init(
         &mut self,
-        symbol_id: Option<SymbolID>,
-        func: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _symbol_id: Option<SymbolID>,
+        _func: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn visit_func(
         &mut self,
-        name: Option<Name>,
-        generics: Vec<ParsedExpr>,
-        params: Vec<ParsedExpr>,
-        body: &ParsedExpr,
-        ret: Option<Box<ParsedExpr>>,
-        captures: Vec<SymbolID>,
-        attributes: Vec<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Option<Name>,
+        _generics: &[ParsedExpr],
+        _params: &[ParsedExpr],
+        _body: &ParsedExpr,
+        _ret: &Option<Box<ParsedExpr>>,
+        _captures: &[SymbolID],
+        _attributes: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_parameter(
         &mut self,
-        name: Name,
-        annotation: Option<Box<ParsedExpr>>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _annotation: &Option<Box<ParsedExpr>>,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_call_arg(
         &mut self,
-        label: Option<Name>,
-        value: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _label: &Option<Name>,
+        _value: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_let(
         &mut self,
-        name: Name,
-        annotation: Option<Box<ParsedExpr>>,
-    ) -> Result<(), TypeError> {
-        todo!()
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        annotation: &Option<Box<ParsedExpr>>,
+    ) -> Result<Ty, TypeError> {
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::Int));
+
+        self.context.declare(&name.symbol_id()?, &ty)?;
+
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::LiteralPrimitive(ty.clone(), Primitive::Int),
+            ConstraintCause::PrimitiveLiteral(parsed_expr.id, Primitive::Int),
+        );
+
+        Ok(ty)
     }
 
     fn visit_assignment(
         &mut self,
-        lhs: Box<ParsedExpr>,
-        rhs: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
-        todo!()
+        parsed_expr: &ParsedExpr,
+        lhs: &ParsedExpr,
+        rhs: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
+        let lhs_ty = self.visit(lhs)?;
+        let rhs_ty = self.visit(rhs)?;
+
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::Equals(lhs_ty.clone(), rhs_ty),
+            ConstraintCause::Assignment(parsed_expr.id),
+        );
+
+        Ok(lhs_ty)
     }
 
-    fn visit_variable(&mut self, name: Name) -> Result<(), TypeError> {
-        todo!()
+    fn visit_variable(&mut self, parsed_expr: &ParsedExpr, name: &Name) -> Result<Ty, TypeError> {
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::None));
+        let scope_ty = self.context.lookup(name)?;
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::Equals(ty.clone(), scope_ty.clone()),
+            ConstraintCause::Variable,
+        );
+
+        Ok(ty)
     }
 
     fn visit_if(
         &mut self,
-        cond: Box<ParsedExpr>,
-        conseq: Box<ParsedExpr>,
-        alt: Option<Box<ParsedExpr>>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _cond: &ParsedExpr,
+        _conseq: &ParsedExpr,
+        _alt: &Option<Box<ParsedExpr>>,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_loop(
         &mut self,
-        cond: Option<Box<ParsedExpr>>,
-        body: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _cond: &Option<Box<ParsedExpr>>,
+        _body: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_enum_decl(
         &mut self,
-        name: Name,
-        conformances: Vec<ParsedExpr>,
-        generics: Vec<ParsedExpr>,
-        body: &ParsedExpr,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _conformances: &[ParsedExpr],
+        _generics: &[ParsedExpr],
+        _body: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_enum_variant(&mut self, name: Name, values: Vec<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_enum_variant(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _values: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_match(
         &mut self,
-        scrutinee: Box<ParsedExpr>,
-        arms: Vec<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _scrutinee: &ParsedExpr,
+        _arms: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_match_arm(
         &mut self,
-        pattern: Box<ParsedExpr>,
-        body: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _pattern: &ParsedExpr,
+        _body: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_pattern_variant(
         &mut self,
-        enum_name: Option<Name>,
-        variant_name: Name,
-        values: Vec<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _enum_name: &Option<Name>,
+        _variant_name: &Name,
+        _values: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_record_literal(&mut self, fields: Vec<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_record_literal(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _fields: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_record_field(&mut self, label: Name, value: Box<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_record_field(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _label: &Name,
+        _value: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_record_type_repr(
         &mut self,
-        fields: Vec<ParsedExpr>,
-        row_var: Option<Box<ParsedExpr>>,
-        introduces_type: bool,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _fields: &[ParsedExpr],
+        _row_var: &Option<Box<ParsedExpr>>,
+        _introduces_type: bool,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_record_type_field(
         &mut self,
-        label: Name,
-        ty: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _label: &Name,
+        _ty: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_row_variable(&mut self, name: Name) -> Result<(), TypeError> {
+    fn visit_row_variable(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_spread(&mut self, parsed_expr: Box<ParsedExpr>) -> Result<(), TypeError> {
+    fn visit_spread(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _expr: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_protocol_decl(
         &mut self,
-        name: Name,
-        associated_types: Vec<ParsedExpr>,
-        body: &ParsedExpr,
-        conformances: Vec<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _associated_types: &[ParsedExpr],
+        _body: &ParsedExpr,
+        _conformances: &[ParsedExpr],
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
     fn visit_func_signature(
         &mut self,
-        name: Name,
-        params: Vec<ParsedExpr>,
-        generics: Vec<ParsedExpr>,
-        ret: Box<ParsedExpr>,
-    ) -> Result<(), TypeError> {
+        _parsed_expr: &ParsedExpr,
+        _name: &Name,
+        _params: &[ParsedExpr],
+        _generics: &[ParsedExpr],
+        _ret: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 
-    fn visit_import(&mut self, module_name: String) -> Result<(), TypeError> {
+    fn visit_import(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        _module_name: &str,
+    ) -> Result<Ty, TypeError> {
         todo!()
     }
 }

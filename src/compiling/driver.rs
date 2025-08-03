@@ -12,7 +12,6 @@ use crate::{
     },
     diagnostic::{Diagnostic, Position},
     environment::Environment,
-    name::ResolvedName,
     semantic_index::QueryDatabase,
     source_file,
     ty::Ty2,

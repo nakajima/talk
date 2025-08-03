@@ -5,7 +5,7 @@ use crate::{
     parsed_expr::{Expr, ParsedExpr},
     type_checker::TypeError,
     types::{
-        ty::{Primitive, Ty},
+        ty::Ty,
         typed_expr::{TypedExpr, TypedExprResult},
     },
 };
@@ -197,22 +197,22 @@ impl ParsedExpr {
             Expr::LiteralInt(val) => TypedExprResult::Ok(TypedExpr {
                 id: self.id,
                 expr: crate::types::typed_expr::Expr::LiteralInt(val.to_string()),
-                ty: Ty::Primitive(Primitive::Int),
+                ty: lookup!(self.id, typed_ids),
             }),
             Expr::LiteralFloat(val) => TypedExprResult::Ok(TypedExpr {
                 id: self.id,
                 expr: crate::types::typed_expr::Expr::LiteralFloat(val.to_string()),
-                ty: Ty::Primitive(Primitive::Int),
+                ty: lookup!(self.id, typed_ids),
             }),
             Expr::LiteralTrue => TypedExprResult::Ok(TypedExpr {
                 id: self.id,
                 expr: crate::types::typed_expr::Expr::LiteralTrue,
-                ty: Ty::Primitive(Primitive::Bool),
+                ty: lookup!(self.id, typed_ids),
             }),
             Expr::LiteralFalse => TypedExprResult::Ok(TypedExpr {
                 id: self.id,
                 expr: crate::types::typed_expr::Expr::LiteralFalse,
-                ty: Ty::Primitive(Primitive::Bool),
+                ty: lookup!(self.id, typed_ids),
             }),
             Expr::LiteralString(val) => TypedExprResult::Ok(TypedExpr {
                 id: self.id,

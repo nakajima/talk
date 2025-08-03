@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use tracing::trace_span;
+
 use crate::{
     ExprMetaStorage,
     diagnostic::Diagnostic,
@@ -7,8 +9,12 @@ use crate::{
     parsed_expr::ParsedExpr,
     type_checker::TypeError,
     types::{
-        constraint::Constraint,
+        checker_traversal::Visitor,
+        constraint_set::ConstraintSet,
+        constraint_solver::ConstraintSolver,
         ty::Ty,
+        type_var::{TypeVar, TypeVarDefault},
+        type_var_context::TypeVarContext,
         typed_expr::{TypedExpr, TypedExprResult},
     },
 };
@@ -18,13 +24,16 @@ pub struct TypeCheckingResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+pub type ExprIDTypeMap = BTreeMap<ExprID, Ty>;
+
 #[derive(Debug)]
 pub struct TypeCheckingSession<'a> {
-    pub typed_expr_ids: BTreeMap<ExprID, Ty>,
-    pub constraints: Vec<Constraint>,
+    pub typed_expr_ids: ExprIDTypeMap,
+    pub constraints: ConstraintSet,
     pub meta: &'a ExprMetaStorage,
     pub parsed_roots: &'a [ParsedExpr],
     pub diagnostics: Vec<Diagnostic>,
+    pub type_var_context: TypeVarContext,
 }
 
 impl<'a> TypeCheckingSession<'a> {
@@ -35,13 +44,26 @@ impl<'a> TypeCheckingSession<'a> {
             typed_expr_ids: Default::default(),
             constraints: Default::default(),
             diagnostics: Default::default(),
+            type_var_context: TypeVarContext::default(),
         }
     }
 
-    pub fn solve(self) -> Result<TypeCheckingResult, TypeError> {
+    pub fn solve(&mut self) -> Result<TypeCheckingResult, TypeError> {
+        let _s = trace_span!("type checking").entered();
+
+        let mut visitor =
+            Visitor::new(&mut self.type_var_context, &mut self.constraints, self.meta);
+
+        for root in self.parsed_roots {
+            visitor.visit(root)?;
+        }
+
+        let mut solver = ConstraintSolver::new(&mut self.type_var_context);
+        let typed_expr_ids = solver.solve(&mut self.constraints)?;
+
         let mut typed_roots = vec![];
         for root in self.parsed_roots {
-            match root.to_typed(&self.typed_expr_ids) {
+            match root.to_typed(&typed_expr_ids) {
                 TypedExprResult::Ok(typed) => {
                     typed_roots.push(typed);
                 }
@@ -52,35 +74,11 @@ impl<'a> TypeCheckingSession<'a> {
 
         Ok(TypeCheckingResult {
             typed_roots,
-            diagnostics: self.diagnostics,
+            diagnostics: self.diagnostics.clone(),
         })
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::{
-        parser::parse,
-        types::{
-            checker::{TypeCheckingResult, TypeCheckingSession},
-            ty::{Primitive, Ty},
-        },
-    };
-
-    fn check(code: &'static str) -> TypeCheckingResult {
-        let parsed = parse(code, "-");
-        let meta = parsed.meta.borrow();
-        let session = TypeCheckingSession::new(parsed.roots(), &meta);
-
-        session.solve().unwrap()
+    pub fn new_type_var(&mut self, default: TypeVarDefault) -> TypeVar {
+        self.type_var_context.new_var(default)
     }
-
-    #[test]
-    fn checks_int() {
-        let checked = check("123");
-        assert_eq!(Ty::Primitive(Primitive::Int), checked.typed_roots[0].ty)
-    }
-
-    #[test]
-    fn test_identity() {}
 }
