@@ -185,16 +185,16 @@ impl<'a> Visitor<'a> {
                 introduces_type,
             } => self.visit_type_repr(parsed, name, generics, conformances, *introduces_type),
             parsed_expr::Expr::FuncTypeRepr(params, ret, introduces_type) => {
-                self.visit_func_type_repr(parsed, params, &ret, *introduces_type)
+                self.visit_func_type_repr(parsed, params, ret, *introduces_type)
             }
             parsed_expr::Expr::TupleTypeRepr(items, introduces_type) => {
                 self.visit_tuple_type_repr(parsed, items, *introduces_type)
             }
             parsed_expr::Expr::Member(Some(box receiver), name) => {
-                self.visit_member(parsed, Some(&receiver), &name)
+                self.visit_member(parsed, Some(receiver), name)
             }
-            parsed_expr::Expr::Member(None, name) => self.visit_member(parsed, None, &name),
-            parsed_expr::Expr::Init(symbol_id, func) => self.visit_init(parsed, *symbol_id, &func),
+            parsed_expr::Expr::Member(None, name) => self.visit_member(parsed, None, name),
+            parsed_expr::Expr::Init(symbol_id, func) => self.visit_init(parsed, *symbol_id, func),
             parsed_expr::Expr::Func {
                 name,
                 generics,
@@ -215,27 +215,27 @@ impl<'a> Visitor<'a> {
             parsed_expr::Expr::Let(name, annotation) => self.visit_let(parsed, name, annotation),
             parsed_expr::Expr::Assignment(lhs, rhs) => self.visit_assignment(parsed, lhs, rhs),
             parsed_expr::Expr::Variable(name) => self.visit_variable(parsed, name),
-            parsed_expr::Expr::If(cond, conseq, alt) => self.visit_if(parsed, &cond, &conseq, alt),
-            parsed_expr::Expr::Loop(cond, body) => self.visit_loop(parsed, cond, &body),
+            parsed_expr::Expr::If(cond, conseq, alt) => self.visit_if(parsed, cond, conseq, alt),
+            parsed_expr::Expr::Loop(cond, body) => self.visit_loop(parsed, cond, body),
             parsed_expr::Expr::EnumDecl {
                 name,
                 conformances,
                 generics,
                 body,
-            } => self.visit_enum_decl(parsed, name, conformances, generics, &body),
+            } => self.visit_enum_decl(parsed, name, conformances, generics, body),
             parsed_expr::Expr::EnumVariant(name, values) => {
                 self.visit_enum_variant(parsed, name, values)
             }
-            parsed_expr::Expr::Match(scrutinee, arms) => self.visit_match(parsed, &scrutinee, arms),
+            parsed_expr::Expr::Match(scrutinee, arms) => self.visit_match(parsed, scrutinee, arms),
             parsed_expr::Expr::MatchArm(pattern, body) => {
-                self.visit_match_arm(parsed, &pattern, &body)
+                self.visit_match_arm(parsed, pattern, body)
             }
             parsed_expr::Expr::PatternVariant(enum_name, variant_name, values) => {
                 self.visit_pattern_variant(parsed, enum_name, variant_name, values)
             }
             parsed_expr::Expr::RecordLiteral(fields) => self.visit_record_literal(parsed, fields),
             parsed_expr::Expr::RecordField { label, value } => {
-                self.visit_record_field(parsed, label, &value)
+                self.visit_record_field(parsed, label, value)
             }
             parsed_expr::Expr::RecordTypeRepr {
                 fields,
@@ -243,22 +243,22 @@ impl<'a> Visitor<'a> {
                 introduces_type,
             } => self.visit_record_type_repr(parsed, fields, row_var, *introduces_type),
             parsed_expr::Expr::RecordTypeField { label, ty } => {
-                self.visit_record_type_field(parsed, label, &ty)
+                self.visit_record_type_field(parsed, label, ty)
             }
             parsed_expr::Expr::RowVariable(name) => self.visit_row_variable(parsed, name),
-            parsed_expr::Expr::Spread(parsed_expr) => self.visit_spread(parsed, &parsed_expr),
+            parsed_expr::Expr::Spread(parsed_expr) => self.visit_spread(parsed, parsed_expr),
             parsed_expr::Expr::ProtocolDecl {
                 name,
                 associated_types,
                 body,
                 conformances,
-            } => self.visit_protocol_decl(parsed, name, associated_types, &body, conformances),
+            } => self.visit_protocol_decl(parsed, name, associated_types, body, conformances),
             parsed_expr::Expr::FuncSignature {
                 name,
                 params,
                 generics,
                 ret,
-            } => self.visit_func_signature(parsed, name, params, generics, &ret),
+            } => self.visit_func_signature(parsed, name, params, generics, ret),
             parsed_expr::Expr::Import(module_name) => self.visit_import(parsed, module_name),
         }
     }
