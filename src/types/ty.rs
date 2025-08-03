@@ -24,6 +24,7 @@ impl Display for Primitive {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     Primitive(Primitive),
+    Func { params: Vec<Ty>, returns: Box<Ty> },
     Product(Row),
     Var(TypeVar),
     Sum(Row),
@@ -34,12 +35,20 @@ impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Ty::Primitive(primitive) => write!(f, "{primitive:?}"),
-            _ => todo!(),
+            _ => write!(f, "{self:?}"),
         }
     }
 }
 
+#[allow(non_upper_case_globals)]
 impl Ty {
+    pub const Int: Ty = Ty::Primitive(Primitive::Int);
+    pub const Float: Ty = Ty::Primitive(Primitive::Float);
+    pub const Bool: Ty = Ty::Primitive(Primitive::Bool);
+    pub const Byte: Ty = Ty::Primitive(Primitive::Byte);
+    pub const Pointer: Ty = Ty::Primitive(Primitive::Pointer);
+    pub const Void: Ty = Ty::Primitive(Primitive::Void);
+
     pub fn optional(&self) -> Ty {
         self.clone() // TODO:
     }

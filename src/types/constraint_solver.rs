@@ -7,7 +7,6 @@ use crate::{
         constraint_set::ConstraintSet,
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
-        type_var::TypeVarDefault,
         type_var_context::TypeVarContext,
     },
 };
@@ -87,7 +86,8 @@ impl<'a> ConstraintSolver<'a> {
             ConstraintKind::LiteralPrimitive(ty, primitive) => {
                 self.solve_literal_primitive(constraint, &ty, &primitive, out)?;
             }
-            ConstraintKind::RowCombine(expr_id, row_combination) => todo!(),
+            #[allow(clippy::todo)]
+            ConstraintKind::RowCombine(..) => todo!(),
         }
 
         Ok(())

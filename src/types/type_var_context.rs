@@ -19,8 +19,26 @@ impl UnifyValue for Ty {
 
     fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, TypeError> {
         match (lhs, rhs) {
+            (Ty::Var(lhs), Ty::Var(rhs)) => {
+                if lhs.1 == TypeVarDefault::None && rhs.1 != TypeVarDefault::None {
+                    return Ok(Ty::Var(*rhs));
+                }
+
+                if lhs.1 != TypeVarDefault::None && rhs.1 == TypeVarDefault::None {
+                    return Ok(Ty::Var(*lhs));
+                }
+
+                if lhs.0 > rhs.0 {
+                    Ok(Ty::Var(*lhs))
+                } else {
+                    Ok(Ty::Var(*rhs))
+                }
+            }
             (Ty::Var(_), ty) | (ty, Ty::Var(_)) => Ok(ty.clone()),
-            _ => Ok(lhs.clone()),
+            _ => {
+                tracing::trace!("unify_values: {lhs:?} <> {rhs:?}");
+                Ok(lhs.clone())
+            }
         }
     }
 }
@@ -69,7 +87,10 @@ impl TypeVarContext {
             roots.insert(self.table.find(VarKey(i as u32)));
         }
 
+        tracing::trace!("applying type var defaults to {roots:?}");
+
         for root in roots {
+            tracing::trace!("{:?}", self.table.probe_value(root));
             match self.table.probe_value(root) {
                 Ty::Var(type_var) => match type_var.1 {
                     TypeVarDefault::Int => self.unify(type_var, Ty::Primitive(Primitive::Int))?,
@@ -86,10 +107,19 @@ impl TypeVarContext {
     }
 
     pub fn resolve(&mut self, ty: &Ty) -> Ty {
-        if let Ty::Var(var) = ty {
-            self.table.probe_value(VarKey(var.0))
-        } else {
-            ty.clone()
+        match ty {
+            Ty::Var(var) => self.table.probe_value(VarKey(var.0)),
+            Ty::Func { params, returns } => Ty::Func {
+                params: params.iter().map(|p| self.resolve(p)).collect(),
+                returns: Box::new(self.resolve(returns)),
+            },
+            Ty::Primitive(..) => ty.clone(),
+            #[allow(clippy::todo)]
+            Ty::Product(..) => todo!(),
+            #[allow(clippy::todo)]
+            Ty::Sum(..) => todo!(),
+            #[allow(clippy::todo)]
+            Ty::Label(..) => todo!(),
         }
     }
 
@@ -111,7 +141,16 @@ impl TypeVarContext {
         self.table.len() == 0
     }
 
-    pub fn unify(&mut self, type_var: TypeVar, ty: Ty) -> Result<(), TypeError> {
+    pub fn unify(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
+        tracing::trace!("unify: {type_var:?} <> {ty:?}");
+
+        if let Ty::Var(ty_var) = &mut ty
+            && ty_var.1 != TypeVarDefault::None
+        {
+            // Copy the default over
+            type_var.1 = ty_var.1;
+        }
+
         self.table.unify_var_value(VarKey(type_var.0), ty)
     }
 

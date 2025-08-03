@@ -8,12 +8,14 @@ use crate::{
     type_checker::Scheme,
     type_def::{TypeDef, TypeDefKind},
     type_var_id::{TypeVarID, TypeVarKind},
+    types::ty::Ty,
 };
 
 pub struct Builtin {
     id: i32,
     info: SymbolInfo,
-    pub ty: Ty2,
+    pub ty2: Ty2,
+    pub ty: Ty,
     pub unbound_vars: Vec<TypeVarID>,
     type_def: Option<TypeDef>,
 }
@@ -30,7 +32,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Int,
+            ty: Ty::Int,
+            ty2: Ty2::Int,
             unbound_vars: vec![],
             type_def: Some(TypeDef::new(
                 SymbolID(-1),
@@ -49,7 +52,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Float,
+            ty: Ty::Float,
+            ty2: Ty2::Float,
             unbound_vars: vec![],
             type_def: Some(TypeDef::new(
                 SymbolID(-2),
@@ -68,7 +72,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Bool,
+            ty: Ty::Bool,
+            ty2: Ty2::Bool,
             unbound_vars: vec![],
             type_def: Some(TypeDef::new(
                 SymbolID(-3),
@@ -87,7 +92,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Pointer,
+            ty: Ty::Pointer,
+            ty2: Ty2::Pointer,
             unbound_vars: vec![],
             type_def: Some(TypeDef::new(
                 SymbolID(-4),
@@ -106,7 +112,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(
+            ty: Ty::Int,
+            ty2: Ty2::Func(
                 vec![Ty2::Int /* capacity */],
                 Ty2::Pointer.into(),
                 vec![Ty2::TypeVar(TypeVarID {
@@ -132,7 +139,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(
+            ty: Ty::Int,
+            ty2: Ty2::Func(
                 vec![Ty2::Pointer, Ty2::Int],
                 Ty2::Pointer.into(),
                 vec![Ty2::TypeVar(TypeVarID {
@@ -158,7 +166,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(vec![Ty2::Pointer], Ty2::Void.into(), vec![]),
+            ty: Ty::Int,
+            ty2: Ty2::Func(vec![Ty2::Pointer], Ty2::Void.into(), vec![]),
             unbound_vars: vec![],
             type_def: None,
         },
@@ -172,7 +181,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(
+            ty: Ty::Int,
+            ty2: Ty2::Func(
                 vec![
                     Ty2::Pointer,
                     Ty2::Int,
@@ -206,7 +216,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(
+            ty: Ty::Int,
+            ty2: Ty2::Func(
                 vec![Ty2::Pointer, Ty2::Int],
                 Ty2::TypeVar(TypeVarID {
                     id: 3,
@@ -238,7 +249,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(
+            ty: Ty::Int,
+            ty2: Ty2::Func(
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
@@ -268,7 +280,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Func(
+            ty: Ty::Int,
+            ty2: Ty2::Func(
                 vec![Ty2::string()],
                 Ty2::TypeVar(TypeVarID {
                     id: 5,
@@ -299,7 +312,8 @@ pub fn builtins() -> Vec<Builtin> {
                 definition: None,
                 documentation: None,
             },
-            ty: Ty2::Byte,
+            ty: Ty::Byte,
+            ty2: Ty2::Byte,
             unbound_vars: vec![],
             type_def: Some(TypeDef::new(
                 SymbolID(-13),
@@ -314,7 +328,7 @@ pub fn builtins() -> Vec<Builtin> {
 pub fn builtin_type(symbol_id: &SymbolID) -> Option<Ty2> {
     for builtin in builtins() {
         if symbol_id == &SymbolID(builtin.id) {
-            return Some(builtin.ty);
+            return Some(builtin.ty2);
         }
     }
 
@@ -347,8 +361,16 @@ pub fn default_env_scope() -> BTreeMap<SymbolID, Scheme> {
     for builtin in builtins() {
         scope.insert(
             SymbolID(builtin.id),
-            Scheme::new(builtin.ty, builtin.unbound_vars, vec![]),
+            Scheme::new(builtin.ty2, builtin.unbound_vars, vec![]),
         );
+    }
+    scope
+}
+
+pub fn default_type_checker_scope() -> BTreeMap<SymbolID, Ty> {
+    let mut scope = BTreeMap::new();
+    for builtin in builtins() {
+        scope.insert(SymbolID(builtin.id), builtin.ty);
     }
     scope
 }
@@ -372,12 +394,12 @@ pub fn match_builtin(name: &Name) -> Option<Ty2> {
         match name {
             Name::Resolved(id, _) => {
                 if *id == SymbolID(builtin.id) {
-                    return Some(builtin.ty);
+                    return Some(builtin.ty2);
                 }
             }
             Name::Raw(name_str) => {
                 if &builtin.info.name == name_str {
-                    return Some(builtin.ty);
+                    return Some(builtin.ty2);
                 }
             }
             _ => return None,

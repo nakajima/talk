@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use tracing::trace_span;
 
 use crate::{
-    ExprMetaStorage, SymbolID,
+    ExprMetaStorage, SymbolID, builtins,
     expr_id::ExprID,
     name::Name,
     parsed_expr::{self, IncompleteExpr, ParsedExpr},
@@ -13,7 +13,8 @@ use crate::{
         constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
         constraint_set::ConstraintSet,
         ty::{Primitive, Ty},
-        type_var::TypeVarDefault,
+        type_checking_session::ExprIDTypeMap,
+        type_var::{TypeVar, TypeVarDefault},
         type_var_context::TypeVarContext,
     },
 };
@@ -28,7 +29,7 @@ struct VisitorContext {
 impl Default for VisitorContext {
     fn default() -> Self {
         Self {
-            scopes: vec![Scope::new()], // Default scope
+            scopes: vec![builtins::default_type_checker_scope()], // Default scope
         }
     }
 }
@@ -43,13 +44,13 @@ impl VisitorContext {
     }
 
     fn lookup(&mut self, name: &Name) -> Result<Ty, TypeError> {
+        let symbol_id = name.symbol_id()?;
+
         if let Some(ty) = self
             .scopes
-            .last()
-            .ok_or(TypeError::Unknown(format!(
-                "Unable to declare symbol {name:?} without scope"
-            )))?
-            .get(&name.symbol_id()?)
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(&symbol_id))
         {
             return Ok(ty.clone());
         }
@@ -87,6 +88,7 @@ impl VisitorContext {
 pub struct Visitor<'a> {
     type_var_context: &'a mut TypeVarContext,
     constraints: &'a mut ConstraintSet,
+    expr_id_types: &'a mut ExprIDTypeMap,
     context: VisitorContext,
     meta: &'a ExprMetaStorage,
 }
@@ -96,14 +98,20 @@ impl<'a> Visitor<'a> {
     pub fn new(
         type_var_context: &'a mut TypeVarContext,
         constraints: &'a mut ConstraintSet,
+        expr_id_types: &'a mut ExprIDTypeMap,
         meta: &'a ExprMetaStorage,
     ) -> Self {
         Self {
             type_var_context,
             constraints,
             context: VisitorContext::default(),
+            expr_id_types,
             meta,
         }
+    }
+
+    fn new_type_var(&mut self) -> TypeVar {
+        self.type_var_context.new_var(TypeVarDefault::None)
     }
 
     pub fn constrain(&mut self, expr_id: ExprID, kind: ConstraintKind, cause: ConstraintCause) {
@@ -134,14 +142,14 @@ impl<'a> Visitor<'a> {
             parsed_expr::Expr::LiteralArray(parsed_exprs) => {
                 self.visit_literal_array(parsed, parsed_exprs)
             }
-            parsed_expr::Expr::LiteralInt(value) => self.visit_literal_int(parsed),
-            parsed_expr::Expr::LiteralFloat(value) => self.visit_literal_float(parsed, &value),
+            parsed_expr::Expr::LiteralInt(_value) => self.visit_literal_int(parsed),
+            parsed_expr::Expr::LiteralFloat(value) => self.visit_literal_float(parsed, value),
             parsed_expr::Expr::LiteralTrue => self.visit_literal_true(parsed),
             parsed_expr::Expr::LiteralFalse => self.visit_literal_false(parsed),
             parsed_expr::Expr::LiteralString(value) => self.visit_literal_string(parsed, value),
-            parsed_expr::Expr::Unary(token_kind, rhs) => self.visit_unary(parsed, token_kind, &rhs),
+            parsed_expr::Expr::Unary(token_kind, rhs) => self.visit_unary(parsed, token_kind, rhs),
             parsed_expr::Expr::Binary(lhs, token_kind, rhs) => {
-                self.visit_binary(parsed, &lhs, token_kind, &rhs)
+                self.visit_binary(parsed, lhs, token_kind, rhs)
             }
             parsed_expr::Expr::Tuple(items) => self.visit_tuple(parsed, items),
             parsed_expr::Expr::Block(items) => self.visit_block(parsed, items),
@@ -149,7 +157,7 @@ impl<'a> Visitor<'a> {
                 callee,
                 type_args,
                 args,
-            } => self.visit_call(parsed, &callee, type_args, args),
+            } => self.visit_call(parsed, callee, type_args, args),
             parsed_expr::Expr::ParsedPattern(pattern) => self.visit_parsed_pattern(parsed, pattern),
             parsed_expr::Expr::Return(parsed_expr) => self.visit_return(parsed, parsed_expr),
             parsed_expr::Expr::Break => self.visit_break(parsed),
@@ -158,13 +166,13 @@ impl<'a> Visitor<'a> {
                 generics,
                 conformances,
                 body,
-            } => self.visit_extend(parsed, name, generics, conformances, &body),
+            } => self.visit_extend(parsed, name, generics, conformances, body),
             parsed_expr::Expr::Struct {
                 name,
                 generics,
                 conformances,
                 body,
-            } => self.visit_struct(parsed, name, generics, conformances, &body),
+            } => self.visit_struct(parsed, name, generics, conformances, body),
             parsed_expr::Expr::Property {
                 name,
                 type_repr,
@@ -196,13 +204,13 @@ impl<'a> Visitor<'a> {
                 captures,
                 attributes,
             } => self.visit_func(
-                parsed, name, generics, params, &body, ret, captures, attributes,
+                parsed, name, generics, params, body, ret, captures, attributes,
             ),
             parsed_expr::Expr::Parameter(name, annotation) => {
                 self.visit_parameter(parsed, name, annotation)
             }
             parsed_expr::Expr::CallArg { label, value } => {
-                self.visit_call_arg(parsed, label, &value)
+                self.visit_call_arg(parsed, label, value)
             }
             parsed_expr::Expr::Let(name, annotation) => self.visit_let(parsed, name, annotation),
             parsed_expr::Expr::Assignment(lhs, rhs) => self.visit_assignment(parsed, lhs, rhs),
@@ -344,10 +352,21 @@ impl<'a> Visitor<'a> {
 
     fn visit_block(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _items: &[ParsedExpr],
+        parsed_expr: &ParsedExpr,
+        items: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let mut ret = Ty::Void;
+
+        for (i, item) in items.iter().enumerate() {
+            let ty = self.visit(item)?;
+            if i == items.len() - 1 {
+                ret = ty;
+            }
+        }
+
+        self.expr_id_types.insert(parsed_expr.id, ret.clone());
+
+        Ok(ret)
     }
 
     fn visit_call(
@@ -414,13 +433,20 @@ impl<'a> Visitor<'a> {
 
     fn visit_type_repr(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _name: &Name,
-        _generics: &[ParsedExpr],
-        _conformances: &[ParsedExpr],
-        _introduces_type: bool,
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        generics: &[ParsedExpr],
+        conformances: &[ParsedExpr],
+        introduces_type: bool,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        if introduces_type {
+            // TODO
+        }
+
+        let ty = self.context.lookup(name)?;
+        self.expr_id_types.insert(parsed_expr.id, ty.clone());
+
+        Ok(ty)
     }
 
     fn visit_func_type_repr(
@@ -463,25 +489,70 @@ impl<'a> Visitor<'a> {
     #[allow(clippy::too_many_arguments)]
     fn visit_func(
         &mut self,
-        _parsed_expr: &ParsedExpr,
+        parsed_expr: &ParsedExpr,
         _name: &Option<Name>,
         _generics: &[ParsedExpr],
-        _params: &[ParsedExpr],
-        _body: &ParsedExpr,
-        _ret: &Option<Box<ParsedExpr>>,
+        params: &[ParsedExpr],
+        body: &ParsedExpr,
+        ret: &Option<Box<ParsedExpr>>,
         _captures: &[SymbolID],
         _attributes: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        todo!()
+        self.context.start_scope();
+
+        let mut typed_params = vec![];
+        for param in params {
+            typed_params.push(self.visit(param)?)
+        }
+
+        let body_ty = self.visit(body)?;
+
+        let typed_ret = if let Some(ret) = ret {
+            let annotated_ty = self.visit(ret)?;
+            self.constrain(
+                ret.id,
+                ConstraintKind::Equals(body_ty, annotated_ty.clone()),
+                ConstraintCause::Annotation(ret.id),
+            );
+            annotated_ty
+        } else {
+            let ty = Ty::Var(self.new_type_var());
+            self.constrain(
+                body.id,
+                ConstraintKind::Equals(body_ty, ty.clone()),
+                ConstraintCause::FuncReturn(body.id),
+            );
+            ty
+        };
+
+        self.context.end_scope();
+
+        let func_ty = Ty::Func {
+            params: typed_params,
+            returns: Box::new(typed_ret),
+        };
+
+        self.expr_id_types.insert(parsed_expr.id, func_ty.clone());
+
+        Ok(func_ty)
     }
 
     fn visit_parameter(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _name: &Name,
-        _annotation: &Option<Box<ParsedExpr>>,
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        annotation: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let param_ty = if let Some(annotation) = annotation {
+            self.visit(annotation)?
+        } else {
+            Ty::Var(self.new_type_var())
+        };
+
+        self.context.declare(&name.symbol_id()?, &param_ty)?;
+        self.expr_id_types.insert(parsed_expr.id, param_ty.clone());
+
+        Ok(param_ty)
     }
 
     fn visit_call_arg(
@@ -499,15 +570,18 @@ impl<'a> Visitor<'a> {
         name: &Name,
         annotation: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
-        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::Int));
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::None));
+
+        if let Some(annotation) = annotation {
+            let annotation_ty = self.visit(annotation)?;
+            self.constrain(
+                parsed_expr.id,
+                ConstraintKind::Equals(ty.clone(), annotation_ty),
+                ConstraintCause::Annotation(annotation.id),
+            );
+        }
 
         self.context.declare(&name.symbol_id()?, &ty)?;
-
-        self.constrain(
-            parsed_expr.id,
-            ConstraintKind::LiteralPrimitive(ty.clone(), Primitive::Int),
-            ConstraintCause::PrimitiveLiteral(parsed_expr.id, Primitive::Int),
-        );
 
         Ok(ty)
     }

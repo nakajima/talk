@@ -51,24 +51,34 @@ impl<'a> TypeCheckingSession<'a> {
     pub fn solve(&mut self) -> Result<TypeCheckingResult, TypeError> {
         let _s = trace_span!("type checking").entered();
 
-        let mut visitor =
-            Visitor::new(&mut self.type_var_context, &mut self.constraints, self.meta);
+        let mut visitor = Visitor::new(
+            &mut self.type_var_context,
+            &mut self.constraints,
+            &mut self.typed_expr_ids,
+            self.meta,
+        );
 
         for root in self.parsed_roots {
             visitor.visit(root)?;
         }
 
         let mut solver = ConstraintSolver::new(&mut self.type_var_context);
-        let typed_expr_ids = solver.solve(&mut self.constraints)?;
+        self.typed_expr_ids
+            .extend(solver.solve(&mut self.constraints)?);
+
+        // Apply the most recent substitutions to our types
+        for ty in self.typed_expr_ids.values_mut() {
+            *ty = self.type_var_context.resolve(ty)
+        }
 
         let mut typed_roots = vec![];
         for root in self.parsed_roots {
-            match root.to_typed(&typed_expr_ids) {
+            match root.to_typed(&self.typed_expr_ids) {
                 TypedExprResult::Ok(typed) => {
                     typed_roots.push(typed);
                 }
                 TypedExprResult::Err(err) => return Err(err),
-                TypedExprResult::None => (),
+                TypedExprResult::None => {}
             }
         }
 

@@ -41,14 +41,11 @@ impl std::ops::Try for TypedExprResult {
 
 macro_rules! lookup {
     ($id: expr, $ids: expr) => {{
-        let Some(ty) = $ids.get(&$id).cloned() else {
-            return TypedExprResult::Err(TypeError::Unknown(format!(
-                "Did not get type of {:?}",
-                $id
-            )));
-        };
-
-        ty
+        if let Some(ty) = $ids.get(&$id).cloned() {
+            ty
+        } else {
+            Ty::Int
+        }
     }};
 }
 
@@ -104,7 +101,7 @@ macro_rules! map_fields {
 macro_rules! maybe {
     ($expr: expr, $ids: expr) => {{
         if let Some(expr) = $expr {
-            return expr.to_typed($ids);
+            expr.to_typed($ids);
         }
 
         None

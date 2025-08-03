@@ -2,7 +2,6 @@ use std::hash::Hash;
 
 use crate::{
     expr_id::ExprID,
-    type_checker::TypeError,
     types::{
         constraint_set::ConstraintId,
         row::RowCombination,
@@ -23,6 +22,7 @@ pub enum ConstraintState {
 pub enum ConstraintCause {
     Annotation(ExprID),
     Assignment(ExprID),
+    FuncReturn(ExprID),
     PrimitiveLiteral(ExprID, Primitive),
     Variable,
 }
@@ -50,7 +50,10 @@ impl Constraint {
                 [lhs, rhs].iter().flat_map(|t| t.type_vars()).collect()
             }
             ConstraintKind::LiteralPrimitive(ty, _) => ty.type_vars(),
-            ConstraintKind::RowCombine(..) => todo!(),
+            #[allow(clippy::todo)]
+            ConstraintKind::RowCombine(..) => {
+                todo!()
+            }
         }
     }
 
