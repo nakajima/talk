@@ -435,8 +435,8 @@ impl<'a> Visitor<'a> {
         &mut self,
         parsed_expr: &ParsedExpr,
         name: &Name,
-        generics: &[ParsedExpr],
-        conformances: &[ParsedExpr],
+        _generics: &[ParsedExpr],
+        _conformances: &[ParsedExpr],
         introduces_type: bool,
     ) -> Result<Ty, TypeError> {
         if introduces_type {
