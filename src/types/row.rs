@@ -8,23 +8,23 @@ pub enum Direction {
 
 pub type Label = String;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RowCombination {
     pub left: Row,
     pub right: Row,
     pub goal: Row,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct RowVar(pub u32);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub enum Row {
     Open(RowVar),
     Closed(ClosedRow),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct ClosedRow {
     // Sorted lexographically
     pub fields: Vec<Label>,

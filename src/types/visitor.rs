@@ -122,9 +122,17 @@ impl<'a> Visitor<'a> {
             expr_id,
             cause,
             kind,
-            parent: None,
+            children: vec![],
             state: ConstraintState::Pending,
         });
+    }
+
+    pub fn visit_mult(&mut self, parsed: &[ParsedExpr]) -> Result<Vec<Ty>, TypeError> {
+        let mut typed = vec![];
+        for expr in parsed {
+            typed.push(self.visit(expr)?);
+        }
+        Ok(typed)
     }
 
     pub fn visit(&mut self, parsed: &ParsedExpr) -> Result<Ty, TypeError> {
@@ -371,12 +379,15 @@ impl<'a> Visitor<'a> {
 
     fn visit_call(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _callee: &ParsedExpr,
-        _type_args: &[ParsedExpr],
-        _args: &[ParsedExpr],
+        parsed_expr: &ParsedExpr,
+        callee: &ParsedExpr,
+        type_args: &[ParsedExpr],
+        args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        todo!()
+       let ret_ty = Ty::Var(self.new_type_var()); 
+       let args = self.visit_mult(args)?;
+
+       Ok(ret_ty)
     }
 
     fn visit_parsed_pattern(
@@ -440,7 +451,9 @@ impl<'a> Visitor<'a> {
         introduces_type: bool,
     ) -> Result<Ty, TypeError> {
         if introduces_type {
-            // TODO
+            let ty = Ty::Var(self.new_type_var());
+            self.context.declare(&name.symbol_id()?, &ty)?;
+            return Ok(ty)
         }
 
         let ty = self.context.lookup(name)?;
@@ -491,7 +504,7 @@ impl<'a> Visitor<'a> {
         &mut self,
         parsed_expr: &ParsedExpr,
         _name: &Option<Name>,
-        _generics: &[ParsedExpr],
+        generics: &[ParsedExpr],
         params: &[ParsedExpr],
         body: &ParsedExpr,
         ret: &Option<Box<ParsedExpr>>,
@@ -499,6 +512,10 @@ impl<'a> Visitor<'a> {
         _attributes: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
         self.context.start_scope();
+
+        for generic in generics {
+            self.visit(generic)?;
+        }
 
         let mut typed_params = vec![];
         for param in params {

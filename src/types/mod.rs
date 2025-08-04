@@ -1,4 +1,4 @@
-pub mod checker_traversal;
+pub mod visitor;
 pub mod constraint;
 pub mod constraint_set;
 pub mod constraint_solver;

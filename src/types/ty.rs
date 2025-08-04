@@ -5,7 +5,7 @@ use crate::types::{
     type_var::TypeVar,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, Copy, PartialEq, Eq)]
 pub enum Primitive {
     Void,
     Int,
@@ -21,7 +21,7 @@ impl Display for Primitive {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Ty {
     Primitive(Primitive),
     Func { params: Vec<Ty>, returns: Box<Ty> },

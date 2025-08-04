@@ -65,3 +65,10 @@ fn checks_unannotated_func() {
         checked.typed_roots[0].ty
     )
 }
+
+#[test]
+fn checks_generic_func() {
+    let checked = check("func id<T>(x: T) { x }; id(123); id(1.23)");
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+    assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}

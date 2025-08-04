@@ -1,21 +1,20 @@
 use std::hash::Hash;
 
 use crate::{
-    expr_id::ExprID,
-    types::{
+    expr_id::ExprID, type_checker::TypeError, types::{
         constraint_set::ConstraintId,
         row::RowCombination,
         ty::{Primitive, Ty},
         type_var::TypeVar,
-    },
+    }
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstraintState {
     Pending,
     Waiting,
     Solved,
-    Error,
+    Error(TypeError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +24,7 @@ pub enum ConstraintCause {
     FuncReturn(ExprID),
     PrimitiveLiteral(ExprID, Primitive),
     Variable,
+    Call
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub struct Constraint {
     pub expr_id: ExprID,
     pub cause: ConstraintCause,
     pub kind: ConstraintKind,
-    pub parent: Option<Box<Self>>,
+    pub children: Vec<ConstraintId>,
     pub state: ConstraintState,
 }
 
@@ -50,6 +50,17 @@ impl Constraint {
                 [lhs, rhs].iter().flat_map(|t| t.type_vars()).collect()
             }
             ConstraintKind::LiteralPrimitive(ty, _) => ty.type_vars(),
+            ConstraintKind::Call {
+                callee,
+                args,
+                returning,
+            } => {
+                let mut res = vec![];
+                res.extend(callee.type_vars());
+                res.extend(args.iter().flat_map(|t|t.type_vars()));
+                res.extend(returning.type_vars());
+                res
+            },
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => {
                 todo!()
@@ -65,6 +76,11 @@ impl Constraint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstraintKind {
     Equals(Ty, Ty),
+    Call {
+        callee: Ty,
+        args: Vec<Ty>,
+        returning: Ty,
+    },
     LiteralPrimitive(Ty, Primitive),
     RowCombine(ExprID, RowCombination),
 }

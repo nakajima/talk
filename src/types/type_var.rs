@@ -1,9 +1,9 @@
 use crate::types::ty::{Primitive, Ty};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
 pub struct TypeVar(pub u32, pub TypeVarDefault);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
 pub enum TypeVarDefault {
     Int,
     Float,

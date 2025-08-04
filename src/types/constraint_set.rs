@@ -1,6 +1,9 @@
 use priority_queue::PriorityQueue;
 
-use crate::types::{constraint::Constraint, type_var::TypeVar};
+use crate::types::{
+    constraint::{Constraint, ConstraintState},
+    type_var::TypeVar,
+};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -17,6 +20,7 @@ impl ConstraintId {
 pub struct ConstraintSet {
     free_type_vars: BTreeMap<TypeVar, Vec<ConstraintId>>,
     constraints: PriorityQueue<Constraint, usize>,
+    last_id: usize,
 }
 
 impl ConstraintSet {
@@ -24,6 +28,7 @@ impl ConstraintSet {
         Self {
             free_type_vars: Default::default(),
             constraints: Default::default(),
+            last_id: 0,
         }
     }
 
@@ -43,8 +48,19 @@ impl ConstraintSet {
         self.constraints.iter_mut().map(|f| f.0)
     }
 
-    pub fn next_id(&self) -> ConstraintId {
-        ConstraintId::new(self.constraints.len())
+    pub fn next_id(&mut self) -> ConstraintId {
+        self.last_id += 1;
+        ConstraintId::new(self.last_id)
+    }
+
+    pub fn state_for(&self, id: &ConstraintId) -> Option<ConstraintState> {
+        self.constraints.iter().find_map(|c| {
+            if &c.0.id == id {
+                return Some(c.0.state.clone());
+            }
+
+            None
+        })
     }
 
     pub fn add(&mut self, constraint: Constraint) -> ConstraintId {
