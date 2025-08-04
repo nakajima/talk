@@ -1,14 +1,11 @@
 use std::{collections::BTreeMap, fmt::Display};
 
-use derive_visitor::{DriveMut, Visitor, VisitorMut};
+use derive_visitor::DriveMut;
 
-use crate::{
-    type_checker::TypeError,
-    types::{
-        row::{Label, Row},
-        type_var::{TypeVar, TypeVarKind},
-        type_var_context::TypeVarContext,
-    },
+use crate::types::{
+    row::{Label, Row},
+    type_var::{TypeVar, TypeVarKind},
+    type_var_context::TypeVarContext,
 };
 
 #[derive(Debug, Clone, Hash, Copy, PartialEq, Eq)]
@@ -105,9 +102,12 @@ impl Ty {
                     self.clone()
                 }
             }
-            Ty::Product(row) => todo!(),
-            Ty::Sum(row) => todo!(),
-            Ty::Label(_, ty) => todo!(),
+            #[allow(clippy::todo)]
+            Ty::Product(..) => todo!(),
+            #[allow(clippy::todo)]
+            Ty::Sum(..) => todo!(),
+            #[allow(clippy::todo)]
+            Ty::Label(_, _) => todo!(),
         }
     }
 }

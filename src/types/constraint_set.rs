@@ -4,7 +4,6 @@ use crate::{
     type_checker::TypeError,
     types::{
         constraint::{Constraint, ConstraintKind, ConstraintState},
-        row::Row,
         ty::Ty,
         type_var::TypeVar,
     },
@@ -104,7 +103,7 @@ impl ConstraintSet {
                     .or_default()
                     .push(constraint_id);
             }
-            ConstraintKind::RowClosed { record } => {}
+            ConstraintKind::RowClosed { .. } => {}
             _ => (),
         }
 

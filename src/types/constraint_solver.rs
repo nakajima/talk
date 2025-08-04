@@ -189,7 +189,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         constraint: &mut Constraint,
         callee: Ty,
-        type_args: Vec<Ty>,
+        _type_args: Vec<Ty>,
         args: Vec<Ty>,
         returning: Ty,
         out: &mut ExprIDTypeMap,
@@ -201,7 +201,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty::Var(_) => {
                 let params = args
                     .iter()
-                    .map(|a| Ty::Var(self.context.new_var(TypeVarKind::None)))
+                    .map(|_| Ty::Var(self.context.new_var(TypeVarKind::None)))
                     .collect();
 
                 let returns = Ty::Var(self.context.new_var(TypeVarKind::None));

@@ -5,7 +5,7 @@ use crate::{
     type_checker::TypeError,
     types::{
         constraint_set::ConstraintId,
-        row::{RowCombination, RowVar},
+        row::RowCombination,
         ty::{Primitive, Ty},
         type_var::TypeVar,
     },
@@ -133,7 +133,10 @@ impl ConstraintKind {
             ConstraintKind::RowClosed { record } => record.contains_canonical_var(),
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
             ConstraintKind::HasField { ty, .. } => ty.contains_canonical_var(),
-            ConstraintKind::RowCombine(..) => todo!(),
+            #[allow(clippy::todo)]
+            ConstraintKind::RowCombine(..) => {
+                todo!()
+            }
         }
     }
 }
