@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
-use ena::unify::{InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
+use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
+use tracing::trace_span;
 
 use crate::{
     builtins,
     type_checker::TypeError,
     types::{
+        row::{ClosedRow, Row, RowVar},
         ty::{Primitive, Ty},
         type_var::{TypeVar, TypeVarKind},
     },
@@ -59,9 +61,28 @@ impl UnifyKey for VarKey {
     }
 }
 
+impl EqUnifyValue for ClosedRow {}
+
+impl UnifyKey for RowVar {
+    type Value = Option<ClosedRow>;
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn from_index(u: u32) -> Self {
+        Self(u)
+    }
+
+    fn tag() -> &'static str {
+        "TypeVar"
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
+    row_table: InPlaceUnificationTable<RowVar>,
 }
 
 impl TypeVarContext {
@@ -94,10 +115,10 @@ impl TypeVarContext {
             match self.table.probe_value(root) {
                 Ty::Var(type_var) => match type_var.kind {
                     TypeVarKind::IntLiteral => {
-                        self.unify(type_var, Ty::Primitive(Primitive::Int))?
+                        self.unify_var_ty(type_var, Ty::Primitive(Primitive::Int))?
                     }
                     TypeVarKind::FloatLiteral => {
-                        self.unify(type_var, Ty::Primitive(Primitive::Float))?
+                        self.unify_var_ty(type_var, Ty::Primitive(Primitive::Float))?
                     }
                     _ => continue,
                 },
@@ -112,24 +133,33 @@ impl TypeVarContext {
         match ty {
             Ty::Var(var) => {
                 let new_ty = self.table.probe_value(VarKey(var.id));
-                if let Ty::Var(new_var) = new_ty && new_var != *var {
-                    self.resolve(&new_ty)
-                } else {
-                    new_ty
+                match new_ty {
+                    Ty::Var(new_var) if new_var == *var => new_ty, // Same var, no progress
+                    Ty::Var(_) => self.resolve(&new_ty),           // Different var, keep resolving
+                    _ => self.resolve(&new_ty),
                 }
-            },
+            }
             Ty::Func { params, returns } => Ty::Func {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 returns: Box::new(self.resolve(returns)),
             },
             Ty::Primitive(..) => ty.clone(),
-            #[allow(clippy::todo)]
-            Ty::Product(..) => todo!(),
+            Ty::Product(row) => match row {
+                Row::Open(row_var) => Ty::Product(Row::Open(self.row_table.find(*row_var))),
+                Row::Closed(ClosedRow { fields, values }) => Ty::Product(Row::Closed(ClosedRow {
+                    fields: fields.to_vec(),
+                    values: values.iter().map(|v| self.resolve(v)).collect(),
+                })),
+            },
             #[allow(clippy::todo)]
             Ty::Sum(..) => todo!(),
             #[allow(clippy::todo)]
-            Ty::Label(..) => todo!(),
+            Ty::Label(label, value) => Ty::Label(label.clone(), Box::new(self.resolve(value))),
         }
+    }
+
+    pub fn new_row_var(&mut self) -> RowVar {
+        self.row_table.new_key(None)
     }
 
     pub fn new_var(&mut self, default: TypeVarKind) -> TypeVar {
@@ -150,7 +180,7 @@ impl TypeVarContext {
         self.table.len() == 0
     }
 
-    pub fn unify(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
+    pub fn unify_var_ty(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
         tracing::trace!("unify: {type_var:?} <> {ty:?}");
 
         if type_var.kind == TypeVarKind::Canonical {
@@ -167,6 +197,45 @@ impl TypeVarContext {
         }
 
         self.table.unify_var_value(VarKey(type_var.id), ty)
+    }
+
+    pub fn unify_ty_ty(&mut self, lhs: &Ty, rhs: &Ty) -> Result<(), TypeError> {
+        let lhs = self.resolve(lhs);
+        let rhs = self.resolve(rhs);
+        let _s = trace_span!("unify", lhs = format!("{lhs:?}"), rhs = format!("{rhs:?}")).entered();
+
+        match (&lhs, &rhs) {
+            (Ty::Var(lhs_var), Ty::Var(rhs_var)) => {
+                let picked = Ty::unify_values(&lhs, &rhs)?;
+                self.unify_var_ty(if picked == lhs { *rhs_var } else { *lhs_var }, picked)
+            }
+            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.unify_var_ty(*var, ty.clone()),
+            (
+                Ty::Func {
+                    params: lhs_params,
+                    returns: lhs_returns,
+                },
+                Ty::Func {
+                    params: rhs_params,
+                    returns: rhs_returns,
+                },
+            ) => {
+                for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
+                    self.unify_ty_ty(lhs, rhs)?;
+                }
+
+                self.unify_ty_ty(lhs_returns, rhs_returns)?;
+
+                Ok(())
+            }
+            _ => {
+                if lhs == rhs {
+                    Ok(())
+                } else {
+                    Err(TypeError::Mismatch(lhs.to_string(), rhs.to_string()))
+                }
+            }
+        }
     }
 
     pub fn snapshot(&mut self) -> Snapshot<InPlace<VarKey>> {

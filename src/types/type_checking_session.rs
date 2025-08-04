@@ -70,7 +70,7 @@ impl<'a> TypeCheckingSession<'a> {
 
         // Apply the most recent substitutions to our types
         for ty in self.typed_expr_ids.values_mut() {
-            *ty = self.type_var_context.resolve(ty)
+            *ty = self.type_var_context.resolve(ty);
         }
 
         let mut typed_roots = vec![];

@@ -44,7 +44,7 @@ macro_rules! lookup {
         if let Some(ty) = $ids.get(&$id).cloned() {
             ty
         } else {
-            Ty::Int
+            Ty::Void
         }
     }};
 }

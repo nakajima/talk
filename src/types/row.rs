@@ -17,7 +17,7 @@ pub struct RowCombination {
     pub goal: Row,
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RowVar(pub u32);
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut)]

@@ -5,7 +5,7 @@ use crate::{
     type_checker::TypeError,
     types::{
         constraint_set::ConstraintId,
-        row::RowCombination,
+        row::{RowCombination, RowVar},
         ty::{Primitive, Ty},
         type_var::TypeVar,
     },
@@ -25,9 +25,11 @@ pub enum ConstraintCause {
     Assignment(ExprID),
     FuncReturn(ExprID),
     PrimitiveLiteral(ExprID, Primitive),
+    RecordLiteral,
     Hoisted,
     Variable,
     Call,
+    MemberAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +70,13 @@ impl Constraint {
                 res
             }
             #[allow(clippy::todo)]
+            ConstraintKind::HasField { ty, .. } => {
+                let mut res = vec![];
+                res.extend(ty.type_vars());
+                res
+            }
+            ConstraintKind::RowClosed { record } => record.type_vars(),
+            #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => {
                 todo!()
             }
@@ -76,6 +85,10 @@ impl Constraint {
 
     pub fn priority(&self) -> usize {
         0
+    }
+
+    pub fn is_solved(&self) -> bool {
+        self.state == ConstraintState::Solved
     }
 }
 
@@ -90,6 +103,14 @@ pub enum ConstraintKind {
     },
     LiteralPrimitive(Ty, Primitive),
     RowCombine(ExprID, RowCombination),
+    RowClosed {
+        record: Ty,
+    },
+    HasField {
+        record: Ty,
+        label: String,
+        ty: Ty,
+    },
 }
 
 impl ConstraintKind {
@@ -109,7 +130,9 @@ impl ConstraintKind {
                     || args.iter().any(|a| a.contains_canonical_var())
                     || returning.contains_canonical_var()
             }
+            ConstraintKind::RowClosed { record } => record.contains_canonical_var(),
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
+            ConstraintKind::HasField { ty, .. } => ty.contains_canonical_var(),
             ConstraintKind::RowCombine(..) => todo!(),
         }
     }

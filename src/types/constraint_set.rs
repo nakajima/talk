@@ -1,8 +1,13 @@
 use priority_queue::PriorityQueue;
 
-use crate::types::{
-    constraint::{Constraint, ConstraintState},
-    type_var::TypeVar,
+use crate::{
+    type_checker::TypeError,
+    types::{
+        constraint::{Constraint, ConstraintKind, ConstraintState},
+        row::Row,
+        ty::Ty,
+        type_var::TypeVar,
+    },
 };
 use std::collections::BTreeMap;
 
@@ -19,6 +24,7 @@ impl ConstraintId {
 #[derive(Default, Clone, Debug)]
 pub struct ConstraintSet {
     free_type_vars: BTreeMap<TypeVar, Vec<ConstraintId>>,
+    row_constraints: BTreeMap<TypeVar, Vec<ConstraintId>>,
     constraints: PriorityQueue<Constraint, usize>,
     last_id: usize,
 }
@@ -27,6 +33,7 @@ impl ConstraintSet {
     pub fn new() -> Self {
         Self {
             free_type_vars: Default::default(),
+            row_constraints: Default::default(),
             constraints: Default::default(),
             last_id: 0,
         }
@@ -63,9 +70,43 @@ impl ConstraintSet {
         })
     }
 
+    pub fn find(&self, id: &ConstraintId) -> Option<&Constraint> {
+        self.constraints.iter().find_map(|c| {
+            if &c.0.id == id {
+                return Some(c.0);
+            }
+
+            None
+        })
+    }
+
+    pub fn find_mut(&mut self, id: &ConstraintId) -> Option<&mut Constraint> {
+        self.constraints.iter_mut().find_map(|c| {
+            if &c.0.id == id {
+                return Some(c.0);
+            }
+
+            None
+        })
+    }
+
     pub fn add(&mut self, constraint: Constraint) -> ConstraintId {
         let constraint_id = constraint.id;
         let priority = constraint.priority();
+
+        match &constraint.kind {
+            ConstraintKind::HasField {
+                record: Ty::Var(var),
+                ..
+            } => {
+                self.row_constraints
+                    .entry(*var)
+                    .or_default()
+                    .push(constraint_id);
+            }
+            ConstraintKind::RowClosed { record } => {}
+            _ => (),
+        }
 
         for type_var in &constraint.type_vars() {
             self.free_type_vars
@@ -77,5 +118,19 @@ impl ConstraintSet {
         self.constraints.push(constraint, priority);
 
         constraint_id
+    }
+
+    pub fn row_constraints_for(&self, ty: &Ty) -> Result<Vec<&Constraint>, TypeError> {
+        let Ty::Var(var) = ty else {
+            return Err(TypeError::Unknown(format!(
+                "{ty:?} cannot have row constraints"
+            )));
+        };
+
+        let Some(constraint_ids) = self.row_constraints.get(var) else {
+            return Ok(vec![]);
+        };
+
+        Ok(constraint_ids.iter().filter_map(|c| self.find(c)).collect())
     }
 }

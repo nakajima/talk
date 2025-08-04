@@ -74,8 +74,8 @@ impl Ty {
                     || returns.contains_canonical_var()
             }
             Ty::Var(type_var) => type_var.kind == TypeVarKind::Canonical,
-            Ty::Product(..) => todo!(),
-            Ty::Sum(..) => todo!(),
+            Ty::Product(..) => false,
+            Ty::Sum(..) => false,
             Ty::Label(_, ty) => ty.contains_canonical_var(),
         }
     }

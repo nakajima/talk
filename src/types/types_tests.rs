@@ -3,6 +3,7 @@ use crate::{
     name_resolver::{NameResolver, Scope},
     parser::parse,
     types::{
+        row::{ClosedRow, Row},
         ty::{Primitive, Ty},
         type_checking_session::{TypeCheckingResult, TypeCheckingSession},
     },
@@ -28,6 +29,19 @@ fn check(code: &'static str) -> TypeCheckingResult {
 fn checks_int() {
     let checked = check("123");
     assert_eq!(Ty::Primitive(Primitive::Int), checked.typed_roots[0].ty)
+}
+
+#[test]
+fn checks_float() {
+    let checked = check("1.23");
+    assert_eq!(Ty::Primitive(Primitive::Float), checked.typed_roots[0].ty)
+}
+
+#[test]
+fn checks_bool() {
+    let checked = check("true ; false");
+    assert_eq!(Ty::Primitive(Primitive::Bool), checked.typed_roots[0].ty);
+    assert_eq!(Ty::Primitive(Primitive::Bool), checked.typed_roots[1].ty);
 }
 
 #[test]
@@ -71,4 +85,23 @@ fn checks_generic_func() {
     let checked = check("func id<T>(x: T) { x }; id(123); id(1.23)");
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn checks_unannotated_generic_func() {
+    let checked = check("func id(x) { x }; id(123); id(1.23)");
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+    assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn checks_record_literal() {
+    let checked = check("{ y: 123, z: 1.23 }");
+    assert_eq!(
+        Ty::Product(Row::Closed(ClosedRow {
+            fields: vec!["y".to_string(), "z".to_string()],
+            values: vec![Ty::Int, Ty::Float],
+        })),
+        checked.typed_roots[0].ty
+    );
 }
