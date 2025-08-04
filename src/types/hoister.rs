@@ -1,0 +1,30 @@
+use crate::{
+    name::Name,
+    parsed_expr::{Expr, ParsedExpr},
+    type_checker::TypeError,
+    types::{ty::Ty, visitor::Visitor},
+};
+
+pub struct Hoister {}
+
+impl Hoister {
+    pub fn hoist<'a>(visitor: &mut Visitor<'a>, roots: &[ParsedExpr]) -> Result<(), TypeError> {
+        for root in roots {
+            match &root.expr {
+                Expr::Func {
+                    name: Some(name), ..
+                } => {
+                    Self::hoist_func(visitor, name)?;
+                }
+                _ => continue,
+            }
+        }
+        Ok(())
+    }
+
+    pub fn hoist_func<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
+        let type_var = visitor.new_type_var();
+        visitor.declare(&name.symbol_id()?, Ty::Var(type_var))?;
+        Ok(())
+    }
+}

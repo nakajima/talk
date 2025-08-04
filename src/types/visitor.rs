@@ -14,7 +14,7 @@ use crate::{
         constraint_set::ConstraintSet,
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
-        type_var::{TypeVar, TypeVarDefault},
+        type_var::{TypeVar, TypeVarKind},
         type_var_context::TypeVarContext,
     },
 };
@@ -110,18 +110,38 @@ impl<'a> Visitor<'a> {
         }
     }
 
-    fn new_type_var(&mut self) -> TypeVar {
-        self.type_var_context.new_var(TypeVarDefault::None)
+    pub fn new_type_var(&mut self) -> TypeVar {
+        self.type_var_context.new_var(TypeVarKind::None)
+    }
+
+    pub fn new_generic_type_var(&mut self) -> TypeVar {
+        self.type_var_context.new_var(TypeVarKind::Canonical)
+    }
+
+    pub fn new_instantiated_type_var(&mut self) -> TypeVar {
+        self.type_var_context.new_var(TypeVarKind::Instantiated)
+    }
+
+    pub fn declare(&mut self, symbol_id: &SymbolID, ty: Ty) -> Result<(), TypeError> {
+        self.context.declare(symbol_id, &ty)
     }
 
     pub fn constrain(&mut self, expr_id: ExprID, kind: ConstraintKind, cause: ConstraintCause) {
         let id = self.constraints.next_id();
+
+        if kind.contains_canonical_var() {
+            tracing::warn!("Constraint contains canonical type var: {kind:?}");
+            return;
+        }
+
         tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
+
         self.constraints.add(Constraint {
             id,
             expr_id,
             cause,
             kind,
+            parent: None,
             children: vec![],
             state: ConstraintState::Pending,
         });
@@ -151,7 +171,7 @@ impl<'a> Visitor<'a> {
                 self.visit_literal_array(parsed, parsed_exprs)
             }
             parsed_expr::Expr::LiteralInt(_value) => self.visit_literal_int(parsed),
-            parsed_expr::Expr::LiteralFloat(value) => self.visit_literal_float(parsed, value),
+            parsed_expr::Expr::LiteralFloat(_value) => self.visit_literal_float(parsed),
             parsed_expr::Expr::LiteralTrue => self.visit_literal_true(parsed),
             parsed_expr::Expr::LiteralFalse => self.visit_literal_false(parsed),
             parsed_expr::Expr::LiteralString(value) => self.visit_literal_string(parsed, value),
@@ -296,7 +316,7 @@ impl<'a> Visitor<'a> {
     }
 
     fn visit_literal_int(&mut self, parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
-        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::Int));
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarKind::IntLiteral));
 
         self.constrain(
             parsed_expr.id,
@@ -307,12 +327,16 @@ impl<'a> Visitor<'a> {
         Ok(ty)
     }
 
-    fn visit_literal_float(
-        &mut self,
-        _parsed_expr: &ParsedExpr,
-        _value: &str,
-    ) -> Result<Ty, TypeError> {
-        todo!()
+    fn visit_literal_float(&mut self, parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarKind::FloatLiteral));
+
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::LiteralPrimitive(ty.clone(), Primitive::Float),
+            ConstraintCause::PrimitiveLiteral(parsed_expr.id, Primitive::Float),
+        );
+
+        Ok(ty)
     }
 
     fn visit_literal_true(&mut self, _parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
@@ -384,10 +408,35 @@ impl<'a> Visitor<'a> {
         type_args: &[ParsedExpr],
         args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-       let ret_ty = Ty::Var(self.new_type_var()); 
-       let args = self.visit_mult(args)?;
+        let substitutions = &mut Default::default();
+        let callee = self
+            .visit(callee)?
+            .instantiate(self.type_var_context, substitutions);
+        let type_args = self
+            .visit_mult(type_args)?
+            .iter()
+            .map(|arg| arg.instantiate(self.type_var_context, substitutions))
+            .collect();
+        let args = self
+            .visit_mult(args)?
+            .iter()
+            .map(|arg| arg.instantiate(self.type_var_context, substitutions))
+            .collect();
 
-       Ok(ret_ty)
+        let returning = Ty::Var(self.new_type_var());
+
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::Call {
+                callee,
+                type_args,
+                args,
+                returning: returning.clone(),
+            },
+            ConstraintCause::Call,
+        );
+
+        Ok(returning)
     }
 
     fn visit_parsed_pattern(
@@ -451,12 +500,13 @@ impl<'a> Visitor<'a> {
         introduces_type: bool,
     ) -> Result<Ty, TypeError> {
         if introduces_type {
-            let ty = Ty::Var(self.new_type_var());
+            let ty = Ty::Var(self.new_generic_type_var());
             self.context.declare(&name.symbol_id()?, &ty)?;
-            return Ok(ty)
+            return Ok(ty);
         }
 
-        let ty = self.context.lookup(name)?;
+        let mut ty = self.context.lookup(name)?;
+
         self.expr_id_types.insert(parsed_expr.id, ty.clone());
 
         Ok(ty)
@@ -503,7 +553,7 @@ impl<'a> Visitor<'a> {
     fn visit_func(
         &mut self,
         parsed_expr: &ParsedExpr,
-        _name: &Option<Name>,
+        name: &Option<Name>,
         generics: &[ParsedExpr],
         params: &[ParsedExpr],
         body: &ParsedExpr,
@@ -551,6 +601,15 @@ impl<'a> Visitor<'a> {
 
         self.expr_id_types.insert(parsed_expr.id, func_ty.clone());
 
+        if let Some(name) = name {
+            let Ty::Var(hoisted_ty) = self.context.lookup(name)? else {
+                unreachable!()
+            };
+
+            // We should unify the hoisted ty with the new one
+            self.type_var_context.unify(hoisted_ty, func_ty.clone());
+        }
+
         Ok(func_ty)
     }
 
@@ -560,7 +619,9 @@ impl<'a> Visitor<'a> {
         name: &Name,
         annotation: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
-        let param_ty = if let Some(annotation) = annotation {
+        let param_ty = if let Some(hoisted) = self.expr_id_types.get(&parsed_expr.id) {
+            hoisted.clone()
+        } else if let Some(annotation) = annotation {
             self.visit(annotation)?
         } else {
             Ty::Var(self.new_type_var())
@@ -574,11 +635,13 @@ impl<'a> Visitor<'a> {
 
     fn visit_call_arg(
         &mut self,
-        _parsed_expr: &ParsedExpr,
+        parsed_expr: &ParsedExpr,
         _label: &Option<Name>,
-        _value: &ParsedExpr,
+        value: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let ty = self.visit(value)?;
+        self.expr_id_types.insert(parsed_expr.id, ty.clone());
+        Ok(ty)
     }
 
     fn visit_let(
@@ -587,7 +650,7 @@ impl<'a> Visitor<'a> {
         name: &Name,
         annotation: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
-        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::None));
+        let ty = Ty::Var(self.type_var_context.new_var(TypeVarKind::None));
 
         if let Some(annotation) = annotation {
             let annotation_ty = self.visit(annotation)?;
@@ -622,15 +685,9 @@ impl<'a> Visitor<'a> {
     }
 
     fn visit_variable(&mut self, parsed_expr: &ParsedExpr, name: &Name) -> Result<Ty, TypeError> {
-        let ty = Ty::Var(self.type_var_context.new_var(TypeVarDefault::None));
         let scope_ty = self.context.lookup(name)?;
-        self.constrain(
-            parsed_expr.id,
-            ConstraintKind::Equals(ty.clone(), scope_ty.clone()),
-            ConstraintCause::Variable,
-        );
-
-        Ok(ty)
+        self.expr_id_types.insert(parsed_expr.id, scope_ty.clone());
+        Ok(scope_ty)
     }
 
     fn visit_if(

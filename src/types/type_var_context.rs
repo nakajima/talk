@@ -7,7 +7,7 @@ use crate::{
     type_checker::TypeError,
     types::{
         ty::{Primitive, Ty},
-        type_var::{TypeVar, TypeVarDefault},
+        type_var::{TypeVar, TypeVarKind},
     },
 };
 
@@ -20,15 +20,15 @@ impl UnifyValue for Ty {
     fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, TypeError> {
         match (lhs, rhs) {
             (Ty::Var(lhs), Ty::Var(rhs)) => {
-                if lhs.1 == TypeVarDefault::None && rhs.1 != TypeVarDefault::None {
+                if lhs.kind == TypeVarKind::None && rhs.kind != TypeVarKind::None {
                     return Ok(Ty::Var(*rhs));
                 }
 
-                if lhs.1 != TypeVarDefault::None && rhs.1 == TypeVarDefault::None {
+                if lhs.kind != TypeVarKind::None && rhs.kind == TypeVarKind::None {
                     return Ok(Ty::Var(*lhs));
                 }
 
-                if lhs.0 > rhs.0 {
+                if lhs.id > rhs.id {
                     Ok(Ty::Var(*lhs))
                 } else {
                     Ok(Ty::Var(*rhs))
@@ -70,7 +70,7 @@ impl TypeVarContext {
             for var in builtin.unbound_vars {
                 let key = self
                     .table
-                    .new_key(Ty::Var(TypeVar::new(self.next_id(), TypeVarDefault::None)));
+                    .new_key(Ty::Var(TypeVar::new(self.next_id(), TypeVarKind::None)));
 
                 assert!(
                     key.0 == var.id,
@@ -92,12 +92,14 @@ impl TypeVarContext {
         for root in roots {
             tracing::trace!("{:?}", self.table.probe_value(root));
             match self.table.probe_value(root) {
-                Ty::Var(type_var) => match type_var.1 {
-                    TypeVarDefault::Int => self.unify(type_var, Ty::Primitive(Primitive::Int))?,
-                    TypeVarDefault::Float => {
+                Ty::Var(type_var) => match type_var.kind {
+                    TypeVarKind::IntLiteral => {
+                        self.unify(type_var, Ty::Primitive(Primitive::Int))?
+                    }
+                    TypeVarKind::FloatLiteral => {
                         self.unify(type_var, Ty::Primitive(Primitive::Float))?
                     }
-                    TypeVarDefault::None => continue,
+                    _ => continue,
                 },
                 _ => continue,
             }
@@ -108,7 +110,14 @@ impl TypeVarContext {
 
     pub fn resolve(&mut self, ty: &Ty) -> Ty {
         match ty {
-            Ty::Var(var) => self.table.probe_value(VarKey(var.0)),
+            Ty::Var(var) => {
+                let new_ty = self.table.probe_value(VarKey(var.id));
+                if let Ty::Var(new_var) = new_ty && new_var != *var {
+                    self.resolve(&new_ty)
+                } else {
+                    new_ty
+                }
+            },
             Ty::Func { params, returns } => Ty::Func {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 returns: Box::new(self.resolve(returns)),
@@ -123,7 +132,7 @@ impl TypeVarContext {
         }
     }
 
-    pub fn new_var(&mut self, default: TypeVarDefault) -> TypeVar {
+    pub fn new_var(&mut self, default: TypeVarKind) -> TypeVar {
         let type_var = TypeVar::new(self.next_id(), default);
         let _ = self.table.new_key(Ty::Var(type_var));
         type_var
@@ -144,14 +153,20 @@ impl TypeVarContext {
     pub fn unify(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
         tracing::trace!("unify: {type_var:?} <> {ty:?}");
 
-        if let Ty::Var(ty_var) = &mut ty
-            && ty_var.1 != TypeVarDefault::None
-        {
-            // Copy the default over
-            type_var.1 = ty_var.1;
+        if type_var.kind == TypeVarKind::Canonical {
+            return Err(TypeError::Unknown(
+                "Cannot unify canonical generic parameter".to_string(),
+            ));
         }
 
-        self.table.unify_var_value(VarKey(type_var.0), ty)
+        if let Ty::Var(ty_var) = &mut ty
+            && ty_var.kind != TypeVarKind::None
+        {
+            // Copy the default over
+            type_var.kind = ty_var.kind;
+        }
+
+        self.table.unify_var_value(VarKey(type_var.id), ty)
     }
 
     pub fn snapshot(&mut self) -> Snapshot<InPlace<VarKey>> {

@@ -1,3 +1,5 @@
+use derive_visitor::DriveMut;
+
 use crate::types::ty::Ty;
 
 #[derive(Debug)]
@@ -18,15 +20,16 @@ pub struct RowCombination {
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct RowVar(pub u32);
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut)]
 pub enum Row {
-    Open(RowVar),
+    Open(#[drive(skip)] RowVar),
     Closed(ClosedRow),
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut)]
 pub struct ClosedRow {
     // Sorted lexographically
+    #[drive(skip)]
     pub fields: Vec<Label>,
     // One type for each field in fields
     pub values: Vec<Ty>,

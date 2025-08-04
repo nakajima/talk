@@ -4,9 +4,10 @@ use crate::{
     type_checker::TypeError,
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
-        constraint_set::{ConstraintId, ConstraintSet},
+        constraint_set::ConstraintSet,
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
+        type_var::TypeVarKind,
         type_var_context::TypeVarContext,
     },
 };
@@ -90,9 +91,10 @@ impl<'a> ConstraintSolver<'a> {
             ConstraintKind::Call {
                 callee,
                 args,
+                type_args,
                 returning,
             } => {
-                self.solve_call(constraint, callee, args, returning, out)?;
+                self.solve_call(constraint, callee, type_args, args, returning, out)?;
             }
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => todo!(),
@@ -105,13 +107,32 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         constraint: &mut Constraint,
         callee: Ty,
+        type_args: Vec<Ty>,
         args: Vec<Ty>,
         returning: Ty,
         out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
-        let Ty::Func { params, box returns } = callee else {
-            // We don't have enough information
-            return Ok(());
+        let callee = self.context.resolve(&callee);
+
+        let (params, returns) = match callee {
+            Ty::Func { params, returns } => (params, *returns),
+            Ty::Var(type_var) => {
+                let params = args
+                    .iter()
+                    .map(|a| Ty::Var(self.context.new_var(TypeVarKind::None)))
+                    .collect();
+
+                let returns = Ty::Var(self.context.new_var(TypeVarKind::None));
+
+                (params, returns)
+            }
+            _ => {
+                constraint.state = ConstraintState::Error(TypeError::Unknown(
+                    "Can't call non-func type".to_string(),
+                ));
+
+                return Err(TypeError::Unknown("Can't call non-func type".to_string()));
+            }
         };
 
         if args.len() != params.len() {
@@ -125,30 +146,41 @@ impl<'a> ConstraintSolver<'a> {
         // If it's the first time this constraint has been attempted, spawn the child
         // constraints
         if constraint.state == ConstraintState::Pending {
+            let mut substitutions = Default::default();
+
             out.insert(constraint.expr_id, returning.clone());
+
             for (param, arg) in params.iter().zip(args.iter()) {
+                let param = param.instantiate(self.context, &mut substitutions);
+
                 let id = self.constraints.next_id();
                 let child = Constraint {
                     id,
                     expr_id: constraint.expr_id, // TODO: It'd be nicer to use the arg id
                     cause: ConstraintCause::Call,
                     kind: ConstraintKind::Equals(param.clone(), arg.clone()),
+                    parent: Some(constraint.id),
                     children: vec![],
                     state: ConstraintState::Pending,
                 };
+
                 self.constraints.add(child);
             }
 
+            let returns = returns.instantiate(self.context, &mut substitutions);
             let id = self.constraints.next_id();
             let child = Constraint {
                 id,
                 expr_id: constraint.expr_id, // TODO: It'd be nicer to use the ret id
                 cause: ConstraintCause::Call,
                 kind: ConstraintKind::Equals(returns.clone(), returning.clone()),
+                parent: Some(constraint.id),
                 children: vec![],
                 state: ConstraintState::Pending,
             };
             self.constraints.add(child);
+
+            constraint.state = ConstraintState::Waiting;
         } else if constraint.state == ConstraintState::Waiting
             && constraint
                 .children

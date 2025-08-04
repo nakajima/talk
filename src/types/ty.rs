@@ -1,8 +1,14 @@
-use std::fmt::Display;
+use std::{collections::BTreeMap, fmt::Display};
 
-use crate::types::{
-    row::{Label, Row},
-    type_var::TypeVar,
+use derive_visitor::{DriveMut, Visitor, VisitorMut};
+
+use crate::{
+    type_checker::TypeError,
+    types::{
+        row::{Label, Row},
+        type_var::{TypeVar, TypeVarKind},
+        type_var_context::TypeVarContext,
+    },
 };
 
 #[derive(Debug, Clone, Hash, Copy, PartialEq, Eq)]
@@ -21,14 +27,14 @@ impl Display for Primitive {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut)]
 pub enum Ty {
-    Primitive(Primitive),
+    Primitive(#[drive(skip)] Primitive),
     Func { params: Vec<Ty>, returns: Box<Ty> },
     Product(Row),
-    Var(TypeVar),
+    Var(#[drive(skip)] TypeVar),
     Sum(Row),
-    Label(Label, Box<Self>),
+    Label(#[drive(skip)] Label, Box<Self>),
 }
 
 impl Display for Ty {
@@ -57,6 +63,51 @@ impl Ty {
         match self {
             Self::Var(type_var) => vec![*type_var],
             _ => vec![],
+        }
+    }
+
+    pub fn contains_canonical_var(&self) -> bool {
+        match self {
+            Ty::Primitive(..) => false,
+            Ty::Func { params, returns } => {
+                params.iter().any(|p| p.contains_canonical_var())
+                    || returns.contains_canonical_var()
+            }
+            Ty::Var(type_var) => type_var.kind == TypeVarKind::Canonical,
+            Ty::Product(..) => todo!(),
+            Ty::Sum(..) => todo!(),
+            Ty::Label(_, ty) => ty.contains_canonical_var(),
+        }
+    }
+
+    pub fn instantiate(
+        &self,
+        context: &mut TypeVarContext,
+        substitutions: &mut BTreeMap<TypeVar, TypeVar>,
+    ) -> Ty {
+        match self {
+            Ty::Primitive(..) => self.clone(),
+            Ty::Func { params, returns } => Ty::Func {
+                params: params
+                    .iter()
+                    .map(|p| p.instantiate(context, substitutions))
+                    .collect(),
+                returns: Box::new(returns.instantiate(context, substitutions)),
+            },
+            Ty::Var(type_var) => {
+                if type_var.kind == TypeVarKind::Canonical {
+                    let new_var = substitutions
+                        .entry(*type_var)
+                        .or_insert_with(|| context.new_var(TypeVarKind::Instantiated));
+                    tracing::trace!("replacing canonical {type_var:?} with {new_var:?}");
+                    Ty::Var(*new_var)
+                } else {
+                    self.clone()
+                }
+            }
+            Ty::Product(row) => todo!(),
+            Ty::Sum(row) => todo!(),
+            Ty::Label(_, ty) => todo!(),
         }
     }
 }

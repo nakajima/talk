@@ -9,13 +9,14 @@ use crate::{
     parsed_expr::ParsedExpr,
     type_checker::TypeError,
     types::{
-        visitor::Visitor,
         constraint_set::ConstraintSet,
         constraint_solver::ConstraintSolver,
+        hoister::Hoister,
         ty::Ty,
-        type_var::{TypeVar, TypeVarDefault},
+        type_var::{TypeVar, TypeVarKind},
         type_var_context::TypeVarContext,
         typed_expr::{TypedExpr, TypedExprResult},
+        visitor::Visitor,
     },
 };
 
@@ -58,13 +59,14 @@ impl<'a> TypeCheckingSession<'a> {
             self.meta,
         );
 
+        Hoister::hoist(&mut visitor, self.parsed_roots)?;
+
         for root in self.parsed_roots {
             visitor.visit(root)?;
         }
 
         let mut solver = ConstraintSolver::new(&mut self.type_var_context, &mut self.constraints);
-        self.typed_expr_ids
-            .extend(solver.solve()?);
+        self.typed_expr_ids.extend(solver.solve()?);
 
         // Apply the most recent substitutions to our types
         for ty in self.typed_expr_ids.values_mut() {
@@ -88,7 +90,7 @@ impl<'a> TypeCheckingSession<'a> {
         })
     }
 
-    pub fn new_type_var(&mut self, default: TypeVarDefault) -> TypeVar {
+    pub fn new_type_var(&mut self, default: TypeVarKind) -> TypeVar {
         self.type_var_context.new_var(default)
     }
 }
