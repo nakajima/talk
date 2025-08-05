@@ -9,6 +9,7 @@ use crate::{
     parsed_expr::ParsedExpr,
     type_checker::TypeError,
     types::{
+        constraint::ConstraintState,
         constraint_set::ConstraintSet,
         constraint_solver::ConstraintSolver,
         hoister::Hoister,
@@ -65,8 +66,23 @@ impl<'a> TypeCheckingSession<'a> {
             visitor.visit(root)?;
         }
 
-        let mut solver = ConstraintSolver::new(&mut self.type_var_context, &mut self.constraints);
-        self.typed_expr_ids.extend(solver.solve()?);
+        let solver = ConstraintSolver::new(&mut self.type_var_context, &mut self.constraints);
+        let (solution, errored) = solver.solve()?;
+        self.typed_expr_ids.extend(solution);
+
+        for constraint in errored {
+            let ConstraintState::Error(err) = constraint.state else {
+                continue;
+            };
+            self.diagnostics.push(crate::diagnostic::Diagnostic::typing(
+                self.meta.path.clone(),
+                self.meta
+                    .span(&constraint.expr_id)
+                    .unwrap_or_default()
+                    .into(),
+                err,
+            ));
+        }
 
         // Apply the most recent substitutions to our types
         for ty in self.typed_expr_ids.values_mut() {

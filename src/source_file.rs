@@ -33,6 +33,12 @@ pub struct ExprMetaStorage {
     storage: HashMap<ExprID, ExprMeta>,
 }
 
+impl From<Span> for (usize, usize) {
+    fn from(value: Span) -> Self {
+        (value.start as usize, value.end as usize)
+    }
+}
+
 impl ExprMetaStorage {
     pub fn get(&self, id: &ExprID) -> Option<&ExprMeta> {
         self.storage.get(id)

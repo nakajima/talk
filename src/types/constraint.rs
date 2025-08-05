@@ -90,6 +90,10 @@ impl Constraint {
     pub fn is_solved(&self) -> bool {
         self.state == ConstraintState::Solved
     }
+
+    pub fn error(&mut self, error: TypeError) {
+        self.state = ConstraintState::Error(error)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_visitor::DriveMut)]

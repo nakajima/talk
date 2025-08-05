@@ -112,10 +112,10 @@ fn generic_func_type_mismatch_should_fail() {
 }
 
 #[test]
-#[should_panic]
 fn generic_func_type_mismatch_at_call_site() {
     // The error happens when we try to call with wrong type
-    let _result = check("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
+    let result = check("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
+    assert_eq!(result.diagnostics.len(), 1);
 }
 
 // TODO: Enable when if expressions are implemented
@@ -153,11 +153,11 @@ fn generic_func_constrained_valid() {
 }
 
 #[test]
-#[should_panic]
 fn generic_func_wrong_call() {
     // The error should happen when we try to call with wrong type
     // Using float instead of string to avoid unimplemented string literals
-    let _result = check("func wrong<T>(x: T) -> Int { x }; wrong(1.5)");
+    let result = check("func wrong<T>(x: T) -> Int { x }; wrong(1.5)");
+    assert_eq!(result.diagnostics.len(), 1);
 }
 
 #[test]

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-
 use tracing::trace_span;
 
 use crate::{
@@ -21,6 +20,7 @@ pub struct ConstraintSolver<'a> {
     context: &'a mut TypeVarContext,
     constraints: &'a mut ConstraintSet,
     record_fields: BTreeMap<TypeVar, BTreeMap<String, Ty>>,
+    errored: Vec<Constraint>,
 }
 
 impl<'a> ConstraintSolver<'a> {
@@ -29,10 +29,11 @@ impl<'a> ConstraintSolver<'a> {
             context,
             constraints,
             record_fields: Default::default(),
+            errored: Default::default(),
         }
     }
 
-    pub fn solve(&mut self) -> Result<ExprIDTypeMap, TypeError> {
+    pub fn solve(mut self) -> Result<(ExprIDTypeMap, Vec<Constraint>), TypeError> {
         let mut result = ExprIDTypeMap::default();
         let mut failed_attempts = 0;
 
@@ -78,7 +79,7 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        Ok(result)
+        Ok((result, self.errored))
     }
 
     pub fn solve_constraint(
@@ -88,27 +89,31 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         let _s = trace_span!("solve_constraint", constraint = format!("{constraint:?}"));
 
-        match constraint.kind.clone() {
-            ConstraintKind::Equals(lhs, rhs) => self.solve_equals(constraint, lhs, rhs, out)?,
+        let result = match constraint.kind.clone() {
+            ConstraintKind::Equals(lhs, rhs) => self.solve_equals(constraint, lhs, rhs, out),
             ConstraintKind::LiteralPrimitive(ty, primitive) => {
-                self.solve_literal_primitive(constraint, &ty, &primitive, out)?;
+                self.solve_literal_primitive(constraint, &ty, &primitive, out)
             }
             ConstraintKind::Call {
                 callee,
                 args,
                 type_args,
                 returning,
-            } => {
-                self.solve_call(constraint, callee, type_args, args, returning, out)?;
-            }
+            } => self.solve_call(constraint, callee, type_args, args, returning, out),
             ConstraintKind::HasField { record, label, ty } => {
-                self.solve_has_field(constraint, &record, label, ty)?;
+                self.solve_has_field(constraint, &record, label, ty)
             }
-            ConstraintKind::RowClosed { record } => {
-                self.solve_row_closed(constraint, &record)?;
-            }
+            ConstraintKind::RowClosed { record } => self.solve_row_closed(constraint, &record),
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => todo!(),
+        };
+
+        match result {
+            Ok(_) => (),
+            Err(err) => {
+                constraint.error(err);
+                self.errored.push(constraint.clone())
+            }
         }
 
         Ok(())
