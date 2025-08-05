@@ -19,8 +19,6 @@ fn check(code: &'static str) -> TypeCheckingResult {
     )
     .resolve(parsed, &mut SymbolTable::base());
 
-    println!("parsed roots: {:#?}", resolved.roots());
-
     let meta = resolved.meta.borrow();
     let mut session = TypeCheckingSession::new(resolved.roots(), &meta);
 
@@ -28,38 +26,38 @@ fn check(code: &'static str) -> TypeCheckingResult {
 }
 
 #[test]
-fn checks_int() {
+fn infers_int() {
     let checked = check("123");
     assert_eq!(Ty::Primitive(Primitive::Int), checked.typed_roots[0].ty)
 }
 
 #[test]
-fn checks_float() {
+fn infers_float() {
     let checked = check("1.23");
     assert_eq!(Ty::Primitive(Primitive::Float), checked.typed_roots[0].ty)
 }
 
 #[test]
-fn checks_bool() {
+fn infers_bool() {
     let checked = check("true ; false");
     assert_eq!(Ty::Primitive(Primitive::Bool), checked.typed_roots[0].ty);
     assert_eq!(Ty::Primitive(Primitive::Bool), checked.typed_roots[1].ty);
 }
 
 #[test]
-fn checks_let() {
+fn infers_let() {
     let checked = check("let x = 123; x");
     assert_eq!(Ty::Primitive(Primitive::Int), checked.typed_roots[1].ty)
 }
 
 #[test]
-fn checks_let_with_annotation() {
+fn infers_let_with_annotation() {
     let checked = check("let x: Byte = 123; x");
     assert_eq!(Ty::Byte, checked.typed_roots[1].ty)
 }
 
 #[test]
-fn checks_annotated_func() {
+fn infers_annotated_func() {
     let checked = check("func(x: Int) -> Int { x }");
     assert_eq!(
         Ty::Func {
@@ -72,7 +70,7 @@ fn checks_annotated_func() {
 }
 
 #[test]
-fn checks_unannotated_func() {
+fn infers_unannotated_func() {
     let checked = check("func() { 123 }");
     assert_eq!(
         Ty::Func {
@@ -85,14 +83,14 @@ fn checks_unannotated_func() {
 }
 
 #[test]
-fn checks_generic_func() {
+fn infers_generic_func() {
     let checked = check("func id<T>(x: T) { x }; id(123); id(1.23)");
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
 }
 
 #[test]
-fn checks_unannotated_generic_func() {
+fn infers_unannotated_generic_func() {
     let checked = check("func id(x) { x }; id(123); id(1.23)");
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
@@ -119,14 +117,6 @@ fn generic_func_type_mismatch_at_call_site() {
     let result = check("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
     assert_eq!(result.diagnostics.len(), 1);
 }
-
-// TODO: Enable when if expressions are implemented
-// #[test]
-// #[should_panic]
-// fn generic_func_breaks_parametricity() {
-//     // This should also fail
-//     let _result = check("func broken<T>(x: T) -> T { if true { x } else { 42 } }");
-// }
 
 #[test]
 fn generic_func_tracks_constraints() {
@@ -163,7 +153,7 @@ fn generic_func_wrong_call() {
 }
 
 #[test]
-fn checks_record_literal() {
+fn infers_record_literal() {
     let checked = check("{ y: 123, z: 1.23 }");
     assert_eq!(
         Ty::Product(Row::Closed(ClosedRow {
@@ -175,14 +165,14 @@ fn checks_record_literal() {
 }
 
 #[test]
-fn checks_record_literal_member() {
+fn infers_record_literal_member() {
     let checked = check("let x = { y: 123, z: 1.23 }; x.y ; x.z");
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
 }
 
 #[test]
-fn checks_tuple() {
+fn infers_tuple() {
     let checked = check("(123, 1.23)");
     assert_eq!(
         Ty::Product(Row::Closed(ClosedRow {
@@ -194,9 +184,47 @@ fn checks_tuple() {
 }
 
 #[test]
-fn checks_tuple_member() {
+fn infers_tuple_member() {
     let checked = check("let x = (123, 1.23) ; x.0; x.1");
     assert_eq!(3, checked.typed_roots.len());
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn infers_if() {
+    let checked = check(
+        "
+        if true {
+           456 
+        }
+        ",
+    );
+    assert_eq!(Ty::Void, checked.typed_roots[0].ty);
+}
+
+#[test]
+fn infers_if_else() {
+    let checked = check(
+        "
+        if true {
+            123
+        } else {
+           456 
+        }
+        ",
+    );
+    assert_eq!(Ty::Int, checked.typed_roots[0].ty);
+}
+
+#[test]
+fn generic_func_breaks_parametricity() {
+    let result = check("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
+    assert_eq!(result.diagnostics.len(), 1);
+}
+
+#[test]
+fn condition_must_be_bool() {
+    let result = check("if 123 { 345 }");
+    assert_eq!(result.diagnostics.len(), 1);
 }

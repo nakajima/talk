@@ -31,6 +31,7 @@ pub enum ConstraintCause {
     Variable,
     Call,
     MemberAccess,
+    Condition,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

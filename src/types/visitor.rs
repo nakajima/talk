@@ -800,12 +800,33 @@ impl<'a> Visitor<'a> {
 
     fn visit_if(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _cond: &ParsedExpr,
-        _conseq: &ParsedExpr,
-        _alt: &Option<Box<ParsedExpr>>,
+        parsed_expr: &ParsedExpr,
+        cond: &ParsedExpr,
+        conseq: &ParsedExpr,
+        alt: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let cond_ty = self.visit(cond)?;
+        self.constrain(cond.id, ConstraintKind::Equals(cond_ty, Ty::Bool), ConstraintCause::Condition);
+
+        let conseq_ty = self.visit(conseq)?;
+
+        let ty = if let Some(alt) = alt {
+            let alt_ty = self.visit(alt)?;
+
+            self.constrain(
+                cond.id,
+                ConstraintKind::Equals(conseq_ty.clone(), alt_ty),
+                ConstraintCause::Condition,
+            )?;
+
+            conseq_ty
+        } else {
+            Ty::Void
+        };
+
+        self.expr_id_types.insert(parsed_expr.id, ty.clone());
+
+        Ok(ty)
     }
 
     fn visit_loop(
