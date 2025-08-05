@@ -806,7 +806,11 @@ impl<'a> Visitor<'a> {
         alt: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
         let cond_ty = self.visit(cond)?;
-        self.constrain(cond.id, ConstraintKind::Equals(cond_ty, Ty::Bool), ConstraintCause::Condition);
+        self.constrain(
+            cond.id,
+            ConstraintKind::Equals(cond_ty, Ty::Bool),
+            ConstraintCause::Condition,
+        )?;
 
         let conseq_ty = self.visit(conseq)?;
 
