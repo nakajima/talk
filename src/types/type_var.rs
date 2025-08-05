@@ -41,10 +41,7 @@ impl TypeVar {
                 ty,
                 Ty::Primitive(Primitive::Int) | Ty::Primitive(Primitive::Byte)
             ),
-            TypeVarKind::FloatLiteral => matches!(
-                ty,
-                Ty::Primitive(Primitive::Float)
-            ),
+            TypeVarKind::FloatLiteral => matches!(ty, Ty::Primitive(Primitive::Float)),
             _ => true,
         }
     }

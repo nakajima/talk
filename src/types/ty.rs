@@ -27,8 +27,8 @@ impl Display for Primitive {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut)]
 pub enum Ty {
     Primitive(#[drive(skip)] Primitive),
-    Func { 
-        params: Vec<Ty>, 
+    Func {
+        params: Vec<Ty>,
         returns: Box<Ty>,
         // Constraints that must be checked when this function is instantiated
         generic_constraints: Vec<crate::types::constraint::ConstraintKind>,
@@ -71,10 +71,16 @@ impl Ty {
     pub fn contains_canonical_var(&self) -> bool {
         match self {
             Ty::Primitive(..) => false,
-            Ty::Func { params, returns, generic_constraints } => {
+            Ty::Func {
+                params,
+                returns,
+                generic_constraints,
+            } => {
                 params.iter().any(|p| p.contains_canonical_var())
                     || returns.contains_canonical_var()
-                    || generic_constraints.iter().any(|c| c.contains_canonical_var())
+                    || generic_constraints
+                        .iter()
+                        .any(|c| c.contains_canonical_var())
             }
             Ty::Var(type_var) => type_var.kind == TypeVarKind::Canonical,
             Ty::Product(..) => false,
@@ -90,7 +96,11 @@ impl Ty {
     ) -> Ty {
         match self {
             Ty::Primitive(..) => self.clone(),
-            Ty::Func { params, returns, generic_constraints } => Ty::Func {
+            Ty::Func {
+                params,
+                returns,
+                generic_constraints,
+            } => Ty::Func {
                 params: params
                     .iter()
                     .map(|p| p.instantiate(context, substitutions))

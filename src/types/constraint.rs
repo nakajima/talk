@@ -108,7 +108,8 @@ pub enum ConstraintKind {
     },
     HasField {
         record: Ty,
-        #[drive(skip)] label: String,
+        #[drive(skip)]
+        label: String,
         ty: Ty,
     },
 }
@@ -132,14 +133,16 @@ impl ConstraintKind {
             }
             ConstraintKind::RowClosed { record } => record.contains_canonical_var(),
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
-            ConstraintKind::HasField { record, ty, .. } => record.contains_canonical_var() || ty.contains_canonical_var(),
+            ConstraintKind::HasField { record, ty, .. } => {
+                record.contains_canonical_var() || ty.contains_canonical_var()
+            }
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => {
                 todo!()
             }
         }
     }
-    
+
     pub fn instantiate(
         &self,
         context: &mut crate::types::type_var_context::TypeVarContext,
@@ -157,14 +160,19 @@ impl ConstraintKind {
                 returning,
             } => ConstraintKind::Call {
                 callee: callee.instantiate(context, substitutions),
-                type_args: type_args.iter().map(|t| t.instantiate(context, substitutions)).collect(),
-                args: args.iter().map(|t| t.instantiate(context, substitutions)).collect(),
+                type_args: type_args
+                    .iter()
+                    .map(|t| t.instantiate(context, substitutions))
+                    .collect(),
+                args: args
+                    .iter()
+                    .map(|t| t.instantiate(context, substitutions))
+                    .collect(),
                 returning: returning.instantiate(context, substitutions),
             },
-            ConstraintKind::LiteralPrimitive(ty, prim) => ConstraintKind::LiteralPrimitive(
-                ty.instantiate(context, substitutions),
-                *prim,
-            ),
+            ConstraintKind::LiteralPrimitive(ty, prim) => {
+                ConstraintKind::LiteralPrimitive(ty.instantiate(context, substitutions), *prim)
+            }
             ConstraintKind::RowClosed { record } => ConstraintKind::RowClosed {
                 record: record.instantiate(context, substitutions),
             },

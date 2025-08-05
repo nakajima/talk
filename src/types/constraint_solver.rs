@@ -197,7 +197,11 @@ impl<'a> ConstraintSolver<'a> {
         let callee = self.context.resolve(&callee);
 
         let (params, returns, generic_constraints) = match callee {
-            Ty::Func { params, returns, generic_constraints } => (params, *returns, generic_constraints),
+            Ty::Func {
+                params,
+                returns,
+                generic_constraints,
+            } => (params, *returns, generic_constraints),
             Ty::Var(_) => {
                 let params = args
                     .iter()
@@ -314,7 +318,7 @@ impl<'a> ConstraintSolver<'a> {
                 } else {
                     (lhs, rhs)
                 };
-                
+
                 self.context.unify_var_ty(to_unify, Ty::Var(with))?;
                 constraint.state = ConstraintState::Waiting;
                 Ok(())
@@ -324,14 +328,11 @@ impl<'a> ConstraintSolver<'a> {
                 if !var.accepts(&ty) {
                     constraint.state = ConstraintState::Error(TypeError::Mismatch(
                         format!("{var:?}"),
-                        format!("{ty:?}")
+                        format!("{ty:?}"),
                     ));
-                    return Err(TypeError::Mismatch(
-                        format!("{var:?}"),
-                        format!("{ty:?}")
-                    ));
+                    return Err(TypeError::Mismatch(format!("{var:?}"), format!("{ty:?}")));
                 }
-                
+
                 self.context.unify_var_ty(var, ty.clone())?;
                 tracing::trace!("Unifying {var:?} -> {ty:?}");
                 constraint.state = ConstraintState::Solved;
@@ -346,9 +347,12 @@ impl<'a> ConstraintSolver<'a> {
             (lhs_ty, rhs_ty) => {
                 constraint.state = ConstraintState::Error(TypeError::Mismatch(
                     format!("{lhs_ty:?}"),
-                    format!("{rhs_ty:?}")
+                    format!("{rhs_ty:?}"),
                 ));
-                Err(TypeError::Mismatch(format!("{lhs_ty:?}"), format!("{rhs_ty:?}")))
+                Err(TypeError::Mismatch(
+                    format!("{lhs_ty:?}"),
+                    format!("{rhs_ty:?}"),
+                ))
             }
         }
     }

@@ -1,7 +1,6 @@
-
 use derive_visitor::DriveMut;
 
-use crate::{name::Name, parsing::expr_id::ExprID, token_kind::TokenKind, SymbolID};
+use crate::{SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind};
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum IncompleteExpr {
@@ -283,4 +282,3 @@ pub struct ParsedExpr {
     pub id: ExprID,
     pub expr: Expr,
 }
-

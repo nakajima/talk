@@ -46,21 +46,21 @@ impl VisitorContext {
     fn end_scope(&mut self) {
         self.scopes.pop();
     }
-    
+
     fn start_generic_function(&mut self) {
         self.generic_constraints_stack.push(vec![]);
     }
-    
+
     fn end_generic_function(&mut self) -> Vec<ConstraintKind> {
         self.generic_constraints_stack.pop().unwrap_or_default()
     }
-    
+
     fn add_generic_constraint(&mut self, constraint: ConstraintKind) {
         if let Some(constraints) = self.generic_constraints_stack.last_mut() {
             constraints.push(constraint);
         }
     }
-    
+
     fn in_generic_function(&self) -> bool {
         !self.generic_constraints_stack.is_empty()
     }

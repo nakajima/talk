@@ -100,7 +100,7 @@ fn checks_unannotated_generic_func() {
 fn generic_func_type_mismatch_should_fail() {
     // This actually succeeds because T gets constrained to Int
     let result = check("func bad<T>(x: T) -> T { 123 }");
-    
+
     // The function is valid - it just means T must be Int
     // Let's verify the type
     if let Ty::Func { returns, .. } = &result.typed_roots[0].ty {
@@ -111,7 +111,7 @@ fn generic_func_type_mismatch_should_fail() {
     }
 }
 
-#[test] 
+#[test]
 #[should_panic]
 fn generic_func_type_mismatch_at_call_site() {
     // The error happens when we try to call with wrong type
@@ -131,9 +131,16 @@ fn generic_func_tracks_constraints() {
     // This function constrains T to be Int
     let result = check("func add_one<T>(x: T) -> T { 123 }");
     // The function should type check, with T constrained to Int
-    if let Ty::Func { generic_constraints, .. } = &result.typed_roots[0].ty {
+    if let Ty::Func {
+        generic_constraints,
+        ..
+    } = &result.typed_roots[0].ty
+    {
         // Should have constraint that T = Int
-        assert!(!generic_constraints.is_empty(), "Should have generic constraints");
+        assert!(
+            !generic_constraints.is_empty(),
+            "Should have generic constraints"
+        );
     } else {
         panic!("Expected function type");
     }
@@ -146,7 +153,7 @@ fn generic_func_constrained_valid() {
 }
 
 #[test]
-#[should_panic]  
+#[should_panic]
 fn generic_func_wrong_call() {
     // The error should happen when we try to call with wrong type
     // Using float instead of string to avoid unimplemented string literals

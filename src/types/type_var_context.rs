@@ -139,7 +139,11 @@ impl TypeVarContext {
                     _ => self.resolve(&new_ty),
                 }
             }
-            Ty::Func { params, returns, generic_constraints } => Ty::Func {
+            Ty::Func {
+                params,
+                returns,
+                generic_constraints,
+            } => Ty::Func {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 returns: Box::new(self.resolve(returns)),
                 generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints

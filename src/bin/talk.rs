@@ -1,8 +1,6 @@
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    
-
     use clap::{Args, Parser, Subcommand};
 
     /// Simple program to greet a person

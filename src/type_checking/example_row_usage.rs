@@ -157,6 +157,9 @@ mod examples {
 
         assert_eq!(resolved_width, Ty2::Float);
         assert_eq!(resolved_x, Ty2::Float);
-        assert_eq!(resolved_area, Ty2::Func(vec![], Box::new(Ty2::Float), vec![]));
+        assert_eq!(
+            resolved_area,
+            Ty2::Func(vec![], Box::new(Ty2::Float), vec![])
+        );
     }
 }
