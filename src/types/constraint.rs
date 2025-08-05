@@ -5,7 +5,7 @@ use crate::{
     type_checker::TypeError,
     types::{
         constraint_set::ConstraintId,
-        row::RowCombination,
+        row::{Label, RowCombination},
         ty::{Primitive, Ty},
         type_var::TypeVar,
     },
@@ -26,6 +26,7 @@ pub enum ConstraintCause {
     FuncReturn(ExprID),
     PrimitiveLiteral(ExprID, Primitive),
     RecordLiteral,
+    TupleLiteral,
     Hoisted,
     Variable,
     Call,
@@ -120,7 +121,7 @@ pub enum ConstraintKind {
     HasField {
         record: Ty,
         #[drive(skip)]
-        label: String,
+        label: Label,
         ty: Ty,
     },
 }

@@ -6,7 +6,7 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
         constraint_set::ConstraintSet,
-        row::{ClosedRow, Row},
+        row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
@@ -14,12 +14,12 @@ use crate::{
     },
 };
 
-const MAX_FAILED_ATTEMPTS: usize = 3;
+const MAX_FAILED_ATTEMPTS: usize = 2;
 
 pub struct ConstraintSolver<'a> {
     context: &'a mut TypeVarContext,
     constraints: &'a mut ConstraintSet,
-    record_fields: BTreeMap<TypeVar, BTreeMap<String, Ty>>,
+    record_fields: BTreeMap<TypeVar, BTreeMap<Label, Ty>>,
     errored: Vec<Constraint>,
 }
 
@@ -123,31 +123,41 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         constraint: &mut Constraint,
         record: &Ty,
-        label: String,
+        label: Label,
         ty: Ty,
         out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
         let record = self.context.resolve(record);
+        let ty = self.context.resolve(&ty);
 
         let Ty::Var(var) = record else {
             return Err(TypeError::Unknown(format!("{record:?} can't have fields",)));
         };
 
-        if let Some(existing) = self.record_fields.entry(var).or_default().get(&label) {
+        let ty = if let Some(existing) = self.record_fields.entry(var).or_default().get(&label) {
             tracing::debug!("Found existing receiver: record: {record:?} {existing:?}");
             self.context.unify_ty_ty(existing, &ty)?;
+            existing.clone()
         } else {
             tracing::debug!(
                 "Did not find existing for record: {record:?}, adding: {label:?}->{ty:?}"
             );
-            self.record_fields.entry(var).or_default().insert(label, ty.clone());
-        }
-        
+            self.record_fields
+                .entry(var)
+                .or_default()
+                .insert(label, ty.clone());
+            ty
+        };
+
         // Store the resolved field type in the output
         let resolved_ty = self.context.resolve(&ty);
-        tracing::debug!("Storing field type for expr {}: {:?}", constraint.expr_id.0, resolved_ty);
-        out.insert(constraint.expr_id, resolved_ty);
+        tracing::debug!(
+            "Storing field type for expr {}: {:?}",
+            constraint.expr_id.0,
+            resolved_ty
+        );
 
+        out.insert(constraint.expr_id, resolved_ty);
         constraint.state = ConstraintState::Solved;
 
         Ok(())

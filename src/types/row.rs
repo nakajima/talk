@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use derive_visitor::DriveMut;
 
 use crate::types::ty::Ty;
@@ -8,7 +10,26 @@ pub enum Direction {
     Right,
 }
 
-pub type Label = String;
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Label {
+    String(String),
+    Int(u32),
+}
+
+impl<T: Into<String>> From<T> for Label {
+    fn from(value: T) -> Self {
+        Label::String(value.into())
+    }
+}
+
+impl Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Label::String(string) => write!(f, "{string}"),
+            Label::Int(i) => write!(f, "{i}"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RowCombination {

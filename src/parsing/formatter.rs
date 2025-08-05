@@ -172,7 +172,7 @@ impl<'a> Formatter<'a> {
             } => self.format_type_repr(name, generics, conformances),
             Expr::FuncTypeRepr(args, ret, _) => self.format_func_type_repr(args, ret),
             Expr::TupleTypeRepr(types, _) => self.format_tuple_type_repr(types),
-            Expr::Member(receiver, property) => self.format_member(receiver, property),
+            Expr::Member(receiver, property) => self.format_member(receiver, &property.to_string()),
             Expr::Func {
                 name,
                 generics,

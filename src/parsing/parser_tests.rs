@@ -2104,4 +2104,87 @@ mod tests {
             _ => panic!("Expected struct pattern"),
         }
     }
+
+    #[test]
+    fn test_member_access_parsing() {
+        // Test simple member access
+        let source = "x.0";
+        let parsed = parse(source);
+
+        println!("Number of roots: {}", parsed.roots().len());
+        for (i, root) in parsed.roots().iter().enumerate() {
+            println!("Root {}: {:?}", i, root.expr);
+        }
+
+        assert_eq!(
+            parsed.roots().len(),
+            1,
+            "Should have exactly one root expression"
+        );
+
+        // Check that the root is a member access expression
+        match &parsed.roots()[0].expr {
+            Expr::Member(Some(lhs), label) => {
+                println!("Member access found: lhs={:?}, label={:?}", lhs.expr, label);
+            }
+            expr => {
+                panic!("Expected Member expression, got: {:?}", expr);
+            }
+        }
+    }
+
+    #[test]
+    fn test_tuple_member_access() {
+        // Test tuple with member access
+        let source = "(1, 2).0";
+        let parsed = parse(source);
+
+        println!("Number of roots: {}", parsed.roots().len());
+        for (i, root) in parsed.roots().iter().enumerate() {
+            println!("Root {}: {:?}", i, root.expr);
+        }
+
+        assert_eq!(
+            parsed.roots().len(),
+            1,
+            "Should have exactly one root expression"
+        );
+    }
+
+    #[test]
+    fn test_multiple_expressions_with_member_access() {
+        // Test multiple expressions, one with member access
+        let source = "let x = (1, 2)\nx.0";
+        let parsed = parse(source);
+
+        println!("Number of roots: {}", parsed.roots().len());
+        for (i, root) in parsed.roots().iter().enumerate() {
+            println!("Root {}: {:?}", i, root.expr);
+        }
+
+        // This should have 2 roots: the let expression and the member access
+        assert_eq!(
+            parsed.roots().len(),
+            2,
+            "Should have exactly two root expressions"
+        );
+    }
+
+    #[test]
+    fn test_chained_member_access() {
+        // Test chained member access
+        let source = "x.y.z";
+        let parsed = parse(source);
+
+        println!("Number of roots: {}", parsed.roots().len());
+        for (i, root) in parsed.roots().iter().enumerate() {
+            println!("Root {}: {:?}", i, root.expr);
+        }
+
+        assert_eq!(
+            parsed.roots().len(),
+            1,
+            "Should have exactly one root expression"
+        );
+    }
 }

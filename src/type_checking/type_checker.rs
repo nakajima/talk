@@ -382,9 +382,13 @@ impl<'a> TypeChecker<'a> {
             crate::parsed_expr::Expr::PatternVariant(enum_name, variant_name, items) => {
                 self.infer_pattern_variant(parsed_expr.id, enum_name, variant_name, items, env)
             }
-            crate::parsed_expr::Expr::Member(receiver, member_name) => {
-                self.infer_member(parsed_expr.id, receiver, member_name, expected, env)
-            }
+            crate::parsed_expr::Expr::Member(receiver, member_name) => self.infer_member(
+                parsed_expr.id,
+                receiver,
+                &member_name.to_string(),
+                expected,
+                env,
+            ),
             crate::parsed_expr::Expr::ParsedPattern(pattern) => {
                 self.infer_pattern_expr(parsed_expr.id, parsed_expr, pattern, expected, env)
             }

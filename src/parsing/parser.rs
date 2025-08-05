@@ -12,6 +12,7 @@ use crate::{
     parsed_expr::{self, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
     token::Token,
     token_kind::TokenKind,
+    types::row::Label,
 };
 
 use super::{name::Name, precedence::Precedence};
@@ -856,7 +857,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::Dot)?;
         let name = self.identifier()?;
 
-        let member = self.add_expr(Member(None, name), tok)?;
+        let member = self.add_expr(Member(None, name.into()), tok)?;
         if let Some(call_id) = self.check_call(&member, can_assign)? {
             Ok(call_id)
         } else {
@@ -872,11 +873,27 @@ impl<'a> Parser<'a> {
         let tok = self.push_lhs_location(lhs.id);
         self.consume(TokenKind::Dot)?;
 
-        let name = match self.identifier() {
-            Ok(name) => name,
-            Err(_) => {
-                let incomplete_member = Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
-                return self.add_expr(incomplete_member, tok);
+        let name = match self.current.clone().map(|c| c.kind) {
+            Some(TokenKind::Identifier(_)) => match self.identifier() {
+                Ok(name) => Label::String(name),
+                Err(_) => {
+                    let incomplete_member = Incomplete(IncompleteExpr::Member(Some(Box::new(lhs))));
+                    return self.add_expr(incomplete_member, tok);
+                }
+            },
+            Some(TokenKind::Int(val)) => {
+                self.advance();
+                Label::Int(
+                    str::parse(&val).map_err(|_| {
+                        ParserError::UnknownError("Unable to parse label".to_string())
+                    })?,
+                )
+            }
+            Some(_) | None => {
+                return Err(ParserError::UnexpectedToken(
+                    "label".to_string(),
+                    self.current.clone(),
+                ));
             }
         };
 

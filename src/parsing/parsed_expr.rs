@@ -1,6 +1,8 @@
 use derive_visitor::DriveMut;
 
-use crate::{SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind};
+use crate::{
+    SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind, types::row::Label,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
 pub enum IncompleteExpr {
@@ -134,7 +136,7 @@ pub enum Expr {
     // A dot thing
     Member(
         Option<Box<ParsedExpr>>, /* receiver */
-        #[drive(skip)] String,
+        #[drive(skip)] Label,
     ),
 
     Init(

@@ -12,7 +12,7 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
         constraint_set::{ConstraintId, ConstraintSet},
-        row::RowVar,
+        row::{Label, RowVar},
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
@@ -420,10 +420,37 @@ impl<'a> Visitor<'a> {
 
     fn visit_tuple(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _items: &[ParsedExpr],
+        parsed_expr: &ParsedExpr,
+        items: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let var = self.new_type_var();
+
+        let constraint_id = self.constrain(
+            parsed_expr.id,
+            ConstraintKind::RowClosed {
+                record: Ty::Var(var),
+            },
+            ConstraintCause::RecordLiteral,
+        )?;
+
+        for (i, item) in items.iter().enumerate() {
+            let item_ty = self.visit(item)?;
+            let child_id = self.constrain(
+                item.id,
+                ConstraintKind::HasField {
+                    record: Ty::Var(var),
+                    label: Label::Int(i as u32),
+                    ty: item_ty.clone(),
+                },
+                ConstraintCause::TupleLiteral,
+            )?;
+
+            self.add_child(constraint_id, child_id);
+        }
+
+        self.expr_id_types.insert(parsed_expr.id, Ty::Var(var));
+
+        Ok(Ty::Var(var))
     }
 
     fn visit_block(
@@ -579,7 +606,7 @@ impl<'a> Visitor<'a> {
         &mut self,
         parsed_expr: &ParsedExpr,
         receiver: Option<&ParsedExpr>,
-        name: &str,
+        name: &Label,
     ) -> Result<Ty, TypeError> {
         match receiver {
             Some(receiver) => {
@@ -589,7 +616,7 @@ impl<'a> Visitor<'a> {
                     parsed_expr.id,
                     ConstraintKind::HasField {
                         record: receiver_ty,
-                        label: name.to_string(),
+                        label: name.clone(),
                         ty: Ty::Var(var),
                     },
                     ConstraintCause::MemberAccess,
@@ -866,7 +893,7 @@ impl<'a> Visitor<'a> {
                 field.id,
                 ConstraintKind::HasField {
                     record: Ty::Var(var),
-                    label: label.to_string(),
+                    label: label.clone(),
                     ty: *value.clone(),
                 },
                 ConstraintCause::RecordLiteral,
@@ -887,7 +914,7 @@ impl<'a> Visitor<'a> {
         value: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
         let value = self.visit(value)?;
-        let field_ty = Ty::Label(label.name_str(), Box::new(value));
+        let field_ty = Ty::Label(label.name_str().into(), Box::new(value));
         self.expr_id_types.insert(parsed_expr.id, field_ty.clone());
         Ok(field_ty)
     }

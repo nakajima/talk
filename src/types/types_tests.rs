@@ -3,7 +3,7 @@ use crate::{
     name_resolver::{NameResolver, Scope},
     parser::parse,
     types::{
-        row::{ClosedRow, Row},
+        row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
         type_checking_session::{TypeCheckingResult, TypeCheckingSession},
     },
@@ -18,6 +18,8 @@ fn check(code: &'static str) -> TypeCheckingResult {
         &Default::default(),
     )
     .resolve(parsed, &mut SymbolTable::base());
+
+    println!("parsed roots: {:#?}", resolved.roots());
 
     let meta = resolved.meta.borrow();
     let mut session = TypeCheckingSession::new(resolved.roots(), &meta);
@@ -165,7 +167,7 @@ fn checks_record_literal() {
     let checked = check("{ y: 123, z: 1.23 }");
     assert_eq!(
         Ty::Product(Row::Closed(ClosedRow {
-            fields: vec!["y".to_string(), "z".to_string()],
+            fields: vec!["y".into(), "z".into()],
             values: vec![Ty::Int, Ty::Float],
         })),
         checked.typed_roots[0].ty
@@ -175,6 +177,26 @@ fn checks_record_literal() {
 #[test]
 fn checks_record_literal_member() {
     let checked = check("let x = { y: 123, z: 1.23 }; x.y ; x.z");
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+    assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn checks_tuple() {
+    let checked = check("(123, 1.23)");
+    assert_eq!(
+        Ty::Product(Row::Closed(ClosedRow {
+            fields: vec![Label::Int(0), Label::Int(1)],
+            values: vec![Ty::Int, Ty::Float]
+        })),
+        checked.typed_roots[0].ty
+    );
+}
+
+#[test]
+fn checks_tuple_member() {
+    let checked = check("let x = (123, 1.23) ; x.0; x.1");
+    assert_eq!(3, checked.typed_roots.len());
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
 }

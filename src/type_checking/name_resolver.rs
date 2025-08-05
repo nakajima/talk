@@ -1672,7 +1672,7 @@ mod tests {
                         any_expr!(Expr::Variable(Name::Resolved(SymbolID::ANY, "Fizz".into())))
                             .into()
                     ),
-                    "foo".to_string()
+                    "foo".into()
                 ))
                 .into(),
                 args: vec![any_expr!(Expr::CallArg {
@@ -1971,7 +1971,7 @@ mod tests {
                                         any_expr!(Expr::Variable(Name::_Self(SymbolID::ANY)))
                                             .into()
                                     ),
-                                    "age".to_string()
+                                    "age".into()
                                 ))
                                 .into(),
                                 any_expr!(Expr::Variable(Name::Resolved(

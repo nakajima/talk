@@ -58,13 +58,13 @@ pub fn synthesize_inits(
 
                 let member_expr = Expr::Member(
                     Some(gen_expr(env, Expr::Variable(Name::_Self(sym))).into()),
-                    property.name.to_string(),
+                    property.name.clone().into(),
                 );
                 let assignment_expr = Expr::Assignment(
                     gen_expr(env, member_expr).into(),
                     gen_expr(
                         env,
-                        Expr::Variable(Name::Resolved(param_sym, property.name.clone())),
+                        Expr::Variable(Name::Resolved(param_sym, property.name.into())),
                     )
                     .into(),
                 );
@@ -236,7 +236,7 @@ mod tests {
             panic!("didn't get member");
         };
 
-        assert_eq!(name, "age");
+        assert_eq!(name, &"age".into());
 
         assert_eq!(
             rhs.expr,
