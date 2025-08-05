@@ -64,7 +64,7 @@ pub fn synthesize_inits(
                     gen_expr(env, member_expr).into(),
                     gen_expr(
                         env,
-                        Expr::Variable(Name::Resolved(param_sym, property.name.into())),
+                        Expr::Variable(Name::Resolved(param_sym, property.name)),
                     )
                     .into(),
                 );
