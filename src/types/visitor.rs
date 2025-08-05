@@ -595,6 +595,7 @@ impl<'a> Visitor<'a> {
                     ConstraintCause::MemberAccess,
                 )?;
 
+                self.expr_id_types.insert(parsed_expr.id, Ty::Var(var));
                 Ok(Ty::Var(var))
             }
             None => {

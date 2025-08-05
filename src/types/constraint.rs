@@ -84,7 +84,14 @@ impl Constraint {
     }
 
     pub fn priority(&self) -> usize {
-        0
+        match &self.kind {
+            ConstraintKind::Equals(..) => 100,
+            ConstraintKind::Call { .. } => 50,
+            ConstraintKind::LiteralPrimitive(..) => 100,
+            ConstraintKind::HasField { .. } => 40,
+            ConstraintKind::RowClosed { .. } => 20,
+            ConstraintKind::RowCombine(..) => 20,
+        }
     }
 
     pub fn is_solved(&self) -> bool {

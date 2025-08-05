@@ -171,3 +171,10 @@ fn checks_record_literal() {
         checked.typed_roots[0].ty
     );
 }
+
+#[test]
+fn checks_record_literal_member() {
+    let checked = check("let x = { y: 123, z: 1.23 }; x.y ; x.z");
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+    assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}

@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-const MAX_FAILED_ATTEMPTS: usize = 4;
+const MAX_FAILED_ATTEMPTS: usize = 3;
 
 pub struct ConstraintSolver<'a> {
     context: &'a mut TypeVarContext,
@@ -101,7 +101,7 @@ impl<'a> ConstraintSolver<'a> {
                 returning,
             } => self.solve_call(constraint, callee, type_args, args, returning, out),
             ConstraintKind::HasField { record, label, ty } => {
-                self.solve_has_field(constraint, &record, label, ty)
+                self.solve_has_field(constraint, &record, label, ty, out)
             }
             ConstraintKind::RowClosed { record } => self.solve_row_closed(constraint, &record),
             #[allow(clippy::todo)]
@@ -125,6 +125,7 @@ impl<'a> ConstraintSolver<'a> {
         record: &Ty,
         label: String,
         ty: Ty,
+        out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
         let record = self.context.resolve(record);
 
@@ -133,10 +134,19 @@ impl<'a> ConstraintSolver<'a> {
         };
 
         if let Some(existing) = self.record_fields.entry(var).or_default().get(&label) {
+            tracing::debug!("Found existing receiver: record: {record:?} {existing:?}");
             self.context.unify_ty_ty(existing, &ty)?;
         } else {
-            self.record_fields.entry(var).or_default().insert(label, ty);
+            tracing::debug!(
+                "Did not find existing for record: {record:?}, adding: {label:?}->{ty:?}"
+            );
+            self.record_fields.entry(var).or_default().insert(label, ty.clone());
         }
+        
+        // Store the resolved field type in the output
+        let resolved_ty = self.context.resolve(&ty);
+        tracing::debug!("Storing field type for expr {}: {:?}", constraint.expr_id.0, resolved_ty);
+        out.insert(constraint.expr_id, resolved_ty);
 
         constraint.state = ConstraintState::Solved;
 
