@@ -139,9 +139,10 @@ impl TypeVarContext {
                     _ => self.resolve(&new_ty),
                 }
             }
-            Ty::Func { params, returns } => Ty::Func {
+            Ty::Func { params, returns, generic_constraints } => Ty::Func {
                 params: params.iter().map(|p| self.resolve(p)).collect(),
                 returns: Box::new(self.resolve(returns)),
+                generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints
             },
             Ty::Primitive(..) => ty.clone(),
             Ty::Product(row) => match row {
@@ -183,10 +184,16 @@ impl TypeVarContext {
     pub fn unify_var_ty(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
         tracing::trace!("unify: {type_var:?} <> {ty:?}");
 
-        if type_var.kind == TypeVarKind::Canonical {
-            return Err(TypeError::Unknown(
-                "Cannot unify canonical generic parameter".to_string(),
-            ));
+        // Check if this type var is already bound to something
+        let current = self.table.probe_value(VarKey(type_var.id));
+        match &current {
+            Ty::Var(v) if v.id == type_var.id => {
+                // Not yet bound, proceed with unification
+            }
+            _ => {
+                // Already bound, need to unify with the existing value
+                return self.unify_ty_ty(&current, &ty);
+            }
         }
 
         if let Ty::Var(ty_var) = &mut ty
@@ -214,10 +221,12 @@ impl TypeVarContext {
                 Ty::Func {
                     params: lhs_params,
                     returns: lhs_returns,
+                    ..
                 },
                 Ty::Func {
                     params: rhs_params,
                     returns: rhs_returns,
+                    ..
                 },
             ) => {
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {

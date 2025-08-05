@@ -15,19 +15,37 @@ pub enum TypeVarKind {
     None,
 }
 
+impl TypeVarKind {
+    /// Returns true if this kind is more specific than the other
+    pub fn is_more_specific_than(&self, other: &TypeVarKind) -> bool {
+        use TypeVarKind::*;
+        match (self, other) {
+            // Literal kinds are most specific
+            (IntLiteral | FloatLiteral, _) => true,
+            // Canonical/Instantiated are more specific than None
+            (Canonical | Instantiated, None) => true,
+            // Everything else is not more specific
+            _ => false,
+        }
+    }
+}
+
 impl TypeVar {
     pub fn new(id: u32, kind: TypeVarKind) -> Self {
         Self { id, kind }
     }
 
     pub fn accepts(&self, ty: &Ty) -> bool {
-        if matches!(self.kind, TypeVarKind::IntLiteral) {
-            return matches!(
+        match self.kind {
+            TypeVarKind::IntLiteral => matches!(
                 ty,
                 Ty::Primitive(Primitive::Int) | Ty::Primitive(Primitive::Byte)
-            );
+            ),
+            TypeVarKind::FloatLiteral => matches!(
+                ty,
+                Ty::Primitive(Primitive::Float)
+            ),
+            _ => true,
         }
-
-        true
     }
 }

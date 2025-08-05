@@ -25,12 +25,15 @@ pub type Scope = BTreeMap<SymbolID, Ty>;
 #[derive(Debug)]
 struct VisitorContext {
     scopes: Vec<Scope>,
+    // Stack of generic constraints being collected for each function scope
+    generic_constraints_stack: Vec<Vec<ConstraintKind>>,
 }
 
 impl Default for VisitorContext {
     fn default() -> Self {
         Self {
             scopes: vec![builtins::default_type_checker_scope()], // Default scope
+            generic_constraints_stack: vec![],
         }
     }
 }
@@ -42,6 +45,24 @@ impl VisitorContext {
 
     fn end_scope(&mut self) {
         self.scopes.pop();
+    }
+    
+    fn start_generic_function(&mut self) {
+        self.generic_constraints_stack.push(vec![]);
+    }
+    
+    fn end_generic_function(&mut self) -> Vec<ConstraintKind> {
+        self.generic_constraints_stack.pop().unwrap_or_default()
+    }
+    
+    fn add_generic_constraint(&mut self, constraint: ConstraintKind) {
+        if let Some(constraints) = self.generic_constraints_stack.last_mut() {
+            constraints.push(constraint);
+        }
+    }
+    
+    fn in_generic_function(&self) -> bool {
+        !self.generic_constraints_stack.is_empty()
     }
 
     fn lookup(&mut self, name: &Name) -> Result<Ty, TypeError> {
@@ -139,12 +160,13 @@ impl<'a> Visitor<'a> {
     ) -> Result<ConstraintId, TypeError> {
         let id = self.constraints.next_id();
 
-        if kind.contains_canonical_var() {
-            tracing::warn!("Constraint contains canonical type var: {kind:?}");
-            return Err(TypeError::Unknown("Type error".to_string()));
-        }
-
         tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
+
+        // If this constraint involves canonical type variables and we're in a generic function,
+        // track it for later enforcement
+        if kind.contains_canonical_var() && self.context.in_generic_function() {
+            self.context.add_generic_constraint(kind.clone());
+        }
 
         self.constraints.add(Constraint {
             id,
@@ -604,6 +626,10 @@ impl<'a> Visitor<'a> {
     ) -> Result<Ty, TypeError> {
         self.context.start_scope();
 
+        // Always start tracking constraints for functions - we'll determine if it's generic
+        // based on whether any canonical vars are used
+        self.context.start_generic_function();
+
         for generic in generics {
             self.visit(generic)?;
         }
@@ -624,7 +650,15 @@ impl<'a> Visitor<'a> {
             )?;
             annotated_ty
         } else {
-            let ty = Ty::Var(self.new_type_var());
+            // For functions without explicit return types, check if the body type
+            // contains canonical vars (making this a generic function)
+            let ty = if body_ty.contains_canonical_var() {
+                // This is a generic function, use a canonical var for the return type
+                Ty::Var(self.new_canonical_type_var())
+            } else {
+                // Regular function, use a normal type var
+                Ty::Var(self.new_type_var())
+            };
             self.constrain(
                 body.id,
                 ConstraintKind::Equals(body_ty, ty.clone()),
@@ -635,9 +669,13 @@ impl<'a> Visitor<'a> {
 
         self.context.end_scope();
 
+        // Collect any generic constraints that were generated
+        let generic_constraints = self.context.end_generic_function();
+
         let func_ty = Ty::Func {
             params: typed_params,
             returns: Box::new(typed_ret),
+            generic_constraints,
         };
 
         self.expr_id_types.insert(parsed_expr.id, func_ty.clone());

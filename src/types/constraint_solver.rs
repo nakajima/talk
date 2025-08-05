@@ -196,8 +196,8 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         let callee = self.context.resolve(&callee);
 
-        let (params, returns) = match callee {
-            Ty::Func { params, returns } => (params, *returns),
+        let (params, returns, generic_constraints) = match callee {
+            Ty::Func { params, returns, generic_constraints } => (params, *returns, generic_constraints),
             Ty::Var(_) => {
                 let params = args
                     .iter()
@@ -206,7 +206,7 @@ impl<'a> ConstraintSolver<'a> {
 
                 let returns = Ty::Var(self.context.new_var(TypeVarKind::None));
 
-                (params, returns)
+                (params, returns, vec![])
             }
             _ => {
                 constraint.state = ConstraintState::Error(TypeError::Unknown(
@@ -247,6 +247,7 @@ impl<'a> ConstraintSolver<'a> {
                 };
 
                 self.constraints.add(child);
+                constraint.children.push(id);
             }
 
             let returns = returns.instantiate(self.context, &mut substitutions);
@@ -261,6 +262,24 @@ impl<'a> ConstraintSolver<'a> {
                 state: ConstraintState::Pending,
             };
             self.constraints.add(child);
+            constraint.children.push(id);
+
+            // Add generic constraints as children
+            for generic_constraint in generic_constraints {
+                let instantiated = generic_constraint.instantiate(self.context, &mut substitutions);
+                let id = self.constraints.next_id();
+                let child = Constraint {
+                    id,
+                    expr_id: constraint.expr_id,
+                    cause: ConstraintCause::Call,
+                    kind: instantiated,
+                    parent: Some(constraint.id),
+                    children: vec![],
+                    state: ConstraintState::Pending,
+                };
+                self.constraints.add(child);
+                constraint.children.push(id);
+            }
 
             constraint.state = ConstraintState::Waiting;
         } else if constraint.state == ConstraintState::Waiting
@@ -289,18 +308,48 @@ impl<'a> ConstraintSolver<'a> {
 
         match (lhs, rhs) {
             (Ty::Var(lhs), Ty::Var(rhs)) => {
-                self.context.unify_var_ty(lhs, Ty::Var(rhs))?;
+                // Determine which type var should constrain the other based on specificity
+                let (to_unify, with) = if lhs.kind.is_more_specific_than(&rhs.kind) {
+                    (rhs, lhs)
+                } else {
+                    (lhs, rhs)
+                };
+                
+                self.context.unify_var_ty(to_unify, Ty::Var(with))?;
                 constraint.state = ConstraintState::Waiting;
                 Ok(())
             }
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => {
+                // Check if the type variable can accept this type
+                if !var.accepts(&ty) {
+                    constraint.state = ConstraintState::Error(TypeError::Mismatch(
+                        format!("{var:?}"),
+                        format!("{ty:?}")
+                    ));
+                    return Err(TypeError::Mismatch(
+                        format!("{var:?}"),
+                        format!("{ty:?}")
+                    ));
+                }
+                
                 self.context.unify_var_ty(var, ty.clone())?;
                 tracing::trace!("Unifying {var:?} -> {ty:?}");
                 constraint.state = ConstraintState::Solved;
                 out.insert(constraint.expr_id, ty);
                 Ok(())
             }
-            _ => Ok(()),
+            (Ty::Primitive(p1), Ty::Primitive(p2)) if p1 == p2 => {
+                constraint.state = ConstraintState::Solved;
+                out.insert(constraint.expr_id, Ty::Primitive(p1));
+                Ok(())
+            }
+            (lhs_ty, rhs_ty) => {
+                constraint.state = ConstraintState::Error(TypeError::Mismatch(
+                    format!("{lhs_ty:?}"),
+                    format!("{rhs_ty:?}")
+                ));
+                Err(TypeError::Mismatch(format!("{lhs_ty:?}"), format!("{rhs_ty:?}")))
+            }
         }
     }
 
