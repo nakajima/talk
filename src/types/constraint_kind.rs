@@ -116,7 +116,7 @@ impl Display for ConstraintKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConstraintKind::Equals(lhs, rhs) => {
-                write!(f, "{} = {}", lhs, rhs)
+                write!(f, "{lhs} = {rhs}")
             }
             ConstraintKind::Call {
                 callee,
@@ -128,13 +128,13 @@ impl Display for ConstraintKind {
                 if !type_args.is_empty() {
                     write!(f, "<{}>)", type_args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "))?;
                 }
-                write!(f, " -> {}", returning)
+                write!(f, " -> {returning}")
             }
             ConstraintKind::LiteralPrimitive(ty, prim) => {
-                write!(f, "{} : {:?}", ty, prim)
+                write!(f, "{ty} : {prim:?}")
             }
             ConstraintKind::RowClosed { record } => {
-                write!(f, "row_closed({})", record)
+                write!(f, "row_closed({record})")
             }
             ConstraintKind::HasField {
                 record,
@@ -142,14 +142,14 @@ impl Display for ConstraintKind {
                 ty,
                 index,
             } => {
-                write!(f, "{}.{:?} : {}", record, label, ty)?;
+                write!(f, "{record}.{label:?} : {ty}")?;
                 if let Some(idx) = index {
-                    write!(f, " [idx:{}]", idx)?;
+                    write!(f, " [idx:{idx}]")?;
                 }
                 Ok(())
             }
             ConstraintKind::RowCombine(id, combination) => {
-                write!(f, "row_combine({}, {:?})", id, combination)
+                write!(f, "row_combine({id}, {combination:?})")
             }
         }
     }
