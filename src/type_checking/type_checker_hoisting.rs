@@ -590,7 +590,7 @@ impl<'a> TypeChecker<'a> {
                     Ty2::Row {
                         nominal_id: Some(name),
                         generics,
-                        kind: crate::ty::RowKind::Protocol,
+                        kind: crate::ty::RowKind2::Protocol,
                         ..
                     } => (*name, generics.clone()),
                     Ty2::Row { kind, .. } => {

@@ -1,7 +1,9 @@
 use crate::{
     SymbolTable,
+    environment::Environment,
     name_resolver::{NameResolver, Scope},
     parser::parse,
+    synthesis::synthesize_inits,
     types::{
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
@@ -11,13 +13,16 @@ use crate::{
 
 fn check(code: &'static str) -> TypeCheckingResult {
     let parsed = parse(code, "-");
-    let resolved = NameResolver::new(
+    let symbol_table = &mut SymbolTable::base();
+    let mut resolved = NameResolver::new(
         Scope::new(crate::builtins::default_name_scope()),
         Default::default(),
         "-",
         &Default::default(),
     )
-    .resolve(parsed, &mut SymbolTable::base());
+    .resolve(parsed, symbol_table);
+
+    synthesize_inits(&mut resolved, symbol_table, &mut Environment::new());
 
     let meta = resolved.meta.borrow();
     let mut session = TypeCheckingSession::new(resolved.roots(), &meta);
@@ -227,4 +232,65 @@ fn generic_func_breaks_parametricity() {
 fn condition_must_be_bool() {
     let result = check("if 123 { 345 }");
     assert_eq!(result.diagnostics.len(), 1);
+}
+
+#[test]
+fn struct_properties() {
+    let checked = check(
+        "
+        struct Person {
+            let name: Float 
+            let age: Int
+        }
+        ",
+    );
+
+    assert_eq!(
+        Ty::Product(Row::Closed(ClosedRow {
+            fields: vec!["name".into(), "age".into()],
+            values: vec![Ty::Float, Ty::Int]
+        })),
+        checked.typed_roots[0].ty
+    );
+}
+
+#[test]
+fn struct_init() {
+    let checked = check(
+        "
+        struct Person {
+            let name: Float 
+            let age: Int
+        }
+
+        Person(name: 1.23, age: 123)
+        ",
+    );
+
+    assert_eq!(
+        Ty::Product(Row::Closed(ClosedRow {
+            fields: vec!["name".into(), "age".into()],
+            values: vec![Ty::Float, Ty::Int]
+        })),
+        checked.typed_roots[1].ty
+    );
+}
+
+#[test]
+fn struct_methods() {
+    let checked = check(
+        "
+        struct Person {
+            func fizz(x: Int) { x }
+        }
+        ",
+    );
+
+    assert_eq!(
+        Ty::Product(Row::Closed(ClosedRow {
+            fields: vec!["name".into(), "age".into()],
+            values: vec![Ty::Float, Ty::Int]
+        })),
+        checked.typed_roots[0].ty
+    );
 }

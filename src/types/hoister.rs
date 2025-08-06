@@ -16,6 +16,9 @@ impl Hoister {
                 } => {
                     Self::hoist_func(visitor, name)?;
                 }
+                Expr::Struct { name, .. } => {
+                    Self::hoist_struct(visitor, name)?;
+                }
                 _ => continue,
             }
         }
@@ -24,6 +27,12 @@ impl Hoister {
 
     pub fn hoist_func<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
         let type_var = visitor.new_type_var();
+        visitor.declare(&name.symbol_id()?, Ty::Var(type_var))?;
+        Ok(())
+    }
+
+    pub fn hoist_struct<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
+        let type_var = visitor.new_row_type_var();
         visitor.declare(&name.symbol_id()?, Ty::Var(type_var))?;
         Ok(())
     }

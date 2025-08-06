@@ -7,7 +7,7 @@ use crate::{
     builtins,
     type_checker::TypeError,
     types::{
-        row::{ClosedRow, Row, RowVar},
+        row::{ClosedRow, Row},
         ty::{Primitive, Ty},
         type_var::{TypeVar, TypeVarKind},
     },
@@ -63,26 +63,9 @@ impl UnifyKey for VarKey {
 
 impl EqUnifyValue for ClosedRow {}
 
-impl UnifyKey for RowVar {
-    type Value = Option<ClosedRow>;
-
-    fn index(&self) -> u32 {
-        self.0
-    }
-
-    fn from_index(u: u32) -> Self {
-        Self(u)
-    }
-
-    fn tag() -> &'static str {
-        "TypeVar"
-    }
-}
-
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
-    row_table: InPlaceUnificationTable<RowVar>,
 }
 
 impl TypeVarContext {
@@ -111,7 +94,6 @@ impl TypeVarContext {
         tracing::trace!("applying type var defaults to {roots:?}");
 
         for root in roots {
-            tracing::trace!("{:?}", self.table.probe_value(root));
             match self.table.probe_value(root) {
                 Ty::Var(type_var) => match type_var.kind {
                     TypeVarKind::IntLiteral => {
@@ -149,13 +131,16 @@ impl TypeVarContext {
                 generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints
             },
             Ty::Primitive(..) => ty.clone(),
-            Ty::Product(row) => match row {
-                Row::Open(row_var) => Ty::Product(Row::Open(self.row_table.find(*row_var))),
-                Row::Closed(ClosedRow { fields, values }) => Ty::Product(Row::Closed(ClosedRow {
-                    fields: fields.to_vec(),
-                    values: values.iter().map(|v| self.resolve(v)).collect(),
-                })),
+            Ty::Nominal {
+                name,
+                properties,
+                methods,
+            } => Ty::Nominal {
+                name: name.clone(),
+                properties: self.resolve_row(properties),
+                methods: self.resolve_row(methods),
             },
+            Ty::Product(row) => Ty::Product(self.resolve_row(row)),
             #[allow(clippy::todo)]
             Ty::Sum(..) => todo!(),
             #[allow(clippy::todo)]
@@ -163,8 +148,20 @@ impl TypeVarContext {
         }
     }
 
-    pub fn new_row_var(&mut self) -> RowVar {
-        self.row_table.new_key(None)
+    pub fn resolve_row(&mut self, row: &Row) -> Row {
+        match row {
+            Row::Open(row_var) => {
+                let Ty::Var(var) = self.table.probe_value(VarKey(row_var.id)) else {
+                    unreachable!();
+                };
+
+                Row::Open(var)
+            }
+            Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
+                fields: fields.to_vec(),
+                values: values.iter().map(|v| self.resolve(v)).collect(),
+            }),
+        }
     }
 
     pub fn new_var(&mut self, default: TypeVarKind) -> TypeVar {
@@ -186,6 +183,15 @@ impl TypeVarContext {
     }
 
     pub fn unify_var_ty(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
+        if self.resolve(&Ty::Var(type_var)) == self.resolve(&ty) {
+            return Ok(());
+        }
+
+        if occurs(type_var, &ty, self) {
+            tracing::error!("Occurs check failed for {type_var:?} in {ty:?}");
+            return Err(TypeError::OccursConflict);
+        }
+
         tracing::trace!("unify: {type_var:?} <> {ty:?}");
 
         // Check if this type var is already bound to something
@@ -261,5 +267,19 @@ impl TypeVarContext {
 
     pub fn rollback(&mut self, snapshot: Snapshot<InPlace<VarKey>>) {
         self.table.rollback_to(snapshot);
+    }
+}
+
+fn occurs(tv: TypeVar, ty: &Ty, ctx: &mut TypeVarContext) -> bool {
+    match ctx.resolve(ty) {
+        Ty::Var(tv2) => tv == tv2,
+        Ty::Func {
+            params, returns, ..
+        } => params.iter().any(|p| occurs(tv, p, ctx)) || occurs(tv, &returns, ctx),
+        Ty::Product(Row::Open(tv2)) | Ty::Sum(Row::Open(tv2)) => tv == tv2,
+        Ty::Product(Row::Closed(cr)) | Ty::Sum(Row::Closed(cr)) => {
+            cr.values.iter().any(|v| occurs(tv, v, ctx))
+        }
+        _ => false,
     }
 }

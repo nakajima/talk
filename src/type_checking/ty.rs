@@ -13,7 +13,7 @@ use crate::{
 
 /// The kind of row type - struct, protocol, or record
 #[derive(Clone, PartialEq, Debug, Drive)]
-pub enum RowKind {
+pub enum RowKind2 {
     /// A struct - concrete type with storage
     Struct,
     /// A protocol - interface/trait type without storage
@@ -62,7 +62,7 @@ pub enum Ty2 {
         nominal_id: Option<SymbolID>, // Some for nominal types (structs/protocols), None for structural (records)
         generics: Vec<Ty2>, // Generic type arguments (for nominal types)
         #[drive(skip)]
-        kind: RowKind, // Distinguishes between struct/protocol/record
+        kind: RowKind2, // Distinguishes between struct/protocol/record
     },
 }
 
@@ -137,7 +137,7 @@ impl Display for Ty2 {
                         format!("Row({sym:?})")
                     };
                     match kind {
-                        RowKind::Protocol => write!(f, "{base_name} (protocol)"),
+                        RowKind2::Protocol => write!(f, "{base_name} (protocol)"),
                         _ => write!(f, "{base_name}"),
                     }
                 } else {
@@ -175,7 +175,7 @@ impl Ty2 {
         matches!(
             self,
             Ty2::Row {
-                kind: RowKind::Protocol,
+                kind: RowKind2::Protocol,
                 ..
             }
         )
@@ -188,7 +188,7 @@ impl Ty2 {
             row: None,
             nominal_id: Some(SymbolID::STRING),
             generics: vec![],
-            kind: RowKind::Struct,
+            kind: RowKind2::Struct,
         }
     }
 
@@ -200,7 +200,7 @@ impl Ty2 {
             row: None,      // TODO: Get row var from TypeDef
             nominal_id: Some(symbol_id),
             generics,
-            kind: RowKind::Struct,
+            kind: RowKind2::Struct,
         }
     }
 
@@ -211,7 +211,7 @@ impl Ty2 {
             row: None,
             nominal_id: Some(symbol_id),
             generics,
-            kind: RowKind::Protocol,
+            kind: RowKind2::Protocol,
         }
     }
 
@@ -222,7 +222,7 @@ impl Ty2 {
             row: None,
             nominal_id: Some(symbol_id),
             generics,
-            kind: RowKind::Enum,
+            kind: RowKind2::Enum,
         }
     }
 

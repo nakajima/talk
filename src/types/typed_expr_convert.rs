@@ -409,10 +409,10 @@ impl ParsedExpr {
                 ),
                 ty: lookup!(self.id, typed_ids),
             }),
-            Expr::CallArg { label, value } => TypedExprResult::Ok(TypedExpr {
+            Expr::CallArg { value, .. } => TypedExprResult::Ok(TypedExpr {
                 id: self.id,
                 expr: crate::types::typed_expr::Expr::CallArg {
-                    label: maybe_resolve!(label),
+                    label: None, // TODO: actually resolve this
                     value: Box::new(value.to_typed(typed_ids)?),
                 },
                 ty: lookup!(self.id, typed_ids),

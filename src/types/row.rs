@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use derive_visitor::DriveMut;
 
-use crate::types::ty::Ty;
+use crate::types::{ty::Ty, type_var::TypeVar};
 
 #[derive(Debug)]
 pub enum Direction {
@@ -38,12 +38,9 @@ pub struct RowCombination {
     pub goal: Row,
 }
 
-#[derive(Debug, Copy, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RowVar(pub u32);
-
 #[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut)]
 pub enum Row {
-    Open(#[drive(skip)] RowVar),
+    Open(#[drive(skip)] TypeVar),
     Closed(ClosedRow),
 }
 

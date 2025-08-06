@@ -3,7 +3,8 @@ use priority_queue::PriorityQueue;
 use crate::{
     type_checker::TypeError,
     types::{
-        constraint::{Constraint, ConstraintKind, ConstraintState},
+        constraint::{Constraint, ConstraintState},
+        constraint_kind::ConstraintKind,
         ty::Ty,
         type_var::TypeVar,
     },
@@ -12,11 +13,17 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
-pub struct ConstraintId(usize);
+pub struct ConstraintId(pub usize);
 
 impl ConstraintId {
     pub fn new(id: usize) -> Self {
         Self(id)
+    }
+}
+
+impl std::fmt::Display for ConstraintId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }
 

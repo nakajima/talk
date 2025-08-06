@@ -10,9 +10,11 @@ use crate::{
     token_kind::TokenKind,
     type_checker::TypeError,
     types::{
-        constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
+        constraint::{Constraint, ConstraintCause, ConstraintState},
+        constraint_kind::ConstraintKind,
         constraint_set::{ConstraintId, ConstraintSet},
-        row::{Label, RowVar},
+        row::Label,
+        row_kind::RowKind,
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
@@ -27,6 +29,8 @@ struct VisitorContext {
     scopes: Vec<Scope>,
     // Stack of generic constraints being collected for each function scope
     generic_constraints_stack: Vec<Vec<ConstraintKind>>,
+    // Stack of `self` values
+    self_stack: Vec<Ty>,
 }
 
 impl Default for VisitorContext {
@@ -34,6 +38,7 @@ impl Default for VisitorContext {
         Self {
             scopes: vec![builtins::default_type_checker_scope()], // Default scope
             generic_constraints_stack: vec![],
+            self_stack: vec![],
         }
     }
 }
@@ -136,8 +141,8 @@ impl<'a> Visitor<'a> {
         self.type_var_context.new_var(TypeVarKind::None)
     }
 
-    pub fn new_row_var(&mut self) -> RowVar {
-        self.type_var_context.new_row_var()
+    pub fn new_row_type_var(&mut self) -> TypeVar {
+        self.type_var_context.new_var(TypeVarKind::Row)
     }
 
     pub fn new_canonical_type_var(&mut self) -> TypeVar {
@@ -185,6 +190,156 @@ impl<'a> Visitor<'a> {
         if let Some(c) = self.constraints.find_mut(&parent) {
             c.children.push(child)
         }
+    }
+
+    pub fn named_row(
+        &mut self,
+        kind: RowKind,
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        body: &ParsedExpr,
+    ) -> Result<Ty, TypeError> {
+        let Ok(Ty::Var(self_ty)) = self.context.lookup(name) else {
+            return Err(TypeError::Unknown("Did not hoist".to_string()));
+        };
+
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::RowClosed {
+                record: Ty::Var(self_ty),
+            },
+            ConstraintCause::StructLiteral,
+        )?;
+
+        self.context.self_stack.push(Ty::Var(self_ty));
+        self.context.start_scope();
+
+        let parsed_expr::Expr::Block(items) = &body.expr else {
+            unreachable!()
+        };
+
+        use parsed_expr::Expr;
+
+        for (index, item) in items.iter().enumerate() {
+            match &item.expr {
+                Expr::Property {
+                    name,
+                    type_repr,
+                    default_value,
+                } if kind != RowKind::Enum => {
+                    let type_repr_ty = type_repr.as_ref().map(|t| self.visit(t)).transpose()?;
+                    let default_value_ty =
+                        default_value.as_ref().map(|t| self.visit(t)).transpose()?;
+
+                    let property_ty = match (type_repr_ty, default_value_ty) {
+                        (None, None) => Ty::Var(self.new_type_var()),
+                        (Some(ty), None) => ty,
+                        (None, Some(ty)) => ty,
+                        (Some(type_repr_ty), Some(default_value_ty)) => {
+                            self.constrain(
+                                item.id,
+                                ConstraintKind::Equals(type_repr_ty.clone(), default_value_ty),
+                                ConstraintCause::PropertyDefinition,
+                            )?;
+                            type_repr_ty
+                        }
+                    };
+
+                    self.constrain(
+                        item.id,
+                        ConstraintKind::HasField {
+                            record: Ty::Var(self_ty),
+                            label: Label::String(name.name_str()),
+                            ty: property_ty,
+                            index: Some(index),
+                        },
+                        ConstraintCause::PropertyDefinition,
+                    )?;
+                }
+                Expr::Func {
+                    name: Some(name), ..
+                } => {
+                    let func_ty = self.visit(item)?;
+                    self.constrain(
+                        item.id,
+                        ConstraintKind::HasField {
+                            record: Ty::Var(self_ty),
+                            label: name.name_str().into(),
+                            ty: func_ty,
+                            index: Some(index),
+                        },
+                        ConstraintCause::MethodDefinition,
+                    )?;
+                }
+                Expr::Init(_, func) if kind != RowKind::Enum => {
+                    let Expr::Func {
+                        name: _,
+                        generics,
+                        params,
+                        body,
+                        ret,
+                        captures,
+                        attributes,
+                    } = &func.expr
+                    else {
+                        unreachable!()
+                    };
+
+                    let mut func_ty = self.visit_func(
+                        func, &None, generics, params, body, ret, captures, attributes, true,
+                    )?;
+                    let self_ty_var = self.new_type_var();
+
+                    // Replace the returns slot with our fresh self
+                    func_ty = match func_ty {
+                        Ty::Func {
+                            params,
+                            returns: _,
+                            generic_constraints,
+                        } => Ty::Func {
+                            params,
+                            returns: Box::new(Ty::Var(self_ty_var)),
+                            generic_constraints,
+                        },
+                        other => {
+                            return Err(TypeError::Mismatch(
+                                name.name_str(),
+                                format!("{other:?} (initializer must be a function)"),
+                            ));
+                        }
+                    };
+
+                    self.constrain(
+                        item.id,
+                        ConstraintKind::Equals(Ty::Var(self_ty), Ty::Var(self_ty_var)),
+                        ConstraintCause::InitializerDefinition,
+                    )?;
+
+                    // Ensure initializer returns `self` (this should always be the case since we synthesize
+                    // a self at the end of inits).
+                    self.constrain(
+                        item.id,
+                        ConstraintKind::HasField {
+                            record: Ty::Var(self_ty),
+                            label: Label::String("init".to_string()),
+                            ty: func_ty,
+                            index: Some(index),
+                        },
+                        ConstraintCause::InitializerDefinition,
+                    )?;
+                }
+                Expr::FuncSignature { .. } if kind == RowKind::Protocol => (),
+                Expr::EnumVariant(_, _) if kind == RowKind::Enum => (),
+                _ => (),
+            }
+        }
+
+        self.context.end_scope();
+        self.context.self_stack.pop();
+
+        self.expr_id_types.insert(parsed_expr.id, Ty::Var(self_ty));
+
+        Ok(Ty::Var(self_ty))
     }
 
     pub fn visit_mult(&mut self, parsed: &[ParsedExpr]) -> Result<Vec<Ty>, TypeError> {
@@ -272,7 +427,7 @@ impl<'a> Visitor<'a> {
                 captures,
                 attributes,
             } => self.visit_func(
-                parsed, name, generics, params, body, ret, captures, attributes,
+                parsed, name, generics, params, body, ret, captures, attributes, false,
             ),
             parsed_expr::Expr::Parameter(name, annotation) => {
                 self.visit_parameter(parsed, name, annotation)
@@ -441,6 +596,7 @@ impl<'a> Visitor<'a> {
                     record: Ty::Var(var),
                     label: Label::Int(i as u32),
                     ty: item_ty.clone(),
+                    index: Some(i),
                 },
                 ConstraintCause::TupleLiteral,
             )?;
@@ -480,9 +636,35 @@ impl<'a> Visitor<'a> {
         args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
         let substitutions = &mut Default::default();
-        let callee = self
-            .visit(callee)?
-            .instantiate(self.type_var_context, substitutions);
+        let callee = self.visit(callee)?;
+
+        let (callee, returning) = if matches!(
+            callee,
+            Ty::Var(TypeVar {
+                kind: TypeVarKind::Row,
+                ..
+            })
+        ) {
+            let init_type_var = self.new_type_var();
+            self.constrain(
+                parsed_expr.id,
+                ConstraintKind::HasField {
+                    record: callee.clone(),
+                    label: Label::String("init".to_string()),
+                    ty: Ty::Var(init_type_var),
+                    index: None,
+                },
+                ConstraintCause::InitializerCall,
+            )?;
+
+            (Ty::Var(init_type_var), callee)
+        } else {
+            (
+                callee.instantiate(self.type_var_context, substitutions),
+                Ty::Var(self.new_type_var()),
+            )
+        };
+
         let type_args = self
             .visit_mult(type_args)?
             .iter()
@@ -493,8 +675,6 @@ impl<'a> Visitor<'a> {
             .iter()
             .map(|arg| arg.instantiate(self.type_var_context, substitutions))
             .collect();
-
-        let returning = Ty::Var(self.new_type_var());
 
         self.constrain(
             parsed_expr.id,
@@ -543,13 +723,13 @@ impl<'a> Visitor<'a> {
 
     fn visit_struct(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _name: &Name,
+        parsed_expr: &ParsedExpr,
+        name: &Name,
         _generics: &[ParsedExpr],
         _conformances: &[ParsedExpr],
-        _body: &ParsedExpr,
+        body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        self.named_row(RowKind::Struct, parsed_expr, name, body)
     }
 
     fn visit_property(
@@ -618,6 +798,7 @@ impl<'a> Visitor<'a> {
                         record: receiver_ty,
                         label: name.clone(),
                         ty: Ty::Var(var),
+                        index: None,
                     },
                     ConstraintCause::MemberAccess,
                 )?;
@@ -651,6 +832,7 @@ impl<'a> Visitor<'a> {
         ret: &Option<Box<ParsedExpr>>,
         _captures: &[SymbolID],
         _attributes: &[ParsedExpr],
+        skip_return_constraint: bool,
     ) -> Result<Ty, TypeError> {
         self.context.start_scope();
 
@@ -671,11 +853,14 @@ impl<'a> Visitor<'a> {
 
         let typed_ret = if let Some(ret) = ret {
             let annotated_ty = self.visit(ret)?;
-            self.constrain(
-                ret.id,
-                ConstraintKind::Equals(body_ty, annotated_ty.clone()),
-                ConstraintCause::Annotation(ret.id),
-            )?;
+
+            if !skip_return_constraint {
+                self.constrain(
+                    ret.id,
+                    ConstraintKind::Equals(body_ty, annotated_ty.clone()),
+                    ConstraintCause::Annotation(ret.id),
+                )?;
+            }
             annotated_ty
         } else {
             // For functions without explicit return types, check if the body type
@@ -687,11 +872,15 @@ impl<'a> Visitor<'a> {
                 // Regular function, use a normal type var
                 Ty::Var(self.new_type_var())
             };
-            self.constrain(
-                body.id,
-                ConstraintKind::Equals(body_ty, ty.clone()),
-                ConstraintCause::FuncReturn(body.id),
-            )?;
+
+            if !skip_return_constraint {
+                self.constrain(
+                    body.id,
+                    ConstraintKind::Equals(body_ty, ty.clone()),
+                    ConstraintCause::FuncReturn(body.id),
+                )?;
+            }
+
             ty
         };
 
@@ -734,6 +923,8 @@ impl<'a> Visitor<'a> {
         } else {
             Ty::Var(self.new_canonical_type_var())
         };
+
+        println!("param name: {name:?}");
 
         self.context.declare(&name.symbol_id()?, &param_ty)?;
         self.expr_id_types.insert(parsed_expr.id, param_ty.clone());
@@ -905,7 +1096,7 @@ impl<'a> Visitor<'a> {
             ConstraintCause::RecordLiteral,
         )?;
 
-        for field in fields {
+        for (index, field) in fields.iter().enumerate() {
             let field_ty = self.visit(field)?;
             let Ty::Label(label, value) = &field_ty else {
                 return Err(TypeError::UnexpectedType(
@@ -920,6 +1111,7 @@ impl<'a> Visitor<'a> {
                     record: Ty::Var(var),
                     label: label.clone(),
                     ty: *value.clone(),
+                    index: Some(index),
                 },
                 ConstraintCause::RecordLiteral,
             )?;

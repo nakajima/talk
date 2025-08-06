@@ -20,7 +20,7 @@ mod tests {
         row_constraints::RowConstraintSolver,
         substitutions::Substitutions,
         token_kind::TokenKind,
-        ty::{RowKind, Ty2},
+        ty::{RowKind2, Ty2},
         type_checker::TypeError,
         type_def::{Method, Property, TypeDef, TypeDefKind, TypeMember},
         type_var_id::{TypeVarID, TypeVarKind},
@@ -810,7 +810,7 @@ mod tests {
             Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -859,7 +859,7 @@ mod tests {
             Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -874,7 +874,7 @@ mod tests {
             Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -906,7 +906,7 @@ mod tests {
             Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(5)); // Result enum
@@ -917,7 +917,7 @@ mod tests {
                     Ty2::Row {
                         nominal_id: Some(opt_id),
                         generics: opt_generics,
-                        kind: RowKind::Enum,
+                        kind: RowKind2::Enum,
                         ..
                     } => {
                         assert_eq!(*opt_id, SymbolID::typed(1)); // Option enum
@@ -1008,7 +1008,7 @@ mod tests {
             Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::typed(1));
@@ -1035,7 +1035,7 @@ mod tests {
                 match ret_ty.as_ref() {
                     Ty2::Row {
                         nominal_id: Some(enum_id),
-                        kind: RowKind::Enum,
+                        kind: RowKind2::Enum,
                         ..
                     } => assert_eq!(*enum_id, SymbolID::typed(1)),
                     _ => panic!("Expected List return type"),
@@ -1044,7 +1044,7 @@ mod tests {
                 match &field_types[1] {
                     Ty2::Row {
                         nominal_id: Some(list_id),
-                        kind: RowKind::Enum,
+                        kind: RowKind2::Enum,
                         ..
                     } => assert_eq!(*list_id, SymbolID::typed(1)),
                     _ => panic!("Expected recursive List type"),
@@ -1203,7 +1203,7 @@ mod tests {
             Ty2::Row {
                 nominal_id: Some(symbol_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 assert_eq!(symbol_id, SymbolID::OPTIONAL); // Optional's ID

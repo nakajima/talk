@@ -8,6 +8,7 @@ pub struct TypeVar {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
 pub enum TypeVarKind {
+    Row,
     IntLiteral,
     FloatLiteral,
     Canonical,

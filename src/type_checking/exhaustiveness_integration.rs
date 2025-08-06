@@ -7,7 +7,7 @@ use crate::{
     environment::Environment,
     expr_id::ExprID,
     row::{FieldMetadata, RowConstraint},
-    ty::{RowKind, Ty2},
+    ty::{RowKind2, Ty2},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr::{self, Pattern},
 };
@@ -47,7 +47,7 @@ impl<'a> RowEnumAnalyzer<'a> {
             Ty2::TypeVar(type_var) => self.analyze_type_var(type_var),
             Ty2::Row {
                 nominal_id: Some(enum_id),
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => self.analyze_traditional_enum(enum_id),
             _ => None,
@@ -166,7 +166,7 @@ impl<'a> RowAwareExhaustivenessChecker<'a> {
             if !all_missing.is_empty() {
                 // For enums, return Variants with all missing variant names
                 if let Ty2::Row {
-                    kind: RowKind::Enum,
+                    kind: RowKind2::Enum,
                     nominal_id: Some(id),
                     ..
                 } = scrutinee_ty

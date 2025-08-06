@@ -1,8 +1,10 @@
 pub mod constraint;
+pub mod constraint_kind;
 pub mod constraint_set;
 pub mod constraint_solver;
 pub mod hoister;
 pub mod row;
+pub mod row_kind;
 pub mod ty;
 pub mod type_checking_session;
 pub mod type_var;

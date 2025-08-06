@@ -24,7 +24,7 @@ use crate::{
     substitutions::Substitutions,
     synthesis::synthesize_inits,
     token_kind::TokenKind,
-    ty::{RowKind, Ty2},
+    ty::{RowKind2, Ty2},
     type_def::{TypeDef, TypeMember},
     type_var_id::{TypeVarID, TypeVarKind},
     typed_expr,
@@ -680,7 +680,7 @@ impl<'a> TypeChecker<'a> {
         let Some(Ty2::Row {
             nominal_id: Some(enum_id),
             generics,
-            kind: RowKind::Enum,
+            kind: RowKind2::Enum,
             ..
         }) = env.selfs.last().cloned()
         else {
@@ -1246,7 +1246,7 @@ impl<'a> TypeChecker<'a> {
                     Ty2::Row {
                         nominal_id: Some(id),
                         generics,
-                        kind: RowKind::Protocol,
+                        kind: RowKind2::Protocol,
                         ..
                     } => (*id, generics.clone()),
                     Ty2::Row { kind, .. } => {
@@ -1576,7 +1576,7 @@ impl<'a> TypeChecker<'a> {
                     match self_ {
                         Ty2::Row {
                             nominal_id: Some(symbol_id),
-                            kind: RowKind::Protocol,
+                            kind: RowKind2::Protocol,
                             ..
                         } => Ty2::TypeVar(
                             env.new_type_variable(TypeVarKind::SelfVar(*symbol_id), id),
@@ -2046,7 +2046,7 @@ impl<'a> TypeChecker<'a> {
                         fields: field_types,
                         row: row_variable,
                         nominal_id,
-                        kind: RowKind::Struct | RowKind::Record,
+                        kind: RowKind2::Struct | RowKind2::Record,
                         ..
                     } => {
                         tracing::debug!("field_types: {field_types:?}, nominal_id: {nominal_id:?}");
@@ -2158,7 +2158,7 @@ impl<'a> TypeChecker<'a> {
                     Ty2::Row {
                         nominal_id: Some(enum_id),
                         generics: type_args,
-                        kind: RowKind::Enum,
+                        kind: RowKind2::Enum,
                         ..
                     } => {
                         let Some(enum_def) = env.lookup_enum(enum_id).cloned() else {
@@ -2175,7 +2175,7 @@ impl<'a> TypeChecker<'a> {
                         let values = match &variant.ty {
                             Ty2::Func(params, _, _) => params,
                             Ty2::Row {
-                                kind: RowKind::Enum,
+                                kind: RowKind2::Enum,
                                 ..
                             } => {
                                 // Variant with no parameters
@@ -2357,10 +2357,10 @@ impl<'a> TypeChecker<'a> {
         // Create the record type using Row representation
         let record_ty = Ty2::Row {
             fields: field_vec,
-            row: None,             // No row variable for concrete record literals
-            nominal_id: None,      // Records are structural types
-            generics: vec![],      // Records don't have generics
-            kind: RowKind::Record, // Records are structural types
+            row: None,              // No row variable for concrete record literals
+            nominal_id: None,       // Records are structural types
+            generics: vec![],       // Records don't have generics
+            kind: RowKind2::Record, // Records are structural types
         };
 
         // Check against expected type if provided
@@ -2544,9 +2544,9 @@ impl<'a> TypeChecker<'a> {
         let record_ty = Ty2::Row {
             fields: field_types,
             row: typed_row_var.as_ref().map(|tv| Box::new(tv.ty.clone())),
-            nominal_id: None,      // Records are structural types
-            generics: vec![],      // Records don't have generics
-            kind: RowKind::Record, // Records are structural types
+            nominal_id: None,       // Records are structural types
+            generics: vec![],       // Records don't have generics
+            kind: RowKind2::Record, // Records are structural types
         };
 
         Ok(TypedExpr {

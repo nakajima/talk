@@ -1,12 +1,11 @@
+use std::fmt::{self, Display};
 use std::hash::Hash;
 
 use crate::{
     expr_id::ExprID,
     type_checker::TypeError,
     types::{
-        constraint_set::ConstraintId,
-        row::{Label, RowCombination},
-        ty::{Primitive, Ty},
+        constraint_kind::ConstraintKind, constraint_set::ConstraintId, ty::Primitive,
         type_var::TypeVar,
     },
 };
@@ -32,6 +31,11 @@ pub enum ConstraintCause {
     Call,
     MemberAccess,
     Condition,
+    StructLiteral,
+    MethodDefinition,
+    PropertyDefinition,
+    InitializerDefinition,
+    InitializerCall,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,9 +94,12 @@ impl Constraint {
             ConstraintKind::Equals(..) => 100,
             ConstraintKind::Call { .. } => 50,
             ConstraintKind::LiteralPrimitive(..) => 100,
-            ConstraintKind::HasField { .. } => 40,
-            ConstraintKind::RowClosed { .. } => 20,
-            ConstraintKind::RowCombine(..) => 20,
+            ConstraintKind::HasField {
+                index: Some(index), ..
+            } => 40 - index,
+            ConstraintKind::HasField { index: None, .. } => 20,
+            ConstraintKind::RowClosed { .. } => 10,
+            ConstraintKind::RowCombine(..) => 10,
         }
     }
 
@@ -105,97 +112,47 @@ impl Constraint {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_visitor::DriveMut)]
-pub enum ConstraintKind {
-    Equals(Ty, Ty),
-    Call {
-        callee: Ty,
-        type_args: Vec<Ty>,
-        args: Vec<Ty>,
-        returning: Ty,
-    },
-    LiteralPrimitive(Ty, #[drive(skip)] Primitive),
-    RowCombine(#[drive(skip)] ExprID, #[drive(skip)] RowCombination),
-    RowClosed {
-        record: Ty,
-    },
-    HasField {
-        record: Ty,
-        #[drive(skip)]
-        label: Label,
-        ty: Ty,
-    },
-}
-
-impl ConstraintKind {
-    pub fn contains_canonical_var(&self) -> bool {
+impl Display for ConstraintState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConstraintKind::Equals(lhs, rhs) => {
-                lhs.contains_canonical_var() || rhs.contains_canonical_var()
-            }
-            ConstraintKind::Call {
-                callee,
-                type_args,
-                args,
-                returning,
-            } => {
-                callee.contains_canonical_var()
-                    || type_args.iter().any(|a| a.contains_canonical_var())
-                    || args.iter().any(|a| a.contains_canonical_var())
-                    || returning.contains_canonical_var()
-            }
-            ConstraintKind::RowClosed { record } => record.contains_canonical_var(),
-            ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
-            ConstraintKind::HasField { record, ty, .. } => {
-                record.contains_canonical_var() || ty.contains_canonical_var()
-            }
-            #[allow(clippy::todo)]
-            ConstraintKind::RowCombine(..) => {
-                todo!()
-            }
+            ConstraintState::Pending => write!(f, "PENDING"),
+            ConstraintState::Waiting => write!(f, "WAITING"),
+            ConstraintState::Solved => write!(f, "SOLVED"),
+            ConstraintState::Error(_) => write!(f, "ERROR"),
         }
     }
+}
 
-    pub fn instantiate(
-        &self,
-        context: &mut crate::types::type_var_context::TypeVarContext,
-        substitutions: &mut std::collections::BTreeMap<TypeVar, TypeVar>,
-    ) -> ConstraintKind {
-        match self {
-            ConstraintKind::Equals(lhs, rhs) => ConstraintKind::Equals(
-                lhs.instantiate(context, substitutions),
-                rhs.instantiate(context, substitutions),
-            ),
-            ConstraintKind::Call {
-                callee,
-                type_args,
-                args,
-                returning,
-            } => ConstraintKind::Call {
-                callee: callee.instantiate(context, substitutions),
-                type_args: type_args
-                    .iter()
-                    .map(|t| t.instantiate(context, substitutions))
-                    .collect(),
-                args: args
-                    .iter()
-                    .map(|t| t.instantiate(context, substitutions))
-                    .collect(),
-                returning: returning.instantiate(context, substitutions),
-            },
-            ConstraintKind::LiteralPrimitive(ty, prim) => {
-                ConstraintKind::LiteralPrimitive(ty.instantiate(context, substitutions), *prim)
-            }
-            ConstraintKind::RowClosed { record } => ConstraintKind::RowClosed {
-                record: record.instantiate(context, substitutions),
-            },
-            ConstraintKind::HasField { record, label, ty } => ConstraintKind::HasField {
-                record: record.instantiate(context, substitutions),
-                label: label.clone(),
-                ty: ty.instantiate(context, substitutions),
-            },
-            #[allow(clippy::todo)]
-            ConstraintKind::RowCombine(..) => todo!(),
+impl Display for ConstraintCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl Display for Constraint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[C{} @ E{}] {} | {} | ",
+            self.id, self.expr_id, self.state, self.cause
+        )?;
+
+        if let Some(parent) = self.parent {
+            write!(f, "parent:{parent} | ")?;
         }
+
+        write!(f, "{}", self.kind)?;
+
+        if !self.children.is_empty() {
+            write!(f, " | children:")?;
+            for (i, child) in self.children.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ",")?;
+                }
+                write!(f, "C{child}")?;
+            }
+        }
+
+        Ok(())
     }
 }

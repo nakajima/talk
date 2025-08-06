@@ -19,6 +19,12 @@ impl std::fmt::Debug for ExprID {
     }
 }
 
+impl std::fmt::Display for ExprID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
 impl From<i32> for ExprID {
     fn from(other: i32) -> Self {
         Self(other)

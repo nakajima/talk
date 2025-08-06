@@ -18,7 +18,7 @@ use crate::{
     row_constraints::RowConstraintSolver,
     semantic_index::ResolvedExpr,
     substitutions::Substitutions,
-    ty::{RowKind, Ty2},
+    ty::{RowKind2, Ty2},
     type_checker::{Scheme, TypeError},
     type_var_id::{TypeVarID, TypeVarKind},
 };
@@ -566,7 +566,7 @@ impl<'a> ConstraintSolver<'a> {
         let Ty2::Row {
             nominal_id: Some(enum_id),
             generics: concrete_type_args,
-            kind: RowKind::Enum,
+            kind: RowKind2::Enum,
             ..
         } = scrutinee_ty
         else {
@@ -588,7 +588,7 @@ impl<'a> ConstraintSolver<'a> {
         let generic_field_tys = match &variant_def.ty {
             Ty2::Func(params, _, _) => params.clone(),
             Ty2::Row {
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => vec![], // Variant with no parameters
             _ => return Err(TypeError::Unknown("Invalid variant type".into())),
@@ -636,7 +636,7 @@ impl<'a> ConstraintSolver<'a> {
             // A variant with no values
             Ty2::Row {
                 nominal_id: Some(enum_id),
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => {
                 let enum_def = self.env.lookup_enum(enum_id).ok_or_else(|| {
@@ -657,7 +657,7 @@ impl<'a> ConstraintSolver<'a> {
                 let ret_ty = substitutions.apply(ret, 0, &mut self.env.context);
                 if let Ty2::Row {
                     nominal_id: Some(enum_id),
-                    kind: RowKind::Enum,
+                    kind: RowKind2::Enum,
                     ..
                 } = ret_ty
                 {
@@ -701,7 +701,7 @@ impl<'a> ConstraintSolver<'a> {
             Ty2::Row {
                 nominal_id: Some(enum_id),
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
                 ..
             } => self.resolve_enum_member(enum_id, member_name, generics),
             Ty2::TypeVar(type_var) => {
@@ -1166,7 +1166,7 @@ impl<'a> ConstraintSolver<'a> {
                 row,
                 nominal_id,
                 generics,
-                kind: RowKind::Enum,
+                kind: RowKind2::Enum,
             } => {
                 let applied_generics = generics
                     .iter()
@@ -1177,7 +1177,7 @@ impl<'a> ConstraintSolver<'a> {
                     row: row.clone(),
                     nominal_id: *nominal_id,
                     generics: applied_generics,
-                    kind: RowKind::Enum,
+                    kind: RowKind2::Enum,
                 }
             }
             Ty2::Tuple(types) => Ty2::Tuple(

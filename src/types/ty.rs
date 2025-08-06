@@ -2,10 +2,14 @@ use std::{collections::BTreeMap, fmt::Display};
 
 use derive_visitor::DriveMut;
 
-use crate::types::{
-    row::{Label, Row},
-    type_var::{TypeVar, TypeVarKind},
-    type_var_context::TypeVarContext,
+use crate::{
+    name::Name,
+    types::{
+        constraint_kind::ConstraintKind,
+        row::{ClosedRow, Label, Row},
+        type_var::{TypeVar, TypeVarKind},
+        type_var_context::TypeVarContext,
+    },
 };
 
 #[derive(Debug, Clone, Hash, Copy, PartialEq, Eq)]
@@ -31,7 +35,13 @@ pub enum Ty {
         params: Vec<Ty>,
         returns: Box<Ty>,
         // Constraints that must be checked when this function is instantiated
-        generic_constraints: Vec<crate::types::constraint::ConstraintKind>,
+        generic_constraints: Vec<ConstraintKind>,
+    },
+    Nominal {
+        #[drive(skip)]
+        name: Name,
+        properties: Row,
+        methods: Row,
     },
     Product(Row),
     Var(#[drive(skip)] TypeVar),
@@ -70,6 +80,21 @@ impl Ty {
 
     pub fn contains_canonical_var(&self) -> bool {
         match self {
+            Ty::Nominal {
+                properties,
+                methods,
+                ..
+            } => {
+                if let Row::Closed(ClosedRow { values, .. }) = properties {
+                    return values.iter().any(|t| t.contains_canonical_var());
+                }
+
+                if let Row::Closed(ClosedRow { values, .. }) = methods {
+                    return values.iter().any(|t| t.contains_canonical_var());
+                }
+
+                false
+            }
             Ty::Primitive(..) => false,
             Ty::Func {
                 params,
@@ -96,6 +121,35 @@ impl Ty {
     ) -> Ty {
         match self {
             Ty::Primitive(..) => self.clone(),
+            Ty::Nominal {
+                name,
+                properties,
+                methods,
+            } => Ty::Nominal {
+                name: name.clone(),
+                properties: if let Row::Closed(ClosedRow { fields, values }) = properties {
+                    Row::Closed(ClosedRow {
+                        fields: fields.clone(),
+                        values: values
+                            .iter()
+                            .map(|v| v.instantiate(context, substitutions))
+                            .collect(),
+                    })
+                } else {
+                    properties.clone()
+                },
+                methods: if let Row::Closed(ClosedRow { fields, values }) = methods {
+                    Row::Closed(ClosedRow {
+                        fields: fields.clone(),
+                        values: values
+                            .iter()
+                            .map(|v| v.instantiate(context, substitutions))
+                            .collect(),
+                    })
+                } else {
+                    methods.clone()
+                },
+            },
             Ty::Func {
                 params,
                 returns,

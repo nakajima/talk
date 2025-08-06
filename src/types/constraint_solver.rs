@@ -1,10 +1,12 @@
+use indexmap::IndexMap;
 use std::collections::BTreeMap;
 use tracing::trace_span;
 
 use crate::{
     type_checker::TypeError,
     types::{
-        constraint::{Constraint, ConstraintCause, ConstraintKind, ConstraintState},
+        constraint::{Constraint, ConstraintCause, ConstraintState},
+        constraint_kind::ConstraintKind,
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
@@ -19,7 +21,7 @@ const MAX_FAILED_ATTEMPTS: usize = 2;
 pub struct ConstraintSolver<'a> {
     context: &'a mut TypeVarContext,
     constraints: &'a mut ConstraintSet,
-    record_fields: BTreeMap<TypeVar, BTreeMap<Label, Ty>>,
+    record_fields: BTreeMap<TypeVar, IndexMap<Label, Ty>>,
     errored: Vec<Constraint>,
 }
 
@@ -87,7 +89,15 @@ impl<'a> ConstraintSolver<'a> {
         constraint: &mut Constraint,
         out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
-        let _s = trace_span!("solve_constraint", constraint = format!("{constraint:?}"));
+        let _s = trace_span!(
+            "solve_constraint",
+            id = constraint.id.0,
+            state = %constraint.state,
+            cause = %constraint.cause,
+            kind = %constraint.kind,
+            priority = constraint.priority()
+        )
+        .entered();
 
         let result = match constraint.kind.clone() {
             ConstraintKind::Equals(lhs, rhs) => self.solve_equals(constraint, lhs, rhs, out),
@@ -100,9 +110,9 @@ impl<'a> ConstraintSolver<'a> {
                 type_args,
                 returning,
             } => self.solve_call(constraint, callee, type_args, args, returning, out),
-            ConstraintKind::HasField { record, label, ty } => {
-                self.solve_has_field(constraint, &record, label, ty, out)
-            }
+            ConstraintKind::HasField {
+                record, label, ty, ..
+            } => self.solve_has_field(constraint, &record, label, ty, out),
             ConstraintKind::RowClosed { record } => self.solve_row_closed(constraint, &record),
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => todo!(),

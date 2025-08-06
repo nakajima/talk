@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     SymbolID,
     environment::Environment,
-    ty::{RowKind, Ty2},
+    ty::{RowKind2, Ty2},
     typed_expr::Pattern,
 };
 
@@ -181,7 +181,7 @@ fn deconstruct_pattern(pattern: &Pattern, _env: &Environment, ty: &Ty2) -> Decon
             let (enum_id, arity) = match ty {
                 Ty2::Row {
                     nominal_id: Some(id),
-                    kind: RowKind::Enum,
+                    kind: RowKind2::Enum,
                     ..
                 } => (*id, fields.len()),
                 _ => (SymbolID(0), fields.len()), // Fallback
@@ -260,7 +260,7 @@ pub fn all_constructors(ty: &Ty2, env: &Environment) -> Vec<Constructor> {
         Ty2::Bool => vec![Constructor::Bool(true), Constructor::Bool(false)],
         Ty2::Row {
             nominal_id: Some(id),
-            kind: RowKind::Enum,
+            kind: RowKind2::Enum,
             ..
         } => {
             // Get enum variants from environment
@@ -281,7 +281,7 @@ pub fn all_constructors(ty: &Ty2, env: &Environment) -> Vec<Constructor> {
         Ty2::Row {
             fields,
             nominal_id,
-            kind: RowKind::Struct | RowKind::Record,
+            kind: RowKind2::Struct | RowKind2::Record,
             ..
         } => {
             // For structs, there's only one constructor
