@@ -248,10 +248,14 @@ fn struct_properties() {
     );
 
     assert_eq!(
-        Ty::Product(Row::Closed(ClosedRow {
-            fields: vec!["name".into(), "age".into()],
-            values: vec![Ty::Float, Ty::Int]
-        })),
+        Ty::Nominal {
+            name: Name::Resolved(SymbolID(1), "Person".to_string()),
+            properties: Row::Closed(ClosedRow {
+                fields: vec!["name".into(), "age".into()],
+                values: vec![Ty::Float, Ty::Int]
+            }),
+            methods: Row::Open(RowVar::new(1))
+        },
         checked.typed_roots[0].ty
     );
 }
@@ -289,14 +293,10 @@ fn struct_methods() {
         struct Person {
             func fizz(x: Int) { x }
         }
+
+        Person().fizz(x: 123)
         ",
     );
 
-    assert_eq!(
-        Ty::Product(Row::Closed(ClosedRow {
-            fields: vec!["name".into(), "age".into()],
-            values: vec![Ty::Float, Ty::Int]
-        })),
-        checked.typed_roots[0].ty
-    );
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
 }

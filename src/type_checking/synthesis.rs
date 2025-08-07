@@ -47,7 +47,7 @@ pub fn synthesize_inits(
                 let param_sym = symbol_table.add(
                     &property.name,
                     crate::SymbolKind::Param,
-                    env.next_expr_id(),
+                    env.synth_expr_id(),
                     None,
                 );
 
@@ -141,7 +141,7 @@ pub fn synthesize_inits(
 
 fn gen_expr(env: &mut Environment, expr: Expr) -> ParsedExpr {
     ParsedExpr {
-        id: env.next_expr_id(),
+        id: env.synth_expr_id(),
         expr,
     }
 }

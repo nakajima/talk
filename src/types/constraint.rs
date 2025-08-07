@@ -36,6 +36,7 @@ pub enum ConstraintCause {
     PropertyDefinition,
     InitializerDefinition,
     InitializerCall,
+    PropertiesEmpty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

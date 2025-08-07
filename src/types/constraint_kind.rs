@@ -172,7 +172,7 @@ impl Display for ConstraintKind {
                 write!(f, " -> {returning}")
             }
             ConstraintKind::LiteralPrimitive(ty, prim) => {
-                write!(f, "{ty} : {prim:?}")
+                write!(f, "LITERAL {ty} : {prim:?}")
             }
             ConstraintKind::RowClosed { record } => {
                 write!(f, "row_closed({record:?})")

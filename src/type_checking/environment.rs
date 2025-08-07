@@ -85,6 +85,12 @@ impl Environment {
         ExprID(res)
     }
 
+    pub fn synth_expr_id(&mut self) -> ExprID {
+        let res = self.next_id;
+        self.next_id += 1;
+        ExprID(-res)
+    }
+
     pub fn next_type_var_id(&self) -> usize {
         self.context.next_id()
     }

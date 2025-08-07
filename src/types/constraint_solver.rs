@@ -35,8 +35,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn solve(mut self) -> Result<(ExprIDTypeMap, Vec<Constraint>), TypeError> {
-        let mut result = ExprIDTypeMap::default();
+    pub fn solve(mut self) -> Result<Vec<Constraint>, TypeError> {
         let mut failed_attempts = 0;
 
         loop {
@@ -81,7 +80,7 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        Ok((result, self.errored))
+        Ok(self.errored)
     }
 
     pub fn solve_constraint(&mut self, constraint: &mut Constraint) -> Result<(), TypeError> {
@@ -148,11 +147,21 @@ impl<'a> ConstraintSolver<'a> {
 
         match receiver {
             Ty::Nominal {
-                name,
                 properties,
                 methods,
+                ..
             } => {
-                println!("solve_ty_has_field {constraint:?}");
+                if let Row::Closed(properties_row) = &properties {
+                    // Check to see if it's a property. If not it's gotta be a method
+                    if properties_row.fields.iter().any(|field| field == &label) {
+                        return self.solve_has_field(constraint, &properties, label, ty);
+                    } else {
+                        return self.solve_has_field(constraint, &methods, label, ty);
+                    }
+                }
+
+                constraint.wait();
+
                 Ok(())
             }
             Ty::Product(row) => self.solve_has_field(constraint, &row, label, ty),
@@ -174,7 +183,11 @@ impl<'a> ConstraintSolver<'a> {
         match &row {
             Row::Closed(ClosedRow { fields, values }) => {
                 for (closed_label, closed_value) in fields.iter().zip(values) {
-                    if &label == closed_label && closed_value == &ty {
+                    if &label == closed_label {
+                        if closed_value != &ty {
+                            self.context.unify_ty_ty(closed_value, &ty)?;
+                        }
+
                         constraint.state = ConstraintState::Solved;
                         return Ok(());
                     }
@@ -226,9 +239,7 @@ impl<'a> ConstraintSolver<'a> {
             };
 
             // Gather the fields
-            let Some(fields) = self.record_fields.remove(var) else {
-                return Err(TypeError::Unknown("Did not get fields".to_string()));
-            };
+            let fields = self.record_fields.remove(var).unwrap_or_default();
 
             let mut labels = vec![];
             let mut values = vec![];
@@ -274,12 +285,31 @@ impl<'a> ConstraintSolver<'a> {
                 generic_constraints,
             } => (params, *returns, generic_constraints),
             Ty::Var(_) => {
-                let params = args
+                let params: Vec<Ty> = args
                     .iter()
                     .map(|_| Ty::Var(self.context.new_var(TypeVarKind::None)))
                     .collect();
 
                 let returns = Ty::Var(self.context.new_var(TypeVarKind::None));
+
+                let func_ty = Ty::Func {
+                    params: params.clone(),
+                    returns: Box::new(returns.clone()),
+                    generic_constraints: vec![],
+                };
+
+                let id = self.constraints.next_id();
+                let child = self.constraints.add(Constraint {
+                    id,
+                    expr_id: constraint.expr_id,
+                    cause: ConstraintCause::Call,
+                    kind: ConstraintKind::Equals(callee, func_ty),
+                    parent: Some(constraint.id),
+                    children: vec![],
+                    state: ConstraintState::Pending,
+                });
+
+                constraint.children.push(child);
 
                 (params, returns, vec![])
             }

@@ -67,8 +67,7 @@ impl<'a> TypeCheckingSession<'a> {
         }
 
         let solver = ConstraintSolver::new(&mut self.type_var_context, &mut self.constraints);
-        let (solution, errored) = solver.solve()?;
-        self.typed_expr_ids.extend(solution);
+        let errored = solver.solve()?;
 
         for constraint in errored {
             let ConstraintState::Error(err) = constraint.state else {

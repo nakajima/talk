@@ -226,7 +226,11 @@ impl<'a> Visitor<'a> {
             unreachable!()
         };
 
+        self.expr_id_types.insert(body.id, Ty::Void);
+
         use parsed_expr::Expr;
+
+        let mut property_count = 0;
 
         for (index, item) in items.iter().enumerate() {
             match &item.expr {
@@ -235,23 +239,7 @@ impl<'a> Visitor<'a> {
                     type_repr,
                     default_value,
                 } if kind != RowKind::Enum => {
-                    let type_repr_ty = type_repr.as_ref().map(|t| self.visit(t)).transpose()?;
-                    let default_value_ty =
-                        default_value.as_ref().map(|t| self.visit(t)).transpose()?;
-
-                    let property_ty = match (type_repr_ty, default_value_ty) {
-                        (None, None) => Ty::Var(self.new_type_var()),
-                        (Some(ty), None) => ty,
-                        (None, Some(ty)) => ty,
-                        (Some(type_repr_ty), Some(default_value_ty)) => {
-                            self.constrain(
-                                item.id,
-                                ConstraintKind::Equals(type_repr_ty.clone(), default_value_ty),
-                                ConstraintCause::PropertyDefinition,
-                            )?;
-                            type_repr_ty
-                        }
-                    };
+                    let property_ty = self.visit(item)?;
 
                     self.constrain(
                         item.id,
@@ -263,6 +251,8 @@ impl<'a> Visitor<'a> {
                         },
                         ConstraintCause::PropertyDefinition,
                     )?;
+
+                    property_count += 1;
                 }
                 Expr::Func {
                     name: Some(name), ..
@@ -344,6 +334,16 @@ impl<'a> Visitor<'a> {
             }
         }
 
+        if kind != RowKind::Enum && property_count == 0 {
+            self.constrain(
+                parsed_expr.id,
+                ConstraintKind::RowClosed {
+                    record: Row::Open(properties),
+                },
+                ConstraintCause::PropertiesEmpty,
+            )?;
+        }
+
         self.context.end_scope();
         self.context.self_stack.pop();
 
@@ -363,6 +363,7 @@ impl<'a> Visitor<'a> {
     pub fn visit(&mut self, parsed: &ParsedExpr) -> Result<Ty, TypeError> {
         let _s = trace_span!(
             "visit",
+            expr_id = parsed.id.0,
             expr = crate::formatter::Formatter::format_single_expr(self.meta, parsed)
         )
         .entered();
@@ -747,12 +748,29 @@ impl<'a> Visitor<'a> {
 
     fn visit_property(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _name: &Name,
-        _type_repr: &Option<Box<ParsedExpr>>,
-        _default_value: &Option<Box<ParsedExpr>>,
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        type_repr: &Option<Box<ParsedExpr>>,
+        default_value: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let type_repr_ty = type_repr.as_ref().map(|t| self.visit(t)).transpose()?;
+        let default_value_ty = default_value.as_ref().map(|t| self.visit(t)).transpose()?;
+
+        let property_ty = match (type_repr_ty, default_value_ty) {
+            (None, None) => Ty::Var(self.new_type_var()),
+            (Some(ty), None) => ty,
+            (None, Some(ty)) => ty,
+            (Some(type_repr_ty), Some(default_value_ty)) => {
+                self.constrain(
+                    parsed_expr.id,
+                    ConstraintKind::Equals(type_repr_ty.clone(), default_value_ty),
+                    ConstraintCause::PropertyDefinition,
+                )?;
+                type_repr_ty
+            }
+        };
+
+        Ok(property_ty)
     }
 
     fn visit_type_repr(
@@ -911,11 +929,9 @@ impl<'a> Visitor<'a> {
 
         self.expr_id_types.insert(parsed_expr.id, func_ty.clone());
 
-        if let Some(name) = name {
-            let Ty::Var(hoisted_ty) = self.context.lookup(name)? else {
-                unreachable!()
-            };
-
+        if let Some(name) = name
+            && let Ok(Ty::Var(hoisted_ty)) = self.context.lookup(name)
+        {
             // We should unify the hoisted ty with the new one
             self.type_var_context
                 .unify_var_ty(hoisted_ty, func_ty.clone())?;
@@ -937,6 +953,8 @@ impl<'a> Visitor<'a> {
         } else {
             Ty::Var(self.new_canonical_type_var())
         };
+
+        tracing::trace!("visit_parameter name: {name:?}, ty: {param_ty:?}");
 
         self.context.declare(&name.symbol_id()?, &param_ty)?;
         self.expr_id_types.insert(parsed_expr.id, param_ty.clone());
@@ -998,6 +1016,9 @@ impl<'a> Visitor<'a> {
     fn visit_variable(&mut self, parsed_expr: &ParsedExpr, name: &Name) -> Result<Ty, TypeError> {
         let scope_ty = self.context.lookup(name)?;
         self.expr_id_types.insert(parsed_expr.id, scope_ty.clone());
+
+        tracing::trace!("visit_variable name: {name:?}, ty: {scope_ty:?}");
+
         Ok(scope_ty)
     }
 
