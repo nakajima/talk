@@ -244,6 +244,8 @@ fn struct_properties() {
             let name: Float 
             let age: Int
         }
+
+        Person(name: 1.23, age: 123).name
         ",
     );
 
@@ -258,6 +260,8 @@ fn struct_properties() {
         },
         checked.typed_roots[0].ty
     );
+
+    assert_eq!(Ty::Float, checked.typed_roots[1].ty);
 }
 
 #[test]
