@@ -2,13 +2,13 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{SymbolID, ty::Ty2, type_def::TypeDef};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ImportedSymbolKind {
     Function { index: usize },
     Constant { index: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ImportedSymbol {
     pub module: String,
     pub name: String,

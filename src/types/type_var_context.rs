@@ -1,4 +1,7 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    fmt::{Display, write},
+};
 
 use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
 use tracing::trace_span;
@@ -45,6 +48,40 @@ impl UnifyValue for Ty {
     }
 }
 
+impl UnifyValue for Row {
+    type Error = TypeError;
+
+    fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, TypeError> {
+        match (lhs, rhs) {
+            (Row::Open(lhs), Row::Open(rhs)) => {
+                // Choose the older one
+                if lhs.0 > rhs.0 {
+                    Ok(Row::Open(*rhs))
+                } else {
+                    Ok(Row::Open(*lhs))
+                }
+            }
+            (Row::Open(..), row @ Row::Closed(..)) | (row @ Row::Closed(..), Row::Open(..)) => {
+                Ok(row.clone())
+            }
+            (Row::Closed(lhs), Row::Closed(rhs)) if lhs.values.len() == rhs.values.len() => {
+                let mut new_values = vec![];
+                for (lhs_value, rhs_value) in lhs.values.iter().zip(&rhs.values) {
+                    new_values.push(Ty::unify_values(lhs_value, rhs_value)?);
+                }
+
+                Ok(Row::Closed(ClosedRow {
+                    fields: lhs.fields.clone(),
+                    values: new_values,
+                }))
+            }
+            _ => Err(TypeError::Unknown(format!(
+                "Cannot unify rows: {lhs:?} <> {rhs:?}"
+            ))),
+        }
+    }
+}
+
 impl UnifyKey for VarKey {
     type Value = Ty;
 
@@ -61,11 +98,43 @@ impl UnifyKey for VarKey {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct RowVar(u32);
+
+impl RowVar {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl Display for RowVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl UnifyKey for RowVar {
+    type Value = Row;
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn from_index(i: u32) -> Self {
+        RowVar(i)
+    }
+
+    fn tag() -> &'static str {
+        "RowKey"
+    }
+}
+
 impl EqUnifyValue for ClosedRow {}
 
 #[derive(Debug, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
+    row_table: InPlaceUnificationTable<RowVar>,
 }
 
 impl TypeVarContext {
@@ -112,7 +181,7 @@ impl TypeVarContext {
     }
 
     pub fn resolve(&mut self, ty: &Ty) -> Ty {
-        match ty {
+        let after = match ty {
             Ty::Var(var) => {
                 let new_ty = self.table.probe_value(VarKey(var.id));
                 match new_ty {
@@ -145,23 +214,42 @@ impl TypeVarContext {
             Ty::Sum(..) => todo!(),
             #[allow(clippy::todo)]
             Ty::Label(label, value) => Ty::Label(label.clone(), Box::new(self.resolve(value))),
+        };
+
+        if ty != &after {
+            tracing::trace!("resolve ty: before: {ty:?} after: {after:?}");
         }
+
+        after
     }
 
     pub fn resolve_row(&mut self, row: &Row) -> Row {
-        match row {
+        let after = match row {
             Row::Open(row_var) => {
-                let Ty::Var(var) = self.table.probe_value(VarKey(row_var.id)) else {
-                    unreachable!();
-                };
-
-                Row::Open(var)
+                let resolved_row = self.row_table.probe_value(*row_var);
+                if matches!(resolved_row, Row::Closed(_)) {
+                    self.resolve_row(&resolved_row)
+                } else {
+                    resolved_row
+                }
             }
             Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
                 fields: fields.to_vec(),
                 values: values.iter().map(|v| self.resolve(v)).collect(),
             }),
+        };
+
+        if row != &after {
+            tracing::trace!("resolve row: before: {row:?} after: {after:?}");
         }
+
+        after
+    }
+
+    pub fn new_row_var(&mut self) -> RowVar {
+        let var = RowVar(self.row_table.len() as u32);
+        let _ = self.row_table.new_key(Row::Open(var));
+        var
     }
 
     pub fn new_var(&mut self, default: TypeVarKind) -> TypeVar {
@@ -180,6 +268,18 @@ impl TypeVarContext {
 
     pub fn is_empty(&self) -> bool {
         self.table.len() == 0
+    }
+
+    pub fn unify_row_var(&mut self, row_var: RowVar, row: Row) -> Result<(), TypeError> {
+        if self.resolve_row(&Row::Open(row_var)) == self.resolve_row(&row) {
+            return Ok(());
+        }
+
+        tracing::trace!("unify_row_var: {row_var:?}, row: {row:?}");
+
+        self.row_table.unify_var_value(row_var, row)?;
+
+        Ok(())
     }
 
     pub fn unify_var_ty(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
@@ -276,7 +376,6 @@ fn occurs(tv: TypeVar, ty: &Ty, ctx: &mut TypeVarContext) -> bool {
         Ty::Func {
             params, returns, ..
         } => params.iter().any(|p| occurs(tv, p, ctx)) || occurs(tv, &returns, ctx),
-        Ty::Product(Row::Open(tv2)) | Ty::Sum(Row::Open(tv2)) => tv == tv2,
         Ty::Product(Row::Closed(cr)) | Ty::Sum(Row::Closed(cr)) => {
             cr.values.iter().any(|v| occurs(tv, v, ctx))
         }

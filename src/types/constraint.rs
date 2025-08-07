@@ -75,13 +75,18 @@ impl Constraint {
                 res.extend(returning.type_vars());
                 res
             }
-            #[allow(clippy::todo)]
             ConstraintKind::HasField { ty, .. } => {
                 let mut res = vec![];
                 res.extend(ty.type_vars());
                 res
             }
-            ConstraintKind::RowClosed { record } => record.type_vars(),
+            ConstraintKind::TyHasField { receiver, ty, .. } => {
+                let mut res = vec![];
+                res.extend(receiver.type_vars());
+                res.extend(ty.type_vars());
+                res
+            }
+            ConstraintKind::RowClosed { .. } => vec![],
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => {
                 todo!()
@@ -98,6 +103,7 @@ impl Constraint {
                 index: Some(index), ..
             } => 40 - index,
             ConstraintKind::HasField { index: None, .. } => 20,
+            ConstraintKind::TyHasField { .. } => 10,
             ConstraintKind::RowClosed { .. } => 10,
             ConstraintKind::RowCombine(..) => 10,
         }
@@ -109,6 +115,10 @@ impl Constraint {
 
     pub fn error(&mut self, error: TypeError) {
         self.state = ConstraintState::Error(error)
+    }
+
+    pub fn wait(&mut self) {
+        self.state = ConstraintState::Waiting
     }
 }
 
@@ -137,11 +147,11 @@ impl Display for Constraint {
             self.id, self.expr_id, self.state, self.cause
         )?;
 
+        write!(f, "{}", self.kind)?;
+
         if let Some(parent) = self.parent {
             write!(f, "parent:{parent} | ")?;
         }
-
-        write!(f, "{}", self.kind)?;
 
         if !self.children.is_empty() {
             write!(f, " | children:")?;

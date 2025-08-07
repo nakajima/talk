@@ -1,6 +1,7 @@
 use crate::{
-    SymbolTable,
+    SymbolID, SymbolTable,
     environment::Environment,
+    name::Name,
     name_resolver::{NameResolver, Scope},
     parser::parse,
     synthesis::synthesize_inits,
@@ -8,6 +9,7 @@ use crate::{
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
         type_checking_session::{TypeCheckingResult, TypeCheckingSession},
+        type_var_context::RowVar,
     },
 };
 
@@ -170,7 +172,7 @@ fn infers_record_literal() {
 }
 
 #[test]
-fn infers_record_literal_member() {
+fn infers_member_record_literal() {
     let checked = check("let x = { y: 123, z: 1.23 }; x.y ; x.z");
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
@@ -268,10 +270,14 @@ fn struct_init() {
     );
 
     assert_eq!(
-        Ty::Product(Row::Closed(ClosedRow {
-            fields: vec!["name".into(), "age".into()],
-            values: vec![Ty::Float, Ty::Int]
-        })),
+        Ty::Nominal {
+            name: Name::Resolved(SymbolID(1), "Person".to_string()),
+            properties: Row::Closed(ClosedRow {
+                fields: vec!["name".into(), "age".into()],
+                values: vec![Ty::Float, Ty::Int]
+            }),
+            methods: Row::Open(RowVar::new(1))
+        },
         checked.typed_roots[1].ty
     );
 }

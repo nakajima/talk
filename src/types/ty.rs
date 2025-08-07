@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Hash, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Primitive {
     Void,
     Int,
@@ -28,7 +28,7 @@ impl Display for Primitive {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub enum Ty {
     Primitive(#[drive(skip)] Primitive),
     Func {

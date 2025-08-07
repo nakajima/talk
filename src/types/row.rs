@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use derive_visitor::DriveMut;
 
-use crate::types::{ty::Ty, type_var::TypeVar};
+use crate::types::{ty::Ty, type_var::TypeVar, type_var_context::RowVar};
 
 #[derive(Debug)]
 pub enum Direction {
@@ -31,20 +31,20 @@ impl Display for Label {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RowCombination {
     pub left: Row,
     pub right: Row,
     pub goal: Row,
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub enum Row {
-    Open(#[drive(skip)] TypeVar),
+    Open(#[drive(skip)] RowVar),
     Closed(ClosedRow),
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub struct ClosedRow {
     // Sorted lexographically
     #[drive(skip)]

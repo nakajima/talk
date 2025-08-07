@@ -5,8 +5,10 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintState},
         constraint_kind::ConstraintKind,
+        row::Row,
         ty::Ty,
         type_var::TypeVar,
+        type_var_context::RowVar,
     },
 };
 use std::collections::BTreeMap;
@@ -100,20 +102,6 @@ impl ConstraintSet {
         let constraint_id = constraint.id;
         let priority = constraint.priority();
 
-        match &constraint.kind {
-            ConstraintKind::HasField {
-                record: Ty::Var(var),
-                ..
-            } => {
-                self.row_constraints
-                    .entry(*var)
-                    .or_default()
-                    .push(constraint_id);
-            }
-            ConstraintKind::RowClosed { .. } => {}
-            _ => (),
-        }
-
         for type_var in &constraint.type_vars() {
             self.free_type_vars
                 .entry(*type_var)
@@ -126,17 +114,34 @@ impl ConstraintSet {
         constraint_id
     }
 
-    pub fn row_constraints_for(&self, ty: &Ty) -> Result<Vec<&Constraint>, TypeError> {
-        let Ty::Var(var) = ty else {
-            return Err(TypeError::Unknown(format!(
-                "{ty:?} cannot have row constraints"
-            )));
-        };
+    pub fn row_constraints_for(&self, row: &Row) -> Result<Vec<&Constraint>, TypeError> {
+        let constraints = self
+            .constraints
+            .iter()
+            .filter_map(|(c, _)| {
+                match &c.kind {
+                    ConstraintKind::RowClosed { record } => {
+                        if record == row {
+                            return Some(c);
+                        }
+                    }
+                    ConstraintKind::HasField {
+                        record,
+                        label,
+                        ty,
+                        index,
+                    } => {
+                        if record == row {
+                            return Some(c);
+                        }
+                    }
+                    _ => (),
+                }
 
-        let Some(constraint_ids) = self.row_constraints.get(var) else {
-            return Ok(vec![]);
-        };
+                None
+            })
+            .collect();
 
-        Ok(constraint_ids.iter().filter_map(|c| self.find(c)).collect())
+        Ok(constraints)
     }
 }

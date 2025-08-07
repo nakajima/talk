@@ -2,7 +2,7 @@ use crate::{
     name::Name,
     parsed_expr::{Expr, ParsedExpr},
     type_checker::TypeError,
-    types::{ty::Ty, visitor::Visitor},
+    types::{row::Row, ty::Ty, visitor::Visitor},
 };
 
 pub struct Hoister {}
@@ -32,8 +32,13 @@ impl Hoister {
     }
 
     pub fn hoist_struct<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
-        let type_var = visitor.new_row_type_var();
-        visitor.declare(&name.symbol_id()?, Ty::Var(type_var))?;
+        let properties = visitor.new_row_type_var();
+        let methods = visitor.new_row_type_var();
+        visitor.declare(&name.symbol_id()?, Ty::Nominal {
+            name: name.clone(),
+            properties: Row::Open(properties),
+            methods: Row::Open(methods),
+        })?;
         Ok(())
     }
 }

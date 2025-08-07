@@ -5,6 +5,7 @@ use tracing::trace_span;
 use crate::{
     ExprMetaStorage, SymbolID, builtins,
     expr_id::ExprID,
+    formatter::Formatter,
     name::Name,
     parsed_expr::{self, IncompleteExpr, ParsedExpr},
     token_kind::TokenKind,
@@ -13,12 +14,12 @@ use crate::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
         constraint_set::{ConstraintId, ConstraintSet},
-        row::Label,
+        row::{Label, Row},
         row_kind::RowKind,
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
-        type_var_context::TypeVarContext,
+        type_var_context::{RowVar, TypeVarContext},
     },
 };
 
@@ -141,8 +142,8 @@ impl<'a> Visitor<'a> {
         self.type_var_context.new_var(TypeVarKind::None)
     }
 
-    pub fn new_row_type_var(&mut self) -> TypeVar {
-        self.type_var_context.new_var(TypeVarKind::Row)
+    pub fn new_row_type_var(&mut self) -> RowVar {
+        self.type_var_context.new_row_var()
     }
 
     pub fn new_canonical_type_var(&mut self) -> TypeVar {
@@ -199,19 +200,26 @@ impl<'a> Visitor<'a> {
         name: &Name,
         body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        let Ok(Ty::Var(self_ty)) = self.context.lookup(name) else {
+        let Ok(
+            self_ty @ Ty::Nominal {
+                properties: Row::Open(properties),
+                methods: Row::Open(methods),
+                ..
+            },
+        ) = self.context.lookup(name)
+        else {
             return Err(TypeError::Unknown("Did not hoist".to_string()));
         };
 
         self.constrain(
             parsed_expr.id,
             ConstraintKind::RowClosed {
-                record: Ty::Var(self_ty),
+                record: Row::Open(properties),
             },
             ConstraintCause::StructLiteral,
         )?;
 
-        self.context.self_stack.push(Ty::Var(self_ty));
+        self.context.self_stack.push(self_ty.clone());
         self.context.start_scope();
 
         let parsed_expr::Expr::Block(items) = &body.expr else {
@@ -248,7 +256,7 @@ impl<'a> Visitor<'a> {
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Ty::Var(self_ty),
+                            record: Row::Open(properties),
                             label: Label::String(name.name_str()),
                             ty: property_ty,
                             index: Some(index),
@@ -263,7 +271,7 @@ impl<'a> Visitor<'a> {
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Ty::Var(self_ty),
+                            record: Row::Open(methods),
                             label: name.name_str().into(),
                             ty: func_ty,
                             index: Some(index),
@@ -309,9 +317,11 @@ impl<'a> Visitor<'a> {
                         }
                     };
 
+                    self.expr_id_types.insert(item.id, func_ty.clone());
+
                     self.constrain(
                         item.id,
-                        ConstraintKind::Equals(Ty::Var(self_ty), Ty::Var(self_ty_var)),
+                        ConstraintKind::Equals(self_ty.clone(), Ty::Var(self_ty_var)),
                         ConstraintCause::InitializerDefinition,
                     )?;
 
@@ -320,7 +330,7 @@ impl<'a> Visitor<'a> {
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Ty::Var(self_ty),
+                            record: Row::Open(methods),
                             label: Label::String("init".to_string()),
                             ty: func_ty,
                             index: Some(index),
@@ -337,9 +347,9 @@ impl<'a> Visitor<'a> {
         self.context.end_scope();
         self.context.self_stack.pop();
 
-        self.expr_id_types.insert(parsed_expr.id, Ty::Var(self_ty));
+        self.expr_id_types.insert(parsed_expr.id, self_ty.clone());
 
-        Ok(Ty::Var(self_ty))
+        Ok(self_ty)
     }
 
     pub fn visit_mult(&mut self, parsed: &[ParsedExpr]) -> Result<Vec<Ty>, TypeError> {
@@ -357,7 +367,7 @@ impl<'a> Visitor<'a> {
         )
         .entered();
 
-        match &parsed.expr {
+        let result = match &parsed.expr {
             parsed_expr::Expr::Incomplete(incomplete_expr) => {
                 self.visit_incomplete(parsed, incomplete_expr)
             }
@@ -483,7 +493,11 @@ impl<'a> Visitor<'a> {
                 ret,
             } => self.visit_func_signature(parsed, name, params, generics, ret),
             parsed_expr::Expr::Import(module_name) => self.visit_import(parsed, module_name),
-        }
+        }?;
+
+        self.expr_id_types.insert(parsed.id, result.clone());
+
+        Ok(result)
     }
 
     fn visit_incomplete(
@@ -512,6 +526,7 @@ impl<'a> Visitor<'a> {
 
     fn visit_literal_int(&mut self, parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
         let ty = Ty::Var(self.type_var_context.new_var(TypeVarKind::IntLiteral));
+        self.expr_id_types.insert(parsed_expr.id, ty.clone());
 
         self.constrain(
             parsed_expr.id,
@@ -524,6 +539,7 @@ impl<'a> Visitor<'a> {
 
     fn visit_literal_float(&mut self, parsed_expr: &ParsedExpr) -> Result<Ty, TypeError> {
         let ty = Ty::Var(self.type_var_context.new_var(TypeVarKind::FloatLiteral));
+        self.expr_id_types.insert(parsed_expr.id, ty.clone());
 
         self.constrain(
             parsed_expr.id,
@@ -578,12 +594,12 @@ impl<'a> Visitor<'a> {
         parsed_expr: &ParsedExpr,
         items: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        let var = self.new_type_var();
+        let var = self.new_row_type_var();
 
         let constraint_id = self.constrain(
             parsed_expr.id,
             ConstraintKind::RowClosed {
-                record: Ty::Var(var),
+                record: Row::Open(var),
             },
             ConstraintCause::RecordLiteral,
         )?;
@@ -593,7 +609,7 @@ impl<'a> Visitor<'a> {
             let child_id = self.constrain(
                 item.id,
                 ConstraintKind::HasField {
-                    record: Ty::Var(var),
+                    record: Row::Open(var),
                     label: Label::Int(i as u32),
                     ty: item_ty.clone(),
                     index: Some(i),
@@ -604,9 +620,10 @@ impl<'a> Visitor<'a> {
             self.add_child(constraint_id, child_id);
         }
 
-        self.expr_id_types.insert(parsed_expr.id, Ty::Var(var));
+        self.expr_id_types
+            .insert(parsed_expr.id, Ty::Product(Row::Open(var)));
 
-        Ok(Ty::Var(var))
+        Ok(Ty::Product(Row::Open(var)))
     }
 
     fn visit_block(
@@ -638,18 +655,12 @@ impl<'a> Visitor<'a> {
         let substitutions = &mut Default::default();
         let callee = self.visit(callee)?;
 
-        let (callee, returning) = if matches!(
-            callee,
-            Ty::Var(TypeVar {
-                kind: TypeVarKind::Row,
-                ..
-            })
-        ) {
+        let (callee, returning) = if let Ty::Nominal { methods, .. } = &callee {
             let init_type_var = self.new_type_var();
             self.constrain(
                 parsed_expr.id,
                 ConstraintKind::HasField {
-                    record: callee.clone(),
+                    record: methods.clone(),
                     label: Label::String("init".to_string()),
                     ty: Ty::Var(init_type_var),
                     index: None,
@@ -686,6 +697,8 @@ impl<'a> Visitor<'a> {
             },
             ConstraintCause::Call,
         )?;
+
+        self.expr_id_types.insert(parsed_expr.id, returning.clone());
 
         Ok(returning)
     }
@@ -792,10 +805,11 @@ impl<'a> Visitor<'a> {
             Some(receiver) => {
                 let receiver_ty = self.visit(receiver)?;
                 let var = self.new_type_var();
+
                 self.constrain(
                     parsed_expr.id,
-                    ConstraintKind::HasField {
-                        record: receiver_ty,
+                    ConstraintKind::TyHasField {
+                        receiver: receiver_ty,
                         label: name.clone(),
                         ty: Ty::Var(var),
                         index: None,
@@ -923,8 +937,6 @@ impl<'a> Visitor<'a> {
         } else {
             Ty::Var(self.new_canonical_type_var())
         };
-
-        println!("param name: {name:?}");
 
         self.context.declare(&name.symbol_id()?, &param_ty)?;
         self.expr_id_types.insert(parsed_expr.id, param_ty.clone());
@@ -1086,12 +1098,12 @@ impl<'a> Visitor<'a> {
         parsed_expr: &ParsedExpr,
         fields: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        let var = self.new_type_var();
+        let var = self.new_row_type_var();
 
         let constraint_id = self.constrain(
             parsed_expr.id,
             ConstraintKind::RowClosed {
-                record: Ty::Var(var),
+                record: Row::Open(var),
             },
             ConstraintCause::RecordLiteral,
         )?;
@@ -1108,7 +1120,7 @@ impl<'a> Visitor<'a> {
             let child_id = self.constrain(
                 field.id,
                 ConstraintKind::HasField {
-                    record: Ty::Var(var),
+                    record: Row::Open(var),
                     label: label.clone(),
                     ty: *value.clone(),
                     index: Some(index),
@@ -1119,9 +1131,10 @@ impl<'a> Visitor<'a> {
             self.add_child(constraint_id, child_id);
         }
 
-        self.expr_id_types.insert(parsed_expr.id, Ty::Var(var));
+        self.expr_id_types
+            .insert(parsed_expr.id, Ty::Product(Row::Open(var)));
 
-        Ok(Ty::Var(var))
+        Ok(Ty::Product(Row::Open(var)))
     }
 
     fn visit_record_field(

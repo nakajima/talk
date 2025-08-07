@@ -3,13 +3,14 @@ use std::fmt::{self, Display};
 use crate::{
     expr_id::ExprID,
     types::{
-        row::{Label, RowCombination},
+        row::{Label, Row, RowCombination},
         ty::{Primitive, Ty},
         type_var::TypeVar,
+        type_var_context::RowVar,
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_visitor::DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_visitor::DriveMut, PartialOrd, Ord)]
 pub enum ConstraintKind {
     Equals(Ty, Ty),
     Call {
@@ -21,10 +22,19 @@ pub enum ConstraintKind {
     LiteralPrimitive(Ty, #[drive(skip)] Primitive),
     RowCombine(#[drive(skip)] ExprID, #[drive(skip)] RowCombination),
     RowClosed {
-        record: Ty,
+        #[drive(skip)]
+        record: Row,
     },
     HasField {
-        record: Ty,
+        record: Row,
+        #[drive(skip)]
+        label: Label,
+        ty: Ty,
+        #[drive(skip)]
+        index: Option<usize>,
+    },
+    TyHasField {
+        receiver: Ty,
         #[drive(skip)]
         label: Label,
         ty: Ty,
@@ -50,10 +60,14 @@ impl ConstraintKind {
                     || args.iter().any(|a| a.contains_canonical_var())
                     || returning.contains_canonical_var()
             }
-            ConstraintKind::RowClosed { record } => record.contains_canonical_var(),
+            ConstraintKind::RowClosed { record } => {
+                tracing::trace!("not sure about this");
+                false
+            }
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
-            ConstraintKind::HasField { record, ty, .. } => {
-                record.contains_canonical_var() || ty.contains_canonical_var()
+            ConstraintKind::HasField { record, ty, .. } => ty.contains_canonical_var(),
+            ConstraintKind::TyHasField { receiver, ty, .. } => {
+                receiver.contains_canonical_var() || ty.contains_canonical_var()
             }
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => {
@@ -93,7 +107,7 @@ impl ConstraintKind {
                 ConstraintKind::LiteralPrimitive(ty.instantiate(context, substitutions), *prim)
             }
             ConstraintKind::RowClosed { record } => ConstraintKind::RowClosed {
-                record: record.instantiate(context, substitutions),
+                record: record.clone(), //record.instantiate(context, substitutions),
             },
             ConstraintKind::HasField {
                 record,
@@ -101,7 +115,18 @@ impl ConstraintKind {
                 ty,
                 index,
             } => ConstraintKind::HasField {
-                record: record.instantiate(context, substitutions),
+                record: record.clone(),
+                label: label.clone(),
+                ty: ty.instantiate(context, substitutions),
+                index: *index,
+            },
+            ConstraintKind::TyHasField {
+                receiver,
+                label,
+                ty,
+                index,
+            } => ConstraintKind::TyHasField {
+                receiver: receiver.clone(),
                 label: label.clone(),
                 ty: ty.instantiate(context, substitutions),
                 index: *index,
@@ -116,7 +141,7 @@ impl Display for ConstraintKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConstraintKind::Equals(lhs, rhs) => {
-                write!(f, "{lhs} = {rhs}")
+                write!(f, "EQUALS {lhs} = {rhs}")
             }
             ConstraintKind::Call {
                 callee,
@@ -124,9 +149,25 @@ impl Display for ConstraintKind {
                 args,
                 returning,
             } => {
-                write!(f, "call {}({})", callee, args.iter().map(|a| a.to_string()).collect::<Vec<_>>().join(", "))?;
+                write!(
+                    f,
+                    "call {}({})",
+                    callee,
+                    args.iter()
+                        .map(|a| a.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )?;
                 if !type_args.is_empty() {
-                    write!(f, "<{}>)", type_args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "))?;
+                    write!(
+                        f,
+                        "<{}>)",
+                        type_args
+                            .iter()
+                            .map(|t| t.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
                 }
                 write!(f, " -> {returning}")
             }
@@ -134,7 +175,7 @@ impl Display for ConstraintKind {
                 write!(f, "{ty} : {prim:?}")
             }
             ConstraintKind::RowClosed { record } => {
-                write!(f, "row_closed({record})")
+                write!(f, "row_closed({record:?})")
             }
             ConstraintKind::HasField {
                 record,
@@ -142,7 +183,19 @@ impl Display for ConstraintKind {
                 ty,
                 index,
             } => {
-                write!(f, "{record}.{label:?} : {ty}")?;
+                write!(f, "{record:?}.{label:?} : {ty}")?;
+                if let Some(idx) = index {
+                    write!(f, " [idx:{idx}]")?;
+                }
+                Ok(())
+            }
+            ConstraintKind::TyHasField {
+                receiver,
+                label,
+                ty,
+                index,
+            } => {
+                write!(f, "{receiver:?}.{label:?} : {ty}")?;
                 if let Some(idx) = index {
                     write!(f, " [idx:{idx}]")?;
                 }

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use tracing::info_span;
+use tracing::{info_span, trace_span};
 
 use crate::{
     SourceFile,
@@ -8,6 +8,7 @@ use crate::{
     environment::Environment,
     expr_id::ExprID,
     expr_meta::ExprMeta,
+    formatter::Formatter,
     lexer::Lexer,
     parsed_expr::{self, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
     token::Token,
@@ -401,7 +402,7 @@ impl<'a> Parser<'a> {
     fn struct_body(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.skip_newlines();
-        tracing::info!("in struct body: {:?}", self.current);
+        let _s = trace_span!("in struct body", current = format!("{:?}", self.current)).entered();
         self.consume(TokenKind::LeftBrace)?;
         self.skip_semicolons_and_newlines();
 
@@ -1772,6 +1773,7 @@ impl<'a> Parser<'a> {
         tok: LocToken,
     ) -> Result<ParsedExpr, ParserError> {
         let id = self.save_meta(tok)?;
+        tracing::trace!("Add {id:?}: {expr:?}");
         Ok(ParsedExpr { id, expr })
     }
 

@@ -2111,7 +2111,6 @@ mod tests {
         let source = "x.0";
         let parsed = parse(source);
 
-        println!("Number of roots: {}", parsed.roots().len());
         for (i, root) in parsed.roots().iter().enumerate() {
             println!("Root {}: {:?}", i, root.expr);
         }

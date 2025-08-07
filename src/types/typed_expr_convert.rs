@@ -44,7 +44,10 @@ macro_rules! lookup {
         if let Some(ty) = $ids.get(&$id).cloned() {
             ty
         } else {
-            Ty::Void
+            return TypedExprResult::Err(TypeError::Unknown(format!(
+                "Type not found in ids: {:?}, {:?}",
+                $id, $ids
+            )));
         }
     }};
 }

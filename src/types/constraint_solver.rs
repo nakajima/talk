@@ -11,8 +11,8 @@ use crate::{
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
         type_checking_session::ExprIDTypeMap,
-        type_var::{TypeVar, TypeVarKind},
-        type_var_context::TypeVarContext,
+        type_var::TypeVarKind,
+        type_var_context::{RowVar, TypeVarContext},
     },
 };
 
@@ -21,7 +21,7 @@ const MAX_FAILED_ATTEMPTS: usize = 2;
 pub struct ConstraintSolver<'a> {
     context: &'a mut TypeVarContext,
     constraints: &'a mut ConstraintSet,
-    record_fields: BTreeMap<TypeVar, IndexMap<Label, Ty>>,
+    record_fields: BTreeMap<RowVar, IndexMap<Label, Ty>>,
     errored: Vec<Constraint>,
 }
 
@@ -56,7 +56,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 let before = constraint.state.clone();
-                self.solve_constraint(&mut constraint, &mut result)?;
+                self.solve_constraint(&mut constraint)?;
                 made_progress |= before != constraint.state;
 
                 if constraint.state != ConstraintState::Solved {
@@ -84,11 +84,7 @@ impl<'a> ConstraintSolver<'a> {
         Ok((result, self.errored))
     }
 
-    pub fn solve_constraint(
-        &mut self,
-        constraint: &mut Constraint,
-        out: &mut ExprIDTypeMap,
-    ) -> Result<(), TypeError> {
+    pub fn solve_constraint(&mut self, constraint: &mut Constraint) -> Result<(), TypeError> {
         let _s = trace_span!(
             "solve_constraint",
             id = constraint.id.0,
@@ -100,19 +96,25 @@ impl<'a> ConstraintSolver<'a> {
         .entered();
 
         let result = match constraint.kind.clone() {
-            ConstraintKind::Equals(lhs, rhs) => self.solve_equals(constraint, lhs, rhs, out),
+            ConstraintKind::Equals(lhs, rhs) => self.solve_equals(constraint, lhs, rhs),
             ConstraintKind::LiteralPrimitive(ty, primitive) => {
-                self.solve_literal_primitive(constraint, &ty, &primitive, out)
+                self.solve_literal_primitive(constraint, &ty, &primitive)
             }
             ConstraintKind::Call {
                 callee,
                 args,
                 type_args,
                 returning,
-            } => self.solve_call(constraint, callee, type_args, args, returning, out),
+            } => self.solve_call(constraint, callee, type_args, args, returning),
             ConstraintKind::HasField {
                 record, label, ty, ..
-            } => self.solve_has_field(constraint, &record, label, ty, out),
+            } => self.solve_has_field(constraint, &record, label, ty),
+            ConstraintKind::TyHasField {
+                receiver,
+                label,
+                ty,
+                ..
+            } => self.solve_ty_has_field(constraint, &receiver, label, ty),
             ConstraintKind::RowClosed { record } => self.solve_row_closed(constraint, &record),
             #[allow(clippy::todo)]
             ConstraintKind::RowCombine(..) => todo!(),
@@ -129,45 +131,79 @@ impl<'a> ConstraintSolver<'a> {
         Ok(())
     }
 
+    // If we just have a type, it could potentially be a nominal type in which case there might be _two_ places to check for
+    // fields (properties vs methods). So this constraint just handles those cases.
+    fn solve_ty_has_field(
+        &mut self,
+        constraint: &mut Constraint,
+        receiver: &Ty,
+        label: Label,
+        ty: Ty,
+    ) -> Result<(), TypeError> {
+        let receiver = self.context.resolve(receiver);
+        if matches!(receiver, Ty::Var(_)) {
+            constraint.wait();
+            return Ok(());
+        }
+
+        match receiver {
+            Ty::Nominal {
+                name,
+                properties,
+                methods,
+            } => {
+                println!("solve_ty_has_field {constraint:?}");
+                Ok(())
+            }
+            Ty::Product(row) => self.solve_has_field(constraint, &row, label, ty),
+            Ty::Sum(row) => self.solve_has_field(constraint, &row, label, ty),
+            _ => Err(TypeError::Unknown(format!("{receiver:?} has no fields"))),
+        }
+    }
+
     fn solve_has_field(
         &mut self,
         constraint: &mut Constraint,
-        record: &Ty,
+        record: &Row,
         label: Label,
         ty: Ty,
-        out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
-        let record = self.context.resolve(record);
+        let row = self.context.resolve_row(record);
         let ty = self.context.resolve(&ty);
 
-        let Ty::Var(var) = record else {
-            return Err(TypeError::Unknown(format!("{record:?} can't have fields",)));
-        };
+        match &row {
+            Row::Closed(ClosedRow { fields, values }) => {
+                for (closed_label, closed_value) in fields.iter().zip(values) {
+                    if &label == closed_label && closed_value == &ty {
+                        constraint.state = ConstraintState::Solved;
+                        return Ok(());
+                    }
+                }
 
-        let ty = if let Some(existing) = self.record_fields.entry(var).or_default().get(&label) {
-            tracing::debug!("Found existing receiver: record: {record:?} {existing:?}");
-            self.context.unify_ty_ty(existing, &ty)?;
-            existing.clone()
-        } else {
-            tracing::debug!(
-                "Did not find existing for record: {record:?}, adding: {label:?}->{ty:?}"
-            );
-            self.record_fields
-                .entry(var)
-                .or_default()
-                .insert(label, ty.clone());
-            ty
-        };
+                constraint.state = ConstraintState::Error(TypeError::Unknown(format!(
+                    "Closed row doesn't satisfy has field requirement. Row {row:?}, req: {label:?}: {ty:?}"
+                )));
+            }
+            Row::Open(row_var) => {
+                if let Some(existing) = self.record_fields.entry(*row_var).or_default().get(&label)
+                {
+                    tracing::debug!("Found existing receiver: record: {row:?} {existing:?}");
+                    self.context.unify_ty_ty(existing, &ty)?;
+                    existing.clone()
+                } else {
+                    tracing::debug!(
+                        "Did not find existing for record: {row:?}, adding: {label:?}->{ty:?}"
+                    );
+                    self.record_fields
+                        .entry(*row_var)
+                        .or_default()
+                        .insert(label, ty.clone());
+                    ty
+                };
+            }
+        }
 
         // Store the resolved field type in the output
-        let resolved_ty = self.context.resolve(&ty);
-        tracing::debug!(
-            "Storing field type for expr {}: {:?}",
-            constraint.expr_id.0,
-            resolved_ty
-        );
-
-        out.insert(constraint.expr_id, resolved_ty);
         constraint.state = ConstraintState::Solved;
 
         Ok(())
@@ -176,7 +212,7 @@ impl<'a> ConstraintSolver<'a> {
     fn solve_row_closed(
         &mut self,
         constraint: &mut Constraint,
-        record: &Ty,
+        record: &Row,
     ) -> Result<(), TypeError> {
         if self
             .constraints
@@ -184,8 +220,9 @@ impl<'a> ConstraintSolver<'a> {
             .iter()
             .all(|c| c.is_solved())
         {
-            let Ty::Var(var) = record else {
-                return Err(TypeError::Unknown("Did not get var".to_string()));
+            let var = match record {
+                Row::Open(var) => var,
+                Row::Closed(..) => return Ok(()),
             };
 
             // Gather the fields
@@ -201,12 +238,12 @@ impl<'a> ConstraintSolver<'a> {
                 values.push(self.context.resolve(&ty));
             }
 
-            self.context.unify_var_ty(
+            self.context.unify_row_var(
                 *var,
-                Ty::Product(Row::Closed(ClosedRow {
+                Row::Closed(ClosedRow {
                     fields: labels,
                     values,
-                })),
+                }),
             )?;
 
             constraint.state = ConstraintState::Solved;
@@ -227,7 +264,6 @@ impl<'a> ConstraintSolver<'a> {
         _type_args: Vec<Ty>,
         args: Vec<Ty>,
         returning: Ty,
-        out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
         let callee = self.context.resolve(&callee);
 
@@ -268,8 +304,6 @@ impl<'a> ConstraintSolver<'a> {
         // constraints
         if constraint.state == ConstraintState::Pending {
             let mut substitutions = Default::default();
-
-            out.insert(constraint.expr_id, returning.clone());
 
             for (param, arg) in params.iter().zip(args.iter()) {
                 let param = param.instantiate(self.context, &mut substitutions);
@@ -340,7 +374,6 @@ impl<'a> ConstraintSolver<'a> {
         constraint: &mut Constraint,
         lhs: Ty,
         rhs: Ty,
-        out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
         let lhs = self.context.resolve(&lhs);
         let rhs = self.context.resolve(&rhs);
@@ -371,12 +404,10 @@ impl<'a> ConstraintSolver<'a> {
                 self.context.unify_var_ty(var, ty.clone())?;
                 tracing::trace!("Unifying {var:?} -> {ty:?}");
                 constraint.state = ConstraintState::Solved;
-                out.insert(constraint.expr_id, ty);
                 Ok(())
             }
             (Ty::Primitive(p1), Ty::Primitive(p2)) if p1 == p2 => {
                 constraint.state = ConstraintState::Solved;
-                out.insert(constraint.expr_id, Ty::Primitive(p1));
                 Ok(())
             }
             (lhs_ty, rhs_ty) => {
@@ -397,7 +428,6 @@ impl<'a> ConstraintSolver<'a> {
         constraint: &mut Constraint,
         ty: &Ty,
         primitive: &Primitive,
-        out: &mut ExprIDTypeMap,
     ) -> Result<(), TypeError> {
         let resolved = self.context.resolve(ty);
 
@@ -406,7 +436,6 @@ impl<'a> ConstraintSolver<'a> {
                 if p == *primitive {
                     constraint.state = ConstraintState::Solved;
                     self.context.unify_ty_ty(ty, &Ty::Primitive(*primitive))?;
-                    out.insert(constraint.expr_id, Ty::Primitive(*primitive));
                 } else {
                     constraint.state = ConstraintState::Error(TypeError::Mismatch(
                         primitive.to_string(),
