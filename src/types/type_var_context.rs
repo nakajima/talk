@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fmt::{Display, write},
+    fmt::Display,
 };
 
 use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};

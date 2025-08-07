@@ -6,7 +6,6 @@ use crate::{
         row::{Label, Row, RowCombination},
         ty::{Primitive, Ty},
         type_var::TypeVar,
-        type_var_context::RowVar,
     },
 };
 
@@ -60,12 +59,12 @@ impl ConstraintKind {
                     || args.iter().any(|a| a.contains_canonical_var())
                     || returning.contains_canonical_var()
             }
-            ConstraintKind::RowClosed { record } => {
+            ConstraintKind::RowClosed { .. } => {
                 tracing::trace!("not sure about this");
                 false
             }
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
-            ConstraintKind::HasField { record, ty, .. } => ty.contains_canonical_var(),
+            ConstraintKind::HasField { ty, .. } => ty.contains_canonical_var(),
             ConstraintKind::TyHasField { receiver, ty, .. } => {
                 receiver.contains_canonical_var() || ty.contains_canonical_var()
             }

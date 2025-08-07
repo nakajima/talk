@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub enum TypedExprResult {
-    Ok(TypedExpr),
+    Ok(Box<TypedExpr>),
     Err(TypeError),
     None,
 }

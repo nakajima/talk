@@ -5,7 +5,6 @@ use tracing::trace_span;
 use crate::{
     ExprMetaStorage, SymbolID, builtins,
     expr_id::ExprID,
-    formatter::Formatter,
     name::Name,
     parsed_expr::{self, IncompleteExpr, ParsedExpr},
     token_kind::TokenKind,
@@ -234,11 +233,7 @@ impl<'a> Visitor<'a> {
 
         for (index, item) in items.iter().enumerate() {
             match &item.expr {
-                Expr::Property {
-                    name,
-                    type_repr,
-                    default_value,
-                } if kind != RowKind::Enum => {
+                Expr::Property { name, .. } if kind != RowKind::Enum => {
                     let property_ty = self.visit(item)?;
 
                     self.constrain(
@@ -749,7 +744,7 @@ impl<'a> Visitor<'a> {
     fn visit_property(
         &mut self,
         parsed_expr: &ParsedExpr,
-        name: &Name,
+        _name: &Name,
         type_repr: &Option<Box<ParsedExpr>>,
         default_value: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {

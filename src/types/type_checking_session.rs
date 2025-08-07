@@ -92,7 +92,7 @@ impl<'a> TypeCheckingSession<'a> {
         for root in self.parsed_roots {
             match root.to_typed(&self.typed_expr_ids) {
                 TypedExprResult::Ok(typed) => {
-                    typed_roots.push(typed);
+                    typed_roots.push(*typed);
                 }
                 TypedExprResult::Err(err) => return Err(err),
                 TypedExprResult::None => {}

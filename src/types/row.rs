@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use derive_visitor::DriveMut;
 
-use crate::types::{ty::Ty, type_var::TypeVar, type_var_context::RowVar};
+use crate::types::{ty::Ty, type_var_context::RowVar};
 
 #[derive(Debug)]
 pub enum Direction {

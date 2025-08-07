@@ -6,9 +6,7 @@ use crate::{
         constraint::{Constraint, ConstraintState},
         constraint_kind::ConstraintKind,
         row::Row,
-        ty::Ty,
         type_var::TypeVar,
-        type_var_context::RowVar,
     },
 };
 use std::collections::BTreeMap;
@@ -32,7 +30,6 @@ impl std::fmt::Display for ConstraintId {
 #[derive(Default, Clone, Debug)]
 pub struct ConstraintSet {
     free_type_vars: BTreeMap<TypeVar, Vec<ConstraintId>>,
-    row_constraints: BTreeMap<TypeVar, Vec<ConstraintId>>,
     constraints: PriorityQueue<Constraint, usize>,
     last_id: usize,
 }
@@ -41,7 +38,6 @@ impl ConstraintSet {
     pub fn new() -> Self {
         Self {
             free_type_vars: Default::default(),
-            row_constraints: Default::default(),
             constraints: Default::default(),
             last_id: 0,
         }
@@ -125,12 +121,7 @@ impl ConstraintSet {
                             return Some(c);
                         }
                     }
-                    ConstraintKind::HasField {
-                        record,
-                        label,
-                        ty,
-                        index,
-                    } => {
+                    ConstraintKind::HasField { record, .. } => {
                         if record == row {
                             return Some(c);
                         }

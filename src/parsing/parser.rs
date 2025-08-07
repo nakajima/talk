@@ -8,7 +8,6 @@ use crate::{
     environment::Environment,
     expr_id::ExprID,
     expr_meta::ExprMeta,
-    formatter::Formatter,
     lexer::Lexer,
     parsed_expr::{self, Expr::*, IncompleteExpr, ParsedExpr, Pattern},
     token::Token,

@@ -10,7 +10,6 @@ use crate::{
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
-        type_checking_session::ExprIDTypeMap,
         type_var::TypeVarKind,
         type_var_context::{RowVar, TypeVarContext},
     },
