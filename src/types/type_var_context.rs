@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    fmt::Display,
-};
+use std::{collections::BTreeSet, fmt::Display};
 
 use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
 use tracing::trace_span;
@@ -25,6 +22,14 @@ impl UnifyValue for Ty {
     fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, TypeError> {
         match (lhs, rhs) {
             (Ty::Var(lhs), Ty::Var(rhs)) => {
+                if lhs.kind.is_more_specific_than(&rhs.kind) {
+                    return Ok(Ty::Var(*lhs));
+                }
+
+                if rhs.kind.is_more_specific_than(&lhs.kind) {
+                    return Ok(Ty::Var(*rhs));
+                }
+
                 if lhs.kind == TypeVarKind::None && rhs.kind != TypeVarKind::None {
                     return Ok(Ty::Var(*rhs));
                 }
@@ -204,10 +209,12 @@ impl TypeVarContext {
                 name,
                 properties,
                 methods,
+                generic_constraints,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: self.resolve_row(properties),
                 methods: self.resolve_row(methods),
+                generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints
             },
             Ty::Product(row) => Ty::Product(self.resolve_row(row)),
             #[allow(clippy::todo)]

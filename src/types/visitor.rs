@@ -52,11 +52,11 @@ impl VisitorContext {
         self.scopes.pop();
     }
 
-    fn start_generic_function(&mut self) {
+    fn start_generic_context(&mut self) {
         self.generic_constraints_stack.push(vec![]);
     }
 
-    fn end_generic_function(&mut self) -> Vec<ConstraintKind> {
+    fn end_generic_context(&mut self) -> Vec<ConstraintKind> {
         self.generic_constraints_stack.pop().unwrap_or_default()
     }
 
@@ -197,6 +197,8 @@ impl<'a> Visitor<'a> {
         kind: RowKind,
         parsed_expr: &ParsedExpr,
         name: &Name,
+        generics: &[ParsedExpr],
+        conformances: &[ParsedExpr],
         body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
         let Ok(
@@ -220,6 +222,11 @@ impl<'a> Visitor<'a> {
 
         self.context.self_stack.push(self_ty.clone());
         self.context.start_scope();
+        self.context.start_generic_context();
+
+        for generic in generics {
+            self.visit(generic)?;
+        }
 
         let parsed_expr::Expr::Block(items) = &body.expr else {
             unreachable!()
@@ -341,6 +348,7 @@ impl<'a> Visitor<'a> {
 
         self.context.end_scope();
         self.context.self_stack.pop();
+        self.context.end_generic_context();
 
         self.expr_id_types.insert(parsed_expr.id, self_ty.clone());
 
@@ -649,7 +657,7 @@ impl<'a> Visitor<'a> {
         args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
         let substitutions = &mut Default::default();
-        let callee = self.visit(callee)?;
+        let mut callee = self.visit(callee)?;
 
         let (callee, returning) = if let Ty::Nominal { methods, .. } = &callee {
             let init_type_var = self.new_type_var();
@@ -663,6 +671,10 @@ impl<'a> Visitor<'a> {
                 },
                 ConstraintCause::InitializerCall,
             )?;
+
+            if callee.contains_canonical_var() {
+                callee = callee.instantiate(self.type_var_context, substitutions);
+            }
 
             (Ty::Var(init_type_var), callee)
         } else {
@@ -682,6 +694,12 @@ impl<'a> Visitor<'a> {
             .iter()
             .map(|arg| arg.instantiate(self.type_var_context, substitutions))
             .collect();
+
+        let returning = if returning.contains_canonical_var() {
+            returning.instantiate(self.type_var_context, &mut Default::default())
+        } else {
+            returning
+        };
 
         self.constrain(
             parsed_expr.id,
@@ -734,11 +752,18 @@ impl<'a> Visitor<'a> {
         &mut self,
         parsed_expr: &ParsedExpr,
         name: &Name,
-        _generics: &[ParsedExpr],
-        _conformances: &[ParsedExpr],
+        generics: &[ParsedExpr],
+        conformances: &[ParsedExpr],
         body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        self.named_row(RowKind::Struct, parsed_expr, name, body)
+        self.named_row(
+            RowKind::Struct,
+            parsed_expr,
+            name,
+            generics,
+            conformances,
+            body,
+        )
     }
 
     fn visit_property(
@@ -865,7 +890,7 @@ impl<'a> Visitor<'a> {
 
         // Always start tracking constraints for functions - we'll determine if it's generic
         // based on whether any canonical vars are used
-        self.context.start_generic_function();
+        self.context.start_generic_context();
 
         for generic in generics {
             self.visit(generic)?;
@@ -914,7 +939,7 @@ impl<'a> Visitor<'a> {
         self.context.end_scope();
 
         // Collect any generic constraints that were generated
-        let generic_constraints = self.context.end_generic_function();
+        let generic_constraints = self.context.end_generic_context();
 
         let func_ty = Ty::Func {
             params: typed_params,

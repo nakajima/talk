@@ -10,6 +10,7 @@ use crate::{
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
+        type_checking_session::ExprIDTypeMap,
         type_var::TypeVarKind,
         type_var_context::{RowVar, TypeVarContext},
     },
@@ -199,6 +200,7 @@ impl<'a> ConstraintSolver<'a> {
             Row::Open(row_var) => {
                 if let Some(existing) = self.record_fields.entry(*row_var).or_default().get(&label)
                 {
+                    let existing = &existing.instantiate(self.context, &mut Default::default());
                     tracing::debug!("Found existing receiver: record: {row:?} {existing:?}");
                     self.context.unify_ty_ty(existing, &ty)?;
                     existing.clone()

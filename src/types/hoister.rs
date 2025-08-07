@@ -34,11 +34,15 @@ impl Hoister {
     pub fn hoist_struct<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
         let properties = visitor.new_row_type_var();
         let methods = visitor.new_row_type_var();
-        visitor.declare(&name.symbol_id()?, Ty::Nominal {
-            name: name.clone(),
-            properties: Row::Open(properties),
-            methods: Row::Open(methods),
-        })?;
+        visitor.declare(
+            &name.symbol_id()?,
+            Ty::Nominal {
+                name: name.clone(),
+                properties: Row::Open(properties),
+                methods: Row::Open(methods),
+                generic_constraints: vec![],
+            },
+        )?;
         Ok(())
     }
 }

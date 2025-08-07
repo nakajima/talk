@@ -256,7 +256,8 @@ fn struct_properties() {
                 fields: vec!["name".into(), "age".into()],
                 values: vec![Ty::Float, Ty::Int]
             }),
-            methods: Row::Open(RowVar::new(1))
+            methods: Row::Open(RowVar::new(1)),
+            generic_constraints: vec![],
         },
         checked.typed_roots[0].ty
     );
@@ -284,7 +285,8 @@ fn struct_init() {
                 fields: vec!["name".into(), "age".into()],
                 values: vec![Ty::Float, Ty::Int]
             }),
-            methods: Row::Open(RowVar::new(1))
+            methods: Row::Open(RowVar::new(1)),
+            generic_constraints: vec![],
         },
         checked.typed_roots[1].ty
     );
@@ -303,4 +305,21 @@ fn struct_methods() {
     );
 
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+}
+
+#[test]
+fn generic_struct_property() {
+    let checked = check(
+        "
+        struct Person<T> {
+            let member: T
+        }
+
+        Person(member: 123).member
+        Person(member: 1.23).member
+        ",
+    );
+
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+    assert_eq!(Ty::Float, checked.typed_roots[2].ty);
 }

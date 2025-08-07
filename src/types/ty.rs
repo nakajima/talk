@@ -42,6 +42,7 @@ pub enum Ty {
         name: Name,
         properties: Row,
         methods: Row,
+        generic_constraints: Vec<ConstraintKind>,
     },
     Product(Row),
     Var(#[drive(skip)] TypeVar),
@@ -125,6 +126,7 @@ impl Ty {
                 name,
                 properties,
                 methods,
+                generic_constraints,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: if let Row::Closed(ClosedRow { fields, values }) = properties {
@@ -149,6 +151,10 @@ impl Ty {
                 } else {
                     methods.clone()
                 },
+                generic_constraints: generic_constraints
+                    .iter()
+                    .map(|c| c.instantiate(context, substitutions))
+                    .collect(),
             },
             Ty::Func {
                 params,
