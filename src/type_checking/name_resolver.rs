@@ -371,7 +371,7 @@ impl<'a> NameResolver<'a> {
             Expr::Func { .. } => {
                 self.resolve_func(expr, &parsed_expr.id, meta, symbol_table)?;
             }
-            Expr::CallArg { value, label } => {
+            Expr::CallArg { value, .. } => {
                 *value = Box::new(self.resolve_node(value, meta, symbol_table)?);
             }
             Expr::Parameter(name, ty_repr) => {
