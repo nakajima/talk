@@ -6,3 +6,4 @@ talk-ex/index.wit
 *.dot
 *.png
 .docs-cache
+/documents
