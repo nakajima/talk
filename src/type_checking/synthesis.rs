@@ -1,7 +1,7 @@
 use derive_visitor::{DriveMut, VisitorMut};
 
 use crate::{
-    NameResolved, SourceFile, SymbolID, SymbolKind, SymbolTable,
+    MemberSymbol, NameResolved, SourceFile, SymbolID, SymbolKind, SymbolTable,
     environment::Environment,
     name::Name,
     parsed_expr::{Expr, ParsedExpr},
@@ -37,13 +37,23 @@ pub fn synthesize_inits(
     symbol_table: &mut SymbolTable,
     env: &mut Environment,
 ) {
-    for (sym, table) in symbol_table.types.clone() {
-        if table.initializers.is_empty() {
+    let types = symbol_table
+        .types
+        .keys()
+        .cloned()
+        .collect::<Vec<SymbolID>>();
+    for sym in types {
+        if symbol_table.initializers_for(&sym).clone().is_empty() {
             tracing::trace!("Synthesizing init for {sym:?}");
             // We need to generate an initializer for this struct
             let mut param_exprs: Vec<ParsedExpr> = vec![];
             let mut body_exprs: Vec<ParsedExpr> = vec![];
-            for property in table.properties {
+            let properties: Vec<MemberSymbol> = symbol_table
+                .properties_for(&sym)
+                .iter()
+                .map(|c| c.to_owned().clone())
+                .collect();
+            for property in properties {
                 let param_sym = symbol_table.add(
                     &property.name,
                     crate::SymbolKind::Param,
@@ -107,7 +117,7 @@ pub fn synthesize_inits(
                 definition,
             );
 
-            symbol_table.add_initializer(init_sym, init.id);
+            symbol_table.add_initializer(sym, "init".to_string(), init.id, init_sym);
 
             let mut inserter = InitInserter {
                 struct_id: sym,

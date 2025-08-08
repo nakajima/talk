@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use tracing::trace_span;
 
 use crate::{
+    MemberKind, SymbolTable,
     type_checker::TypeError,
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
@@ -10,7 +11,6 @@ use crate::{
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
-        type_checking_session::ExprIDTypeMap,
         type_var::TypeVarKind,
         type_var_context::{RowVar, TypeVarContext},
     },
@@ -23,15 +23,21 @@ pub struct ConstraintSolver<'a> {
     constraints: &'a mut ConstraintSet,
     record_fields: BTreeMap<RowVar, IndexMap<Label, Ty>>,
     errored: Vec<Constraint>,
+    symbols: &'a SymbolTable,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(context: &'a mut TypeVarContext, constraints: &'a mut ConstraintSet) -> Self {
+    pub fn new(
+        context: &'a mut TypeVarContext,
+        constraints: &'a mut ConstraintSet,
+        symbols: &'a SymbolTable,
+    ) -> Self {
         Self {
             context,
             constraints,
             record_fields: Default::default(),
             errored: Default::default(),
+            symbols,
         }
     }
 
@@ -147,47 +153,82 @@ impl<'a> ConstraintSolver<'a> {
 
         match receiver {
             Ty::Nominal {
+                name,
                 properties,
                 methods,
                 ..
             } => {
-                match (&properties, &methods) {
-                    (Row::Closed(properties_row), _) => {
-                        // If property exists, use it; otherwise it's a method
-                        if properties_row.fields.iter().any(|field| field == &label) {
-                            return self.solve_has_field(constraint, &properties, label, ty);
-                        } else {
-                            return self.solve_has_field(constraint, &methods, label, ty);
-                        }
-                    }
-                    (Row::Open(prop_var), Row::Open(_)) | (Row::Open(prop_var), Row::Closed(_)) => {
-                        // Use recorded fields first if available
-                        let has_property_label = self
-                            .record_fields
-                            .get(prop_var)
-                            .and_then(|m| m.get(&label))
-                            .is_some();
-                        let has_method_label = match &methods {
-                            Row::Open(mv) => self
-                                .record_fields
-                                .get(mv)
-                                .and_then(|m| m.get(&label))
-                                .is_some(),
-                            Row::Closed(closed) => closed.fields.iter().any(|l| l == &label),
-                        };
+                let Some(member) = self
+                    .symbols
+                    .member_kind(&name.symbol_id()?, &label.to_string())
+                else {
+                    constraint.error(TypeError::MemberNotFound(
+                        name.name_str().to_string(),
+                        label.to_string(),
+                    ));
 
-                        if has_method_label {
-                            return self.solve_has_field(constraint, &methods, label, ty);
-                        }
-                        // Default to properties when there is no known method with this label
-                        return self.solve_has_field(constraint, &properties, label, ty);
+                    return Err(TypeError::MemberNotFound(
+                        name.name_str().to_string(),
+                        label.to_string(),
+                    ));
+                };
+
+                match member.kind {
+                    MemberKind::Property => {
+                        self.solve_has_field(constraint, &properties, label, ty)
+                    }
+                    MemberKind::Method | MemberKind::Initializer => {
+                        self.solve_has_field(constraint, &methods, label, ty)
                     }
                 }
             }
-            Ty::Product(row) => self.solve_has_field(constraint, &row, label, ty),
-            Ty::Sum(row) => self.solve_has_field(constraint, &row, label, ty),
-            _ => Err(TypeError::Unknown(format!("{receiver:?} has no fields"))),
+            Ty::Product(row) => {
+                self.solve_has_field(constraint, &row, label, ty)
+            }
+            _ => {
+                constraint.wait();
+                Ok(())
+            }
         }
+
+        //
+        //                match (&properties, &methods) {
+        //                    (Row::Closed(properties_row), _) => {
+        //                        // If property exists, use it; otherwise it's a method
+        //                        if properties_row.fields.iter().any(|field| field == &label) {
+        //                            return self.solve_has_field(constraint, &properties, label, ty);
+        //                        } else {
+        //                            return self.solve_has_field(constraint, &methods, label, ty);
+        //                        }
+        //                    }
+        //                    (Row::Open(prop_var), Row::Open(_)) | (Row::Open(prop_var), Row::Closed(_)) => {
+        //                        // Use recorded fields first if available
+        //                        let has_property_label = self
+        //                            .record_fields
+        //                            .get(prop_var)
+        //                            .and_then(|m| m.get(&label))
+        //                            .is_some();
+        //                        let has_method_label = match &methods {
+        //                            Row::Open(mv) => self
+        //                                .record_fields
+        //                                .get(mv)
+        //                                .and_then(|m| m.get(&label))
+        //                                .is_some(),
+        //                            Row::Closed(closed) => closed.fields.iter().any(|l| l == &label),
+        //                        };
+        //
+        //                        if has_method_label {
+        //                            return self.solve_has_field(constraint, &methods, label, ty);
+        //                        }
+        //                        // Default to properties when there is no known method with this label
+        //                        return self.solve_has_field(constraint, &properties, label, ty);
+        //                    }
+        //                }
+        //            }
+        //            Ty::Product(row) => self.solve_has_field(constraint, &row, label, ty),
+        //            Ty::Sum(row) => self.solve_has_field(constraint, &row, label, ty),
+        //            _ => Err(TypeError::Unknown(format!("{receiver:?} has no fields"))),
+        //        }
     }
 
     fn solve_has_field(

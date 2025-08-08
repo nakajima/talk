@@ -27,7 +27,7 @@ fn check(code: &'static str) -> TypeCheckingResult {
     synthesize_inits(&mut resolved, symbol_table, &mut Environment::new());
 
     let meta = resolved.meta.borrow();
-    let mut session = TypeCheckingSession::new(resolved.roots(), &meta);
+    let mut session = TypeCheckingSession::new(resolved.roots(), &meta, symbol_table);
 
     session.solve().unwrap()
 }

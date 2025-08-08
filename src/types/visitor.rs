@@ -3,13 +3,7 @@ use std::collections::BTreeMap;
 use tracing::trace_span;
 
 use crate::{
-    ExprMetaStorage, SymbolID, builtins,
-    expr_id::ExprID,
-    name::Name,
-    parsed_expr::{self, IncompleteExpr, ParsedExpr},
-    token_kind::TokenKind,
-    type_checker::TypeError,
-    types::{
+    builtins, expr_id::ExprID, name::Name, parsed_expr::{self, IncompleteExpr, ParsedExpr}, token_kind::TokenKind, type_checker::TypeError, types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
         constraint_set::{ConstraintId, ConstraintSet},
@@ -19,7 +13,7 @@ use crate::{
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
         type_var_context::{RowVar, TypeVarContext},
-    },
+    }, ExprMetaStorage, SymbolID, SymbolTable
 };
 
 pub type Scope = BTreeMap<SymbolID, Ty>;
@@ -118,6 +112,7 @@ pub struct Visitor<'a> {
     expr_id_types: &'a mut ExprIDTypeMap,
     context: VisitorContext,
     meta: &'a ExprMetaStorage,
+    symbols: &'a SymbolTable
 }
 
 #[allow(clippy::todo)]
@@ -127,6 +122,7 @@ impl<'a> Visitor<'a> {
         constraints: &'a mut ConstraintSet,
         expr_id_types: &'a mut ExprIDTypeMap,
         meta: &'a ExprMetaStorage,
+        symbols: &'a SymbolTable,
     ) -> Self {
         Self {
             type_var_context,
@@ -134,6 +130,7 @@ impl<'a> Visitor<'a> {
             context: VisitorContext::default(),
             expr_id_types,
             meta,
+            symbols,
         }
     }
 

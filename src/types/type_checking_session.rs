@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use tracing::trace_span;
 
 use crate::{
-    ExprMetaStorage,
+    ExprMetaStorage, SymbolTable,
     diagnostic::Diagnostic,
     expr_id::ExprID,
     parsed_expr::ParsedExpr,
@@ -36,10 +36,15 @@ pub struct TypeCheckingSession<'a> {
     pub parsed_roots: &'a [ParsedExpr],
     pub diagnostics: Vec<Diagnostic>,
     pub type_var_context: TypeVarContext,
+    pub symbols: &'a SymbolTable,
 }
 
 impl<'a> TypeCheckingSession<'a> {
-    pub fn new(parsed_roots: &'a [ParsedExpr], meta: &'a ExprMetaStorage) -> Self {
+    pub fn new(
+        parsed_roots: &'a [ParsedExpr],
+        meta: &'a ExprMetaStorage,
+        symbols: &'a SymbolTable,
+    ) -> Self {
         Self {
             parsed_roots,
             meta,
@@ -47,6 +52,7 @@ impl<'a> TypeCheckingSession<'a> {
             constraints: Default::default(),
             diagnostics: Default::default(),
             type_var_context: TypeVarContext::default(),
+            symbols,
         }
     }
 
@@ -58,6 +64,7 @@ impl<'a> TypeCheckingSession<'a> {
             &mut self.constraints,
             &mut self.typed_expr_ids,
             self.meta,
+            self.symbols,
         );
 
         Hoister::hoist(&mut visitor, self.parsed_roots)?;
@@ -66,7 +73,11 @@ impl<'a> TypeCheckingSession<'a> {
             visitor.visit(root)?;
         }
 
-        let solver = ConstraintSolver::new(&mut self.type_var_context, &mut self.constraints);
+        let solver = ConstraintSolver::new(
+            &mut self.type_var_context,
+            &mut self.constraints,
+            self.symbols,
+        );
         let errored = solver.solve()?;
 
         for constraint in errored {

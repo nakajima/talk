@@ -269,7 +269,13 @@ impl<'a> NameResolver<'a> {
                     ));
                 };
 
-                symbol_table.add_initializer(symbol_id, parsed_expr.id);
+                symbol_table.add_initializer(
+                    symbol_id,
+                    "init".to_string(),
+                    parsed_expr.id,
+                    symbol_id,
+                );
+
                 *func_id = Box::new(self.resolve_node(func_id, meta, symbol_table)?);
                 *initializes_id = Some(symbol_id);
             }
@@ -814,7 +820,6 @@ impl<'a> NameResolver<'a> {
 
             *name = Name::Resolved(struct_symbol, name_str.to_string());
 
-            symbol_table.initialize_type_table(struct_symbol);
             let tok = self.start_scope(
                 meta.span(&parsed_expr.id)
                     .ok_or(NameResolverError::InvalidSpan)?,
@@ -852,16 +857,41 @@ impl<'a> NameResolver<'a> {
 
                     symbol_table.add_property(
                         struct_symbol,
-                        name_str.clone(),
-                        ty.clone(),
-                        val.clone(),
-                        Some(property_symbol),
+                        name_str.to_string(),
+                        body_expr.id,
+                        property_symbol,
                     );
 
                     *name = Name::Resolved(property_symbol, name_str.clone());
-                }
-                if let Expr::Init(None, func) = &mut body_expr.expr {
-                    symbol_table.add_initializer(struct_symbol, func.id);
+                } else if let Expr::Func {
+                    name: Some(name), ..
+                } = &mut body_expr.expr
+                {
+                    let name_str = name.name_str();
+
+                    let method_symbol = self.declare(
+                        name_str.clone(),
+                        SymbolKind::FuncDef,
+                        body_expr.id,
+                        meta,
+                        symbol_table,
+                    );
+
+                    symbol_table.add_method(
+                        struct_symbol,
+                        name_str.to_string(),
+                        body_expr.id,
+                        method_symbol,
+                    );
+
+                    *name = Name::Resolved(method_symbol, name_str.clone());
+                } else if let Expr::Init(None, func) = &mut body_expr.expr {
+                    symbol_table.add_initializer(
+                        struct_symbol,
+                        "init".to_string(),
+                        body_expr.id,
+                        struct_symbol,
+                    );
 
                     let ParsedExpr {
                         id,

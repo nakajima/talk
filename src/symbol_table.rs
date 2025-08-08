@@ -102,12 +102,19 @@ pub struct Definition {
     pub sym: Option<SymbolID>,
 }
 
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct PropertyInfo {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemberKind {
+    Initializer,
+    Method,
+    Property,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberSymbol {
     pub name: String,
-    pub type_id: Option<ParsedExpr>,
-    pub default_value_id: Option<ParsedExpr>,
-    pub symbol_id: Option<SymbolID>,
+    pub member_id: SymbolID,
+    pub expr_id: ExprID,
+    pub kind: MemberKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -122,15 +129,14 @@ pub struct SymbolInfo {
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct TypeTable {
-    pub properties: Vec<PropertyInfo>,
-    pub initializers: Vec<ExprID>,
+    pub members: Vec<MemberSymbol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolTable {
     symbols: BTreeMap<SymbolID, SymbolInfo>,
     next_id: i32,
-    pub types: BTreeMap<SymbolID, TypeTable>,
+    pub types: BTreeMap<SymbolID, Vec<MemberSymbol>>,
     pub symbol_map: BTreeMap<Span, SymbolID>,
     pub import_symbol_map: HashMap<SymbolID, SymbolID>,
 }
@@ -162,12 +168,61 @@ impl SymbolTable {
         self.symbols.insert(*symbol_id, info);
     }
 
-    pub fn initializers_for(&self, symbol_id: &SymbolID) -> Option<&Vec<ExprID>> {
-        self.types.get(symbol_id).map(|t| &t.initializers)
+    pub fn initializers_for(&self, symbol_id: &SymbolID) -> Vec<&ExprID> {
+        self.types
+            .get(symbol_id)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|t| {
+                        if t.kind == MemberKind::Initializer {
+                            Some(&t.expr_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub fn properties_for(&self, symbol_id: &SymbolID) -> Option<&Vec<PropertyInfo>> {
-        self.types.get(symbol_id).map(|t| &t.properties)
+    pub fn member_kind(&self, type_id: &SymbolID, name: &str) -> Option<&MemberSymbol> {
+        self.types
+            .get(type_id)
+            .and_then(|t| t.iter().find(|t| t.name == name))
+    }
+
+    pub fn properties_for(&self, symbol_id: &SymbolID) -> Vec<&MemberSymbol> {
+        self.types
+            .get(symbol_id)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|t| {
+                        if t.kind == MemberKind::Property {
+                            Some(t)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn methods_for(&self, symbol_id: &SymbolID) -> Vec<&ExprID> {
+        self.types
+            .get(symbol_id)
+            .map(|t| {
+                t.iter()
+                    .filter_map(|t| {
+                        if t.kind == MemberKind::Method {
+                            Some(&t.expr_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn all(&self) -> BTreeMap<SymbolID, SymbolInfo> {
@@ -221,56 +276,65 @@ impl SymbolTable {
         symbol_id
     }
 
-    pub fn initialize_type_table(&mut self, to_symbol_id: SymbolID) {
-        let table = TypeTable {
-            initializers: vec![],
-            properties: vec![],
-        };
-
-        self.types.insert(to_symbol_id, table);
-    }
-
     pub fn map_import(&mut self, theirs: SymbolID, ours: SymbolID) {
         self.import_symbol_map.insert(theirs, ours);
     }
 
     pub fn add_property(
         &mut self,
-        to_symbol_id: SymbolID,
+        type_id: SymbolID,
         name: String,
-        type_id: Option<Box<ParsedExpr>>,
-        default_value_id: Option<Box<ParsedExpr>>,
-        property_symbol_id: Option<SymbolID>,
+        expr_id: ExprID,
+        member_id: SymbolID,
     ) {
-        let info = PropertyInfo {
+        self.types.entry(type_id).or_default().push(MemberSymbol {
             name,
-            type_id: type_id.map(|e| *e),
-            default_value_id: default_value_id.map(|e| *e),
-            symbol_id: property_symbol_id,
-        };
-
-        let Some(table) = self.types.get_mut(&to_symbol_id) else {
-            unreachable!("type table unititalized for: {:?}", to_symbol_id)
-        };
-
-        table.properties.push(info);
+            member_id,
+            kind: MemberKind::Property,
+            expr_id,
+        });
     }
 
-    pub fn add_initializer(&mut self, to_symbol_id: SymbolID, id: ExprID) {
-        if let Some(table) = self.types.get_mut(&to_symbol_id) {
-            table.initializers.push(id);
-        } else {
-            let table = TypeTable {
-                initializers: vec![id],
-                properties: vec![],
-            };
+    pub fn add_method(
+        &mut self,
+        type_id: SymbolID,
+        name: String,
+        expr_id: ExprID,
+        member_id: SymbolID,
+    ) {
+        self.types.entry(type_id).or_default().push(MemberSymbol {
+            name,
+            member_id,
+            kind: MemberKind::Method,
+            expr_id,
+        });
+    }
 
-            self.types.insert(to_symbol_id, table);
-        }
+    pub fn add_initializer(
+        &mut self,
+        type_id: SymbolID,
+        name: String,
+        expr_id: ExprID,
+        member_id: SymbolID,
+    ) {
+        self.types.entry(type_id).or_default().push(MemberSymbol {
+            name,
+            member_id,
+            kind: MemberKind::Initializer,
+            expr_id,
+        });
     }
 
     pub fn initializer_for(&self, struct_id: &SymbolID) -> Option<ExprID> {
-        self.types.get(struct_id).map(|table| table.initializers[0])
+        self.types.get(struct_id).and_then(|table| {
+            table.iter().find_map(|t| {
+                if t.kind == MemberKind::Initializer {
+                    Some(t.expr_id)
+                } else {
+                    None
+                }
+            })
+        })
     }
 
     pub fn lookup(&self, name: &str) -> Option<SymbolID> {
