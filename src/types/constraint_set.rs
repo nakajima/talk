@@ -6,6 +6,7 @@ use crate::{
         constraint::{Constraint, ConstraintState},
         constraint_kind::ConstraintKind,
         row::Row,
+        ty::Ty,
         type_var::TypeVar,
     },
 };
@@ -124,6 +125,13 @@ impl ConstraintSet {
                     ConstraintKind::HasField { record, .. } => {
                         if record == row {
                             return Some(c);
+                        }
+                    }
+                    ConstraintKind::TyHasField { receiver, .. } => {
+                        if let Ty::Nominal { properties, .. } = receiver {
+                            if *properties == *row {
+                                return Some(c);
+                            }
                         }
                     }
                     _ => (),

@@ -657,9 +657,16 @@ impl<'a> Visitor<'a> {
         args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
         let substitutions = &mut Default::default();
-        let mut callee = self.visit(callee)?;
+        let mut callee_ty = self.visit(callee)?;
 
-        let (callee, returning) = if let Ty::Nominal { methods, .. } = &callee {
+        // Track whether this is a struct initializer call
+        let mut is_initializer_call = false;
+
+        // If calling a nominal type, we are invoking an initializer. Constrain the existence of
+        // an init method on the nominal type, but return a fresh nominal instance with fresh rows.
+        let (callee_for_call, mut returning) = if let Ty::Nominal { methods, name, .. } = &callee_ty {
+            is_initializer_call = true;
+
             let init_type_var = self.new_type_var();
             self.constrain(
                 parsed_expr.id,
@@ -672,45 +679,105 @@ impl<'a> Visitor<'a> {
                 ConstraintCause::InitializerCall,
             )?;
 
-            if callee.contains_canonical_var() {
-                callee = callee.instantiate(self.type_var_context, substitutions);
-            }
+            // The function we are calling is the initializer
+            let callee_for_call = Ty::Var(init_type_var);
 
-            (Ty::Var(init_type_var), callee)
+            // The value produced by a struct initializer is a fresh nominal instance for
+            // properties, but shares the methods row so that methods remain discoverable.
+            let fresh_properties = self.new_row_type_var();
+            let fresh_returning = Ty::Nominal {
+                name: name.clone(),
+                properties: Row::Open(fresh_properties),
+                methods: methods.clone(),
+                generic_constraints: vec![],
+            };
+
+            // Ensure the fresh properties row is closed from the provided labeled arguments
+            self.constrain(
+                parsed_expr.id,
+                ConstraintKind::RowClosed {
+                    record: Row::Open(fresh_properties),
+                },
+                ConstraintCause::InitializerCall,
+            )?;
+
+            // If the callee nominal currently contains canonical vars, instantiate them for the
+            // purpose of resolving the init method lookup.
+            // Note: we only need to instantiate the receiver for method lookup if needed;
+            // returning itself is handled below.
+
+            (callee_for_call, fresh_returning)
         } else {
             (
-                callee.instantiate(self.type_var_context, substitutions),
+                callee_ty.instantiate(self.type_var_context, substitutions),
                 Ty::Var(self.new_type_var()),
             )
         };
 
+        // Resolve type args
         let type_args = self
             .visit_mult(type_args)?
             .iter()
             .map(|arg| arg.instantiate(self.type_var_context, substitutions))
-            .collect();
-        let args = self
-            .visit_mult(args)?
-            .iter()
-            .map(|arg| arg.instantiate(self.type_var_context, substitutions))
-            .collect();
+            .collect::<Vec<_>>();
 
+        // Resolve value args via visit_mult to ensure per-CallArg ids are recorded
+        let visited_arg_tys = self.visit_mult(args)?;
+        let mut args_only = Vec::with_capacity(visited_arg_tys.len());
+        let mut labeled_args: Vec<(Option<String>, Ty)> = Vec::with_capacity(visited_arg_tys.len());
+        for (i, arg) in args.iter().enumerate() {
+            let instantiated = visited_arg_tys[i].instantiate(self.type_var_context, substitutions);
+            args_only.push(instantiated.clone());
+            if let parsed_expr::Expr::CallArg { label, .. } = &arg.expr {
+                labeled_args.push((label.as_ref().map(|n| n.name_str()), instantiated));
+            } else {
+                labeled_args.push((None, instantiated));
+            }
+        }
+
+        // If the returning type contains canonical vars, instantiate them
         let returning = if returning.contains_canonical_var() {
             returning.instantiate(self.type_var_context, &mut Default::default())
         } else {
             returning
         };
 
+        // Constrain the call itself
         self.constrain(
             parsed_expr.id,
             ConstraintKind::Call {
-                callee,
+                callee: callee_for_call,
                 type_args,
-                args,
+                args: args_only.clone(),
                 returning: returning.clone(),
             },
             ConstraintCause::Call,
         )?;
+
+        // For initializer calls, also constrain that the returned instance's properties/methods
+        // include the appropriate labels: labeled args define properties; defined methods persist.
+        if is_initializer_call {
+            for (label, ty) in labeled_args.into_iter() {
+                if let Some(label) = label {
+                    self.constrain(
+                        parsed_expr.id,
+                        ConstraintKind::TyHasField {
+                            receiver: returning.clone(),
+                            label: Label::String(label),
+                            ty,
+                            index: None,
+                        },
+                        ConstraintCause::InitializerCall,
+                    )?;
+                }
+            }
+
+            // Also propagate method presence by checking the methods row of the fresh instance
+            if let Ty::Nominal { methods, .. } = &returning {
+                // Not adding specific methods here; member access will add constraints as needed.
+                let _ = methods; // keep lint happy
+            }
+        }
 
         self.expr_id_types.insert(parsed_expr.id, returning.clone());
 

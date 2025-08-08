@@ -125,7 +125,7 @@ impl ConstraintKind {
                 ty,
                 index,
             } => ConstraintKind::TyHasField {
-                receiver: receiver.clone(),
+                receiver: receiver.instantiate(context, substitutions),
                 label: label.clone(),
                 ty: ty.instantiate(context, substitutions),
                 index: *index,

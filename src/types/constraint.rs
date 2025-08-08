@@ -102,10 +102,10 @@ impl Constraint {
             ConstraintKind::LiteralPrimitive(..) => 100,
             ConstraintKind::HasField {
                 index: Some(index), ..
-            } => 40 - index,
-            ConstraintKind::HasField { index: None, .. } => 20,
-            ConstraintKind::TyHasField { .. } => 10,
-            ConstraintKind::RowClosed { .. } => 10,
+            } => 60 - index, // Per-field constraints for struct defs/blocks
+            ConstraintKind::HasField { index: None, .. } => 30, // Method/initializer lookup
+            ConstraintKind::TyHasField { .. } => 20,
+            ConstraintKind::RowClosed { .. } => 1,
             ConstraintKind::RowCombine(..) => 10,
         }
     }
