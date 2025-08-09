@@ -128,11 +128,10 @@ impl ConstraintSet {
                         }
                     }
                     ConstraintKind::TyHasField { receiver, .. } => {
-                        if let Ty::Nominal { properties, .. } = receiver {
-                            if *properties == *row {
+                        if let Ty::Nominal { properties, .. } = receiver
+                            && *properties == *row {
                                 return Some(c);
                             }
-                        }
                     }
                     _ => (),
                 }

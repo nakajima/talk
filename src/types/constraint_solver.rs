@@ -100,7 +100,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn solve(mut self) -> Result<Vec<Constraint>, TypeError> {
+    pub fn solve(mut self) -> Vec<Constraint> {
         let mut failed_attempts = 0;
 
         loop {
@@ -120,7 +120,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 let before = constraint.state.clone();
-                self.solve_constraint(&mut constraint)?;
+                self.solve_constraint(&mut constraint);
                 made_progress |= before != constraint.state;
 
                 if constraint.state != ConstraintState::Solved {
@@ -132,9 +132,10 @@ impl<'a> ConstraintSolver<'a> {
                 break;
             }
 
-            if failed_attempts == MAX_FAILED_ATTEMPTS - 1 {
-                self.context.apply_defaults()?;
-            }
+            if failed_attempts == MAX_FAILED_ATTEMPTS - 1
+                && self.context.apply_defaults().is_err() {
+                    tracing::error!("Error applying defaults");
+                }
 
             if !made_progress {
                 failed_attempts += 1;
@@ -145,7 +146,7 @@ impl<'a> ConstraintSolver<'a> {
             }
         }
 
-        Ok(self.errored)
+        self.errored
     }
 
     pub fn solve_constraint(&mut self, constraint: &mut Constraint) -> Result<(), TypeError> {
@@ -299,11 +300,10 @@ impl<'a> ConstraintSolver<'a> {
                 )))
             }
             Row::Open(row_var) => {
-                if let Some(fields) = self.record_fields.get(row_var) {
-                    if let Some(ty) = fields.get(label) {
+                if let Some(fields) = self.record_fields.get(row_var)
+                    && let Some(ty) = fields.get(label) {
                         return Ok(ty.clone());
                     }
-                }
                 Err(TypeError::Unknown(format!(
                     "Field {label:?} not found in open row"
                 )))
@@ -318,12 +318,11 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<Ty, TypeError> {
         // Look for the field in the base struct definition (with RowVar::new(0))
         // This is where the canonical type variable would be stored
-        if let Some(fields) = self.record_fields.get(&RowVar::new(0)) {
-            if let Some(ty) = fields.get(label) {
+        if let Some(fields) = self.record_fields.get(&RowVar::new(0))
+            && let Some(ty) = fields.get(label) {
                 tracing::debug!("Found base field type for {label:?}: {ty:?}");
                 return Ok(ty.clone());
             }
-        }
 
         Err(TypeError::Unknown(format!(
             "Field {label:?} not found in base struct {_name:?}"
@@ -337,11 +336,10 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<Ty, TypeError> {
         // Look for the method in the base struct definition (with RowVar::new(1))
         // This is where the canonical type variable would be stored
-        if let Some(methods) = self.record_fields.get(&RowVar::new(1)) {
-            if let Some(ty) = methods.get(label) {
+        if let Some(methods) = self.record_fields.get(&RowVar::new(1))
+            && let Some(ty) = methods.get(label) {
                 return Ok(ty.clone());
             }
-        }
 
         Err(TypeError::Unknown(format!(
             "Method {label:?} not found in base struct {_name:?}"
@@ -463,6 +461,8 @@ impl<'a> ConstraintSolver<'a> {
                 generic_constraints,
             } => (params, *returns, generic_constraints),
             Ty::Var(_) => {
+                // Create a synthetic function type that matches the call
+                // This will be unified with the actual function type later
                 let params: Vec<Ty> = args
                     .iter()
                     .map(|_| Ty::Var(self.context.new_var(TypeVarKind::None)))
@@ -492,21 +492,13 @@ impl<'a> ConstraintSolver<'a> {
                 (params, returns, vec![])
             }
             _ => {
-                constraint.state = ConstraintState::Error(TypeError::Unknown(
-                    "Can't call non-func type".to_string(),
-                ));
-
-                return Err(TypeError::Unknown("Can't call non-func type".to_string()));
+                constraint.error(TypeError::Unknown("Can't call non-func type".to_string()))?;
             }
         };
 
-        if args.len() != params.len() {
-            constraint.state = ConstraintState::Error(TypeError::ArgumentError(format!(
-                "Expected {} args, got {}",
-                params.len(),
-                args.len()
-            )));
-        }
+        // Note: Argument count checking is handled by function unification in TypeVarContext::unify_ty_ty
+        // When we create a synthetic function type for a TypeVar callee, it will have the wrong
+        // number of parameters if there's a mismatch, and unification will fail
 
         // If it's the first time this constraint has been attempted, spawn the child
         // constraints

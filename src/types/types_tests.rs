@@ -29,7 +29,7 @@ pub(super) fn check(code: &'static str) -> TypeCheckingResult {
     let meta = resolved.meta.borrow();
     let mut session = TypeCheckingSession::new(resolved.roots(), &meta, symbol_table);
 
-    session.solve().unwrap()
+    session.solve()
 }
 
 #[test]
@@ -345,4 +345,63 @@ fn generic_struct_property_with_synthesized_init() {
 
     assert_eq!(Ty::Int, checked.typed_roots[1].ty);
     assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn checks_method_out_of_order() {
+    let checked = check(
+        "
+        struct Person {
+            let age: Int
+
+            func getAge() {
+                self.getAgeAgain()
+            }
+
+            func getAgeAgain() {
+                self.age
+            }
+        }
+        let person = Person(age: 123)
+        person.getAge()
+        ",
+    );
+
+    assert_eq!(Ty::Int, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn checks_constructor_args() {
+    let checked = check(
+        "struct Person {
+            let age: Int
+
+            init(age: Int) {
+                self.age = age
+            }
+
+            func getAge() {
+                self.age
+            }
+        }
+
+        Person()",
+    );
+
+    assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
+}
+
+#[test]
+fn checks_setter() {
+    let checked = check(
+        "struct Person {
+            let age: Int
+        }
+
+        let person = Person()
+        person.age = 1.23
+        ",
+    );
+
+    assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
 }

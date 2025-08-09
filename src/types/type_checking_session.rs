@@ -7,7 +7,6 @@ use crate::{
     diagnostic::Diagnostic,
     expr_id::ExprID,
     parsed_expr::ParsedExpr,
-    type_checker::TypeError,
     types::{
         constraint::ConstraintState,
         constraint_set::ConstraintSet,
@@ -56,7 +55,7 @@ impl<'a> TypeCheckingSession<'a> {
         }
     }
 
-    pub fn solve(&mut self) -> Result<TypeCheckingResult, TypeError> {
+    pub fn solve(&mut self) -> TypeCheckingResult {
         let _s = trace_span!("type checking").entered();
 
         let mut visitor = Visitor::new(
@@ -67,10 +66,24 @@ impl<'a> TypeCheckingSession<'a> {
             self.symbols,
         );
 
-        Hoister::hoist(&mut visitor, self.parsed_roots)?;
+        if Hoister::hoist(&mut visitor, self.parsed_roots).is_err() {
+            return TypeCheckingResult {
+                typed_roots: vec![],
+                diagnostics: self.diagnostics.clone(),
+            };
+        }
 
         for root in self.parsed_roots {
-            visitor.visit(root)?;
+            match visitor.visit(root) {
+                Ok(_) => (),
+                Err(err) => {
+                    self.diagnostics.push(Diagnostic::typing(
+                        self.meta.path.clone(),
+                        self.meta.span(&root.id).unwrap_or_default().into(),
+                        err,
+                    ));
+                }
+            }
         }
 
         let solver = ConstraintSolver::new(
@@ -78,7 +91,7 @@ impl<'a> TypeCheckingSession<'a> {
             &mut self.constraints,
             self.symbols,
         );
-        let errored = solver.solve()?;
+        let errored = solver.solve();
 
         for constraint in errored {
             let ConstraintState::Error(err) = constraint.state else {
@@ -105,15 +118,21 @@ impl<'a> TypeCheckingSession<'a> {
                 TypedExprResult::Ok(typed) => {
                     typed_roots.push(*typed);
                 }
-                TypedExprResult::Err(err) => return Err(err),
+                TypedExprResult::Err(err) => {
+                    self.diagnostics.push(Diagnostic::typing(
+                        self.meta.path.clone(),
+                        self.meta.span(&root.id).unwrap_or_default().into(),
+                        err,
+                    ));
+                }
                 TypedExprResult::None => {}
             }
         }
 
-        Ok(TypeCheckingResult {
+        TypeCheckingResult {
             typed_roots,
             diagnostics: self.diagnostics.clone(),
-        })
+        }
     }
 
     pub fn new_type_var(&mut self, default: TypeVarKind) -> TypeVar {

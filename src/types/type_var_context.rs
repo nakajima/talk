@@ -348,6 +348,14 @@ impl TypeVarContext {
                     ..
                 },
             ) => {
+                if lhs_params.len() != rhs_params.len() {
+                    return Err(TypeError::ArgumentError(format!(
+                        "Function parameter count mismatch: {} vs {}",
+                        lhs_params.len(),
+                        rhs_params.len()
+                    )));
+                }
+                
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
                     self.unify_ty_ty(lhs, rhs)?;
                 }

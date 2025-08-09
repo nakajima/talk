@@ -114,8 +114,9 @@ impl Constraint {
         self.state == ConstraintState::Solved
     }
 
-    pub fn error(&mut self, error: TypeError) {
-        self.state = ConstraintState::Error(error)
+    pub fn error(&mut self, error: TypeError) -> Result<!, TypeError> {
+        self.state = ConstraintState::Error(error.clone());
+        Err(error)
     }
 
     pub fn wait(&mut self) {
