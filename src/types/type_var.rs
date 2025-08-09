@@ -14,6 +14,7 @@ pub enum TypeVarKind {
     Canonical,
     Instantiated,
     None,
+    Void,
 }
 
 impl TypeVarKind {

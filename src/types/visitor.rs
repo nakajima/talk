@@ -602,12 +602,12 @@ impl<'a> Visitor<'a> {
 
     fn visit_binary(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _lhs: &ParsedExpr,
-        _token_kind: &TokenKind,
-        _rhs: &ParsedExpr,
+        parsed_expr: &ParsedExpr,
+        lhs: &ParsedExpr,
+        token_kind: &TokenKind,
+        rhs: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        Ok(Ty::Var(self.new_type_var()))
     }
 
     fn visit_tuple(

@@ -176,6 +176,9 @@ impl TypeVarContext {
                     TypeVarKind::FloatLiteral => {
                         self.unify_var_ty(type_var, Ty::Primitive(Primitive::Float))?
                     }
+                    TypeVarKind::Void => {
+                        self.unify_var_ty(type_var, Ty::Primitive(Primitive::Void))?
+                    }
                     _ => continue,
                 },
                 _ => continue,
@@ -355,7 +358,7 @@ impl TypeVarContext {
                         rhs_params.len()
                     )));
                 }
-                
+
                 for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
                     self.unify_ty_ty(lhs, rhs)?;
                 }

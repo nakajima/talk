@@ -24,6 +24,7 @@ pub struct ConstraintSolver<'a> {
     record_fields: BTreeMap<RowVar, IndexMap<Label, Ty>>,
     errored: Vec<Constraint>,
     symbols: &'a SymbolTable,
+    current_depth: u8,
 }
 
 impl<'a> ConstraintSolver<'a> {
@@ -38,6 +39,7 @@ impl<'a> ConstraintSolver<'a> {
             record_fields: Default::default(),
             errored: Default::default(),
             symbols,
+            current_depth: 0,
         }
     }
 
@@ -120,10 +122,12 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 let before = constraint.state.clone();
-                self.solve_constraint(&mut constraint);
+                self.solve_constraint(&mut constraint).ok();
                 made_progress |= before != constraint.state;
 
-                if constraint.state != ConstraintState::Solved {
+                if constraint.is_solved() {
+                    self.current_depth = 0;
+                } else {
                     deferred.push(constraint);
                 }
             }
@@ -132,10 +136,10 @@ impl<'a> ConstraintSolver<'a> {
                 break;
             }
 
-            if failed_attempts == MAX_FAILED_ATTEMPTS - 1
-                && self.context.apply_defaults().is_err() {
-                    tracing::error!("Error applying defaults");
-                }
+            if failed_attempts == MAX_FAILED_ATTEMPTS - 1 && self.context.apply_defaults().is_err()
+            {
+                tracing::error!("Error applying defaults");
+            }
 
             if !made_progress {
                 failed_attempts += 1;
@@ -301,9 +305,10 @@ impl<'a> ConstraintSolver<'a> {
             }
             Row::Open(row_var) => {
                 if let Some(fields) = self.record_fields.get(row_var)
-                    && let Some(ty) = fields.get(label) {
-                        return Ok(ty.clone());
-                    }
+                    && let Some(ty) = fields.get(label)
+                {
+                    return Ok(ty.clone());
+                }
                 Err(TypeError::Unknown(format!(
                     "Field {label:?} not found in open row"
                 )))
@@ -319,10 +324,11 @@ impl<'a> ConstraintSolver<'a> {
         // Look for the field in the base struct definition (with RowVar::new(0))
         // This is where the canonical type variable would be stored
         if let Some(fields) = self.record_fields.get(&RowVar::new(0))
-            && let Some(ty) = fields.get(label) {
-                tracing::debug!("Found base field type for {label:?}: {ty:?}");
-                return Ok(ty.clone());
-            }
+            && let Some(ty) = fields.get(label)
+        {
+            tracing::debug!("Found base field type for {label:?}: {ty:?}");
+            return Ok(ty.clone());
+        }
 
         Err(TypeError::Unknown(format!(
             "Field {label:?} not found in base struct {_name:?}"
@@ -337,9 +343,10 @@ impl<'a> ConstraintSolver<'a> {
         // Look for the method in the base struct definition (with RowVar::new(1))
         // This is where the canonical type variable would be stored
         if let Some(methods) = self.record_fields.get(&RowVar::new(1))
-            && let Some(ty) = methods.get(label) {
-                return Ok(ty.clone());
-            }
+            && let Some(ty) = methods.get(label)
+        {
+            return Ok(ty.clone());
+        }
 
         Err(TypeError::Unknown(format!(
             "Method {label:?} not found in base struct {_name:?}"
@@ -496,14 +503,20 @@ impl<'a> ConstraintSolver<'a> {
             }
         };
 
-        // Note: Argument count checking is handled by function unification in TypeVarContext::unify_ty_ty
-        // When we create a synthetic function type for a TypeVar callee, it will have the wrong
-        // number of parameters if there's a mismatch, and unification will fail
-
         // If it's the first time this constraint has been attempted, spawn the child
         // constraints
         if constraint.state == ConstraintState::Pending {
             let mut substitutions = Default::default();
+
+            if self.current_depth > 128 {
+                tracing::trace!("Ran into 128 depth");
+                let var = self.context.new_var(TypeVarKind::Void);
+                self.context.unify_ty_ty(&returns, &Ty::Var(var))?;
+                constraint.state = ConstraintState::Solved;
+                return Ok(());
+            }
+
+            self.current_depth += 1;
 
             for (param, arg) in params.iter().zip(args.iter()) {
                 let param = param.instantiate(self.context, &mut substitutions);
