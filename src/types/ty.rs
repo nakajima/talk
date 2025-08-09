@@ -42,7 +42,10 @@ pub enum Ty {
         name: Name,
         properties: Row,
         methods: Row,
-        generic_constraints: Vec<ConstraintKind>,
+        #[drive(skip)]
+        type_params: Vec<TypeVar>, // Generic type parameters (e.g., T in Person<T>)
+        #[drive(skip)]
+        instantiations: BTreeMap<TypeVar, Ty>, // Substitutions for this instance
     },
     Product(Row),
     Var(#[drive(skip)] TypeVar),
@@ -126,36 +129,37 @@ impl Ty {
                 name,
                 properties,
                 methods,
-                generic_constraints,
-            } => Ty::Nominal {
-                name: name.clone(),
-                properties: if let Row::Closed(ClosedRow { fields, values }) = properties {
-                    Row::Closed(ClosedRow {
-                        fields: fields.clone(),
-                        values: values
-                            .iter()
-                            .map(|v| v.instantiate(context, substitutions))
-                            .collect(),
-                    })
-                } else {
-                    properties.clone()
-                },
-                methods: if let Row::Closed(ClosedRow { fields, values }) = methods {
-                    Row::Closed(ClosedRow {
-                        fields: fields.clone(),
-                        values: values
-                            .iter()
-                            .map(|v| v.instantiate(context, substitutions))
-                            .collect(),
-                    })
-                } else {
-                    methods.clone()
-                },
-                generic_constraints: generic_constraints
-                    .iter()
-                    .map(|c| c.instantiate(context, substitutions))
-                    .collect(),
-            },
+                type_params,
+                instantiations,
+            } => {
+                // Create fresh type variables for each generic parameter
+                let mut local_subs = BTreeMap::new();
+                for type_param in type_params {
+                    if !substitutions.contains_key(type_param) {
+                        let fresh_var = context.new_var(TypeVarKind::Instantiated);
+                        substitutions.insert(*type_param, fresh_var);
+                        local_subs.insert(*type_param, fresh_var);
+                    }
+                }
+
+                // Instantiate property and method rows with the substitutions
+                let inst_properties = properties.instantiate_row(context, substitutions);
+                let inst_methods = methods.instantiate_row(context, substitutions);
+
+                // Build instantiations map for this instance
+                let mut inst_map = instantiations.clone();
+                for (canonical, instantiated) in local_subs.iter() {
+                    inst_map.insert(*canonical, Ty::Var(*instantiated));
+                }
+
+                Ty::Nominal {
+                    name: name.clone(),
+                    properties: inst_properties,
+                    methods: inst_methods,
+                    type_params: vec![], // Instance has no type params, they're instantiated
+                    instantiations: inst_map,
+                }
+            }
             Ty::Func {
                 params,
                 returns,
@@ -176,7 +180,9 @@ impl Ty {
                     let new_var = substitutions
                         .entry(*type_var)
                         .or_insert_with(|| context.new_var(TypeVarKind::Instantiated));
-                    tracing::trace!("replacing canonical {type_var:?} with {new_var:?}");
+                    tracing::debug!(
+                        "instantiate: replacing canonical {type_var:?} with {new_var:?}"
+                    );
                     Ty::Var(*new_var)
                 } else {
                     self.clone()

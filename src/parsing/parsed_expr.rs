@@ -1,10 +1,10 @@
-use derive_visitor::DriveMut;
+use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind, types::row::Label,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
 pub enum IncompleteExpr {
     Member(Option<Box<ParsedExpr>>), // Receiver
     Func {
@@ -17,7 +17,7 @@ pub enum IncompleteExpr {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
 pub enum Pattern {
     // Literals that must match exactly
     #[drive(skip)]
@@ -60,7 +60,7 @@ pub enum Pattern {
     // PatternRef(Box<Pattern>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
 pub enum Expr {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
@@ -278,9 +278,43 @@ pub enum Expr {
     Import(#[drive(skip)] String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
 pub struct ParsedExpr {
     #[drive(skip)]
     pub id: ExprID,
     pub expr: Expr,
+}
+
+#[derive(derive_visitor::Visitor)]
+#[visitor(ParsedExpr(enter))]
+struct Finder {
+    expr_id: ExprID,
+    result: Option<ParsedExpr>,
+}
+
+impl Finder {
+    fn enter_parsed_expr(&mut self, expr: &ParsedExpr) {
+        if self.expr_id == expr.id {
+            self.result = Some(expr.clone());
+        }
+    }
+}
+
+impl ParsedExpr {
+    pub fn find_in(roots: &[ParsedExpr], id: ExprID) -> Option<ParsedExpr> {
+        let mut visitor = Finder {
+            expr_id: id,
+            result: None,
+        };
+
+        for root in roots {
+            root.drive(&mut visitor);
+
+            if let Some(result) = visitor.result {
+                return Some(result);
+            }
+        }
+
+        None
+    }
 }

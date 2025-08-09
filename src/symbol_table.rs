@@ -3,10 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{
-    compiling::compiled_module::ImportedSymbol, parsed_expr::ParsedExpr, parsing::expr_id::ExprID,
-    span::Span,
-};
+use crate::{compiling::compiled_module::ImportedSymbol, parsing::expr_id::ExprID, span::Span};
 
 #[derive(Default, Copy, Clone, Eq, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
@@ -107,6 +104,7 @@ pub enum MemberKind {
     Initializer,
     Method,
     Property,
+    Generic,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +166,13 @@ impl SymbolTable {
         self.symbols.insert(*symbol_id, info);
     }
 
+    pub fn members_for(&self, symbol_id: &SymbolID, kind: MemberKind) -> Vec<&MemberSymbol> {
+        self.types
+            .get(symbol_id)
+            .map(|t| t.iter().filter(|t| t.kind == kind).collect())
+            .unwrap_or_default()
+    }
+
     pub fn initializers_for(&self, symbol_id: &SymbolID) -> Vec<&ExprID> {
         self.types
             .get(symbol_id)
@@ -196,13 +201,7 @@ impl SymbolTable {
             .get(symbol_id)
             .map(|t| {
                 t.iter()
-                    .filter_map(|t| {
-                        if t.kind == MemberKind::Property {
-                            Some(t)
-                        } else {
-                            None
-                        }
-                    })
+                    .filter(|t| t.kind == MemberKind::Property)
                     .collect()
             })
             .unwrap_or_default()
@@ -306,6 +305,21 @@ impl SymbolTable {
             name,
             member_id,
             kind: MemberKind::Method,
+            expr_id,
+        });
+    }
+
+    pub fn add_generic(
+        &mut self,
+        type_id: SymbolID,
+        name: String,
+        expr_id: ExprID,
+        member_id: SymbolID,
+    ) {
+        self.types.entry(type_id).or_default().push(MemberSymbol {
+            name,
+            member_id,
+            kind: MemberKind::Generic,
             expr_id,
         });
     }

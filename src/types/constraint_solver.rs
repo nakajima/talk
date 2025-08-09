@@ -11,7 +11,7 @@ use crate::{
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
         ty::{Primitive, Ty},
-        type_var::TypeVarKind,
+        type_var::{TypeVar, TypeVarKind},
         type_var_context::{RowVar, TypeVarContext},
     },
 };
@@ -38,6 +38,65 @@ impl<'a> ConstraintSolver<'a> {
             record_fields: Default::default(),
             errored: Default::default(),
             symbols,
+        }
+    }
+
+    fn apply_instantiations(&mut self, ty: &Ty, instantiations: &BTreeMap<TypeVar, Ty>) -> Ty {
+        match ty {
+            Ty::Var(tv) => {
+                // If this type var has an instantiation, use it and resolve it
+                if let Some(instantiated) = instantiations.get(tv) {
+                    self.context.resolve(instantiated)
+                } else {
+                    ty.clone()
+                }
+            }
+            Ty::Func {
+                params,
+                returns,
+                generic_constraints,
+            } => {
+                Ty::Func {
+                    params: params
+                        .iter()
+                        .map(|p| self.apply_instantiations(p, instantiations))
+                        .collect(),
+                    returns: Box::new(self.apply_instantiations(returns, instantiations)),
+                    generic_constraints: generic_constraints.clone(), // TODO: apply to constraints too
+                }
+            }
+            Ty::Product(row) => Ty::Product(self.apply_instantiations_to_row(row, instantiations)),
+            Ty::Nominal {
+                name,
+                properties,
+                methods,
+                type_params,
+                instantiations: inst,
+            } => Ty::Nominal {
+                name: name.clone(),
+                properties: self.apply_instantiations_to_row(properties, instantiations),
+                methods: self.apply_instantiations_to_row(methods, instantiations),
+                type_params: type_params.clone(),
+                instantiations: inst.clone(),
+            },
+            _ => ty.clone(),
+        }
+    }
+
+    fn apply_instantiations_to_row(
+        &mut self,
+        row: &Row,
+        instantiations: &BTreeMap<TypeVar, Ty>,
+    ) -> Row {
+        match row {
+            Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
+                fields: fields.clone(),
+                values: values
+                    .iter()
+                    .map(|v| self.apply_instantiations(v, instantiations))
+                    .collect(),
+            }),
+            Row::Open(_) => row.clone(),
         }
     }
 
@@ -156,6 +215,7 @@ impl<'a> ConstraintSolver<'a> {
                 name,
                 properties,
                 methods,
+                instantiations,
                 ..
             } => {
                 let Some(member) = self
@@ -175,21 +235,117 @@ impl<'a> ConstraintSolver<'a> {
 
                 match member.kind {
                     MemberKind::Property => {
-                        self.solve_has_field(constraint, &properties, label, ty)
+                        // For instantiated types with open rows, we need to look at the base type
+                        // to find the field type, then apply instantiations
+                        let field_ty =
+                            if !instantiations.is_empty() && matches!(properties, Row::Open(_)) {
+                                // Find the field type from the base struct definition
+                                // The base struct would have the canonical type variable
+                                self.find_base_field_type(&name, &label)?
+                            } else {
+                                self.get_field_type(&properties, &label)?
+                            };
+
+                        // Apply instantiations to get the actual type for this instance
+                        let instantiated_ty = self.apply_instantiations(&field_ty, &instantiations);
+
+                        // Unify with the expected type
+                        self.context.unify_ty_ty(&ty, &instantiated_ty)?;
+
+                        constraint.state = ConstraintState::Solved;
+                        Ok(())
                     }
                     MemberKind::Method | MemberKind::Initializer => {
-                        self.solve_has_field(constraint, &methods, label, ty)
+                        // Get the method type
+                        let method_ty =
+                            if !instantiations.is_empty() && matches!(methods, Row::Open(_)) {
+                                // For instantiated types, look up the base method and apply instantiations
+                                self.find_base_method_type(&name, &label)?
+                            } else {
+                                self.get_field_type(&methods, &label)?
+                            };
+
+                        // Apply instantiations to the method type
+                        let instantiated_method =
+                            self.apply_instantiations(&method_ty, &instantiations);
+
+                        // Unify with the expected type
+                        self.context.unify_ty_ty(&ty, &instantiated_method)?;
+
+                        constraint.state = ConstraintState::Solved;
+                        Ok(())
                     }
+                    _ => todo!("don't know how to handle {member:?} yet"),
                 }
             }
-            Ty::Product(row) => {
-                self.solve_has_field(constraint, &row, label, ty)
-            }
+            Ty::Product(row) => self.solve_has_field(constraint, &row, label, ty),
             _ => {
                 constraint.wait();
                 Ok(())
             }
         }
+    }
+
+    fn get_field_type(&self, row: &Row, label: &Label) -> Result<Ty, TypeError> {
+        match row {
+            Row::Closed(ClosedRow { fields, values }) => {
+                for (field_label, field_value) in fields.iter().zip(values) {
+                    if field_label == label {
+                        return Ok(field_value.clone());
+                    }
+                }
+                Err(TypeError::Unknown(format!(
+                    "Field {label:?} not found in row"
+                )))
+            }
+            Row::Open(row_var) => {
+                if let Some(fields) = self.record_fields.get(row_var) {
+                    if let Some(ty) = fields.get(label) {
+                        return Ok(ty.clone());
+                    }
+                }
+                Err(TypeError::Unknown(format!(
+                    "Field {label:?} not found in open row"
+                )))
+            }
+        }
+    }
+
+    fn find_base_field_type(
+        &self,
+        _name: &crate::name::Name,
+        label: &Label,
+    ) -> Result<Ty, TypeError> {
+        // Look for the field in the base struct definition (with RowVar::new(0))
+        // This is where the canonical type variable would be stored
+        if let Some(fields) = self.record_fields.get(&RowVar::new(0)) {
+            if let Some(ty) = fields.get(label) {
+                tracing::debug!("Found base field type for {label:?}: {ty:?}");
+                return Ok(ty.clone());
+            }
+        }
+
+        Err(TypeError::Unknown(format!(
+            "Field {label:?} not found in base struct {_name:?}"
+        )))
+    }
+
+    fn find_base_method_type(
+        &self,
+        _name: &crate::name::Name,
+        label: &Label,
+    ) -> Result<Ty, TypeError> {
+        // Look for the method in the base struct definition (with RowVar::new(1))
+        // This is where the canonical type variable would be stored
+        if let Some(methods) = self.record_fields.get(&RowVar::new(1)) {
+            if let Some(ty) = methods.get(label) {
+                return Ok(ty.clone());
+            }
+        }
+
+        Err(TypeError::Unknown(format!(
+            "Method {label:?} not found in base struct {_name:?}"
+        )))
     }
 
     fn solve_has_field(
@@ -199,7 +355,7 @@ impl<'a> ConstraintSolver<'a> {
         label: Label,
         ty: Ty,
     ) -> Result<(), TypeError> {
-        let row = self.context.resolve_row(record);
+        let row = self.context.resolve_row(record).clone();
         let ty = self.context.resolve(&ty);
 
         match &row {
@@ -222,7 +378,6 @@ impl<'a> ConstraintSolver<'a> {
             Row::Open(row_var) => {
                 if let Some(existing) = self.record_fields.entry(*row_var).or_default().get(&label)
                 {
-                    let existing = &existing.instantiate(self.context, &mut Default::default());
                     tracing::debug!("Found existing receiver: record: {row:?} {existing:?}");
                     self.context.unify_ty_ty(existing, &ty)?;
                     existing.clone()
@@ -295,7 +450,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         constraint: &mut Constraint,
         callee: Ty,
-        _type_args: Vec<Ty>,
+        type_args: Vec<Ty>,
         args: Vec<Ty>,
         returning: Ty,
     ) -> Result<(), TypeError> {

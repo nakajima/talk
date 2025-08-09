@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-fn check(code: &'static str) -> TypeCheckingResult {
+pub(super) fn check(code: &'static str) -> TypeCheckingResult {
     let parsed = parse(code, "-");
     let symbol_table = &mut SymbolTable::base();
     let mut resolved = NameResolver::new(
@@ -257,7 +257,8 @@ fn struct_properties() {
                 values: vec![Ty::Float, Ty::Int]
             }),
             methods: Row::Open(RowVar::new(1)),
-            generic_constraints: vec![],
+            type_params: vec![],
+            instantiations: Default::default(),
         },
         checked.typed_roots[0].ty
     );
@@ -286,7 +287,8 @@ fn struct_init() {
                 values: vec![Ty::Float, Ty::Int]
             }),
             methods: Row::Open(RowVar::new(1)),
-            generic_constraints: vec![],
+            type_params: vec![],
+            instantiations: Default::default(),
         },
         checked.typed_roots[1].ty
     );
@@ -308,7 +310,28 @@ fn struct_methods() {
 }
 
 #[test]
-fn generic_struct_property() {
+fn generic_struct_property_with_annotated_init() {
+    let checked = check(
+        "
+        struct Person<T> {
+            let member: T
+
+            init(member: T) -> Person<T> {
+                self.member = member
+            }
+        }
+
+        Person(member: 123).member
+        Person(member: 1.23).member
+        ",
+    );
+
+    assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+    assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+}
+
+#[test]
+fn generic_struct_property_with_synthesized_init() {
     let checked = check(
         "
         struct Person<T> {

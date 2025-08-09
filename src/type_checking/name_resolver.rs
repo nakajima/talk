@@ -829,6 +829,19 @@ impl<'a> NameResolver<'a> {
             *generics = self.resolve_nodes(generics, meta, symbol_table, false)?;
             *conformances = self.resolve_nodes(conformances, meta, symbol_table, false)?;
 
+            #[allow(clippy::expect_used)]
+            for generic in generics {
+                let Expr::TypeRepr { name, .. } = &generic.expr else {
+                    unreachable!()
+                };
+                symbol_table.add_generic(
+                    struct_symbol,
+                    name.name_str().to_string(),
+                    generic.id,
+                    name.symbol_id().expect("we literally just resolved these"),
+                );
+            }
+
             // Hoist properties
             let Expr::Block(body_parsed_exprs) = &mut body.expr else {
                 return Err(NameResolverError::Unknown(
@@ -839,12 +852,7 @@ impl<'a> NameResolver<'a> {
             // Get properties for the struct so we can synthesize stuff before
             // type checking
             for body_expr in body_parsed_exprs {
-                if let Expr::Property {
-                    name,
-                    type_repr: ty,
-                    default_value: val,
-                } = &mut body_expr.expr
-                {
+                if let Expr::Property { name, .. } = &mut body_expr.expr {
                     let name_str = name.name_str();
 
                     let property_symbol = self.declare(

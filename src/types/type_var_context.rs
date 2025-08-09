@@ -209,12 +209,14 @@ impl TypeVarContext {
                 name,
                 properties,
                 methods,
-                generic_constraints,
+                type_params,
+                instantiations,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: self.resolve_row(properties),
                 methods: self.resolve_row(methods),
-                generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints
+                type_params: type_params.clone(),
+                instantiations: instantiations.clone(), // TODO: might need to resolve types in instantiations
             },
             Ty::Product(row) => Ty::Product(self.resolve_row(row)),
             #[allow(clippy::todo)]

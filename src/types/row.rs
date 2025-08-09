@@ -1,8 +1,12 @@
-use std::fmt::Display;
+use std::{collections::BTreeMap, fmt::Display};
 
 use derive_visitor::DriveMut;
 
-use crate::types::{ty::Ty, type_var_context::RowVar};
+use crate::types::{
+    ty::Ty,
+    type_var::TypeVar,
+    type_var_context::{RowVar, TypeVarContext},
+};
 
 #[derive(Debug)]
 pub enum Direction {
@@ -51,4 +55,27 @@ pub struct ClosedRow {
     pub fields: Vec<Label>,
     // One type for each field in fields
     pub values: Vec<Ty>,
+}
+
+impl Row {
+    pub fn instantiate_row(
+        &self,
+        context: &mut TypeVarContext,
+        substitutions: &mut BTreeMap<TypeVar, TypeVar>,
+    ) -> Row {
+        match self {
+            Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
+                fields: fields.clone(),
+                values: values
+                    .iter()
+                    .map(|v| v.instantiate(context, substitutions))
+                    .collect(),
+            }),
+            Row::Open(_) => {
+                // For open rows, create a new row var
+                // The actual fields will be instantiated separately by the constraint solver
+                Row::Open(context.new_row_var())
+            }
+        }
+    }
 }

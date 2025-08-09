@@ -3,7 +3,13 @@ use std::collections::BTreeMap;
 use tracing::trace_span;
 
 use crate::{
-    builtins, expr_id::ExprID, name::Name, parsed_expr::{self, IncompleteExpr, ParsedExpr}, token_kind::TokenKind, type_checker::TypeError, types::{
+    ExprMetaStorage, SymbolID, SymbolTable, builtins,
+    expr_id::ExprID,
+    name::Name,
+    parsed_expr::{self, IncompleteExpr, ParsedExpr},
+    token_kind::TokenKind,
+    type_checker::TypeError,
+    types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
         constraint_set::{ConstraintId, ConstraintSet},
@@ -13,7 +19,7 @@ use crate::{
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
         type_var_context::{RowVar, TypeVarContext},
-    }, ExprMetaStorage, SymbolID, SymbolTable
+    },
 };
 
 pub type Scope = BTreeMap<SymbolID, Ty>;
@@ -112,7 +118,7 @@ pub struct Visitor<'a> {
     expr_id_types: &'a mut ExprIDTypeMap,
     context: VisitorContext,
     meta: &'a ExprMetaStorage,
-    symbols: &'a SymbolTable
+    symbols: &'a SymbolTable,
 }
 
 #[allow(clippy::todo)]
@@ -199,7 +205,7 @@ impl<'a> Visitor<'a> {
         body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
         let Ok(
-            self_ty @ Ty::Nominal {
+            mut self_ty @ Ty::Nominal {
                 properties: Row::Open(properties),
                 methods: Row::Open(methods),
                 ..
@@ -209,20 +215,26 @@ impl<'a> Visitor<'a> {
             return Err(TypeError::Unknown("Did not hoist".to_string()));
         };
 
-        self.constrain(
-            parsed_expr.id,
-            ConstraintKind::RowClosed {
-                record: Row::Open(properties),
-            },
-            ConstraintCause::StructLiteral,
-        )?;
-
         self.context.self_stack.push(self_ty.clone());
         self.context.start_scope();
         self.context.start_generic_context();
 
+        // Collect generic type parameters
+        let mut type_params = vec![];
         for generic in generics {
-            self.visit(generic)?;
+            let ty = self.visit(generic)?;
+            if let Ty::Var(tv) = ty {
+                type_params.push(tv);
+            }
+        }
+
+        // Update the nominal type with the generic parameters
+        if let Ty::Nominal {
+            type_params: params,
+            ..
+        } = &mut self_ty
+        {
+            *params = type_params.clone();
         }
 
         let parsed_expr::Expr::Block(items) = &body.expr else {
@@ -333,19 +345,27 @@ impl<'a> Visitor<'a> {
             }
         }
 
-        if kind != RowKind::Enum && property_count == 0 {
+        if kind != RowKind::Enum {
+            // Always close the properties row, whether empty or not
             self.constrain(
                 parsed_expr.id,
                 ConstraintKind::RowClosed {
                     record: Row::Open(properties),
                 },
-                ConstraintCause::PropertiesEmpty,
+                if property_count == 0 {
+                    ConstraintCause::PropertiesEmpty
+                } else {
+                    ConstraintCause::StructLiteral
+                },
             )?;
         }
 
         self.context.end_scope();
         self.context.self_stack.pop();
         self.context.end_generic_context();
+
+        // Update the struct definition with the generic type parameters
+        self.context.declare(&name.symbol_id()?, &self_ty)?;
 
         self.expr_id_types.insert(parsed_expr.id, self_ty.clone());
 
@@ -653,128 +673,97 @@ impl<'a> Visitor<'a> {
         type_args: &[ParsedExpr],
         args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        let substitutions = &mut Default::default();
-        let mut callee_ty = self.visit(callee)?;
+        let callee_ty = self.visit(callee)?;
 
-        // Track whether this is a struct initializer call
-        let mut is_initializer_call = false;
-
-        // If calling a nominal type, we are invoking an initializer. Constrain the existence of
-        // an init method on the nominal type, but return a fresh nominal instance with fresh rows.
-        let (callee_for_call, mut returning) = if let Ty::Nominal { methods, name, .. } = &callee_ty {
-            is_initializer_call = true;
-
-            let init_type_var = self.new_type_var();
-            self.constrain(
-                parsed_expr.id,
-                ConstraintKind::HasField {
-                    record: methods.clone(),
-                    label: Label::String("init".to_string()),
-                    ty: Ty::Var(init_type_var),
-                    index: None,
-                },
-                ConstraintCause::InitializerCall,
-            )?;
-
-            // The function we are calling is the initializer
-            let callee_for_call = Ty::Var(init_type_var);
-
-            // The value produced by a struct initializer is a fresh nominal instance for
-            // properties, but shares the methods row so that methods remain discoverable.
-            let fresh_properties = self.new_row_type_var();
-            let fresh_returning = Ty::Nominal {
-                name: name.clone(),
-                properties: Row::Open(fresh_properties),
-                methods: methods.clone(),
-                generic_constraints: vec![],
+        let (init_ty, returning) = if let Ty::Nominal {
+            type_params,
+            methods,
+            ..
+        } = &callee_ty
+        {
+            // Only instantiate if there are type parameters
+            let instantiated = if !type_params.is_empty() {
+                let mut substitutions = BTreeMap::new();
+                callee_ty.instantiate(self.type_var_context, &mut substitutions)
+            } else {
+                // For non-generic structs, just use the type as-is
+                callee_ty.clone()
             };
 
-            // Ensure the fresh properties row is closed from the provided labeled arguments
-            self.constrain(
-                parsed_expr.id,
-                ConstraintKind::RowClosed {
-                    record: Row::Open(fresh_properties),
-                },
-                ConstraintCause::InitializerCall,
-            )?;
+            // Get the init method type
+            let init_ty = Ty::Var(self.new_type_var());
 
-            // If the callee nominal currently contains canonical vars, instantiate them for the
-            // purpose of resolving the init method lookup.
-            // Note: we only need to instantiate the receiver for method lookup if needed;
-            // returning itself is handled below.
-
-            (callee_for_call, fresh_returning)
-        } else {
-            (
-                callee_ty.instantiate(self.type_var_context, substitutions),
-                Ty::Var(self.new_type_var()),
-            )
-        };
-
-        // Resolve type args
-        let type_args = self
-            .visit_mult(type_args)?
-            .iter()
-            .map(|arg| arg.instantiate(self.type_var_context, substitutions))
-            .collect::<Vec<_>>();
-
-        // Resolve value args via visit_mult to ensure per-CallArg ids are recorded
-        let visited_arg_tys = self.visit_mult(args)?;
-        let mut args_only = Vec::with_capacity(visited_arg_tys.len());
-        let mut labeled_args: Vec<(Option<String>, Ty)> = Vec::with_capacity(visited_arg_tys.len());
-        for (i, arg) in args.iter().enumerate() {
-            let instantiated = visited_arg_tys[i].instantiate(self.type_var_context, substitutions);
-            args_only.push(instantiated.clone());
-            if let parsed_expr::Expr::CallArg { label, .. } = &arg.expr {
-                labeled_args.push((label.as_ref().map(|n| n.name_str()), instantiated));
+            // Use the appropriate constraint based on whether we have an instantiated type
+            if !type_params.is_empty() {
+                // For generic structs, use TyHasField on the instantiated type
+                self.constrain(
+                    parsed_expr.id,
+                    ConstraintKind::TyHasField {
+                        receiver: instantiated.clone(),
+                        label: "init".into(),
+                        ty: init_ty.clone(),
+                        index: None,
+                    },
+                    ConstraintCause::InitializerCall,
+                )?;
             } else {
-                labeled_args.push((None, instantiated));
+                // For non-generic structs, use HasField on the methods row directly
+                self.constrain(
+                    parsed_expr.id,
+                    ConstraintKind::HasField {
+                        record: methods.clone(),
+                        label: "init".into(),
+                        ty: init_ty.clone(),
+                        index: None,
+                    },
+                    ConstraintCause::InitializerCall,
+                )?;
             }
-        }
 
-        // If the returning type contains canonical vars, instantiate them
-        let returning = if returning.contains_canonical_var() {
-            returning.instantiate(self.type_var_context, &mut Default::default())
+            (init_ty, instantiated)
         } else {
-            returning
+            (callee_ty, Ty::Var(self.new_type_var()))
         };
+
+        let type_args = self.visit_mult(type_args)?;
+        let args = self.visit_mult(args)?;
 
         // Constrain the call itself
         self.constrain(
             parsed_expr.id,
             ConstraintKind::Call {
-                callee: callee_for_call,
+                callee: init_ty,
                 type_args,
-                args: args_only.clone(),
+                args,
                 returning: returning.clone(),
             },
             ConstraintCause::Call,
         )?;
 
-        // For initializer calls, also constrain that the returned instance's properties/methods
-        // include the appropriate labels: labeled args define properties; defined methods persist.
-        if is_initializer_call {
-            for (label, ty) in labeled_args.into_iter() {
-                if let Some(label) = label {
-                    self.constrain(
-                        parsed_expr.id,
-                        ConstraintKind::TyHasField {
-                            receiver: returning.clone(),
-                            label: Label::String(label),
-                            ty,
-                            index: None,
-                        },
-                        ConstraintCause::InitializerCall,
-                    )?;
-                }
-            }
+        //      // For initializer calls, also constrain that the returned instance's properties/methods
+        //      // include the appropriate labels: labeled args define properties; defined methods persist.
+        //      if is_initializer_call {
+        //          for (label, ty) in labeled_args.into_iter() {
+        //              if let Some(label) = label {
+        //                  self.constrain(
+        //                      parsed_expr.id,
+        //                      ConstraintKind::TyHasField {
+        //                          receiver: returning.clone(),
+        //                          label: Label::String(label),
+        //                          ty,
+        //                          index: None,
+        //                      },
+        //                      ConstraintCause::InitializerCall,
+        //                  )?;
+        //              }
+        //          }
 
-            // Also propagate method presence by checking the methods row of the fresh instance
-            if let Ty::Nominal { methods, .. } = &returning {
-                // Not adding specific methods here; member access will add constraints as needed.
-                let _ = methods; // keep lint happy
-            }
-        }
+        //          // Also propagate method presence by checking the methods row of the fresh instance
+        //          if let Ty::Nominal { methods, .. } = &returning {
+        //              // Not adding specific methods here; member access will add constraints as needed.
+        //              let _ = methods; // keep lint happy
+        //          }
+        //      }
 
         self.expr_id_types.insert(parsed_expr.id, returning.clone());
 
@@ -906,6 +895,13 @@ impl<'a> Visitor<'a> {
         match receiver {
             Some(receiver) => {
                 let receiver_ty = self.visit(receiver)?;
+
+                tracing::debug!(
+                    "Member access - receiver: {:?}, field: {:?}",
+                    receiver_ty,
+                    name
+                );
+
                 let var = self.new_type_var();
 
                 self.constrain(
@@ -922,9 +918,7 @@ impl<'a> Visitor<'a> {
                 self.expr_id_types.insert(parsed_expr.id, Ty::Var(var));
                 Ok(Ty::Var(var))
             }
-            None => {
-                todo!()
-            }
+            None => todo!(),
         }
     }
 

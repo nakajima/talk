@@ -1,10 +1,10 @@
 use derive_visitor::{DriveMut, VisitorMut};
 
 use crate::{
-    MemberSymbol, NameResolved, SourceFile, SymbolID, SymbolKind, SymbolTable,
+    MemberKind, MemberSymbol, NameResolved, SourceFile, SymbolID, SymbolKind, SymbolTable,
     environment::Environment,
     name::Name,
-    parsed_expr::{Expr, ParsedExpr},
+    parsed_expr::{self, Expr, ParsedExpr},
 };
 
 #[derive(VisitorMut)]
@@ -43,13 +43,17 @@ pub fn synthesize_inits(
         .cloned()
         .collect::<Vec<SymbolID>>();
     for sym in types {
-        if symbol_table.initializers_for(&sym).clone().is_empty() {
+        if symbol_table
+            .members_for(&sym, MemberKind::Initializer)
+            .clone()
+            .is_empty()
+        {
             tracing::trace!("Synthesizing init for {sym:?}");
             // We need to generate an initializer for this struct
             let mut param_exprs: Vec<ParsedExpr> = vec![];
             let mut body_exprs: Vec<ParsedExpr> = vec![];
             let properties: Vec<MemberSymbol> = symbol_table
-                .properties_for(&sym)
+                .members_for(&sym, MemberKind::Property)
                 .iter()
                 .map(|c| c.to_owned().clone())
                 .collect();
@@ -61,9 +65,27 @@ pub fn synthesize_inits(
                     None,
                 );
 
+                let Some(ParsedExpr {
+                    expr:
+                        parsed_expr::Expr::Property {
+                            type_repr: Some(type_repr),
+                            ..
+                        },
+                    ..
+                }) = ParsedExpr::find_in(source_file.roots(), property.expr_id)
+                else {
+                    todo!(
+                        "We don't handle this case yet: {:?}",
+                        ParsedExpr::find_in(source_file.roots(), property.expr_id)
+                    );
+                };
+
                 param_exprs.push(gen_expr(
                     env,
-                    Expr::Parameter(Name::Resolved(param_sym, property.name.to_string()), None),
+                    Expr::Parameter(
+                        Name::Resolved(param_sym, property.name.to_string()),
+                        Some(type_repr.clone()),
+                    ),
                 ));
 
                 let member_expr = Expr::Member(
@@ -88,11 +110,27 @@ pub fn synthesize_inits(
 
             let body = gen_expr(env, Expr::Block(body_exprs));
 
+            let generics = symbol_table
+                .members_for(&sym, MemberKind::Generic)
+                .iter()
+                .map(|g| {
+                    gen_expr(
+                        env,
+                        Expr::TypeRepr {
+                            name: Name::Resolved(g.member_id, g.name.clone()),
+                            generics: vec![],
+                            conformances: vec![],
+                            introduces_type: false,
+                        },
+                    )
+                })
+                .collect();
+
             let func = gen_expr(
                 env,
                 Expr::Func {
                     name: Some(Name::Resolved(sym, "init".to_string())),
-                    generics: vec![],
+                    generics,
                     params: param_exprs,
                     body: Box::new(body),
                     ret: None,
@@ -161,9 +199,10 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{
-        NameResolved, SourceFile, SymbolID, SymbolTable,
+        NameResolved, SourceFile, SymbolID, SymbolTable, any_expr,
         compiling::driver::Driver,
         environment::Environment,
+        formatter::Formatter,
         name::Name,
         parsed_expr::{Expr, ParsedExpr},
         synthesis::synthesize_inits,
@@ -252,5 +291,90 @@ mod tests {
             rhs.expr,
             Expr::Variable(Name::Resolved(SymbolID::resolved(3), "age".into()))
         );
+    }
+
+    #[test]
+    fn synthesizes_generic_init() {
+        let (mut resolved, mut symbol_table, mut env) = resolve_with_symbols(
+            "
+        struct Person<T> {
+            let age: T 
+        }
+        ",
+        );
+
+        synthesize_inits(&mut resolved, &mut symbol_table, &mut env);
+
+        let Expr::Struct {
+            body:
+                box ParsedExpr {
+                    expr: Expr::Block(items),
+                    ..
+                },
+            ..
+        } = &resolved.roots()[0].expr
+        else {
+            panic!("didn't get struct: {:?}", resolved.roots()[0]);
+        };
+
+        let Expr::Init(_, func_expr) = &items[0].expr else {
+            panic!("didn't get init")
+        };
+
+        let Expr::Func {
+            name,
+            generics,
+            params,
+            body,
+            ret,
+            captures,
+            ..
+        } = &func_expr.expr
+        else {
+            panic!("didn't get init func")
+        };
+
+        let Some(Name::Resolved(_, init_name)) = name else {
+            panic!("didn't get init");
+        };
+        assert_eq!(init_name, "init");
+        assert_eq!(generics.len(), 1);
+        assert_eq!(params.len(), 1);
+        assert_eq!(ret, &None);
+        assert!(captures.is_empty());
+
+        let Expr::Block(body_exprs) = &body.expr else {
+            panic!("didn't get body")
+        };
+
+        assert_eq!(body_exprs.len(), 2);
+        let Expr::Assignment(lhs, rhs) = &body_exprs[0].expr else {
+            panic!("didn't get assignment");
+        };
+
+        let Expr::Member(_, name) = &lhs.expr else {
+            panic!("didn't get member");
+        };
+
+        assert_eq!(name, &"age".into());
+
+        assert_eq!(
+            rhs.expr,
+            Expr::Variable(Name::Resolved(SymbolID::resolved(4), "age".into()))
+        );
+
+        // let Expr::Parameter(_, Some(ty)) = &params[0].expr else {
+        //     panic!("didn't get param")
+        // };
+
+        // assert_eq!(
+        //     *ty,
+        //     Box::new(any_expr!(Expr::TypeRepr {
+        //         name: Name::Resolved(SymbolID::ANY, "T".to_string()),
+        //         generics: vec![],
+        //         conformances: vec![],
+        //         introduces_type: false
+        //     }))
+        // )
     }
 }

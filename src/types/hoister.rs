@@ -40,7 +40,8 @@ impl Hoister {
                 name: name.clone(),
                 properties: Row::Open(properties),
                 methods: Row::Open(methods),
-                generic_constraints: vec![],
+                type_params: vec![], // Will be filled during struct definition
+                instantiations: Default::default(),
             },
         )?;
         Ok(())
