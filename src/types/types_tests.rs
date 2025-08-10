@@ -446,13 +446,27 @@ mod tests {
         );
 
         // The function should have one parameter
-        if let Ty::Func {
-            params, returns, ..
-        } = &checked.typed_roots[0].ty
-        {
+        if let Ty::Func { returns, .. } = &checked.typed_roots[0].ty {
             assert_eq!(**returns, Ty::Int)
         } else {
             panic!("Expected function type");
         }
+    }
+
+    #[test]
+    fn check_mutual_recursion() {
+        let checker = check(
+            "
+        func even(n: Int) -> Int {
+            odd(n)
+        }
+        func odd(n: Int) -> Int {
+            even(n)
+        }
+        even(123)
+        ",
+        );
+
+        assert_eq!(Ty::Int, checker.typed_roots[2].ty);
     }
 }
