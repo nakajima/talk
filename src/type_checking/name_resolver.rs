@@ -283,6 +283,7 @@ impl<'a> NameResolver<'a> {
                 type_repr,
                 default_value,
                 name,
+                is_static,
             } => {
                 if let Some(type_repr) = type_repr {
                     *type_repr = Box::new(self.resolve_node(type_repr, meta, symbol_table)?);
@@ -295,7 +296,11 @@ impl<'a> NameResolver<'a> {
                 if let Name::Raw(name_str) = name {
                     let symbol_id = self.declare(
                         name_str.clone(),
-                        SymbolKind::Property,
+                        if *is_static {
+                            SymbolKind::StaticProperty
+                        } else {
+                            SymbolKind::Property
+                        },
                         parsed_expr.id,
                         meta,
                         symbol_table,
@@ -440,7 +445,7 @@ impl<'a> NameResolver<'a> {
                         Name::Resolved(symbol_id, name_str.to_string())
                     } else if let Some((symbol_id, imported_symbol)) = self.lookup_import(name_str)
                     {
-                        Name::Imported(symbol_id, imported_symbol)
+                        Name::Imported(symbol_id, imported_symbol.into())
                     } else {
                         return Err(NameResolverError::UnresolvedName(name_str.to_string()));
                     };
@@ -1936,6 +1941,7 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Person".into()),
                 body: any_expr!(Expr::Block(vec![any_expr!(Expr::Property {
                     name: Name::Resolved(SymbolID::ANY, "age".into()),
+                    is_static: false,
                     type_repr: Some(
                         any_expr!(Expr::TypeRepr {
                             name: Name::Resolved(SymbolID::INT, "Int".into()),
@@ -1975,6 +1981,7 @@ mod tests {
                 body: any_expr!(Expr::Block(vec![
                     any_expr!(Expr::Property {
                         name: Name::Resolved(SymbolID::ANY, "age".into()),
+                        is_static: false,
                         type_repr: Some(
                             any_expr!(Expr::TypeRepr {
                                 name: Name::Resolved(SymbolID::INT, "Int".into()),
@@ -2143,6 +2150,7 @@ mod tests {
                     symbol: SymbolID(123123123),
                     kind: ImportedSymbolKind::Function { index: 0 }
                 }
+                .into()
             )))
         )
     }

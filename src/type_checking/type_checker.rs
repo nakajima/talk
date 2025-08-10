@@ -444,6 +444,7 @@ impl<'a> TypeChecker<'a> {
                 name,
                 type_repr,
                 default_value,
+                ..
             } => self.infer_property(parsed_expr.id, name, type_repr, default_value, env),
             crate::parsed_expr::Expr::Break => Ok(TypedExpr {
                 id: parsed_expr.id,

@@ -65,6 +65,7 @@ pub fn synthesize_inits(
                     None,
                 );
 
+                #[allow(clippy::todo)]
                 let Some(ParsedExpr {
                     expr:
                         parsed_expr::Expr::Property {
@@ -199,10 +200,9 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{
-        NameResolved, SourceFile, SymbolID, SymbolTable, any_expr,
+        NameResolved, SourceFile, SymbolID, SymbolTable,
         compiling::driver::Driver,
         environment::Environment,
-        formatter::Formatter,
         name::Name,
         parsed_expr::{Expr, ParsedExpr},
         synthesis::synthesize_inits,

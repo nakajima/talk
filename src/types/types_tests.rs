@@ -258,6 +258,7 @@ mod tests {
                     values: vec![Ty::Float, Ty::Int]
                 }),
                 methods: Row::Open(RowVar::new(1)),
+                statics: Row::Open(RowVar::new(2)),
                 type_params: vec![],
                 instantiations: Default::default(),
             },
@@ -288,6 +289,7 @@ mod tests {
                     values: vec![Ty::Float, Ty::Int]
                 }),
                 methods: Row::Open(RowVar::new(1)),
+                statics: Row::Open(RowVar::new(2)),
                 type_params: vec![],
                 instantiations: Default::default(),
             },
@@ -468,5 +470,52 @@ mod tests {
         );
 
         assert_eq!(Ty::Int, checker.typed_roots[2].ty);
+    }
+
+    #[test]
+    fn check_static_method() {
+        let checker = check(
+            "
+        struct Person {
+            static let age = 123
+        }
+
+        Person.age
+        ",
+        );
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+    }
+
+    #[test]
+    #[ignore = "waiting on statics"]
+    fn checks_let_with_enum_case() {
+        let checked = check(
+            "
+        enum Maybe<T> {
+          case definitely(T), nope
+        }
+
+        let maybe = Maybe.definitely(123)
+        maybe
+        ",
+        );
+
+        println!(
+            "checked typed roots: {:?}\n{:?}",
+            checked.typed_roots, checked.diagnostics
+        );
+
+        assert_eq!(
+            Ty::Nominal {
+                name: "Maybe".into(),
+                properties: Row::Closed(ClosedRow::default()),
+                methods: Row::Closed(ClosedRow::default()),
+                statics: Row::Closed(ClosedRow::default()),
+                type_params: vec![],
+                instantiations: Default::default(),
+            },
+            checked.typed_roots[2].ty,
+        );
     }
 }

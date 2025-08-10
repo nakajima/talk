@@ -366,6 +366,7 @@ impl ParsedExpr {
                 name,
                 type_repr,
                 default_value,
+                is_static,
             } => TypedExprResult::Ok(
                 TypedExpr {
                     id: self.id,
@@ -373,6 +374,7 @@ impl ParsedExpr {
                         name: resolve!(name),
                         type_repr: maybe!(type_repr, typed_ids),
                         default_value: maybe!(default_value, typed_ids),
+                        is_static: *is_static,
                     },
                     ty: lookup!(self.id, typed_ids),
                 }

@@ -86,6 +86,7 @@ pub enum SymbolKind {
     VariantConstructor,
     SyntheticConstructor,
     Property,
+    StaticProperty,
     Protocol,
     RecordLabel,
     Import(ImportedSymbol),

@@ -72,12 +72,14 @@ impl<'a> ConstraintSolver<'a> {
                 name,
                 properties,
                 methods,
+                statics,
                 type_params,
                 instantiations: inst,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: self.apply_instantiations_to_row(properties, instantiations),
                 methods: self.apply_instantiations_to_row(methods, instantiations),
+                statics: self.apply_instantiations_to_row(statics, instantiations),
                 type_params: type_params.clone(),
                 instantiations: inst.clone(),
             },
@@ -192,8 +194,8 @@ impl<'a> ConstraintSolver<'a> {
         match result {
             Ok(_) => (),
             Err(err) => {
-                constraint.error(err);
-                self.errored.push(constraint.clone())
+                self.errored.push(constraint.clone());
+                constraint.error(err)?;
             }
         }
 
@@ -230,12 +232,7 @@ impl<'a> ConstraintSolver<'a> {
                     constraint.error(TypeError::MemberNotFound(
                         name.name_str().to_string(),
                         label.to_string(),
-                    ));
-
-                    return Err(TypeError::MemberNotFound(
-                        name.name_str().to_string(),
-                        label.to_string(),
-                    ));
+                    ))?;
                 };
 
                 match member.kind {
@@ -280,6 +277,7 @@ impl<'a> ConstraintSolver<'a> {
                         constraint.state = ConstraintState::Solved;
                         Ok(())
                     }
+                    #[allow(clippy::todo)]
                     _ => todo!("don't know how to handle {member:?} yet"),
                 }
             }
@@ -455,7 +453,7 @@ impl<'a> ConstraintSolver<'a> {
         &mut self,
         constraint: &mut Constraint,
         callee: Ty,
-        type_args: Vec<Ty>,
+        _type_args: Vec<Ty>,
         args: Vec<Ty>,
         returning: Ty,
     ) -> Result<(), TypeError> {

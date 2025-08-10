@@ -42,6 +42,7 @@ pub enum Ty {
         name: Name,
         properties: Row,
         methods: Row,
+        statics: Row,
         #[drive(skip)]
         type_params: Vec<TypeVar>, // Generic type parameters (e.g., T in Person<T>)
         #[drive(skip)]
@@ -129,6 +130,7 @@ impl Ty {
                 name,
                 properties,
                 methods,
+                statics,
                 type_params,
                 instantiations,
             } => {
@@ -145,6 +147,7 @@ impl Ty {
                 // Instantiate property and method rows with the substitutions
                 let inst_properties = properties.instantiate_row(context, substitutions);
                 let inst_methods = methods.instantiate_row(context, substitutions);
+                let inst_statics = statics.instantiate_row(context, substitutions);
 
                 // Build instantiations map for this instance
                 let mut inst_map = instantiations.clone();
@@ -156,6 +159,7 @@ impl Ty {
                     name: name.clone(),
                     properties: inst_properties,
                     methods: inst_methods,
+                    statics: inst_statics,
                     type_params: vec![], // Instance has no type params, they're instantiated
                     instantiations: inst_map,
                 }

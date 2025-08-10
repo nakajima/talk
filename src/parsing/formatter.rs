@@ -163,7 +163,8 @@ impl<'a> Formatter<'a> {
                 name,
                 type_repr,
                 default_value,
-            } => self.format_property(name, type_repr, default_value),
+                is_static,
+            } => self.format_property(name, is_static, type_repr, default_value),
             Expr::TypeRepr {
                 name,
                 generics,
@@ -702,10 +703,15 @@ impl<'a> Formatter<'a> {
     fn format_property(
         &self,
         name: &Name,
+        is_static: &bool,
         type_repr: &Option<Box<ParsedExpr>>,
         default_value: &Option<Box<ParsedExpr>>,
     ) -> Doc {
         let mut result = concat_space(text("let"), self.format_name(name));
+
+        if *is_static {
+            result = concat_space(text("static"), result);
+        }
 
         if let Some(type_id) = type_repr {
             result = concat(result, concat_space(text(":"), self.format_expr(type_id)));

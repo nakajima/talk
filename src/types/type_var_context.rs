@@ -212,12 +212,14 @@ impl TypeVarContext {
                 name,
                 properties,
                 methods,
+                statics,
                 type_params,
                 instantiations,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: self.resolve_row(properties),
                 methods: self.resolve_row(methods),
+                statics: self.resolve_row(statics),
                 type_params: type_params.clone(),
                 instantiations: instantiations.clone(), // TODO: might need to resolve types in instantiations
             },

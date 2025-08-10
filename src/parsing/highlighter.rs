@@ -94,6 +94,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Else => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Loop => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Return => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Static => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::True => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::False => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Enum => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -265,6 +266,7 @@ impl<'a> Higlighter<'a> {
                 name: _name,
                 type_repr,
                 default_value,
+                ..
             } => {
                 if let Some(type_repr) = type_repr {
                     result.extend(self.tokens_from_expr(type_repr));

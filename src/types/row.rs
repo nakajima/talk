@@ -48,7 +48,7 @@ pub enum Row {
     Closed(ClosedRow),
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
+#[derive(Debug, Default, Hash, Clone, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub struct ClosedRow {
     // Sorted lexographically
     #[drive(skip)]

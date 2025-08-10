@@ -412,7 +412,11 @@ impl<'a> Parser<'a> {
 
             match self.current {
                 some_kind!(Let) => {
-                    members.push(self.property()?);
+                    members.push(self.property(false)?);
+                }
+                some_kind!(Static) => {
+                    self.advance();
+                    members.push(self.property(true)?);
                 }
                 some_kind!(Init) => members.push(self.init()?),
                 _ => {
@@ -468,7 +472,11 @@ impl<'a> Parser<'a> {
             tracing::info!("in struct body: {:?}", self.current);
             match self.current {
                 some_kind!(Let) => {
-                    members.push(self.property()?);
+                    members.push(self.property(false)?);
+                }
+                some_kind!(Static) => {
+                    self.advance();
+                    members.push(self.property(true)?);
                 }
                 some_kind!(Init) => members.push(self.init()?),
                 some_kind!(Func) => {
@@ -523,7 +531,7 @@ impl<'a> Parser<'a> {
         self.add_expr(Init(None, func_id), tok)
     }
 
-    pub(crate) fn property(&mut self) -> Result<ParsedExpr, ParserError> {
+    pub(crate) fn property(&mut self, is_static: bool) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::Let)?;
         let name = self.identifier()?;
@@ -543,6 +551,7 @@ impl<'a> Parser<'a> {
         self.add_expr(
             Property {
                 name: Name::Raw(name),
+                is_static,
                 type_repr,
                 default_value,
             },

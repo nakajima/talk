@@ -85,6 +85,8 @@ pub enum Expr {
         name: ResolvedName,
         type_repr: Option<Box<TypedExpr>>,
         default_value: Option<Box<TypedExpr>>,
+        #[drive(skip)]
+        is_static: bool,
     },
 
     // A type annotation

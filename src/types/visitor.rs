@@ -118,6 +118,7 @@ pub struct Visitor<'a> {
     expr_id_types: &'a mut ExprIDTypeMap,
     context: VisitorContext,
     meta: &'a ExprMetaStorage,
+    #[allow(unused)]
     symbols: &'a SymbolTable,
 }
 
@@ -201,7 +202,7 @@ impl<'a> Visitor<'a> {
         parsed_expr: &ParsedExpr,
         name: &Name,
         generics: &[ParsedExpr],
-        conformances: &[ParsedExpr],
+        _conformances: &[ParsedExpr],
         body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
         let Ok(
@@ -431,7 +432,8 @@ impl<'a> Visitor<'a> {
                 name,
                 type_repr,
                 default_value,
-            } => self.visit_property(parsed, name, type_repr, default_value),
+                is_static,
+            } => self.visit_property(parsed, name, *is_static, type_repr, default_value),
             parsed_expr::Expr::TypeRepr {
                 name,
                 generics,
@@ -602,10 +604,10 @@ impl<'a> Visitor<'a> {
 
     fn visit_binary(
         &mut self,
-        parsed_expr: &ParsedExpr,
-        lhs: &ParsedExpr,
-        token_kind: &TokenKind,
-        rhs: &ParsedExpr,
+        _parsed_expr: &ParsedExpr,
+        _lhs: &ParsedExpr,
+        _token_kind: &TokenKind,
+        _rhs: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
         Ok(Ty::Var(self.new_type_var()))
     }
@@ -823,6 +825,7 @@ impl<'a> Visitor<'a> {
         &mut self,
         parsed_expr: &ParsedExpr,
         _name: &Name,
+        _is_static: bool,
         type_repr: &Option<Box<ParsedExpr>>,
         default_value: &Option<Box<ParsedExpr>>,
     ) -> Result<Ty, TypeError> {
@@ -1146,13 +1149,20 @@ impl<'a> Visitor<'a> {
 
     fn visit_enum_decl(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _name: &Name,
-        _conformances: &[ParsedExpr],
-        _generics: &[ParsedExpr],
-        _body: &ParsedExpr,
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        conformances: &[ParsedExpr],
+        generics: &[ParsedExpr],
+        body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        self.named_row(
+            RowKind::Enum,
+            parsed_expr,
+            name,
+            generics,
+            conformances,
+            body,
+        )
     }
 
     fn visit_enum_variant(

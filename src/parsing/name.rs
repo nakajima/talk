@@ -8,7 +8,7 @@ pub enum Name {
     Resolved(SymbolID, String),
     _Self(SymbolID),
     SelfType,
-    Imported(SymbolID, ImportedSymbol),
+    Imported(SymbolID, Box<ImportedSymbol>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

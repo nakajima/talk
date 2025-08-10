@@ -108,6 +108,8 @@ pub enum Expr {
     Property {
         #[drive(skip)]
         name: Name,
+        #[drive(skip)]
+        is_static: bool,
         type_repr: Option<Box<ParsedExpr>>,
         default_value: Option<Box<ParsedExpr>>,
     },

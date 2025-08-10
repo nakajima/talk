@@ -2,7 +2,6 @@
 mod tests {
     use std::path::PathBuf;
 
-    use crate::any_expr;
     use crate::compiling::compilation_session::SharedCompilationSession;
     use crate::diagnostic::Diagnostic;
     use crate::environment::Environment;
@@ -12,6 +11,7 @@ mod tests {
     use crate::{
         Parsed, SourceFile, name::Name, parser::parse_with_comments, token_kind::TokenKind,
     };
+    use crate::{any_expr, assert_eq_diff};
 
     use crate::parsed_expr::Expr::{self, *};
 
@@ -1289,6 +1289,7 @@ mod tests {
                 body: any_expr!(Block(vec![
                     any_expr!(Property {
                         name: Name::Raw("age".into()),
+                        is_static: false,
                         type_repr: Some(
                             any_expr!(TypeRepr {
                                 name: Name::Raw("Int".into()),
@@ -1302,6 +1303,7 @@ mod tests {
                     }),
                     any_expr!(Property {
                         name: Name::Raw("count".into()),
+                        is_static: false,
                         type_repr: Some(
                             any_expr!(TypeRepr {
                                 name: Name::Raw("Int".into()),
@@ -1315,6 +1317,66 @@ mod tests {
                     }),
                     any_expr!(Property {
                         name: Name::Raw("height".into()),
+                        is_static: false,
+                        type_repr: None,
+                        default_value: Some(any_expr!(LiteralInt("456".into())).into()),
+                    }),
+                ]))
+                .into()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_static_struct_properties() {
+        let parsed = parse(
+            "
+        struct Person {
+            static let age: Int
+            static let count: Int = 123
+            static let height = 456
+        }
+        ",
+        );
+
+        assert_eq_diff!(
+            parsed.roots()[0],
+            any_expr!(Expr::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_expr!(Block(vec![
+                    any_expr!(Property {
+                        name: Name::Raw("age".into()),
+                        is_static: true,
+                        type_repr: Some(
+                            any_expr!(TypeRepr {
+                                name: Name::Raw("Int".into()),
+                                generics: vec![],
+                                conformances: vec![],
+                                introduces_type: false
+                            })
+                            .into()
+                        ),
+                        default_value: None
+                    }),
+                    any_expr!(Property {
+                        name: Name::Raw("count".into()),
+                        is_static: true,
+                        type_repr: Some(
+                            any_expr!(TypeRepr {
+                                name: Name::Raw("Int".into()),
+                                generics: vec![],
+                                conformances: vec![],
+                                introduces_type: false
+                            })
+                            .into()
+                        ),
+                        default_value: Some(any_expr!(LiteralInt("123".into())).into()),
+                    }),
+                    any_expr!(Property {
+                        name: Name::Raw("height".into()),
+                        is_static: true,
                         type_repr: None,
                         default_value: Some(any_expr!(LiteralInt("456".into())).into()),
                     }),
@@ -1347,6 +1409,7 @@ mod tests {
                 body: any_expr!(Block(vec![
                     any_expr!(Property {
                         name: Name::Raw("age".into()),
+                        is_static: false,
                         type_repr: Some(
                             any_expr!(TypeRepr {
                                 name: Name::Raw("Int".into()),
@@ -1480,6 +1543,7 @@ mod tests {
                 body: any_expr!(Block(vec![
                     any_expr!(Property {
                         name: Name::Raw("age".into()),
+                        is_static: false,
                         type_repr: Some(
                             any_expr!(TypeRepr {
                                 name: Name::Raw("Int".into()),
@@ -2127,7 +2191,7 @@ mod tests {
                 println!("Member access found: lhs={:?}, label={:?}", lhs.expr, label);
             }
             expr => {
-                panic!("Expected Member expression, got: {:?}", expr);
+                panic!("Expected Member expression, got: {expr:?}");
             }
         }
     }
