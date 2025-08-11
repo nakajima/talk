@@ -509,12 +509,42 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "waiting on statics"]
     fn checks_let_with_enum_case() {
         let checked = check(
             "
         enum Maybe<T> {
           case definitely(T), nope
+        }
+
+        let maybe = Maybe.definitely(123)
+        maybe
+        ",
+        );
+
+        println!(
+            "checked typed roots: {:?}\n{:?}",
+            checked.typed_roots, checked.diagnostics
+        );
+
+        assert_eq!(
+            Ty::Nominal {
+                name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
+                properties: Row::Closed(ClosedRow::default()),
+                methods: Row::Closed(ClosedRow::default()),
+                statics: Row::Closed(ClosedRow::default()),
+                type_params: vec![],
+                instantiations: Default::default(),
+            },
+            checked.typed_roots[2].ty,
+        );
+    }
+
+    #[test]
+    fn checks_non_generic_enum() {
+        let checked = check(
+            "
+        enum Maybe {
+          case definitely(Int), nope
         }
 
         let maybe = Maybe.definitely(123)
@@ -539,4 +569,5 @@ mod tests {
             checked.typed_roots[2].ty,
         );
     }
+
 }

@@ -108,6 +108,7 @@ pub enum MemberKind {
     StaticMethod,
     Property,
     Generic,
+    EnumVariant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,6 +334,21 @@ impl SymbolTable {
             name,
             member_id,
             kind: MemberKind::Generic,
+            expr_id,
+        });
+    }
+
+    pub fn add_enum_variant(
+        &mut self,
+        type_id: SymbolID,
+        name: String,
+        expr_id: ExprID,
+        member_id: SymbolID,
+    ) {
+        self.types.entry(type_id).or_default().push(MemberSymbol {
+            name,
+            member_id,
+            kind: MemberKind::EnumVariant,
             expr_id,
         });
     }

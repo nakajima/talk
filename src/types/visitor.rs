@@ -359,25 +359,36 @@ impl<'a> Visitor<'a> {
                     )?;
                 }
                 Expr::FuncSignature { .. } if kind == RowKind::Protocol => (),
-                Expr::EnumVariant(_, _) if kind == RowKind::Enum => (),
+                Expr::EnumVariant(name, values) if kind == RowKind::Enum => {
+                    let property_ty = self.visit(item)?;
+
+                    self.constrain(
+                        item.id,
+                        ConstraintKind::HasField {
+                            record: Row::Open(properties),
+                            label: Label::String(name.name_str()),
+                            ty: property_ty,
+                            index: Some(index),
+                        },
+                        ConstraintCause::PropertyDefinition,
+                    )?;
+                }
                 _ => (),
             }
         }
 
-        if kind != RowKind::Enum {
-            // Always close the properties row, whether empty or not
-            self.constrain(
-                parsed_expr.id,
-                ConstraintKind::RowClosed {
-                    record: Row::Open(properties),
-                },
-                if property_count == 0 {
-                    ConstraintCause::PropertiesEmpty
-                } else {
-                    ConstraintCause::StructLiteral
-                },
-            )?;
-        }
+        // Always close the properties row, whether empty or not
+        self.constrain(
+            parsed_expr.id,
+            ConstraintKind::RowClosed {
+                record: Row::Open(properties),
+            },
+            if property_count == 0 {
+                ConstraintCause::PropertiesEmpty
+            } else {
+                ConstraintCause::StructLiteral
+            },
+        )?;
 
         self.context.end_scope();
         self.context.self_stack.pop();
@@ -700,7 +711,6 @@ impl<'a> Visitor<'a> {
 
         let (init_ty, returning) = if let Ty::Nominal {
             type_params,
-            methods,
             statics,
             ..
         } = &callee_ty
@@ -1173,11 +1183,27 @@ impl<'a> Visitor<'a> {
 
     fn visit_enum_variant(
         &mut self,
-        _parsed_expr: &ParsedExpr,
-        _name: &Name,
-        _values: &[ParsedExpr],
+        parsed_expr: &ParsedExpr,
+        name: &Name,
+        values: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let Some(enum_ty) = self.context.self_stack.last().cloned() else {
+            return Err(TypeError::Unknown("No self stack found".to_string()));
+        };
+
+        tracing::trace!("visit_enum_variant: {name:?}");
+
+        // Treat variants with attached values as function constructors for the enum,
+        // otherwise just make it a static property.
+        if values.is_empty() {
+            Ok(enum_ty)
+        } else {
+            Ok(Ty::Func {
+                params: self.visit_mult(values)?,
+                returns: Box::new(enum_ty),
+                generic_constraints: vec![],
+            })
+        }
     }
 
     fn visit_match(

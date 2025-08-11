@@ -24,6 +24,7 @@ pub enum ConstraintCause {
     Assignment(ExprID),
     FuncReturn(ExprID),
     PrimitiveLiteral(ExprID, Primitive),
+    EnumLiteral,
     RecordLiteral,
     TupleLiteral,
     Hoisted,

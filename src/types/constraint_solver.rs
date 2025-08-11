@@ -256,7 +256,7 @@ impl<'a> ConstraintSolver<'a> {
                 };
 
                 match member.kind {
-                    MemberKind::Property => {
+                    MemberKind::Property | MemberKind::EnumVariant => {
                         let field_ty = if !instantiations.is_empty()
                             && let Row::Open(var) = properties
                         {

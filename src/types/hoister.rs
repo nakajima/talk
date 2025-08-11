@@ -2,7 +2,11 @@ use crate::{
     name::Name,
     parsed_expr::{Expr, ParsedExpr},
     type_checker::TypeError,
-    types::{row::Row, ty::Ty, visitor::Visitor},
+    types::{
+        row::{ClosedRow, Row},
+        ty::Ty,
+        visitor::Visitor,
+    },
 };
 
 pub struct Hoister {}
@@ -19,6 +23,9 @@ impl Hoister {
                 Expr::Struct { name, .. } => {
                     Self::hoist_struct(visitor, name)?;
                 }
+                Expr::EnumDecl { name, .. } => {
+                    Self::hoist_enum(visitor, name)?;
+                }
                 _ => continue,
             }
         }
@@ -32,6 +39,24 @@ impl Hoister {
     }
 
     pub fn hoist_struct<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
+        let properties = visitor.new_row_type_var();
+        let methods = visitor.new_row_type_var();
+        let statics = visitor.new_row_type_var();
+        visitor.declare(
+            &name.symbol_id()?,
+            Ty::Nominal {
+                name: name.clone(),
+                properties: Row::Open(properties),
+                methods: Row::Open(methods),
+                statics: Row::Open(statics),
+                type_params: vec![], // Will be filled during struct definition
+                instantiations: Default::default(),
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn hoist_enum<'a>(visitor: &mut Visitor<'a>, name: &Name) -> Result<(), TypeError> {
         let properties = visitor.new_row_type_var();
         let methods = visitor.new_row_type_var();
         let statics = visitor.new_row_type_var();

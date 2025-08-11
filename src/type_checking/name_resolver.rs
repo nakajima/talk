@@ -885,9 +885,7 @@ impl<'a> NameResolver<'a> {
 
                     *name = Name::Resolved(property_symbol, name_str.clone());
                 } else if let Expr::Method {
-                    is_static,
-                    func,
-                    ..
+                    is_static, func, ..
                 } = &mut body_expr.expr
                 {
                     // First extract the method name
@@ -918,7 +916,7 @@ impl<'a> NameResolver<'a> {
 
                     // Resolve the entire func expression including its parameters and body
                     *func = Box::new(self.resolve_node(func, meta, symbol_table)?);
-                    
+
                     // Update the method name to be resolved
                     if let Expr::Func {
                         name: Some(name), ..
@@ -1017,7 +1015,7 @@ impl<'a> NameResolver<'a> {
 
             // Hoist variants
             self.type_symbol_stack.push(enum_symbol);
-            self.hoist_enum_members(body, meta, symbol_table)?;
+            self.hoist_enum_members(enum_symbol, body, meta, symbol_table)?;
             self.type_symbol_stack.pop();
             self.end_scope(tok);
         }
@@ -1184,6 +1182,7 @@ impl<'a> NameResolver<'a> {
     #[tracing::instrument(skip(self, meta, symbol_table, body))]
     fn hoist_enum_members(
         &mut self,
+        enum_id: SymbolID,
         body: &mut ParsedExpr,
         meta: &ExprMetaStorage,
         symbol_table: &mut SymbolTable,
@@ -1193,11 +1192,26 @@ impl<'a> NameResolver<'a> {
         };
 
         for variant_expr in &mut *items {
-            let Expr::EnumVariant(Name::Raw(_), field_types) = &mut variant_expr.expr else {
+            let Expr::EnumVariant(name, field_types) = &mut variant_expr.expr else {
                 continue;
             };
 
+            let member_id = self.declare(
+                name.name_str().to_string(),
+                SymbolKind::EnumVariant(enum_id),
+                variant_expr.id,
+                meta,
+                symbol_table,
+            );
+
             *field_types = self.resolve_nodes(field_types, meta, symbol_table, false)?;
+
+            symbol_table.add_enum_variant(
+                enum_id,
+                name.name_str().to_string(),
+                variant_expr.id,
+                member_id,
+            );
         }
 
         *items = self.resolve_nodes(items, meta, symbol_table, false)?;

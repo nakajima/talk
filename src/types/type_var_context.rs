@@ -189,6 +189,7 @@ impl TypeVarContext {
     }
 
     pub fn resolve(&mut self, ty: &Ty) -> Ty {
+        let _s = trace_span!("resolve", ty = format!("{ty:?}")).entered();
         let after = match ty {
             Ty::Var(var) => {
                 let new_ty = self.table.probe_value(VarKey(var.id));
