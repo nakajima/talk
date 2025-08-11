@@ -165,6 +165,32 @@ impl<'a> Formatter<'a> {
                 default_value,
                 is_static,
             } => self.format_property(name, is_static, type_repr, default_value),
+            Expr::Method {
+                func:
+                    box ParsedExpr {
+                        expr:
+                            Expr::Func {
+                                name,
+                                generics,
+                                params,
+                                body,
+                                ret,
+                                ..
+                            },
+                        ..
+                    },
+                is_static,
+                ..
+            } => self.format_func(
+                name,
+                generics,
+                params,
+                &Some(body),
+                &ret.as_ref().map(|r| &**r),
+                false,
+                *is_static,
+            ),
+            Expr::Method { .. } => unreachable!(),
             Expr::TypeRepr {
                 name,
                 generics,
@@ -187,6 +213,7 @@ impl<'a> Formatter<'a> {
                 params,
                 &Some(body),
                 &ret.as_ref().map(|r| &**r),
+                false,
                 false,
             ),
             Expr::Parameter(name, type_repr) => self.format_parameter(name, type_repr),
@@ -232,6 +259,7 @@ impl<'a> Formatter<'a> {
                     &Some(body),
                     &ret.as_ref().map(|r| &**r),
                     true,
+                    false,
                 )
             }
             Expr::ProtocolDecl {
@@ -251,6 +279,7 @@ impl<'a> Formatter<'a> {
                 params,
                 &None,
                 &Some(ret),
+                false,
                 false,
             ),
             Expr::RecordLiteral(fields) => self.format_record_literal(fields),
@@ -786,6 +815,7 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn format_func(
         &self,
         name: &Option<Name>,
@@ -794,13 +824,19 @@ impl<'a> Formatter<'a> {
         body: &Option<&ParsedExpr>,
         ret: &Option<&ParsedExpr>,
         is_init: bool,
+        is_static: bool,
     ) -> Doc {
         let mut result;
 
         if is_init {
             result = text("init");
         } else {
-            result = text("func");
+            if is_static {
+                result = text("static func");
+            } else {
+                result = text("func");
+            }
+
             if let Some(n) = name {
                 result = concat_space(result, self.format_name(n));
             }

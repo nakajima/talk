@@ -104,6 +104,8 @@ pub struct Definition {
 pub enum MemberKind {
     Initializer,
     Method,
+    StaticProperty,
+    StaticMethod,
     Property,
     Generic,
 }
@@ -286,11 +288,16 @@ impl SymbolTable {
         name: String,
         expr_id: ExprID,
         member_id: SymbolID,
+        is_static: bool,
     ) {
         self.types.entry(type_id).or_default().push(MemberSymbol {
             name,
             member_id,
-            kind: MemberKind::Property,
+            kind: if is_static {
+                MemberKind::StaticProperty
+            } else {
+                MemberKind::Property
+            },
             expr_id,
         });
     }
@@ -301,11 +308,16 @@ impl SymbolTable {
         name: String,
         expr_id: ExprID,
         member_id: SymbolID,
+        is_static: bool,
     ) {
         self.types.entry(type_id).or_default().push(MemberSymbol {
             name,
             member_id,
-            kind: MemberKind::Method,
+            kind: if is_static {
+                MemberKind::StaticMethod
+            } else {
+                MemberKind::Method
+            },
             expr_id,
         });
     }

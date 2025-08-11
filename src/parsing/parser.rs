@@ -416,7 +416,37 @@ impl<'a> Parser<'a> {
                 }
                 some_kind!(Static) => {
                     self.advance();
-                    members.push(self.property(true)?);
+
+                    if self.peek_is(TokenKind::Let) {
+                        members.push(self.property(true)?);
+                    } else {
+                        let attributes = self.collect_attributes()?;
+                        let tok = self.push_source_location();
+                        self.consume(TokenKind::Func)?;
+                        let func = self.func(attributes, false)?;
+
+                        members.push(self.add_expr(
+                            parsed_expr::Expr::Method {
+                                func: Box::new(func),
+                                is_static: true,
+                            },
+                            tok,
+                        )?);
+                    }
+                }
+                some_kind!(Func) => {
+                    let attributes = self.collect_attributes()?;
+                    let tok = self.push_source_location();
+                    self.consume(TokenKind::Func)?;
+                    let func = self.func(attributes, false)?;
+
+                    members.push(self.add_expr(
+                        parsed_expr::Expr::Method {
+                            func: Box::new(func),
+                            is_static: false,
+                        },
+                        tok,
+                    )?);
                 }
                 some_kind!(Init) => members.push(self.init()?),
                 _ => {
@@ -527,7 +557,7 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn init(&mut self) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
-        let func_id = Box::new(self.func(vec![])?);
+        let func_id = Box::new(self.func(vec![], false)?);
         self.add_expr(Init(None, func_id), tok)
     }
 
@@ -625,13 +655,22 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Func => {
                 self.consume(TokenKind::Func)?;
-                self.func(attributes)
+                self.func(attributes, true)
             }
             _ => Err(ParserError::UnknownError(format!(
                 "Expr does not support attributes: {}",
                 current.as_str()
             ))),
         }
+    }
+
+    fn collect_attributes(&mut self) -> Result<Vec<ParsedExpr>, ParserError> {
+        let mut attributes = vec![];
+        while self.peek_is(TokenKind::At) {
+            attributes.push(self.parse_attribute()?);
+            self.consume(TokenKind::Comma).ok();
+        }
+        Ok(attributes)
     }
 
     fn parse_attribute(&mut self) -> Result<ParsedExpr, ParserError> {
@@ -1041,7 +1080,7 @@ impl<'a> Parser<'a> {
             TokenKind::Int(val) => self.add_expr(LiteralInt(val.clone()), tok),
             TokenKind::Float(val) => self.add_expr(LiteralFloat(val.clone()), tok),
             TokenKind::StringLiteral(val) => self.add_expr(LiteralString(val.to_string()), tok),
-            TokenKind::Func => self.func(vec![]),
+            TokenKind::Func => self.func(vec![], true),
             _ => return Err(ParserError::UnknownError("did not get literal".into())),
         }?;
 
@@ -1091,7 +1130,11 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(crate) fn func(&mut self, attributes: Vec<ParsedExpr>) -> Result<ParsedExpr, ParserError> {
+    pub(crate) fn func(
+        &mut self,
+        attributes: Vec<ParsedExpr>,
+        allow_call: bool,
+    ) -> Result<ParsedExpr, ParserError> {
         let tok = self.push_source_location();
 
         let current = self.current.clone();
@@ -1190,7 +1233,7 @@ impl<'a> Parser<'a> {
             tok,
         )?;
 
-        if let Some(call_id) = self.check_call(&func_id, false)? {
+        if allow_call && let Some(call_id) = self.check_call(&func_id, false)? {
             Ok(call_id)
         } else {
             Ok(func_id)

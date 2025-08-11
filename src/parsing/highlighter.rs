@@ -275,6 +275,7 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(default_value));
                 }
             }
+            Expr::Method { box func, .. } => result.extend(self.tokens_from_expr(func)),
             Expr::TypeRepr {
                 generics,
                 conformances,

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use tracing::trace_span;
+
 use crate::{
     expr_id::ExprID,
     parsed_expr::{Expr, ParsedExpr},
@@ -181,6 +183,7 @@ impl crate::parsing::parsed_expr::Pattern {
 
 impl ParsedExpr {
     pub fn to_typed(&self, typed_ids: &BTreeMap<ExprID, Ty>) -> TypedExprResult {
+        let _s = trace_span!("typing", expr = format!("{self:?}")).entered();
         match &self.expr {
             Expr::Incomplete(..) => TypedExprResult::None,
             Expr::Attribute(..) => TypedExprResult::None,
@@ -357,6 +360,17 @@ impl ParsedExpr {
                         generics: map!(generics, typed_ids),
                         conformances: map!(conformances, typed_ids),
                         body: Box::new(body.to_typed(typed_ids)?),
+                    },
+                    ty: lookup!(self.id, typed_ids),
+                }
+                .into(),
+            ),
+            Expr::Method { func, is_static } => TypedExprResult::Ok(
+                TypedExpr {
+                    id: self.id,
+                    expr: crate::types::typed_expr::Expr::Method {
+                        func: func.to_typed(typed_ids)?.into(),
+                        is_static: *is_static,
                     },
                     ty: lookup!(self.id, typed_ids),
                 }

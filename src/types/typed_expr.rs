@@ -89,6 +89,12 @@ pub enum Expr {
         is_static: bool,
     },
 
+    Method {
+        func: Box<TypedExpr>,
+        #[drive(skip)]
+        is_static: bool,
+    },
+
     // A type annotation
     TypeRepr {
         #[drive(skip)]
@@ -297,6 +303,7 @@ impl TypedExpr {
 
                 Ok(())
             }
+            Expr::Method { func, .. } => func.find(id),
             Expr::TypeRepr {
                 generics,
                 conformances,

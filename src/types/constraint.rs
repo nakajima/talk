@@ -33,6 +33,7 @@ pub enum ConstraintCause {
     Condition,
     StructLiteral,
     MethodDefinition,
+    StaticMethodDefinition,
     PropertyDefinition,
     InitializerDefinition,
     InitializerCall,
@@ -48,6 +49,18 @@ pub struct Constraint {
     pub parent: Option<ConstraintId>,
     pub children: Vec<ConstraintId>,
     pub state: ConstraintState,
+}
+
+impl PartialOrd for Constraint {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Constraint {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.0.cmp(&other.id.0)
+    }
 }
 
 impl Hash for Constraint {

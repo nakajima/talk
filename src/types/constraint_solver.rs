@@ -1,9 +1,10 @@
 use indexmap::IndexMap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::trace_span;
 
 use crate::{
     MemberKind, SymbolTable,
+    name::Name,
     type_checker::TypeError,
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
@@ -22,7 +23,7 @@ pub struct ConstraintSolver<'a> {
     context: &'a mut TypeVarContext,
     constraints: &'a mut ConstraintSet,
     record_fields: BTreeMap<RowVar, IndexMap<Label, Ty>>,
-    errored: Vec<Constraint>,
+    errored: BTreeSet<Constraint>,
     symbols: &'a SymbolTable,
     current_depth: u8,
 }
@@ -104,7 +105,7 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    pub fn solve(mut self) -> Vec<Constraint> {
+    pub fn solve(mut self) -> BTreeSet<Constraint> {
         let mut failed_attempts = 0;
 
         loop {
@@ -124,7 +125,13 @@ impl<'a> ConstraintSolver<'a> {
                 }
 
                 let before = constraint.state.clone();
-                self.solve_constraint(&mut constraint).ok();
+                match self.solve_constraint(&mut constraint) {
+                    Ok(_) => (),
+                    Err(_) => {
+                        self.errored.insert(constraint);
+                        continue;
+                    }
+                }
                 made_progress |= before != constraint.state;
 
                 if constraint.is_solved() {
@@ -138,9 +145,20 @@ impl<'a> ConstraintSolver<'a> {
                 break;
             }
 
-            if failed_attempts == MAX_FAILED_ATTEMPTS - 1 && self.context.apply_defaults().is_err()
-            {
-                tracing::error!("Error applying defaults");
+            if failed_attempts == MAX_FAILED_ATTEMPTS - 1 {
+                match self.context.apply_defaults() {
+                    Ok(()) => (),
+                    Err(e) => {
+                        if let Some(mut constraint) = deferred.pop() {
+                            constraint.error(e).ok();
+                            // TODO: This may not be strictly accurate.
+                            self.errored.insert(constraint);
+                        } else {
+                            panic!("didn't get a constraint to blame");
+                        }
+                        tracing::error!("Error applying defaults");
+                    }
+                }
             }
 
             if !made_progress {
@@ -194,8 +212,9 @@ impl<'a> ConstraintSolver<'a> {
         match result {
             Ok(_) => (),
             Err(err) => {
-                self.errored.push(constraint.clone());
-                constraint.error(err)?;
+                constraint.state = ConstraintState::Error(err.clone());
+                self.errored.insert(constraint.clone());
+                return Err(err);
             }
         }
 
@@ -223,6 +242,7 @@ impl<'a> ConstraintSolver<'a> {
                 properties,
                 methods,
                 instantiations,
+                statics,
                 ..
             } => {
                 let Some(member) = self
@@ -237,41 +257,51 @@ impl<'a> ConstraintSolver<'a> {
 
                 match member.kind {
                     MemberKind::Property => {
-                        // For instantiated types with open rows, we need to look at the base type
-                        // to find the field type, then apply instantiations
-                        let field_ty =
-                            if !instantiations.is_empty() && matches!(properties, Row::Open(_)) {
-                                // Find the field type from the base struct definition
-                                // The base struct would have the canonical type variable
-                                self.find_base_field_type(&name, &label)?
-                            } else {
-                                self.get_field_type(&properties, &label)?
-                            };
+                        let field_ty = if !instantiations.is_empty()
+                            && let Row::Open(var) = properties
+                        {
+                            self.find_base_field_type(&name, &var, &label)?
+                        } else {
+                            self.get_field_type(&properties, &label)?
+                        };
 
-                        // Apply instantiations to get the actual type for this instance
                         let instantiated_ty = self.apply_instantiations(&field_ty, &instantiations);
-
-                        // Unify with the expected type
                         self.context.unify_ty_ty(&ty, &instantiated_ty)?;
 
                         constraint.state = ConstraintState::Solved;
                         Ok(())
                     }
-                    MemberKind::Method | MemberKind::Initializer => {
-                        // Get the method type
-                        let method_ty =
-                            if !instantiations.is_empty() && matches!(methods, Row::Open(_)) {
-                                // For instantiated types, look up the base method and apply instantiations
-                                self.find_base_method_type(&name, &label)?
-                            } else {
-                                self.get_field_type(&methods, &label)?
-                            };
+                    MemberKind::StaticProperty
+                    | MemberKind::StaticMethod
+                    | MemberKind::Initializer => {
+                        let field_ty = if !instantiations.is_empty()
+                            && let Row::Open(var) = statics
+                        {
+                            self.find_base_field_type(&name, &var, &label)?
+                        } else {
+                            self.get_field_type(&statics, &label)?
+                        };
 
-                        // Apply instantiations to the method type
+                        let instantiated_ty = self.apply_instantiations(&field_ty, &instantiations);
+
+                        self.context.unify_ty_ty(&ty, &instantiated_ty)?;
+
+                        constraint.state = ConstraintState::Solved;
+                        Ok(())
+                    }
+                    MemberKind::Method => {
+                        // Get the method type
+                        let method_ty = if !instantiations.is_empty()
+                            && let Row::Open(row_var) = methods
+                        {
+                            // For instantiated types, look up the base method and apply instantiations
+                            self.find_base_method_type(&name, &row_var, &label)?
+                        } else {
+                            self.get_field_type(&methods, &label)?
+                        };
+
                         let instantiated_method =
                             self.apply_instantiations(&method_ty, &instantiations);
-
-                        // Unify with the expected type
                         self.context.unify_ty_ty(&ty, &instantiated_method)?;
 
                         constraint.state = ConstraintState::Solved;
@@ -316,12 +346,11 @@ impl<'a> ConstraintSolver<'a> {
 
     fn find_base_field_type(
         &self,
-        _name: &crate::name::Name,
+        name: &Name,
+        row: &RowVar,
         label: &Label,
     ) -> Result<Ty, TypeError> {
-        // Look for the field in the base struct definition (with RowVar::new(0))
-        // This is where the canonical type variable would be stored
-        if let Some(fields) = self.record_fields.get(&RowVar::new(0))
+        if let Some(fields) = self.record_fields.get(row)
             && let Some(ty) = fields.get(label)
         {
             tracing::debug!("Found base field type for {label:?}: {ty:?}");
@@ -329,18 +358,17 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         Err(TypeError::Unknown(format!(
-            "Field {label:?} not found in base struct {_name:?}"
+            "Field {label:?} not found in struct {name:?}"
         )))
     }
 
     fn find_base_method_type(
         &self,
         _name: &crate::name::Name,
+        row_var: &RowVar,
         label: &Label,
     ) -> Result<Ty, TypeError> {
-        // Look for the method in the base struct definition (with RowVar::new(1))
-        // This is where the canonical type variable would be stored
-        if let Some(methods) = self.record_fields.get(&RowVar::new(1))
+        if let Some(methods) = self.record_fields.get(row_var)
             && let Some(ty) = methods.get(label)
         {
             return Ok(ty.clone());
@@ -515,6 +543,15 @@ impl<'a> ConstraintSolver<'a> {
             }
 
             self.current_depth += 1;
+
+            // Check for arity mismatch
+            if params.len() != args.len() {
+                constraint.error(TypeError::Unknown(format!(
+                    "Arity mismatch: expected {} arguments, got {}",
+                    params.len(),
+                    args.len()
+                )))?;
+            }
 
             for (param, arg) in params.iter().zip(args.iter()) {
                 let param = param.instantiate(self.context, &mut substitutions);

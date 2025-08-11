@@ -209,6 +209,7 @@ impl<'a> Visitor<'a> {
             mut self_ty @ Ty::Nominal {
                 properties: Row::Open(properties),
                 methods: Row::Open(methods),
+                statics: Row::Open(statics),
                 ..
             },
         ) = self.context.lookup(name)
@@ -250,13 +251,17 @@ impl<'a> Visitor<'a> {
 
         for (index, item) in items.iter().enumerate() {
             match &item.expr {
-                Expr::Property { name, .. } if kind != RowKind::Enum => {
+                Expr::Property {
+                    name, is_static, ..
+                } if kind != RowKind::Enum => {
                     let property_ty = self.visit(item)?;
+
+                    let row_var = if *is_static { statics } else { properties };
 
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Row::Open(properties),
+                            record: Row::Open(row_var),
                             label: Label::String(name.name_str()),
                             ty: property_ty,
                             index: Some(index),
@@ -264,17 +269,30 @@ impl<'a> Visitor<'a> {
                         ConstraintCause::PropertyDefinition,
                     )?;
 
-                    property_count += 1;
+                    if !*is_static {
+                        property_count += 1;
+                    }
                 }
-                Expr::Func {
-                    name: Some(name), ..
-                } => {
-                    let func_ty = self.visit(item)?;
+                Expr::Method { func, is_static } => {
+                    // Extract the method name from the func expression
+                    let method_name = if let Expr::Func {
+                        name: Some(method_name),
+                        ..
+                    } = &func.expr
+                    {
+                        method_name.name_str()
+                    } else {
+                        return Err(TypeError::Unknown("Method must have a name".to_string()));
+                    };
+
+                    let row_var = if *is_static { statics } else { methods };
+                    let func_ty = self.visit(func)?;
+                    self.expr_id_types.insert(item.id, func_ty.clone());
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Row::Open(methods),
-                            label: name.name_str().into(),
+                            record: Row::Open(row_var),
+                            label: method_name.into(),
                             ty: func_ty,
                             index: Some(index),
                         },
@@ -332,7 +350,7 @@ impl<'a> Visitor<'a> {
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Row::Open(methods),
+                            record: Row::Open(statics),
                             label: Label::String("init".to_string()),
                             ty: func_ty,
                             index: Some(index),
@@ -434,6 +452,9 @@ impl<'a> Visitor<'a> {
                 default_value,
                 is_static,
             } => self.visit_property(parsed, name, *is_static, type_repr, default_value),
+            parsed_expr::Expr::Method { func, is_static } => {
+                self.visit_method(parsed, func, *is_static)
+            }
             parsed_expr::Expr::TypeRepr {
                 name,
                 generics,
@@ -680,6 +701,7 @@ impl<'a> Visitor<'a> {
         let (init_ty, returning) = if let Ty::Nominal {
             type_params,
             methods,
+            statics,
             ..
         } = &callee_ty
         {
@@ -713,7 +735,7 @@ impl<'a> Visitor<'a> {
                 self.constrain(
                     parsed_expr.id,
                     ConstraintKind::HasField {
-                        record: methods.clone(),
+                        record: statics.clone(),
                         label: "init".into(),
                         ty: init_ty.clone(),
                         index: None,
@@ -741,31 +763,6 @@ impl<'a> Visitor<'a> {
             },
             ConstraintCause::Call,
         )?;
-
-        //      // For initializer calls, also constrain that the returned instance's properties/methods
-        //      // include the appropriate labels: labeled args define properties; defined methods persist.
-        //      if is_initializer_call {
-        //          for (label, ty) in labeled_args.into_iter() {
-        //              if let Some(label) = label {
-        //                  self.constrain(
-        //                      parsed_expr.id,
-        //                      ConstraintKind::TyHasField {
-        //                          receiver: returning.clone(),
-        //                          label: Label::String(label),
-        //                          ty,
-        //                          index: None,
-        //                      },
-        //                      ConstraintCause::InitializerCall,
-        //                  )?;
-        //              }
-        //          }
-
-        //          // Also propagate method presence by checking the methods row of the fresh instance
-        //          if let Ty::Nominal { methods, .. } = &returning {
-        //              // Not adding specific methods here; member access will add constraints as needed.
-        //              let _ = methods; // keep lint happy
-        //          }
-        //      }
 
         self.expr_id_types.insert(parsed_expr.id, returning.clone());
 
@@ -847,6 +844,15 @@ impl<'a> Visitor<'a> {
         };
 
         Ok(property_ty)
+    }
+
+    fn visit_method(
+        &mut self,
+        _parsed_expr: &ParsedExpr,
+        func: &ParsedExpr,
+        _is_static: bool,
+    ) -> Result<Ty, TypeError> {
+        self.visit(func)
     }
 
     fn visit_type_repr(

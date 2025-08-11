@@ -114,6 +114,12 @@ pub enum Expr {
         default_value: Option<Box<ParsedExpr>>,
     },
 
+    Method {
+        func: Box<ParsedExpr>,
+        #[drive(skip)]
+        is_static: bool,
+    },
+
     // A type annotation
     TypeRepr {
         #[drive(skip)]

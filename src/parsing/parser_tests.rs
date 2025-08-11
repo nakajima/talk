@@ -1387,6 +1387,78 @@ mod tests {
     }
 
     #[test]
+    fn parses_static_struct_methods() {
+        let parsed = parse(
+            "
+        struct Person {
+            static func getAge() {
+                123
+            }
+        }
+        ",
+        );
+
+        assert_eq_diff!(
+            parsed.roots()[0],
+            any_expr!(Expr::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_expr!(Block(vec![any_expr!(Method {
+                    is_static: true,
+                    func: any_expr!(Func {
+                        name: Some("getAge".into()),
+                        generics: vec![],
+                        params: vec![],
+                        body: any_expr!(Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
+                        ret: None,
+                        captures: vec![],
+                        attributes: vec![]
+                    })
+                    .into()
+                }),]))
+                .into()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_instance_struct_methods() {
+        let parsed = parse(
+            "
+        struct Person {
+            func getAge() {
+                123
+            }
+        }
+        ",
+        );
+
+        assert_eq_diff!(
+            parsed.roots()[0],
+            any_expr!(Expr::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_expr!(Block(vec![any_expr!(Method {
+                    is_static: false,
+                    func: any_expr!(Func {
+                        name: Some("getAge".into()),
+                        generics: vec![],
+                        params: vec![],
+                        body: any_expr!(Block(vec![any_expr!(LiteralInt("123".into()))])).into(),
+                        ret: None,
+                        captures: vec![],
+                        attributes: vec![]
+                    })
+                    .into()
+                }),]))
+                .into()
+            })
+        );
+    }
+
+    #[test]
     fn parses_init() {
         let parsed = parse(
             "

@@ -60,7 +60,7 @@ pub struct ClosedRow {
 impl Row {
     pub fn instantiate_row(
         &self,
-        context: &mut TypeVarContext,
+        _context: &mut TypeVarContext,
         substitutions: &mut BTreeMap<TypeVar, TypeVar>,
     ) -> Row {
         match self {
@@ -68,13 +68,14 @@ impl Row {
                 fields: fields.clone(),
                 values: values
                     .iter()
-                    .map(|v| v.instantiate(context, substitutions))
+                    .map(|v| v.instantiate(_context, substitutions))
                     .collect(),
             }),
-            Row::Open(_) => {
-                // For open rows, create a new row var
-                // The actual fields will be instantiated separately by the constraint solver
-                Row::Open(context.new_row_var())
+            Row::Open(var) => {
+                // For open rows, keep the same row variable
+                // The fields are already defined for this row variable, and instantiation
+                // only affects the types of those fields (via substitutions), not the structure
+                Row::Open(*var)
             }
         }
     }

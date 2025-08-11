@@ -391,7 +391,7 @@ mod tests {
         Person()",
         );
 
-        assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
+        assert_eq!(checked.diagnostics.len(), 1, "{:#?}", checked.diagnostics);
     }
 
     #[test]
@@ -401,7 +401,7 @@ mod tests {
             let age: Int
         }
 
-        let person = Person()
+        let person = Person(age: 42)
         person.age = 1.23
         ",
         );
@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn check_static_method() {
+    fn check_static_property() {
         let checker = check(
             "
         struct Person {
@@ -483,6 +483,27 @@ mod tests {
         Person.age
         ",
         );
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+    }
+
+    #[test]
+    fn check_static_method() {
+        let checker = check(
+            "
+        struct Person {
+            static func getAge() {
+                123
+            }
+        }
+
+        Person.getAge()
+        ",
+        );
+
+        if !checker.diagnostics.is_empty() {
+            panic!("{:#?}", checker.diagnostics);
+        }
 
         assert_eq!(Ty::Int, checker.typed_roots[1].ty);
     }

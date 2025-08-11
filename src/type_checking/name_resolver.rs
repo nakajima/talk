@@ -857,12 +857,19 @@ impl<'a> NameResolver<'a> {
             // Get properties for the struct so we can synthesize stuff before
             // type checking
             for body_expr in body_parsed_exprs {
-                if let Expr::Property { name, .. } = &mut body_expr.expr {
+                if let Expr::Property {
+                    name, is_static, ..
+                } = &mut body_expr.expr
+                {
                     let name_str = name.name_str();
 
                     let property_symbol = self.declare(
                         name_str.clone(),
-                        SymbolKind::Property,
+                        if *is_static {
+                            SymbolKind::StaticProperty
+                        } else {
+                            SymbolKind::Property
+                        },
                         body_expr.id,
                         meta,
                         symbol_table,
@@ -873,14 +880,25 @@ impl<'a> NameResolver<'a> {
                         name_str.to_string(),
                         body_expr.id,
                         property_symbol,
+                        *is_static,
                     );
 
                     *name = Name::Resolved(property_symbol, name_str.clone());
-                } else if let Expr::Func {
-                    name: Some(name), ..
+                } else if let Expr::Method {
+                    is_static,
+                    func,
+                    ..
                 } = &mut body_expr.expr
                 {
-                    let name_str = name.name_str();
+                    // First extract the method name
+                    let name_str = if let Expr::Func {
+                        name: Some(name), ..
+                    } = &func.expr
+                    {
+                        name.name_str()
+                    } else {
+                        return Err(NameResolverError::MissingMethodName);
+                    };
 
                     let method_symbol = self.declare(
                         name_str.clone(),
@@ -895,9 +913,19 @@ impl<'a> NameResolver<'a> {
                         name_str.to_string(),
                         body_expr.id,
                         method_symbol,
+                        *is_static,
                     );
 
-                    *name = Name::Resolved(method_symbol, name_str.clone());
+                    // Resolve the entire func expression including its parameters and body
+                    *func = Box::new(self.resolve_node(func, meta, symbol_table)?);
+                    
+                    // Update the method name to be resolved
+                    if let Expr::Func {
+                        name: Some(name), ..
+                    } = &mut func.expr
+                    {
+                        *name = Name::Resolved(method_symbol, name_str.clone());
+                    }
                 } else if let Expr::Init(None, func) = &mut body_expr.expr {
                     symbol_table.add_initializer(
                         struct_symbol,
