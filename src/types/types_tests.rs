@@ -522,6 +522,8 @@ mod tests {
 
         let maybe = Maybe.definitely(123)
         maybe
+
+        Maybe.nope // Make sure it works without args too
         ",
         );
 
@@ -538,6 +540,21 @@ mod tests {
                 ),]),
             },
             checked.typed_roots[2].ty,
+        );
+
+        // The type should be Maybe<Int> with T instantiated to Int
+        assert_eq!(
+            Ty::Nominal {
+                name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
+                properties: Row::Closed(ClosedRow::default()),
+                methods: Row::Open(RowVar::new(1)),
+                type_params: vec![],
+                instantiations: std::collections::BTreeMap::from([(
+                    TypeVar::new(0, TypeVarKind::Canonical),
+                    Ty::Int
+                ),]),
+            },
+            checked.typed_roots[3].ty,
         );
     }
 
