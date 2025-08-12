@@ -73,14 +73,12 @@ impl<'a> ConstraintSolver<'a> {
                 name,
                 properties,
                 methods,
-                statics,
                 type_params,
                 instantiations: inst,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: self.apply_instantiations_to_row(properties, instantiations),
                 methods: self.apply_instantiations_to_row(methods, instantiations),
-                statics: self.apply_instantiations_to_row(statics, instantiations),
                 type_params: type_params.clone(),
                 instantiations: inst.clone(),
             },
@@ -134,9 +132,7 @@ impl<'a> ConstraintSolver<'a> {
                 }
                 made_progress |= before != constraint.state;
 
-                if constraint.is_solved() {
-                    self.current_depth = 0;
-                } else {
+                if !constraint.is_solved() {
                     deferred.push(constraint);
                 }
             }
@@ -148,6 +144,7 @@ impl<'a> ConstraintSolver<'a> {
             if failed_attempts == MAX_FAILED_ATTEMPTS - 1 {
                 match self.context.apply_defaults() {
                     Ok(()) => (),
+                    #[allow(clippy::panic)]
                     Err(e) => {
                         if let Some(mut constraint) = deferred.pop() {
                             constraint.error(e).ok();
@@ -237,12 +234,71 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         match receiver {
+            Ty::Metatype {
+                ty:
+                    box Ty::Nominal {
+                        name,
+                        instantiations: insts,
+                        ..
+                    },
+                properties,
+                methods,
+            } => {
+                let Some(member) = self
+                    .symbols
+                    .member_kind(&name.symbol_id()?, &label.to_string())
+                else {
+                    constraint.error(TypeError::MemberNotFound(
+                        name.name_str().to_string(),
+                        label.to_string(),
+                    ))?;
+                };
+
+                match member.kind {
+                    MemberKind::StaticMethod | MemberKind::Initializer => {
+                        let mut field_ty = if let Row::Open(var) = methods {
+                            self.find_base_field_type(&name, &var, &label)?
+                        } else {
+                            self.get_field_type(&methods, &label)?
+                        };
+
+                        // If this metatype refers to a generic nominal instance, apply
+                        // its instantiations to the method type so that call-site
+                        // substitution uses the same instantiated type variables.
+                        if !insts.is_empty() {
+                            field_ty = self.apply_instantiations(&field_ty, &insts);
+                        }
+
+                        self.context.unify_ty_ty(&ty, &field_ty)?;
+
+                        constraint.state = ConstraintState::Solved;
+                        Ok(())
+                    }
+                    MemberKind::StaticProperty | MemberKind::EnumVariant => {
+                        let mut field_ty = if let Row::Open(var) = properties {
+                            self.find_base_field_type(&name, &var, &label)?
+                        } else {
+                            self.get_field_type(&properties, &label)?
+                        };
+
+                        if !insts.is_empty() {
+                            field_ty = self.apply_instantiations(&field_ty, &insts);
+                        }
+
+                        self.context.unify_ty_ty(&ty, &field_ty)?;
+
+                        constraint.state = ConstraintState::Solved;
+                        Ok(())
+                    }
+                    #[allow(clippy::todo)]
+                    _ => todo!("don't know how to handle metatype {member:?} yet"),
+                }
+            }
             Ty::Nominal {
                 name,
                 properties,
                 methods,
                 instantiations,
-                statics,
                 ..
             } => {
                 let Some(member) = self
@@ -256,7 +312,7 @@ impl<'a> ConstraintSolver<'a> {
                 };
 
                 match member.kind {
-                    MemberKind::Property | MemberKind::EnumVariant => {
+                    MemberKind::Property => {
                         let field_ty = if !instantiations.is_empty()
                             && let Row::Open(var) = properties
                         {
@@ -266,24 +322,6 @@ impl<'a> ConstraintSolver<'a> {
                         };
 
                         let instantiated_ty = self.apply_instantiations(&field_ty, &instantiations);
-                        self.context.unify_ty_ty(&ty, &instantiated_ty)?;
-
-                        constraint.state = ConstraintState::Solved;
-                        Ok(())
-                    }
-                    MemberKind::StaticProperty
-                    | MemberKind::StaticMethod
-                    | MemberKind::Initializer => {
-                        let field_ty = if !instantiations.is_empty()
-                            && let Row::Open(var) = statics
-                        {
-                            self.find_base_field_type(&name, &var, &label)?
-                        } else {
-                            self.get_field_type(&statics, &label)?
-                        };
-
-                        let instantiated_ty = self.apply_instantiations(&field_ty, &instantiations);
-
                         self.context.unify_ty_ty(&ty, &instantiated_ty)?;
 
                         constraint.state = ConstraintState::Solved;
@@ -386,8 +424,9 @@ impl<'a> ConstraintSolver<'a> {
         label: Label,
         ty: Ty,
     ) -> Result<(), TypeError> {
-        let row = self.context.resolve_row(record).clone();
-        let ty = self.context.resolve(&ty);
+        let seen = &mut Default::default();
+        let row = self.context.resolve_row_with_seen(record, seen).clone();
+        let ty = self.context.resolve_with_seen(&ty, seen);
 
         match &row {
             Row::Closed(ClosedRow { fields, values }) => {
@@ -532,7 +571,21 @@ impl<'a> ConstraintSolver<'a> {
         // If it's the first time this constraint has been attempted, spawn the child
         // constraints
         if constraint.state == ConstraintState::Pending {
-            let mut substitutions = Default::default();
+            let mut substitutions: BTreeMap<TypeVar, TypeVar> = Default::default();
+
+            // If the call is constructing a nominal type instance, prefer to reuse
+            // the same instantiated type variables for this call's generic
+            // substitutions, so arguments constrain the same vars that appear in
+            // the returned instance's properties/methods.
+            if let Ty::Nominal { instantiations, .. } = &returning {
+                for (canonical, bound_ty) in instantiations.iter() {
+                    if let Ty::Var(instantiated) = bound_ty
+                        && instantiated.kind == TypeVarKind::Instantiated
+                    {
+                        substitutions.insert(*canonical, *instantiated);
+                    }
+                }
+            }
 
             if self.current_depth > 128 {
                 tracing::trace!("Ran into 128 depth");
@@ -625,6 +678,11 @@ impl<'a> ConstraintSolver<'a> {
     ) -> Result<(), TypeError> {
         let lhs = self.context.resolve(&lhs);
         let rhs = self.context.resolve(&rhs);
+
+        if lhs == rhs {
+            constraint.state = ConstraintState::Solved;
+            return Ok(());
+        }
 
         match (lhs, rhs) {
             (Ty::Var(lhs), Ty::Var(rhs)) => {

@@ -31,6 +31,7 @@ struct VisitorContext {
     generic_constraints_stack: Vec<Vec<ConstraintKind>>,
     // Stack of `self` values
     self_stack: Vec<Ty>,
+    metaself_stack: Vec<Ty>,
 }
 
 impl Default for VisitorContext {
@@ -39,6 +40,7 @@ impl Default for VisitorContext {
             scopes: vec![builtins::default_type_checker_scope()], // Default scope
             generic_constraints_stack: vec![],
             self_stack: vec![],
+            metaself_stack: vec![],
         }
     }
 }
@@ -205,19 +207,24 @@ impl<'a> Visitor<'a> {
         _conformances: &[ParsedExpr],
         body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        let Ok(
-            mut self_ty @ Ty::Nominal {
-                properties: Row::Open(properties),
-                methods: Row::Open(methods),
-                statics: Row::Open(statics),
-                ..
-            },
-        ) = self.context.lookup(name)
+        let Ok(metatype) = self.context.lookup(name) else {
+            return Err(TypeError::Unknown("Did not hoist".to_string()));
+        };
+
+        let Ty::Metatype {
+            ty:
+                mut self_ty @ box Ty::Nominal {
+                    properties: Row::Open(properties),
+                    methods: Row::Open(methods),
+                    ..
+                },
+            properties: Row::Open(meta_properties),
+            methods: Row::Open(meta_methods),
+        } = metatype.clone()
         else {
             return Err(TypeError::Unknown("Did not hoist".to_string()));
         };
 
-        self.context.self_stack.push(self_ty.clone());
         self.context.start_scope();
         self.context.start_generic_context();
 
@@ -234,10 +241,21 @@ impl<'a> Visitor<'a> {
         if let Ty::Nominal {
             type_params: params,
             ..
-        } = &mut self_ty
+        } = &mut *self_ty
         {
             *params = type_params.clone();
         }
+
+        // Push the updated enum type to the stack (after setting type params)
+        self.context.self_stack.push(*self_ty.clone());
+
+        // Update the metatype with the updated nominal type
+        let updated_metatype = Ty::Metatype {
+            ty: self_ty.clone(),
+            properties: Row::Open(meta_properties),
+            methods: Row::Open(meta_methods),
+        };
+        self.context.metaself_stack.push(updated_metatype.clone());
 
         let parsed_expr::Expr::Block(items) = &body.expr else {
             unreachable!()
@@ -256,7 +274,11 @@ impl<'a> Visitor<'a> {
                 } if kind != RowKind::Enum => {
                     let property_ty = self.visit(item)?;
 
-                    let row_var = if *is_static { statics } else { properties };
+                    let row_var = if *is_static {
+                        meta_properties
+                    } else {
+                        properties
+                    };
 
                     self.constrain(
                         item.id,
@@ -285,7 +307,7 @@ impl<'a> Visitor<'a> {
                         return Err(TypeError::Unknown("Method must have a name".to_string()));
                     };
 
-                    let row_var = if *is_static { statics } else { methods };
+                    let row_var = if *is_static { meta_methods } else { methods };
                     let func_ty = self.visit(func)?;
                     self.expr_id_types.insert(item.id, func_ty.clone());
                     self.constrain(
@@ -341,7 +363,7 @@ impl<'a> Visitor<'a> {
 
                     self.constrain(
                         item.id,
-                        ConstraintKind::Equals(self_ty.clone(), Ty::Var(self_ty_var)),
+                        ConstraintKind::Equals(*self_ty.clone(), Ty::Var(self_ty_var)),
                         ConstraintCause::InitializerDefinition,
                     )?;
 
@@ -350,7 +372,7 @@ impl<'a> Visitor<'a> {
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Row::Open(statics),
+                            record: Row::Open(meta_methods),
                             label: Label::String("init".to_string()),
                             ty: func_ty,
                             index: Some(index),
@@ -359,13 +381,13 @@ impl<'a> Visitor<'a> {
                     )?;
                 }
                 Expr::FuncSignature { .. } if kind == RowKind::Protocol => (),
-                Expr::EnumVariant(name, values) if kind == RowKind::Enum => {
+                Expr::EnumVariant(name, _values) if kind == RowKind::Enum => {
                     let property_ty = self.visit(item)?;
 
                     self.constrain(
                         item.id,
                         ConstraintKind::HasField {
-                            record: Row::Open(properties),
+                            record: Row::Open(meta_properties),
                             label: Label::String(name.name_str()),
                             ty: property_ty,
                             index: Some(index),
@@ -392,14 +414,20 @@ impl<'a> Visitor<'a> {
 
         self.context.end_scope();
         self.context.self_stack.pop();
+        self.context.metaself_stack.pop();
         self.context.end_generic_context();
 
         // Update the struct definition with the generic type parameters
-        self.context.declare(&name.symbol_id()?, &self_ty)?;
+        let final_metatype = Ty::Metatype {
+            ty: self_ty.clone(),
+            properties: Row::Open(meta_properties),
+            methods: Row::Open(meta_methods),
+        };
+        self.context.declare(&name.symbol_id()?, &final_metatype)?;
 
-        self.expr_id_types.insert(parsed_expr.id, self_ty.clone());
+        self.expr_id_types.insert(parsed_expr.id, *self_ty.clone());
 
-        Ok(self_ty)
+        Ok(final_metatype)
     }
 
     pub fn visit_mult(&mut self, parsed: &[ParsedExpr]) -> Result<Vec<Ty>, TypeError> {
@@ -709,12 +737,49 @@ impl<'a> Visitor<'a> {
     ) -> Result<Ty, TypeError> {
         let callee_ty = self.visit(callee)?;
 
-        let (init_ty, returning) = if let Ty::Nominal {
-            type_params,
-            statics,
+        tracing::debug!("visit_call: callee_ty = {:?}", callee_ty);
+
+        let (init_ty, returning) = if let Ty::Metatype {
+            ty: box Ty::Nominal {
+                type_params,
+                ..
+            },
             ..
         } = &callee_ty
         {
+            // For metatype calls (e.g., Person(...)), look up the static "init" on the metatype
+            // and treat the call as invoking that initializer, returning an instance of the
+            // underlying nominal type (instantiated if generic).
+            let instantiated = if !type_params.is_empty() {
+                let mut substitutions = BTreeMap::new();
+                callee_ty.instantiate(self.type_var_context, &mut substitutions)
+            } else {
+                callee_ty.clone()
+            };
+
+            // Extract the nominal type from the (possibly instantiated) metatype for the return
+            let returning_nominal = match &instantiated {
+                Ty::Metatype { ty, .. } => ty.as_ref().clone(),
+                _ => unreachable!(),
+            };
+
+            // Get the init method type via TyHasField on the metatype. Use the
+            // (possibly) instantiated metatype so method parameter types are
+            // expressed in terms of the per-call instantiated type variables.
+            let init_ty = Ty::Var(self.new_type_var());
+            self.constrain(
+                parsed_expr.id,
+                ConstraintKind::TyHasField {
+                    receiver: instantiated.clone(),
+                    label: "init".into(),
+                    ty: init_ty.clone(),
+                    index: None,
+                },
+                ConstraintCause::InitializerCall,
+            )?;
+
+            (init_ty, returning_nominal)
+        } else if let Ty::Nominal { type_params, .. } = &callee_ty {
             // Only instantiate if there are type parameters
             let instantiated = if !type_params.is_empty() {
                 let mut substitutions = BTreeMap::new();
@@ -741,11 +806,14 @@ impl<'a> Visitor<'a> {
                     ConstraintCause::InitializerCall,
                 )?;
             } else {
-                // For non-generic structs, use HasField on the methods row directly
+                // Non-generic nominal calls should still route through the metatype's init
+                // Since we don't have direct access to metatype rows here, rely on TyHasField
+                // against the nominal; the solver will find the metatype initializer via
+                // symbol table lookup.
                 self.constrain(
                     parsed_expr.id,
-                    ConstraintKind::HasField {
-                        record: statics.clone(),
+                    ConstraintKind::TyHasField {
+                        receiver: instantiated.clone(),
                         label: "init".into(),
                         ty: init_ty.clone(),
                         index: None,
@@ -756,6 +824,7 @@ impl<'a> Visitor<'a> {
 
             (init_ty, instantiated)
         } else {
+            // For regular function calls, the return type will be determined by the Call constraint
             (callee_ty, Ty::Var(self.new_type_var()))
         };
 
@@ -1111,7 +1180,16 @@ impl<'a> Visitor<'a> {
     }
 
     fn visit_variable(&mut self, parsed_expr: &ParsedExpr, name: &Name) -> Result<Ty, TypeError> {
-        let scope_ty = self.context.lookup(name)?;
+        let scope_ty = if matches!(name, Name::_Self(..)) {
+            let Some(self_ty) = self.context.self_stack.last() else {
+                return Err(TypeError::Unknown("No ty for `self` found".to_string()));
+            };
+
+            self_ty.clone()
+        } else {
+            self.context.lookup(name)?
+        };
+
         self.expr_id_types.insert(parsed_expr.id, scope_ty.clone());
 
         tracing::trace!("visit_variable name: {name:?}, ty: {scope_ty:?}");
@@ -1183,7 +1261,7 @@ impl<'a> Visitor<'a> {
 
     fn visit_enum_variant(
         &mut self,
-        parsed_expr: &ParsedExpr,
+        _parsed_expr: &ParsedExpr,
         name: &Name,
         values: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {

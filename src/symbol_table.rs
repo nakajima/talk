@@ -20,13 +20,21 @@ impl std::hash::Hash for SymbolID {
     }
 }
 
+#[cfg(test)]
 impl PartialEq for SymbolID {
     fn eq(&self, other: &Self) -> bool {
-        if other.0 == i32::MIN + 2 {
+        if other.0 == SymbolID::ANY.0 || self.0 == SymbolID::ANY.0 {
             true
         } else {
             other.0 == self.0
         }
+    }
+}
+
+#[cfg(not(test))]
+impl PartialEq for SymbolID {
+    fn eq(&self, other: &Self) -> bool {
+        other.0 == self.0
     }
 }
 

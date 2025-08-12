@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, fmt::Display};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Display,
+};
 
 use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
 use tracing::trace_span;
@@ -189,14 +192,39 @@ impl TypeVarContext {
     }
 
     pub fn resolve(&mut self, ty: &Ty) -> Ty {
-        let _s = trace_span!("resolve", ty = format!("{ty:?}")).entered();
+        self.resolve_with_seen(ty, &mut Default::default())
+    }
+
+    pub fn resolve_with_seen(&mut self, ty: &Ty, seen: &mut BTreeMap<Ty, Ty>) -> Ty {
+        if let Some(seen_ty) = seen.get(ty) {
+            return seen_ty.clone();
+        }
+
+        seen.insert(ty.clone(), ty.clone());
+
+        let _s = trace_span!(
+            "resolve",
+            ty = format!("{ty:?}"),
+            seen = format!("{seen:?}")
+        )
+        .entered();
+
         let after = match ty {
+            Ty::Metatype {
+                ty,
+                properties,
+                methods,
+            } => Ty::Metatype {
+                ty: Box::new(self.resolve_with_seen(ty, seen)),
+                properties: self.resolve_row_with_seen(properties, seen),
+                methods: self.resolve_row_with_seen(methods, seen),
+            },
             Ty::Var(var) => {
                 let new_ty = self.table.probe_value(VarKey(var.id));
                 match new_ty {
                     Ty::Var(new_var) if new_var == *var => new_ty, // Same var, no progress
-                    Ty::Var(_) => self.resolve(&new_ty),           // Different var, keep resolving
-                    _ => self.resolve(&new_ty),
+                    Ty::Var(_) => self.resolve_with_seen(&new_ty, seen), // Different var, keep resolving
+                    _ => self.resolve_with_seen(&new_ty, seen),
                 }
             }
             Ty::Func {
@@ -204,8 +232,11 @@ impl TypeVarContext {
                 returns,
                 generic_constraints,
             } => Ty::Func {
-                params: params.iter().map(|p| self.resolve(p)).collect(),
-                returns: Box::new(self.resolve(returns)),
+                params: params
+                    .iter()
+                    .map(|p| self.resolve_with_seen(p, seen))
+                    .collect(),
+                returns: Box::new(self.resolve_with_seen(returns, seen)),
                 generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints
             },
             Ty::Primitive(..) => ty.clone(),
@@ -213,23 +244,60 @@ impl TypeVarContext {
                 name,
                 properties,
                 methods,
-                statics,
                 type_params,
                 instantiations,
-            } => Ty::Nominal {
-                name: name.clone(),
-                properties: self.resolve_row(properties),
-                methods: self.resolve_row(methods),
-                statics: self.resolve_row(statics),
-                type_params: type_params.clone(),
-                instantiations: instantiations.clone(), // TODO: might need to resolve types in instantiations
-            },
-            Ty::Product(row) => Ty::Product(self.resolve_row(row)),
+            } => {
+                // Resolve rows as usual
+                let resolved_properties = self.resolve_row_with_seen(properties, seen);
+                let resolved_methods = self.resolve_row_with_seen(methods, seen);
+
+                // Drop generic type parameters that have been bound to concrete types.
+                // Keep only those vars that still probe to themselves.
+                let mut remaining_type_params = vec![];
+                for type_param in type_params {
+                    let probed = self.table.probe_value(VarKey(type_param.id));
+                    match probed {
+                        Ty::Var(v) if v == *type_param => {
+                            remaining_type_params.push(*type_param)
+                        }
+                        _ => {
+                            // Bound to some type; omit from remaining params.
+                        }
+                    }
+                }
+
+                // Build updated instantiations: resolve existing values and add
+                // entries for any type params that are now bound.
+                let mut new_instantiations = BTreeMap::new();
+                for (k, v) in instantiations {
+                    new_instantiations.insert(*k, self.resolve_with_seen(v, seen));
+                }
+                for type_param in type_params {
+                    let probed = self.table.probe_value(VarKey(type_param.id));
+                    let resolved = self.resolve_with_seen(&probed, seen);
+                    if !matches!(resolved, Ty::Var(v) if v == *type_param) {
+                        new_instantiations.insert(*type_param, resolved);
+                    }
+                }
+
+                Ty::Nominal {
+                    name: name.clone(),
+                    properties: resolved_properties,
+                    methods: resolved_methods,
+                    type_params: remaining_type_params,
+                    instantiations: new_instantiations,
+                }
+            }
+            Ty::Product(row) => Ty::Product(self.resolve_row_with_seen(row, seen)),
             #[allow(clippy::todo)]
             Ty::Sum(..) => todo!(),
             #[allow(clippy::todo)]
-            Ty::Label(label, value) => Ty::Label(label.clone(), Box::new(self.resolve(value))),
+            Ty::Label(label, value) => {
+                Ty::Label(label.clone(), Box::new(self.resolve_with_seen(value, seen)))
+            }
         };
+
+        seen.insert(ty.clone(), after.clone());
 
         if ty != &after {
             tracing::trace!("resolve ty: before: {ty:?} after: {after:?}");
@@ -238,19 +306,22 @@ impl TypeVarContext {
         after
     }
 
-    pub fn resolve_row(&mut self, row: &Row) -> Row {
+    pub fn resolve_row_with_seen(&mut self, row: &Row, seen: &mut BTreeMap<Ty, Ty>) -> Row {
         let after = match row {
             Row::Open(row_var) => {
                 let resolved_row = self.row_table.probe_value(*row_var);
                 if matches!(resolved_row, Row::Closed(_)) {
-                    self.resolve_row(&resolved_row)
+                    self.resolve_row_with_seen(&resolved_row, seen)
                 } else {
                     resolved_row
                 }
             }
             Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
                 fields: fields.to_vec(),
-                values: values.iter().map(|v| self.resolve(v)).collect(),
+                values: values
+                    .iter()
+                    .map(|v| self.resolve_with_seen(v, seen))
+                    .collect(),
             }),
         };
 
@@ -286,7 +357,10 @@ impl TypeVarContext {
     }
 
     pub fn unify_row_var(&mut self, row_var: RowVar, row: Row) -> Result<(), TypeError> {
-        if self.resolve_row(&Row::Open(row_var)) == self.resolve_row(&row) {
+        let seen = &mut Default::default();
+        if self.resolve_row_with_seen(&Row::Open(row_var), seen)
+            == self.resolve_row_with_seen(&row, seen)
+        {
             return Ok(());
         }
 
@@ -298,7 +372,9 @@ impl TypeVarContext {
     }
 
     pub fn unify_var_ty(&mut self, mut type_var: TypeVar, mut ty: Ty) -> Result<(), TypeError> {
-        if self.resolve(&Ty::Var(type_var)) == self.resolve(&ty) {
+        let seen = &mut Default::default();
+
+        if self.resolve_with_seen(&Ty::Var(type_var), seen) == self.resolve_with_seen(&ty, seen) {
             return Ok(());
         }
 
@@ -332,8 +408,9 @@ impl TypeVarContext {
     }
 
     pub fn unify_ty_ty(&mut self, lhs: &Ty, rhs: &Ty) -> Result<(), TypeError> {
-        let lhs = self.resolve(lhs);
-        let rhs = self.resolve(rhs);
+        let seen = &mut Default::default();
+        let lhs = self.resolve_with_seen(lhs, seen);
+        let rhs = self.resolve_with_seen(rhs, seen);
         let _s = trace_span!("unify", lhs = format!("{lhs:?}"), rhs = format!("{rhs:?}")).entered();
 
         match (&lhs, &rhs) {
@@ -342,6 +419,18 @@ impl TypeVarContext {
                 self.unify_var_ty(if picked == lhs { *rhs_var } else { *lhs_var }, picked)
             }
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.unify_var_ty(*var, ty.clone()),
+            (
+                Ty::Nominal { name: lhs_name, .. },
+                Ty::Nominal { name: rhs_name, .. },
+            ) => {
+                // Only unify nominal types by identity (same declaration).
+                // Do NOT attempt to unify per-call instantiations here; those are
+                // handled by field/method constraints and call instantiation.
+                if lhs_name != rhs_name {
+                    return Err(TypeError::Mismatch(lhs.to_string(), rhs.to_string()));
+                }
+                Ok(())
+            }
             (
                 Ty::Func {
                     params: lhs_params,

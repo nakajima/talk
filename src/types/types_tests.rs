@@ -10,6 +10,7 @@ mod tests {
             row::{ClosedRow, Label, Row},
             ty::{Primitive, Ty},
             type_checking_session::{TypeCheckingResult, TypeCheckingSession},
+            type_var::{TypeVar, TypeVarKind},
             type_var_context::RowVar,
         },
     };
@@ -251,16 +252,20 @@ mod tests {
         );
 
         assert_eq!(
-            Ty::Nominal {
-                name: Name::Resolved(SymbolID(1), "Person".to_string()),
-                properties: Row::Closed(ClosedRow {
-                    fields: vec!["name".into(), "age".into()],
-                    values: vec![Ty::Float, Ty::Int]
-                }),
-                methods: Row::Open(RowVar::new(1)),
-                statics: Row::Open(RowVar::new(2)),
-                type_params: vec![],
-                instantiations: Default::default(),
+            Ty::Metatype {
+                ty: Ty::Nominal {
+                    name: Name::Resolved(SymbolID::ANY, "Person".to_string()),
+                    properties: Row::Closed(ClosedRow {
+                        fields: vec!["name".into(), "age".into()],
+                        values: vec![Ty::Float, Ty::Int]
+                    }),
+                    methods: Row::Open(RowVar::new(1)),
+                    type_params: vec![],
+                    instantiations: Default::default()
+                }
+                .into(),
+                properties: Row::Open(RowVar::new(2)),
+                methods: Row::Open(RowVar::new(3))
             },
             checked.typed_roots[0].ty
         );
@@ -289,7 +294,6 @@ mod tests {
                     values: vec![Ty::Float, Ty::Int]
                 }),
                 methods: Row::Open(RowVar::new(1)),
-                statics: Row::Open(RowVar::new(2)),
                 type_params: vec![],
                 instantiations: Default::default(),
             },
@@ -521,19 +525,17 @@ mod tests {
         ",
         );
 
-        println!(
-            "checked typed roots: {:?}\n{:?}",
-            checked.typed_roots, checked.diagnostics
-        );
-
+        // The type should be Maybe<Int> with T instantiated to Int
         assert_eq!(
             Ty::Nominal {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
-                methods: Row::Closed(ClosedRow::default()),
-                statics: Row::Closed(ClosedRow::default()),
+                methods: Row::Open(RowVar::new(1)),
                 type_params: vec![],
-                instantiations: Default::default(),
+                instantiations: std::collections::BTreeMap::from([(
+                    TypeVar::new(0, TypeVarKind::Canonical),
+                    Ty::Int
+                ),]),
             },
             checked.typed_roots[2].ty,
         );
@@ -552,22 +554,15 @@ mod tests {
         ",
         );
 
-        println!(
-            "checked typed roots: {:?}\n{:?}",
-            checked.typed_roots, checked.diagnostics
-        );
-
         assert_eq!(
             Ty::Nominal {
-                name: "Maybe".into(),
+                name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
-                methods: Row::Closed(ClosedRow::default()),
-                statics: Row::Closed(ClosedRow::default()),
+                methods: Row::Open(RowVar::new(1)),
                 type_params: vec![],
                 instantiations: Default::default(),
             },
             checked.typed_roots[2].ty,
         );
     }
-
 }

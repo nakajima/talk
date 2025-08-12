@@ -31,6 +31,11 @@ impl Display for Primitive {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub enum Ty {
     Primitive(#[drive(skip)] Primitive),
+    Metatype {
+        ty: Box<Ty>,
+        properties: Row,
+        methods: Row,
+    },
     Func {
         params: Vec<Ty>,
         returns: Box<Ty>,
@@ -42,7 +47,6 @@ pub enum Ty {
         name: Name,
         properties: Row,
         methods: Row,
-        statics: Row,
         #[drive(skip)]
         type_params: Vec<TypeVar>, // Generic type parameters (e.g., T in Person<T>)
         #[drive(skip)]
@@ -85,6 +89,21 @@ impl Ty {
 
     pub fn contains_canonical_var(&self) -> bool {
         match self {
+            Ty::Metatype {
+                ty,
+                properties,
+                methods,
+            } => {
+                if let Row::Closed(ClosedRow { values, .. }) = properties {
+                    return values.iter().any(|t| t.contains_canonical_var());
+                }
+
+                if let Row::Closed(ClosedRow { values, .. }) = methods {
+                    return values.iter().any(|t| t.contains_canonical_var());
+                }
+
+                ty.contains_canonical_var()
+            }
             Ty::Nominal {
                 properties,
                 methods,
@@ -125,12 +144,20 @@ impl Ty {
         substitutions: &mut BTreeMap<TypeVar, TypeVar>,
     ) -> Ty {
         match self {
+            Ty::Metatype {
+                ty,
+                properties,
+                methods,
+            } => Ty::Metatype {
+                ty: Box::new(ty.instantiate(context, substitutions)),
+                properties: properties.clone(),
+                methods: methods.clone(),
+            },
             Ty::Primitive(..) => self.clone(),
             Ty::Nominal {
                 name,
                 properties,
                 methods,
-                statics,
                 type_params,
                 instantiations,
             } => {
@@ -147,7 +174,6 @@ impl Ty {
                 // Instantiate property and method rows with the substitutions
                 let inst_properties = properties.instantiate_row(context, substitutions);
                 let inst_methods = methods.instantiate_row(context, substitutions);
-                let inst_statics = statics.instantiate_row(context, substitutions);
 
                 // Build instantiations map for this instance
                 let mut inst_map = instantiations.clone();
@@ -159,7 +185,6 @@ impl Ty {
                     name: name.clone(),
                     properties: inst_properties,
                     methods: inst_methods,
-                    statics: inst_statics,
                     type_params: vec![], // Instance has no type params, they're instantiated
                     instantiations: inst_map,
                 }
