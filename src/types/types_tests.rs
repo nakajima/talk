@@ -16,6 +16,16 @@ mod tests {
     };
 
     pub(super) fn check(code: &'static str) -> TypeCheckingResult {
+        let res = check_err(code);
+        assert!(
+            res.diagnostics.is_empty(),
+            "diagnostics not empty!\n{:#?}",
+            res.diagnostics
+        );
+        res
+    }
+
+    pub(super) fn check_err(code: &'static str) -> TypeCheckingResult {
         let parsed = parse(code, "-");
         let symbol_table = &mut SymbolTable::base();
         let mut resolved = NameResolver::new(
@@ -92,6 +102,18 @@ mod tests {
     }
 
     #[test]
+    fn infers_nested_identity() {
+        let checker = check(
+            "
+            func identity(arg) { arg }
+            identity(identity(1))
+        ",
+        );
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+    }
+
+    #[test]
     fn infers_generic_func() {
         let checked = check("func id<T>(x: T) { x }; id(123); id(1.23)");
         assert_eq!(Ty::Int, checked.typed_roots[1].ty);
@@ -108,7 +130,7 @@ mod tests {
     #[test]
     fn generic_func_type_mismatch_should_fail() {
         // This actually succeeds because T gets constrained to Int
-        let result = check("func bad<T>(x: T) -> T { 123 }");
+        let result = check_err("func bad<T>(x: T) -> T { 123 }");
 
         // The function is valid - it just means T must be Int
         // Let's verify the type
@@ -123,7 +145,7 @@ mod tests {
     #[test]
     fn generic_func_type_mismatch_at_call_site() {
         // The error happens when we try to call with wrong type
-        let result = check("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
+        let result = check_err("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
@@ -157,7 +179,7 @@ mod tests {
     fn generic_func_wrong_call() {
         // The error should happen when we try to call with wrong type
         // Using float instead of string to avoid unimplemented string literals
-        let result = check("func wrong<T>(x: T) -> Int { x }; wrong(1.5)");
+        let result = check_err("func wrong<T>(x: T) -> Int { x }; wrong(1.5)");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
@@ -228,13 +250,13 @@ mod tests {
 
     #[test]
     fn generic_func_breaks_parametricity() {
-        let result = check("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
+        let result = check_err("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
     #[test]
     fn condition_must_be_bool() {
-        let result = check("if 123 { 345 }");
+        let result = check_err("if 123 { 345 }");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
@@ -379,7 +401,7 @@ mod tests {
 
     #[test]
     fn checks_constructor_args() {
-        let checked = check(
+        let checked = check_err(
             "struct Person {
             let age: Int
 
@@ -400,7 +422,7 @@ mod tests {
 
     #[test]
     fn checks_setter() {
-        let checked = check(
+        let checked = check_err(
             "struct Person {
             let age: Int
         }
@@ -438,7 +460,7 @@ mod tests {
 
     #[test]
     fn checks_recursive_terminating() {
-        let checked = check(
+        let checked = check_err(
             "
         func rec(n) {
             if n < 10 {
@@ -581,5 +603,65 @@ mod tests {
             },
             checked.typed_roots[2].ty,
         );
+    }
+
+    #[test]
+    fn checks_basic_match_expression() {
+        let checker = check(
+            "
+            enum Boolean {
+                case yes, no
+            }
+
+            match Boolean.yes {
+                Boolean.yes -> 0,
+                Boolean.no -> 1,
+            }
+            ",
+        );
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+    }
+
+    #[test]
+    fn errors_basic_match_expression_if_bodies_dont_agree() {
+        let checker = check_err(
+            "
+            enum Boolean {
+                case yes, no
+            }
+
+            match Boolean.yes {
+                Boolean.yes -> 0,
+                Boolean.no -> 1.2,
+            }
+            ",
+        );
+
+        assert_eq!(checker.diagnostics.len(), 1);
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+    }
+
+    #[test]
+    fn checks_match_bind() {
+        let checker = check(
+            "
+            enum Option<T> {
+                case some(T)
+            }
+
+            match Option.some(123) {
+                Option.some(i) -> i,
+            }
+
+            match Option.some(12.3) {
+                Option.some(i) -> i,
+            }
+            ",
+        );
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+        assert_eq!(Ty::Float, checker.typed_roots[2].ty);
     }
 }

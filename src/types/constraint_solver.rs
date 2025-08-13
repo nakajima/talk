@@ -146,6 +146,8 @@ impl<'a> ConstraintSolver<'a> {
                     Ok(()) => (),
                     #[allow(clippy::panic)]
                     Err(e) => {
+                        tracing::error!("Error applying defaults: {e:?}");
+
                         if let Some(mut constraint) = deferred.pop() {
                             constraint.error(e).ok();
                             // TODO: This may not be strictly accurate.
@@ -153,7 +155,6 @@ impl<'a> ConstraintSolver<'a> {
                         } else {
                             panic!("didn't get a constraint to blame");
                         }
-                        tracing::error!("Error applying defaults");
                     }
                 }
             }

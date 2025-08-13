@@ -9,6 +9,7 @@ use crate::{
     parsed_expr::{self, IncompleteExpr, ParsedExpr},
     token_kind::TokenKind,
     type_checker::TypeError,
+    typed_expr::Pattern,
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
@@ -32,6 +33,8 @@ struct VisitorContext {
     // Stack of `self` values
     self_stack: Vec<Ty>,
     metaself_stack: Vec<Ty>,
+
+    expected_stack: Vec<Ty>,
 }
 
 impl Default for VisitorContext {
@@ -41,6 +44,7 @@ impl Default for VisitorContext {
             generic_constraints_stack: vec![],
             self_stack: vec![],
             metaself_stack: vec![],
+            expected_stack: vec![],
         }
     }
 }
@@ -740,10 +744,7 @@ impl<'a> Visitor<'a> {
         tracing::debug!("visit_call: callee_ty = {:?}", callee_ty);
 
         let (init_ty, returning) = if let Ty::Metatype {
-            ty: box Ty::Nominal {
-                type_params,
-                ..
-            },
+            ty: box Ty::Nominal { type_params, .. },
             ..
         } = &callee_ty
         {
@@ -846,14 +847,6 @@ impl<'a> Visitor<'a> {
         self.expr_id_types.insert(parsed_expr.id, returning.clone());
 
         Ok(returning)
-    }
-
-    fn visit_parsed_pattern(
-        &mut self,
-        _parsed_expr: &ParsedExpr,
-        _pattern: &parsed_expr::Pattern,
-    ) -> Result<Ty, TypeError> {
-        todo!()
     }
 
     fn visit_return(
@@ -1006,7 +999,10 @@ impl<'a> Visitor<'a> {
                 self.expr_id_types.insert(parsed_expr.id, Ty::Var(var));
                 Ok(Ty::Var(var))
             }
-            None => todo!(),
+            None => {
+                // Look up the identifier in the scopes
+                todo!()
+            }
         }
     }
 
@@ -1284,22 +1280,121 @@ impl<'a> Visitor<'a> {
         }
     }
 
+    fn expecting<T, F: Fn(&mut Self) -> T>(&mut self, expected_ty: Ty, f: F) -> T {
+        self.context.expected_stack.push(expected_ty);
+        let ret = f(self);
+        self.context.expected_stack.pop();
+        ret
+    }
+
     fn visit_match(
         &mut self,
         _parsed_expr: &ParsedExpr,
-        _scrutinee: &ParsedExpr,
-        _arms: &[ParsedExpr],
+        scrutinee: &ParsedExpr,
+        arms: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
-        todo!()
+        let scrutinee_ty = self.visit(scrutinee)?;
+        let typed_arms = self.expecting(scrutinee_ty, |v| v.visit_mult(arms))?;
+
+        if let Some(first_arm) = typed_arms.first() {
+            // Ensure arms agree
+            for (i, other_arm) in typed_arms[1..].iter().enumerate() {
+                self.constrain(
+                    arms[i].id,
+                    ConstraintKind::Equals(first_arm.clone(), other_arm.clone()),
+                    ConstraintCause::MatchArm,
+                )?;
+            }
+
+            Ok(first_arm.clone())
+        } else {
+            Ok(Ty::Void)
+        }
     }
 
     fn visit_match_arm(
         &mut self,
         _parsed_expr: &ParsedExpr,
-        _pattern: &ParsedExpr,
-        _body: &ParsedExpr,
+        pattern: &ParsedExpr,
+        body: &ParsedExpr,
     ) -> Result<Ty, TypeError> {
-        todo!()
+        self.context.start_scope();
+        let _pattern = self.visit(pattern)?;
+        let body = self.visit(body)?;
+        self.context.end_scope();
+
+        Ok(body)
+    }
+
+    fn visit_parsed_pattern(
+        &mut self,
+        parsed_expr: &ParsedExpr,
+        pattern: &parsed_expr::Pattern,
+    ) -> Result<Ty, TypeError> {
+        let Some(expected) = self.context.expected_stack.last().cloned() else {
+            unreachable!("didn't get scrutinee type for pattern");
+        };
+
+        match pattern {
+            parsed_expr::Pattern::LiteralInt(_val) => (),
+            parsed_expr::Pattern::LiteralFloat(_val) => (),
+            parsed_expr::Pattern::LiteralTrue => (),
+            parsed_expr::Pattern::LiteralFalse => (),
+            parsed_expr::Pattern::Bind(name) => {
+                self.declare(&name.symbol_id()?, expected.clone())?;
+            }
+            parsed_expr::Pattern::Wildcard => (),
+            parsed_expr::Pattern::Variant {
+                enum_name,
+                variant_name,
+                fields,
+            } => {
+                let enum_ty = if let Some(enum_name) = enum_name {
+                    self.context.lookup(enum_name)?
+                } else {
+                    Ty::Var(self.new_type_var())
+                };
+
+                if fields.is_empty() {
+                    self.constrain(
+                        parsed_expr.id,
+                        ConstraintKind::TyHasField {
+                            receiver: enum_ty,
+                            label: variant_name.into(),
+                            ty: expected.clone(),
+                            index: None,
+                        },
+                        ConstraintCause::MatchArm,
+                    )?;
+                } else {
+                    let mut params = vec![];
+
+                    for field in fields {
+                        let field_ty = Ty::Var(self.new_type_var());
+                        params.push(field_ty.clone());
+                        self.expecting(field_ty.clone(), |v| v.visit(field))?;
+                    }
+
+                    self.constrain(
+                        parsed_expr.id,
+                        ConstraintKind::TyHasField {
+                            receiver: enum_ty,
+                            label: variant_name.into(),
+                            ty: Ty::Func {
+                                params,
+                                returns: Box::new(expected),
+                                generic_constraints: vec![],
+                            },
+                            index: None,
+                        },
+                        ConstraintCause::MatchArm,
+                    )?;
+                }
+            }
+            parsed_expr::Pattern::Struct { .. } => (),
+        };
+
+        Ok(Ty::Void)
     }
 
     fn visit_pattern_variant(

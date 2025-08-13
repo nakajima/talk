@@ -247,7 +247,7 @@ impl TypeVarContext {
                 type_params,
                 instantiations,
             } => {
-                // Resolve rows as usual
+                // Resolve rows and specialize generic params to current bindings
                 let resolved_properties = self.resolve_row_with_seen(properties, seen);
                 let resolved_methods = self.resolve_row_with_seen(methods, seen);
 
@@ -424,8 +424,6 @@ impl TypeVarContext {
                 Ty::Nominal { name: rhs_name, .. },
             ) => {
                 // Only unify nominal types by identity (same declaration).
-                // Do NOT attempt to unify per-call instantiations here; those are
-                // handled by field/method constraints and call instantiation.
                 if lhs_name != rhs_name {
                     return Err(TypeError::Mismatch(lhs.to_string(), rhs.to_string()));
                 }
