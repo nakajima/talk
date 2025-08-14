@@ -1,4 +1,4 @@
-use crate::types::ty::{Primitive, Ty};
+use crate::types::ty::{Primitive, Ty, TypeParameter};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
 pub struct TypeVar {
@@ -6,12 +6,18 @@ pub struct TypeVar {
     pub kind: TypeVarKind,
 }
 
+impl TypeVar {
+    pub fn to_type_parameter(&self) -> TypeParameter {
+        TypeParameter(self.id)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, std::cmp::Ord)]
 pub enum TypeVarKind {
     Row,
     IntLiteral,
     FloatLiteral,
-    Canonical,
+    // Canonical,
     Instantiated,
     None,
     Void,
@@ -25,7 +31,7 @@ impl TypeVarKind {
             // Literal kinds are most specific
             (IntLiteral | FloatLiteral, _) => true,
             // Canonical/Instantiated are more specific than None
-            (Canonical | Instantiated, None) => true,
+            (Instantiated, None) => true,
             // Everything else is not more specific
             _ => false,
         }

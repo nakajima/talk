@@ -28,6 +28,16 @@ impl Display for Primitive {
     }
 }
 
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TypeParameter(pub u32);
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, DriveMut, Ord)]
+pub enum GenericState {
+    #[drive(skip)]
+    Template(Vec<TypeParameter>),
+    Instance(BTreeMap<TypeParameter, Ty>),
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub enum Ty {
     Primitive(#[drive(skip)] Primitive),
@@ -47,13 +57,11 @@ pub enum Ty {
         name: Name,
         properties: Row,
         methods: Row,
-        #[drive(skip)]
-        type_params: Vec<TypeVar>, // Generic type parameters (e.g., T in Person<T>)
-        #[drive(skip)]
-        instantiations: BTreeMap<TypeVar, Ty>, // Substitutions for this instance
+        generics: GenericState,
     },
     Product(Row),
     Var(#[drive(skip)] TypeVar),
+    TypeParameter(#[drive(skip)] TypeParameter),
     Sum(Row),
     Label(#[drive(skip)] Label, Box<Self>),
 }
@@ -131,7 +139,8 @@ impl Ty {
                         .iter()
                         .any(|c| c.contains_canonical_var())
             }
-            Ty::Var(type_var) => type_var.kind == TypeVarKind::Canonical,
+            Ty::TypeParameter(_) => true,
+            Ty::Var(..) => false,
             Ty::Product(..) => false,
             Ty::Sum(..) => false,
             Ty::Label(_, ty) => ty.contains_canonical_var(),
@@ -141,7 +150,7 @@ impl Ty {
     pub fn instantiate(
         &self,
         context: &mut TypeVarContext,
-        substitutions: &mut BTreeMap<TypeVar, TypeVar>,
+        substitutions: &mut BTreeMap<TypeParameter, TypeVar>,
     ) -> Ty {
         match self {
             Ty::Metatype {
@@ -155,11 +164,14 @@ impl Ty {
             },
             Ty::Primitive(..) => self.clone(),
             Ty::Nominal {
+                generics: GenericState::Instance(..),
+                ..
+            } => self.clone(),
+            Ty::Nominal {
                 name,
                 properties,
                 methods,
-                type_params,
-                instantiations,
+                generics: GenericState::Template(type_params),
             } => {
                 // Create fresh type variables for each generic parameter
                 let mut local_subs = BTreeMap::new();
@@ -176,7 +188,7 @@ impl Ty {
                 let inst_methods = methods.instantiate_row(context, substitutions);
 
                 // Build instantiations map for this instance
-                let mut inst_map = instantiations.clone();
+                let mut inst_map = BTreeMap::new();
                 for (canonical, instantiated) in local_subs.iter() {
                     inst_map.insert(*canonical, Ty::Var(*instantiated));
                 }
@@ -185,8 +197,7 @@ impl Ty {
                     name: name.clone(),
                     properties: inst_properties,
                     methods: inst_methods,
-                    type_params: vec![], // Instance has no type params, they're instantiated
-                    instantiations: inst_map,
+                    generics: GenericState::Instance(inst_map),
                 }
             }
             Ty::Func {
@@ -204,19 +215,16 @@ impl Ty {
                     .map(|c| c.instantiate(context, substitutions))
                     .collect(),
             },
-            Ty::Var(type_var) => {
-                if type_var.kind == TypeVarKind::Canonical {
-                    let new_var = substitutions
-                        .entry(*type_var)
-                        .or_insert_with(|| context.new_var(TypeVarKind::Instantiated));
-                    tracing::debug!(
-                        "instantiate: replacing canonical {type_var:?} with {new_var:?}"
-                    );
-                    Ty::Var(*new_var)
+            Ty::TypeParameter(type_param) => {
+                if let Some(existing) = substitutions.get(type_param) {
+                    Ty::Var(*existing)
                 } else {
-                    self.clone()
+                    let fresh_var = context.new_var(TypeVarKind::Instantiated);
+                    substitutions.insert(*type_param, fresh_var);
+                    Ty::Var(fresh_var)
                 }
             }
+            Ty::Var(type_var) => self.clone(),
             #[allow(clippy::todo)]
             Ty::Product(..) => todo!(),
             #[allow(clippy::todo)]

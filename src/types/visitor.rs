@@ -9,14 +9,13 @@ use crate::{
     parsed_expr::{self, IncompleteExpr, ParsedExpr},
     token_kind::TokenKind,
     type_checker::TypeError,
-    typed_expr::Pattern,
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
         constraint_set::{ConstraintId, ConstraintSet},
         row::{Label, Row},
         row_kind::RowKind,
-        ty::{Primitive, Ty},
+        ty::{GenericState, Primitive, Ty, TypeParameter},
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
         type_var_context::{RowVar, TypeVarContext},
@@ -155,8 +154,8 @@ impl<'a> Visitor<'a> {
         self.type_var_context.new_row_var()
     }
 
-    pub fn new_canonical_type_var(&mut self) -> TypeVar {
-        self.type_var_context.new_var(TypeVarKind::Canonical)
+    pub fn new_canonical_type_var(&mut self) -> TypeParameter {
+        self.type_var_context.new_type_param()
     }
 
     pub fn new_instantiated_type_var(&mut self) -> TypeVar {
@@ -242,12 +241,9 @@ impl<'a> Visitor<'a> {
         }
 
         // Update the nominal type with the generic parameters
-        if let Ty::Nominal {
-            type_params: params,
-            ..
-        } = &mut *self_ty
-        {
-            *params = type_params.clone();
+        if let Ty::Nominal { generics, .. } = &mut *self_ty {
+            *generics =
+                GenericState::Template(type_params.iter().map(|t| t.to_type_parameter()).collect());
         }
 
         // Push the updated enum type to the stack (after setting type params)
@@ -744,7 +740,11 @@ impl<'a> Visitor<'a> {
         tracing::debug!("visit_call: callee_ty = {:?}", callee_ty);
 
         let (init_ty, returning) = if let Ty::Metatype {
-            ty: box Ty::Nominal { type_params, .. },
+            ty:
+                box Ty::Nominal {
+                    generics: GenericState::Template(type_params),
+                    ..
+                },
             ..
         } = &callee_ty
         {
@@ -780,7 +780,11 @@ impl<'a> Visitor<'a> {
             )?;
 
             (init_ty, returning_nominal)
-        } else if let Ty::Nominal { type_params, .. } = &callee_ty {
+        } else if let Ty::Nominal {
+            generics: GenericState::Template(type_params),
+            ..
+        } = &callee_ty
+        {
             // Only instantiate if there are type parameters
             let instantiated = if !type_params.is_empty() {
                 let mut substitutions = BTreeMap::new();
@@ -936,7 +940,7 @@ impl<'a> Visitor<'a> {
         introduces_type: bool,
     ) -> Result<Ty, TypeError> {
         if introduces_type {
-            let ty = Ty::Var(self.new_canonical_type_var());
+            let ty = Ty::TypeParameter(self.new_canonical_type_var());
             self.context.declare(&name.symbol_id()?, &ty)?;
             return Ok(ty);
         }
@@ -1028,6 +1032,8 @@ impl<'a> Visitor<'a> {
         _attributes: &[ParsedExpr],
         skip_return_constraint: bool,
     ) -> Result<Ty, TypeError> {
+        let mut constraint_set = ConstraintSet::new();
+
         self.context.start_scope();
 
         // Always start tracking constraints for functions - we'll determine if it's generic
@@ -1049,11 +1055,11 @@ impl<'a> Visitor<'a> {
             let annotated_ty = self.visit(ret)?;
 
             if !skip_return_constraint {
-                self.constrain(
+                constraint_set.constrain(
                     ret.id,
                     ConstraintKind::Equals(body_ty, annotated_ty.clone()),
                     ConstraintCause::Annotation(ret.id),
-                )?;
+                );
             }
             annotated_ty
         } else {
@@ -1061,7 +1067,7 @@ impl<'a> Visitor<'a> {
             // contains canonical vars (making this a generic function)
             let ty = if body_ty.contains_canonical_var() {
                 // This is a generic function, use a canonical var for the return type
-                Ty::Var(self.new_canonical_type_var())
+                Ty::TypeParameter(self.new_canonical_type_var())
             } else {
                 // Regular function, use a normal type var
                 Ty::Var(self.new_type_var())
@@ -1113,7 +1119,7 @@ impl<'a> Visitor<'a> {
         } else if let Some(annotation) = annotation {
             self.visit(annotation)?
         } else {
-            Ty::Var(self.new_canonical_type_var())
+            Ty::TypeParameter(self.new_canonical_type_var())
         };
 
         tracing::trace!("visit_parameter name: {name:?}, ty: {param_ty:?}");

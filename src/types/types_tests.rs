@@ -8,12 +8,27 @@ mod tests {
         synthesis::synthesize_inits,
         types::{
             row::{ClosedRow, Label, Row},
-            ty::{Primitive, Ty},
+            ty::{GenericState, Primitive, Ty, TypeParameter},
             type_checking_session::{TypeCheckingResult, TypeCheckingSession},
             type_var::{TypeVar, TypeVarKind},
             type_var_context::RowVar,
         },
     };
+
+    macro_rules! btreemap {
+    // trailing comma case
+    ($($key:expr => $value:expr,)+) => (btreemap!($($key => $value),+));
+
+    ( $($key:expr => $value:expr),* ) => {
+        {
+            let mut _map = ::std::collections::BTreeMap::new();
+            $(
+                let _ = _map.insert($key, $value);
+            )*
+            _map
+        }
+    };
+}
 
     pub(super) fn check(code: &'static str) -> TypeCheckingResult {
         let res = check_err(code);
@@ -99,6 +114,18 @@ mod tests {
             },
             checked.typed_roots[0].ty
         )
+    }
+
+    #[test]
+    fn infers_identity() {
+        let checker = check(
+            "
+            func identity(arg) { arg }
+            identity(1)
+        ",
+        );
+
+        assert_eq!(Ty::Int, checker.typed_roots[1].ty);
     }
 
     #[test]
@@ -250,7 +277,8 @@ mod tests {
 
     #[test]
     fn generic_func_breaks_parametricity() {
-        let result = check_err("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
+        let result =
+            check_err("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
@@ -282,8 +310,7 @@ mod tests {
                         values: vec![Ty::Float, Ty::Int]
                     }),
                     methods: Row::Open(RowVar::new(1)),
-                    type_params: vec![],
-                    instantiations: Default::default()
+                    generics: GenericState::Instance(btreemap!())
                 }
                 .into(),
                 properties: Row::Open(RowVar::new(2)),
@@ -316,8 +343,7 @@ mod tests {
                     values: vec![Ty::Float, Ty::Int]
                 }),
                 methods: Row::Open(RowVar::new(1)),
-                type_params: vec![],
-                instantiations: Default::default(),
+                generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[1].ty
         );
@@ -555,11 +581,9 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
                 methods: Row::Open(RowVar::new(1)),
-                type_params: vec![],
-                instantiations: std::collections::BTreeMap::from([(
-                    TypeVar::new(0, TypeVarKind::Canonical),
-                    Ty::Int
-                ),]),
+                generics: GenericState::Instance(btreemap!(
+                    TypeParameter(0) => Ty::Int
+                ))
             },
             checked.typed_roots[2].ty,
         );
@@ -570,11 +594,9 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
                 methods: Row::Open(RowVar::new(1)),
-                type_params: vec![],
-                instantiations: std::collections::BTreeMap::from([(
-                    TypeVar::new(0, TypeVarKind::Canonical),
-                    Ty::Int
-                ),]),
+                generics: GenericState::Instance(btreemap!(
+                    TypeParameter(0) => Ty::Int
+                ))
             },
             checked.typed_roots[3].ty,
         );
@@ -598,8 +620,7 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
                 methods: Row::Open(RowVar::new(1)),
-                type_params: vec![],
-                instantiations: Default::default(),
+                generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[2].ty,
         );

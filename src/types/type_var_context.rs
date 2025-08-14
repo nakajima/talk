@@ -11,7 +11,7 @@ use crate::{
     type_checker::TypeError,
     types::{
         row::{ClosedRow, Row},
-        ty::{Primitive, Ty},
+        ty::{GenericState, Primitive, Ty, TypeParameter},
         type_var::{TypeVar, TypeVarKind},
     },
 };
@@ -139,10 +139,33 @@ impl UnifyKey for RowVar {
 
 impl EqUnifyValue for ClosedRow {}
 
+impl Display for TypeParameter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl UnifyKey for TypeParameter {
+    type Value = ();
+
+    fn index(&self) -> u32 {
+        self.0
+    }
+
+    fn from_index(i: u32) -> Self {
+        TypeParameter(i)
+    }
+
+    fn tag() -> &'static str {
+        "TypeParameter"
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
     row_table: InPlaceUnificationTable<RowVar>,
+    type_params_table: InPlaceUnificationTable<TypeParameter>,
 }
 
 impl TypeVarContext {
@@ -219,6 +242,7 @@ impl TypeVarContext {
                 properties: self.resolve_row_with_seen(properties, seen),
                 methods: self.resolve_row_with_seen(methods, seen),
             },
+            Ty::TypeParameter(_) => ty.clone(),
             Ty::Var(var) => {
                 let new_ty = self.table.probe_value(VarKey(var.id));
                 match new_ty {
@@ -244,48 +268,29 @@ impl TypeVarContext {
                 name,
                 properties,
                 methods,
-                type_params,
-                instantiations,
+                generics,
             } => {
                 // Resolve rows and specialize generic params to current bindings
                 let resolved_properties = self.resolve_row_with_seen(properties, seen);
                 let resolved_methods = self.resolve_row_with_seen(methods, seen);
 
-                // Drop generic type parameters that have been bound to concrete types.
-                // Keep only those vars that still probe to themselves.
-                let mut remaining_type_params = vec![];
-                for type_param in type_params {
-                    let probed = self.table.probe_value(VarKey(type_param.id));
-                    match probed {
-                        Ty::Var(v) if v == *type_param => {
-                            remaining_type_params.push(*type_param)
-                        }
-                        _ => {
-                            // Bound to some type; omit from remaining params.
-                        }
-                    }
-                }
-
                 // Build updated instantiations: resolve existing values and add
                 // entries for any type params that are now bound.
                 let mut new_instantiations = BTreeMap::new();
-                for (k, v) in instantiations {
-                    new_instantiations.insert(*k, self.resolve_with_seen(v, seen));
-                }
-                for type_param in type_params {
-                    let probed = self.table.probe_value(VarKey(type_param.id));
-                    let resolved = self.resolve_with_seen(&probed, seen);
-                    if !matches!(resolved, Ty::Var(v) if v == *type_param) {
-                        new_instantiations.insert(*type_param, resolved);
+                let mut generics = generics.clone();
+                if let GenericState::Instance(instantiations) = generics {
+                    for (k, v) in instantiations {
+                        new_instantiations.insert(k, self.resolve_with_seen(&v, seen));
                     }
+
+                    generics = GenericState::Instance(new_instantiations);
                 }
 
                 Ty::Nominal {
                     name: name.clone(),
                     properties: resolved_properties,
                     methods: resolved_methods,
-                    type_params: remaining_type_params,
-                    instantiations: new_instantiations,
+                    generics,
                 }
             }
             Ty::Product(row) => Ty::Product(self.resolve_row_with_seen(row, seen)),
@@ -344,6 +349,12 @@ impl TypeVarContext {
         type_var
     }
 
+    pub fn new_type_param(&mut self) -> TypeParameter {
+        let var = TypeParameter(self.type_params_table.len() as u32);
+        let _ = self.type_params_table.new_key(());
+        var
+    }
+
     pub fn next_id(&self) -> u32 {
         self.table.len() as u32
     }
@@ -368,6 +379,15 @@ impl TypeVarContext {
 
         self.row_table.unify_var_value(row_var, row)?;
 
+        Ok(())
+    }
+
+    pub fn unify_type_params(
+        &mut self,
+        lhs: TypeParameter,
+        rhs: TypeParameter,
+    ) -> Result<(), TypeError> {
+        self.type_params_table.unify_var_var(lhs, rhs).ok();
         Ok(())
     }
 
@@ -419,10 +439,7 @@ impl TypeVarContext {
                 self.unify_var_ty(if picked == lhs { *rhs_var } else { *lhs_var }, picked)
             }
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.unify_var_ty(*var, ty.clone()),
-            (
-                Ty::Nominal { name: lhs_name, .. },
-                Ty::Nominal { name: rhs_name, .. },
-            ) => {
+            (Ty::Nominal { name: lhs_name, .. }, Ty::Nominal { name: rhs_name, .. }) => {
                 // Only unify nominal types by identity (same declaration).
                 if lhs_name != rhs_name {
                     return Err(TypeError::Mismatch(lhs.to_string(), rhs.to_string()));
@@ -455,6 +472,10 @@ impl TypeVarContext {
 
                 self.unify_ty_ty(lhs_returns, rhs_returns)?;
 
+                Ok(())
+            }
+            (Ty::TypeParameter(lhs), Ty::TypeParameter(rhs)) => {
+                self.type_params_table.unify_var_var(*lhs, *rhs).ok();
                 Ok(())
             }
             _ => {

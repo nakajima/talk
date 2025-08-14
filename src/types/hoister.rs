@@ -2,7 +2,11 @@ use crate::{
     name::Name,
     parsed_expr::{Expr, ParsedExpr},
     type_checker::TypeError,
-    types::{row::Row, ty::Ty, visitor::Visitor},
+    types::{
+        row::Row,
+        ty::{GenericState, Ty},
+        visitor::Visitor,
+    },
 };
 
 pub struct Hoister {}
@@ -42,8 +46,7 @@ impl Hoister {
             name: name.clone(),
             properties: Row::Open(properties),
             methods: Row::Open(methods),
-            type_params: vec![], // Will be filled during struct definition
-            instantiations: Default::default(),
+            generics: GenericState::Template(vec![]),
         };
 
         let meta_properties = visitor.new_row_type_var();
@@ -71,8 +74,7 @@ impl Hoister {
             name: name.clone(),
             properties: Row::Open(properties),
             methods: Row::Open(methods),
-            type_params: vec![], // Will be filled during struct definition
-            instantiations: Default::default(),
+            generics: GenericState::Template(vec![]),
         };
 
         visitor.declare(

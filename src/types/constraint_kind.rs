@@ -4,7 +4,7 @@ use crate::{
     expr_id::ExprID,
     types::{
         row::{Label, Row, RowCombination},
-        ty::{Primitive, Ty},
+        ty::{Primitive, Ty, TypeParameter},
         type_var::TypeVar,
     },
 };
@@ -78,7 +78,7 @@ impl ConstraintKind {
     pub fn instantiate(
         &self,
         context: &mut crate::types::type_var_context::TypeVarContext,
-        substitutions: &mut std::collections::BTreeMap<TypeVar, TypeVar>,
+        substitutions: &mut std::collections::BTreeMap<TypeParameter, TypeVar>,
     ) -> ConstraintKind {
         match self {
             ConstraintKind::Equals(lhs, rhs) => ConstraintKind::Equals(

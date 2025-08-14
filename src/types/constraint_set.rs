@@ -1,9 +1,10 @@
 use priority_queue::PriorityQueue;
 
 use crate::{
+    expr_id::ExprID,
     type_checker::TypeError,
     types::{
-        constraint::{Constraint, ConstraintState},
+        constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
         row::Row,
         ty::Ty,
@@ -95,6 +96,22 @@ impl ConstraintSet {
         })
     }
 
+    pub fn constrain(&mut self, expr_id: ExprID, kind: ConstraintKind, cause: ConstraintCause) {
+        let id = self.next_id();
+
+        tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
+
+        self.add(Constraint {
+            id,
+            expr_id,
+            cause,
+            kind,
+            parent: None,
+            children: vec![],
+            state: ConstraintState::Pending,
+        });
+    }
+
     pub fn add(&mut self, constraint: Constraint) -> ConstraintId {
         let constraint_id = constraint.id;
         let priority = constraint.priority();
@@ -129,9 +146,10 @@ impl ConstraintSet {
                     }
                     ConstraintKind::TyHasField { receiver, .. } => {
                         if let Ty::Nominal { properties, .. } = receiver
-                            && *properties == *row {
-                                return Some(c);
-                            }
+                            && *properties == *row
+                        {
+                            return Some(c);
+                        }
                     }
                     _ => (),
                 }

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt::Display};
 use derive_visitor::DriveMut;
 
 use crate::types::{
-    ty::Ty,
+    ty::{Ty, TypeParameter},
     type_var::TypeVar,
     type_var_context::{RowVar, TypeVarContext},
 };
@@ -61,7 +61,7 @@ impl Row {
     pub fn instantiate_row(
         &self,
         _context: &mut TypeVarContext,
-        substitutions: &mut BTreeMap<TypeVar, TypeVar>,
+        substitutions: &mut BTreeMap<TypeParameter, TypeVar>,
     ) -> Row {
         match self {
             Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {

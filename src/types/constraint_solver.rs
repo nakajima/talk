@@ -11,7 +11,7 @@ use crate::{
         constraint_kind::ConstraintKind,
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
-        ty::{Primitive, Ty},
+        ty::{GenericState, Primitive, Ty, TypeParameter},
         type_var::{TypeVar, TypeVarKind},
         type_var_context::{RowVar, TypeVarContext},
     },
@@ -44,16 +44,13 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    fn apply_instantiations(&mut self, ty: &Ty, instantiations: &BTreeMap<TypeVar, Ty>) -> Ty {
+    fn apply_instantiations(
+        &mut self,
+        ty: &Ty,
+        instantiations: &BTreeMap<TypeParameter, Ty>,
+    ) -> Ty {
         match ty {
-            Ty::Var(tv) => {
-                // If this type var has an instantiation, use it and resolve it
-                if let Some(instantiated) = instantiations.get(tv) {
-                    self.context.resolve(instantiated)
-                } else {
-                    ty.clone()
-                }
-            }
+            Ty::Var(tv) => self.context.resolve(ty),
             Ty::Func {
                 params,
                 returns,
@@ -73,14 +70,12 @@ impl<'a> ConstraintSolver<'a> {
                 name,
                 properties,
                 methods,
-                type_params,
-                instantiations: inst,
+                generics,
             } => Ty::Nominal {
                 name: name.clone(),
                 properties: self.apply_instantiations_to_row(properties, instantiations),
                 methods: self.apply_instantiations_to_row(methods, instantiations),
-                type_params: type_params.clone(),
-                instantiations: inst.clone(),
+                generics: generics.clone(),
             },
             _ => ty.clone(),
         }
@@ -89,7 +84,7 @@ impl<'a> ConstraintSolver<'a> {
     fn apply_instantiations_to_row(
         &mut self,
         row: &Row,
-        instantiations: &BTreeMap<TypeVar, Ty>,
+        instantiations: &BTreeMap<TypeParameter, Ty>,
     ) -> Row {
         match row {
             Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
@@ -239,7 +234,7 @@ impl<'a> ConstraintSolver<'a> {
                 ty:
                     box Ty::Nominal {
                         name,
-                        instantiations: insts,
+                        generics: GenericState::Instance(insts),
                         ..
                     },
                 properties,
@@ -299,8 +294,7 @@ impl<'a> ConstraintSolver<'a> {
                 name,
                 properties,
                 methods,
-                instantiations,
-                ..
+                generics: GenericState::Instance(instantiations),
             } => {
                 let Some(member) = self
                     .symbols
@@ -572,13 +566,17 @@ impl<'a> ConstraintSolver<'a> {
         // If it's the first time this constraint has been attempted, spawn the child
         // constraints
         if constraint.state == ConstraintState::Pending {
-            let mut substitutions: BTreeMap<TypeVar, TypeVar> = Default::default();
+            let mut substitutions: BTreeMap<TypeParameter, TypeVar> = Default::default();
 
             // If the call is constructing a nominal type instance, prefer to reuse
             // the same instantiated type variables for this call's generic
             // substitutions, so arguments constrain the same vars that appear in
             // the returned instance's properties/methods.
-            if let Ty::Nominal { instantiations, .. } = &returning {
+            if let Ty::Nominal {
+                generics: GenericState::Instance(instantiations),
+                ..
+            } = &returning
+            {
                 for (canonical, bound_ty) in instantiations.iter() {
                     if let Ty::Var(instantiated) = bound_ty
                         && instantiated.kind == TypeVarKind::Instantiated
@@ -715,6 +713,10 @@ impl<'a> ConstraintSolver<'a> {
             }
             (Ty::Primitive(p1), Ty::Primitive(p2)) if p1 == p2 => {
                 constraint.state = ConstraintState::Solved;
+                Ok(())
+            }
+            (Ty::TypeParameter(lhs), Ty::TypeParameter(rhs)) => {
+                self.context.unify_type_params(lhs, rhs);
                 Ok(())
             }
             (lhs_ty, rhs_ty) => {
