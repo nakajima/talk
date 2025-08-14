@@ -174,12 +174,10 @@ impl Ty {
                 generics: GenericState::Template(type_params),
             } => {
                 // Create fresh type variables for each generic parameter
-                let mut local_subs = BTreeMap::new();
                 for type_param in type_params {
                     if !substitutions.contains_key(type_param) {
                         let fresh_var = context.new_var(TypeVarKind::Instantiated);
                         substitutions.insert(*type_param, fresh_var);
-                        local_subs.insert(*type_param, fresh_var);
                     }
                 }
 
@@ -189,8 +187,10 @@ impl Ty {
 
                 // Build instantiations map for this instance
                 let mut inst_map = BTreeMap::new();
-                for (canonical, instantiated) in local_subs.iter() {
-                    inst_map.insert(*canonical, Ty::Var(*instantiated));
+                for type_param in type_params {
+                    if let Some(instantiated) = substitutions.get(type_param) {
+                        inst_map.insert(*type_param, Ty::Var(*instantiated));
+                    }
                 }
 
                 Ty::Nominal {

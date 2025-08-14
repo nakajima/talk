@@ -114,6 +114,17 @@ impl VisitorContext {
 
         Ok(())
     }
+    
+    fn update_in_parent_scope(&mut self, symbol_id: &SymbolID, ty: &Ty) -> Result<(), TypeError> {
+        // Update in the parent scope (second to last)
+        let scope_len = self.scopes.len();
+        if scope_len < 2 {
+            return Err(TypeError::Unknown("No parent scope available".to_string()));
+        }
+        
+        self.scopes[scope_len - 2].insert(*symbol_id, ty.clone());
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -235,15 +246,19 @@ impl<'a> Visitor<'a> {
         let mut type_params = vec![];
         for generic in generics {
             let ty = self.visit(generic)?;
-            if let Ty::Var(tv) = ty {
-                type_params.push(tv);
+            match ty {
+                Ty::TypeParameter(tp) => {
+                    type_params.push(tp);
+                }
+                _ => {
+                    return Err(TypeError::Unknown(format!("Expected type parameter, got {ty:?}")));
+                }
             }
         }
 
         // Update the nominal type with the generic parameters
         if let Ty::Nominal { generics, .. } = &mut *self_ty {
-            *generics =
-                GenericState::Template(type_params.iter().map(|t| t.to_type_parameter()).collect());
+            *generics = GenericState::Template(type_params.clone());
         }
 
         // Push the updated enum type to the stack (after setting type params)
@@ -256,6 +271,10 @@ impl<'a> Visitor<'a> {
             methods: Row::Open(meta_methods),
         };
         self.context.metaself_stack.push(updated_metatype.clone());
+        
+        // IMPORTANT: Update the metatype in the PARENT scope (not current scope)
+        // so it persists after we end the current scope
+        self.context.update_in_parent_scope(&name.symbol_id()?, &updated_metatype)?;
 
         let parsed_expr::Expr::Block(items) = &body.expr else {
             unreachable!()
@@ -338,7 +357,6 @@ impl<'a> Visitor<'a> {
                     let mut func_ty = self.visit_func(
                         func, &None, generics, params, body, ret, captures, attributes, true,
                     )?;
-                    let self_ty_var = self.new_type_var();
 
                     // Replace the returns slot with our fresh self
                     func_ty = match func_ty {
@@ -348,7 +366,7 @@ impl<'a> Visitor<'a> {
                             generic_constraints,
                         } => Ty::Func {
                             params,
-                            returns: Box::new(Ty::Var(self_ty_var)),
+                            returns: Box::new(*self_ty.clone()),
                             generic_constraints,
                         },
                         other => {
@@ -360,12 +378,6 @@ impl<'a> Visitor<'a> {
                     };
 
                     self.expr_id_types.insert(item.id, func_ty.clone());
-
-                    self.constrain(
-                        item.id,
-                        ConstraintKind::Equals(*self_ty.clone(), Ty::Var(self_ty_var)),
-                        ConstraintCause::InitializerDefinition,
-                    )?;
 
                     // Ensure initializer returns `self` (this should always be the case since we synthesize
                     // a self at the end of inits).
@@ -417,13 +429,12 @@ impl<'a> Visitor<'a> {
         self.context.metaself_stack.pop();
         self.context.end_generic_context();
 
-        // Update the struct definition with the generic type parameters
+        // Return the updated metatype with generics
         let final_metatype = Ty::Metatype {
             ty: self_ty.clone(),
             properties: Row::Open(meta_properties),
             methods: Row::Open(meta_methods),
         };
-        self.context.declare(&name.symbol_id()?, &final_metatype)?;
 
         self.expr_id_types.insert(parsed_expr.id, *self_ty.clone());
 
@@ -740,23 +751,15 @@ impl<'a> Visitor<'a> {
         tracing::debug!("visit_call: callee_ty = {:?}", callee_ty);
 
         let (init_ty, returning) = if let Ty::Metatype {
-            ty:
-                box Ty::Nominal {
-                    generics: GenericState::Template(type_params),
-                    ..
-                },
+            ty: box Ty::Nominal { generics, .. },
             ..
         } = &callee_ty
         {
             // For metatype calls (e.g., Person(...)), look up the static "init" on the metatype
             // and treat the call as invoking that initializer, returning an instance of the
             // underlying nominal type (instantiated if generic).
-            let instantiated = if !type_params.is_empty() {
-                let mut substitutions = BTreeMap::new();
-                callee_ty.instantiate(self.type_var_context, &mut substitutions)
-            } else {
-                callee_ty.clone()
-            };
+            let mut substitutions = BTreeMap::new();
+            let instantiated = callee_ty.instantiate(self.type_var_context, &mut substitutions);
 
             // Extract the nominal type from the (possibly instantiated) metatype for the return
             let returning_nominal = match &instantiated {
@@ -786,13 +789,8 @@ impl<'a> Visitor<'a> {
         } = &callee_ty
         {
             // Only instantiate if there are type parameters
-            let instantiated = if !type_params.is_empty() {
-                let mut substitutions = BTreeMap::new();
-                callee_ty.instantiate(self.type_var_context, &mut substitutions)
-            } else {
-                // For non-generic structs, just use the type as-is
-                callee_ty.clone()
-            };
+            let instantiated =
+                callee_ty.instantiate(self.type_var_context, &mut Default::default());
 
             // Get the init method type
             let init_ty = Ty::Var(self.new_type_var());

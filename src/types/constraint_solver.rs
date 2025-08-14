@@ -77,6 +77,10 @@ impl<'a> ConstraintSolver<'a> {
                 methods: self.apply_instantiations_to_row(methods, instantiations),
                 generics: generics.clone(),
             },
+            Ty::TypeParameter(tp) => {
+                // Apply the instantiation if this type parameter has been instantiated
+                instantiations.get(tp).cloned().unwrap_or_else(|| ty.clone())
+            },
             _ => ty.clone(),
         }
     }
@@ -231,15 +235,15 @@ impl<'a> ConstraintSolver<'a> {
 
         match receiver {
             Ty::Metatype {
-                ty:
-                    box Ty::Nominal {
-                        name,
-                        generics: GenericState::Instance(insts),
-                        ..
-                    },
+                ty: box Ty::Nominal { name, generics, .. },
                 properties,
                 methods,
             } => {
+                let insts = match generics {
+                    GenericState::Instance(insts) => insts,
+                    GenericState::Template(_) => Default::default(),
+                };
+
                 let Some(member) = self
                     .symbols
                     .member_kind(&name.symbol_id()?, &label.to_string())
@@ -759,6 +763,10 @@ impl<'a> ConstraintSolver<'a> {
                     constraint.state =
                         ConstraintState::Error(TypeError::Unknown("Unexpected type".to_string()));
                 }
+            }
+            Ty::TypeParameter(_) => {
+                // Generic type parameter will be constrained to the primitive
+                constraint.state = ConstraintState::Waiting;
             }
             _ => unreachable!("Internal error"),
         }

@@ -309,7 +309,7 @@ mod tests {
                         values: vec![Ty::Float, Ty::Int]
                     }),
                     methods: Row::Open(RowVar::new(1)),
-                    generics: GenericState::Instance(btreemap!())
+                    generics: GenericState::Template(vec![])
                 }
                 .into(),
                 properties: Row::Open(RowVar::new(2)),
