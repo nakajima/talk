@@ -224,7 +224,7 @@ impl Ty {
                     Ty::Var(fresh_var)
                 }
             }
-            Ty::Var(type_var) => self.clone(),
+            Ty::Var(_type_var) => self.clone(),
             #[allow(clippy::todo)]
             Ty::Product(..) => todo!(),
             #[allow(clippy::todo)]

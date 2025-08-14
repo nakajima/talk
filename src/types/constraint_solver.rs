@@ -50,7 +50,7 @@ impl<'a> ConstraintSolver<'a> {
         instantiations: &BTreeMap<TypeParameter, Ty>,
     ) -> Ty {
         match ty {
-            Ty::Var(tv) => self.context.resolve(ty),
+            Ty::Var(_tv) => self.context.resolve(ty),
             Ty::Func {
                 params,
                 returns,
@@ -716,7 +716,7 @@ impl<'a> ConstraintSolver<'a> {
                 Ok(())
             }
             (Ty::TypeParameter(lhs), Ty::TypeParameter(rhs)) => {
-                self.context.unify_type_params(lhs, rhs);
+                self.context.unify_type_params(lhs, rhs)?;
                 Ok(())
             }
             (lhs_ty, rhs_ty) => {

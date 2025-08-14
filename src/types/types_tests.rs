@@ -10,7 +10,6 @@ mod tests {
             row::{ClosedRow, Label, Row},
             ty::{GenericState, Primitive, Ty, TypeParameter},
             type_checking_session::{TypeCheckingResult, TypeCheckingSession},
-            type_var::{TypeVar, TypeVarKind},
             type_var_context::RowVar,
         },
     };
