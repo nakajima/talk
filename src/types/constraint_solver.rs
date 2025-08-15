@@ -71,12 +71,35 @@ impl<'a> ConstraintSolver<'a> {
                 properties,
                 methods,
                 generics,
-            } => Ty::Nominal {
-                name: name.clone(),
-                properties: self.apply_instantiations_to_row(properties, instantiations),
-                methods: self.apply_instantiations_to_row(methods, instantiations),
-                generics: generics.clone(),
-            },
+            } => {
+                // Apply instantiations to the generics field as well
+                let new_generics = match generics {
+                    GenericState::Template(type_params) => {
+                        // If we have instantiations for these type parameters, convert to Instance
+                        let mut has_instantiations = false;
+                        let mut inst_map = BTreeMap::new();
+                        for tp in type_params {
+                            if let Some(instantiated) = instantiations.get(tp) {
+                                inst_map.insert(*tp, instantiated.clone());
+                                has_instantiations = true;
+                            }
+                        }
+                        if has_instantiations {
+                            GenericState::Instance(inst_map)
+                        } else {
+                            generics.clone()
+                        }
+                    }
+                    GenericState::Instance(_) => generics.clone(),
+                };
+                
+                Ty::Nominal {
+                    name: name.clone(),
+                    properties: self.apply_instantiations_to_row(properties, instantiations),
+                    methods: self.apply_instantiations_to_row(methods, instantiations),
+                    generics: new_generics,
+                }
+            }
             Ty::TypeParameter(tp) => {
                 // Apply the instantiation if this type parameter has been instantiated
                 instantiations.get(tp).cloned().unwrap_or_else(|| ty.clone())
@@ -241,7 +264,16 @@ impl<'a> ConstraintSolver<'a> {
             } => {
                 let insts = match generics {
                     GenericState::Instance(insts) => insts,
-                    GenericState::Template(_) => Default::default(),
+                    GenericState::Template(type_params) => {
+                        // For templates, we need to create fresh type variables for instantiation
+                        // This happens when accessing enum variants or other static members on generic types
+                        let mut instantiations = BTreeMap::new();
+                        for type_param in type_params {
+                            let fresh_var = self.context.new_var(TypeVarKind::Instantiated);
+                            instantiations.insert(type_param, Ty::Var(fresh_var));
+                        }
+                        instantiations
+                    }
                 };
 
                 let Some(member) = self

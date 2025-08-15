@@ -12,6 +12,7 @@ pub mod type_var_context;
 pub mod typed_expr;
 pub mod typed_expr_convert;
 pub mod visitor;
+pub mod visitors;
 
 #[cfg(test)]
 pub mod types_tests;

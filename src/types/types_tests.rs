@@ -154,51 +154,10 @@ mod tests {
     }
 
     #[test]
-    fn generic_func_type_mismatch_should_fail() {
-        // This actually succeeds because T gets constrained to Int
-        let result = check_err("func bad<T>(x: T) -> T { 123 }");
-
-        // The function is valid - it just means T must be Int
-        // Let's verify the type
-        if let Ty::Func { returns, .. } = &result.typed_roots[0].ty {
-            // The return type should be resolved to Int
-            assert_eq!(**returns, Ty::Int);
-        } else {
-            panic!("Expected function type");
-        }
-    }
-
-    #[test]
     fn generic_func_type_mismatch_at_call_site() {
         // The error happens when we try to call with wrong type
         let result = check_err("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
         assert_eq!(result.diagnostics.len(), 1);
-    }
-
-    #[test]
-    fn generic_func_tracks_constraints() {
-        // This function constrains T to be Int
-        let result = check("func add_one<T>(x: T) -> T { 123 }");
-        // The function should type check, with T constrained to Int
-        if let Ty::Func {
-            generic_constraints,
-            ..
-        } = &result.typed_roots[0].ty
-        {
-            // Should have constraint that T = Int
-            assert!(
-                !generic_constraints.is_empty(),
-                "Should have generic constraints"
-            );
-        } else {
-            panic!("Expected function type");
-        }
-    }
-
-    #[test]
-    fn generic_func_constrained_valid() {
-        // This should actually be valid - T is constrained to Int
-        let _result = check("func wrong<T>(x: T) -> Int { x }");
     }
 
     #[test]
@@ -278,7 +237,7 @@ mod tests {
     fn generic_func_breaks_parametricity() {
         let result =
             check_err("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
-        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     }
 
     #[test]

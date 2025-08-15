@@ -751,7 +751,7 @@ impl<'a> Visitor<'a> {
         tracing::debug!("visit_call: callee_ty = {:?}", callee_ty);
 
         let (init_ty, returning) = if let Ty::Metatype {
-            ty: box Ty::Nominal { generics, .. },
+            ty: box Ty::Nominal { .. },
             ..
         } = &callee_ty
         {
@@ -1274,8 +1274,13 @@ impl<'a> Visitor<'a> {
         // Treat variants with attached values as function constructors for the enum,
         // otherwise just make it a static property.
         if values.is_empty() {
-            Ok(enum_ty)
+            // For non-generic enums, we still want instances not templates
+            let mut substitutions = BTreeMap::new();
+            let instantiated_enum = enum_ty.instantiate(self.type_var_context, &mut substitutions);
+            Ok(instantiated_enum)
         } else {
+            // For variants with parameters, keep them as-is during definition
+            // They will be instantiated when actually called
             Ok(Ty::Func {
                 params: self.visit_mult(values)?,
                 returns: Box::new(enum_ty),
