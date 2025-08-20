@@ -2,10 +2,14 @@ use std::{collections::BTreeMap, fmt::Display};
 
 use derive_visitor::DriveMut;
 
-use crate::types::{
-    ty::{Ty, TypeParameter},
-    type_var::TypeVar,
-    type_var_context::{RowVar, TypeVarContext},
+use crate::{
+    type_checker::TypeError,
+    types::{
+        ty::{Ty, TypeParameter},
+        type_var::TypeVar,
+        type_var_context::{RowVar, TypeVarContext},
+        visitors::inference_visitor::Substitutions,
+    },
 };
 
 #[derive(Debug)]
@@ -76,6 +80,43 @@ impl Row {
                 // The fields are already defined for this row variable, and instantiation
                 // only affects the types of those fields (via substitutions), not the structure
                 Row::Open(*var)
+            }
+        }
+    }
+
+    pub(crate) fn substituting(self, substitutions: &Substitutions) -> Result<Row, TypeError> {
+        let row = match self {
+            Row::Open(var) => {
+                if let Some(new_var) = substitutions.get_row(&var) {
+                    Row::Open(*new_var)
+                } else {
+                    self
+                }
+            }
+            Row::Closed(ClosedRow { fields, values }) => {
+                let mut new_values = vec![];
+                for value in values {
+                    new_values.push(value.substituting(substitutions)?);
+                }
+                Row::Closed(ClosedRow {
+                    fields,
+                    values: new_values,
+                })
+            }
+        };
+
+        Ok(row)
+    }
+
+    pub fn canonical_type_vars(&self) -> Vec<TypeVar> {
+        match self {
+            Row::Open(_) => vec![],
+            Row::Closed(ClosedRow { values, .. }) => {
+                let mut result = vec![];
+                for value in values {
+                    result.extend(value.canonical_type_vars())
+                }
+                result
             }
         }
     }

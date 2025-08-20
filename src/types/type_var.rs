@@ -17,9 +17,15 @@ pub enum TypeVarKind {
     Row,
     IntLiteral,
     FloatLiteral,
-    // Canonical,
+    BoolLiteral,
+    Canonical(TypeParameter),
     Instantiated,
+    Init,
     None,
+    FuncParam,
+    FuncRet,
+    Member,
+    Let,
     Void,
 }
 

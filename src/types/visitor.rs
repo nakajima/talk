@@ -1,3 +1,4 @@
+// DEPRECATED, SEE visitors/ INSTEAD
 use std::collections::BTreeMap;
 
 use tracing::trace_span;
@@ -18,7 +19,7 @@ use crate::{
         ty::{GenericState, Primitive, Ty, TypeParameter},
         type_checking_session::ExprIDTypeMap,
         type_var::{TypeVar, TypeVarKind},
-        type_var_context::{RowVar, TypeVarContext},
+        type_var_context::{RowVar, RowVarKind, TypeVarContext},
     },
 };
 
@@ -114,14 +115,14 @@ impl VisitorContext {
 
         Ok(())
     }
-    
+
     fn update_in_parent_scope(&mut self, symbol_id: &SymbolID, ty: &Ty) -> Result<(), TypeError> {
         // Update in the parent scope (second to last)
         let scope_len = self.scopes.len();
         if scope_len < 2 {
             return Err(TypeError::Unknown("No parent scope available".to_string()));
         }
-        
+
         self.scopes[scope_len - 2].insert(*symbol_id, ty.clone());
         Ok(())
     }
@@ -162,7 +163,7 @@ impl<'a> Visitor<'a> {
     }
 
     pub fn new_row_type_var(&mut self) -> RowVar {
-        self.type_var_context.new_row_var()
+        self.type_var_context.new_row_var(RowVarKind::Instantiated)
     }
 
     pub fn new_canonical_type_var(&mut self) -> TypeParameter {
@@ -251,7 +252,9 @@ impl<'a> Visitor<'a> {
                     type_params.push(tp);
                 }
                 _ => {
-                    return Err(TypeError::Unknown(format!("Expected type parameter, got {ty:?}")));
+                    return Err(TypeError::Unknown(format!(
+                        "Expected type parameter, got {ty:?}"
+                    )));
                 }
             }
         }
@@ -271,10 +274,11 @@ impl<'a> Visitor<'a> {
             methods: Row::Open(meta_methods),
         };
         self.context.metaself_stack.push(updated_metatype.clone());
-        
+
         // IMPORTANT: Update the metatype in the PARENT scope (not current scope)
         // so it persists after we end the current scope
-        self.context.update_in_parent_scope(&name.symbol_id()?, &updated_metatype)?;
+        self.context
+            .update_in_parent_scope(&name.symbol_id()?, &updated_metatype)?;
 
         let parsed_expr::Expr::Block(items) = &body.expr else {
             unreachable!()

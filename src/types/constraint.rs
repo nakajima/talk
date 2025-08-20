@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
 use std::fmt::{self, Display};
 use std::hash::Hash;
 
+use crate::types::ty::TypeParameter;
+use crate::types::visitors::inference_visitor::Substitutions;
 use crate::{
     expr_id::ExprID,
     type_checker::TypeError,
@@ -72,6 +75,82 @@ impl Hash for Constraint {
 }
 
 impl Constraint {
+    pub(crate) fn instantiate(
+        &self,
+        substitutions: &Substitutions,
+    ) -> Result<Constraint, TypeError> {
+        let kind = match self.kind.clone() {
+            ConstraintKind::Equals(lhs, rhs) => ConstraintKind::Equals(
+                lhs.substituting(substitutions)?,
+                rhs.substituting(substitutions)?,
+            ),
+            ConstraintKind::Call {
+                callee,
+                type_args,
+                args,
+                returning,
+            } => {
+                let mut new_type_args = vec![];
+                let mut new_args = vec![];
+
+                for arg in type_args {
+                    new_type_args.push(arg.substituting(substitutions)?);
+                }
+
+                for arg in args {
+                    new_args.push(arg.substituting(substitutions)?);
+                }
+                ConstraintKind::Call {
+                    callee: callee.substituting(substitutions)?,
+                    type_args: new_type_args,
+                    args: new_args,
+                    returning: returning.substituting(substitutions)?,
+                }
+            }
+            ConstraintKind::LiteralPrimitive(ty, primitive) => {
+                ConstraintKind::LiteralPrimitive(ty.substituting(substitutions)?, primitive)
+            }
+            ConstraintKind::RowCombine(expr_id, row_combination) => {
+                ConstraintKind::RowCombine(expr_id, row_combination)
+            }
+            ConstraintKind::RowClosed { record } => ConstraintKind::RowClosed {
+                record: record.substituting(substitutions)?,
+            },
+            ConstraintKind::HasField {
+                record,
+                label,
+                ty,
+                index,
+            } => ConstraintKind::HasField {
+                record: record.substituting(substitutions)?,
+                label,
+                ty: ty.substituting(substitutions)?,
+                index,
+            },
+            ConstraintKind::TyHasField {
+                receiver,
+                label,
+                ty,
+                index,
+            } => ConstraintKind::TyHasField {
+                receiver: receiver.substituting(substitutions)?,
+                label,
+                ty: ty.substituting(substitutions)?,
+                index,
+            },
+        };
+
+        Ok(Constraint {
+            id: self.id,
+            expr_id: self.expr_id,
+            cause: self.cause.clone(),
+            kind,
+            parent: self.parent,
+            children: self.children.clone(),
+            state: self.state.clone(),
+        })
+    }
+
     pub fn type_vars(&self) -> Vec<TypeVar> {
         match &self.kind {
             ConstraintKind::Equals(lhs, rhs) => {

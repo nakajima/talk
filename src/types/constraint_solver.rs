@@ -44,89 +44,10 @@ impl<'a> ConstraintSolver<'a> {
         }
     }
 
-    fn apply_instantiations(
-        &mut self,
-        ty: &Ty,
-        instantiations: &BTreeMap<TypeParameter, Ty>,
-    ) -> Ty {
-        match ty {
-            Ty::Var(_tv) => self.context.resolve(ty),
-            Ty::Func {
-                params,
-                returns,
-                generic_constraints,
-            } => {
-                Ty::Func {
-                    params: params
-                        .iter()
-                        .map(|p| self.apply_instantiations(p, instantiations))
-                        .collect(),
-                    returns: Box::new(self.apply_instantiations(returns, instantiations)),
-                    generic_constraints: generic_constraints.clone(), // TODO: apply to constraints too
-                }
-            }
-            Ty::Product(row) => Ty::Product(self.apply_instantiations_to_row(row, instantiations)),
-            Ty::Nominal {
-                name,
-                properties,
-                methods,
-                generics,
-            } => {
-                // Apply instantiations to the generics field as well
-                let new_generics = match generics {
-                    GenericState::Template(type_params) => {
-                        // If we have instantiations for these type parameters, convert to Instance
-                        let mut has_instantiations = false;
-                        let mut inst_map = BTreeMap::new();
-                        for tp in type_params {
-                            if let Some(instantiated) = instantiations.get(tp) {
-                                inst_map.insert(*tp, instantiated.clone());
-                                has_instantiations = true;
-                            }
-                        }
-                        if has_instantiations {
-                            GenericState::Instance(inst_map)
-                        } else {
-                            generics.clone()
-                        }
-                    }
-                    GenericState::Instance(_) => generics.clone(),
-                };
-                
-                Ty::Nominal {
-                    name: name.clone(),
-                    properties: self.apply_instantiations_to_row(properties, instantiations),
-                    methods: self.apply_instantiations_to_row(methods, instantiations),
-                    generics: new_generics,
-                }
-            }
-            Ty::TypeParameter(tp) => {
-                // Apply the instantiation if this type parameter has been instantiated
-                instantiations.get(tp).cloned().unwrap_or_else(|| ty.clone())
-            },
-            _ => ty.clone(),
-        }
-    }
-
-    fn apply_instantiations_to_row(
-        &mut self,
-        row: &Row,
-        instantiations: &BTreeMap<TypeParameter, Ty>,
-    ) -> Row {
-        match row {
-            Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
-                fields: fields.clone(),
-                values: values
-                    .iter()
-                    .map(|v| self.apply_instantiations(v, instantiations))
-                    .collect(),
-            }),
-            Row::Open(_) => row.clone(),
-        }
-    }
-
     pub fn solve(mut self) -> BTreeSet<Constraint> {
         let mut failed_attempts = 0;
+
+        println!("Solving constraints: {:#?}", self.constraints);
 
         loop {
             let mut made_progress = false;
@@ -147,7 +68,8 @@ impl<'a> ConstraintSolver<'a> {
                 let before = constraint.state.clone();
                 match self.solve_constraint(&mut constraint) {
                     Ok(_) => (),
-                    Err(_) => {
+                    Err(err) => {
+                        tracing::error!("Error resolving {constraint:?}: {err:?}");
                         self.errored.insert(constraint);
                         continue;
                     }
@@ -257,128 +179,40 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         match receiver {
-            Ty::Metatype {
-                ty: box Ty::Nominal { name, generics, .. },
-                properties,
-                methods,
-            } => {
-                let insts = match generics {
-                    GenericState::Instance(insts) => insts,
-                    GenericState::Template(type_params) => {
-                        // For templates, we need to create fresh type variables for instantiation
-                        // This happens when accessing enum variants or other static members on generic types
-                        let mut instantiations = BTreeMap::new();
-                        for type_param in type_params {
-                            let fresh_var = self.context.new_var(TypeVarKind::Instantiated);
-                            instantiations.insert(type_param, Ty::Var(fresh_var));
-                        }
-                        instantiations
-                    }
-                };
-
-                let Some(member) = self
-                    .symbols
-                    .member_kind(&name.symbol_id()?, &label.to_string())
-                else {
-                    constraint.error(TypeError::MemberNotFound(
-                        name.name_str().to_string(),
-                        label.to_string(),
-                    ))?;
-                };
-
-                match member.kind {
-                    MemberKind::StaticMethod | MemberKind::Initializer => {
-                        let mut field_ty = if let Row::Open(var) = methods {
-                            self.find_base_field_type(&name, &var, &label)?
-                        } else {
-                            self.get_field_type(&methods, &label)?
-                        };
-
-                        // If this metatype refers to a generic nominal instance, apply
-                        // its instantiations to the method type so that call-site
-                        // substitution uses the same instantiated type variables.
-                        if !insts.is_empty() {
-                            field_ty = self.apply_instantiations(&field_ty, &insts);
-                        }
-
-                        self.context.unify_ty_ty(&ty, &field_ty)?;
-
-                        constraint.state = ConstraintState::Solved;
-                        Ok(())
-                    }
-                    MemberKind::StaticProperty | MemberKind::EnumVariant => {
-                        let mut field_ty = if let Row::Open(var) = properties {
-                            self.find_base_field_type(&name, &var, &label)?
-                        } else {
-                            self.get_field_type(&properties, &label)?
-                        };
-
-                        if !insts.is_empty() {
-                            field_ty = self.apply_instantiations(&field_ty, &insts);
-                        }
-
-                        self.context.unify_ty_ty(&ty, &field_ty)?;
-
-                        constraint.state = ConstraintState::Solved;
-                        Ok(())
-                    }
-                    #[allow(clippy::todo)]
-                    _ => todo!("don't know how to handle metatype {member:?} yet"),
+            Ty::Metatype { properties, methods, .. } => {
+                // Prefer static methods and initializers first
+                if let Ok(field_ty) = self.get_field_type(&methods, &label) {
+                    self.context.unify_ty_ty(&ty, &field_ty)?;
+                    constraint.state = ConstraintState::Solved;
+                    return Ok(());
                 }
+
+                if let Ok(field_ty) = self.get_field_type(&properties, &label) {
+                    self.context.unify_ty_ty(&ty, &field_ty)?;
+                    constraint.state = ConstraintState::Solved;
+                    return Ok(());
+                }
+
+                // Not enough info yet
+                constraint.wait();
+                Ok(())
             }
-            Ty::Nominal {
-                name,
-                properties,
-                methods,
-                generics: GenericState::Instance(instantiations),
-            } => {
-                let Some(member) = self
-                    .symbols
-                    .member_kind(&name.symbol_id()?, &label.to_string())
-                else {
-                    constraint.error(TypeError::MemberNotFound(
-                        name.name_str().to_string(),
-                        label.to_string(),
-                    ))?;
-                };
-
-                match member.kind {
-                    MemberKind::Property => {
-                        let field_ty = if !instantiations.is_empty()
-                            && let Row::Open(var) = properties
-                        {
-                            self.find_base_field_type(&name, &var, &label)?
-                        } else {
-                            self.get_field_type(&properties, &label)?
-                        };
-
-                        let instantiated_ty = self.apply_instantiations(&field_ty, &instantiations);
-                        self.context.unify_ty_ty(&ty, &instantiated_ty)?;
-
-                        constraint.state = ConstraintState::Solved;
-                        Ok(())
-                    }
-                    MemberKind::Method => {
-                        // Get the method type
-                        let method_ty = if !instantiations.is_empty()
-                            && let Row::Open(row_var) = methods
-                        {
-                            // For instantiated types, look up the base method and apply instantiations
-                            self.find_base_method_type(&name, &row_var, &label)?
-                        } else {
-                            self.get_field_type(&methods, &label)?
-                        };
-
-                        let instantiated_method =
-                            self.apply_instantiations(&method_ty, &instantiations);
-                        self.context.unify_ty_ty(&ty, &instantiated_method)?;
-
-                        constraint.state = ConstraintState::Solved;
-                        Ok(())
-                    }
-                    #[allow(clippy::todo)]
-                    _ => todo!("don't know how to handle {member:?} yet"),
+            Ty::Nominal { properties, methods, .. } => {
+                // Prefer instance properties first
+                if let Ok(field_ty) = self.get_field_type(&properties, &label) {
+                    self.context.unify_ty_ty(&ty, &field_ty)?;
+                    constraint.state = ConstraintState::Solved;
+                    return Ok(());
                 }
+
+                if let Ok(method_ty) = self.get_field_type(&methods, &label) {
+                    self.context.unify_ty_ty(&ty, &method_ty)?;
+                    constraint.state = ConstraintState::Solved;
+                    return Ok(());
+                }
+
+                constraint.wait();
+                Ok(())
             }
             Ty::Product(row) => self.solve_has_field(constraint, &row, label, ty),
             _ => {
@@ -406,8 +240,9 @@ impl<'a> ConstraintSolver<'a> {
                 {
                     return Ok(ty.clone());
                 }
+
                 Err(TypeError::Unknown(format!(
-                    "Field {label:?} not found in open row"
+                    "Field {label:?} not found in open row: {row_var:?}"
                 )))
             }
         }
@@ -419,11 +254,12 @@ impl<'a> ConstraintSolver<'a> {
         row: &RowVar,
         label: &Label,
     ) -> Result<Ty, TypeError> {
-        if let Some(fields) = self.record_fields.get(row)
-            && let Some(ty) = fields.get(label)
-        {
-            tracing::debug!("Found base field type for {label:?}: {ty:?}");
-            return Ok(ty.clone());
+        if let Some(fields) = self.record_fields.get(row) {
+            println!("Found fields: {:?}", fields.keys().collect::<Vec<_>>());
+            if let Some(ty) = fields.get(label) {
+                tracing::debug!("Found base field type for {label:?}: {ty:?}");
+                return Ok(ty.clone());
+            }
         }
 
         Err(TypeError::Unknown(format!(
@@ -556,52 +392,56 @@ impl<'a> ConstraintSolver<'a> {
         returning: Ty,
     ) -> Result<(), TypeError> {
         let callee = self.context.resolve(&callee);
-
         let (params, returns, generic_constraints) = match callee {
             Ty::Func {
                 params,
                 returns,
                 generic_constraints,
             } => (params, *returns, generic_constraints),
-            Ty::Var(_) => {
-                // Create a synthetic function type that matches the call
-                // This will be unified with the actual function type later
-                let params: Vec<Ty> = args
-                    .iter()
-                    .map(|_| Ty::Var(self.context.new_var(TypeVarKind::None)))
-                    .collect();
+            // Ty::Var(_) => {
+            //     // Create a synthetic function type that matches the call
+            //     // This will be unified with the actual function type later
+            //     let params: Vec<Ty> = args
+            //         .iter()
+            //         .map(|_| Ty::Var(self.context.new_var(TypeVarKind::None)))
+            //         .collect();
 
-                let returns = Ty::Var(self.context.new_var(TypeVarKind::None));
+            //     let returns = Ty::Var(self.context.new_var(TypeVarKind::None));
 
-                let func_ty = Ty::Func {
-                    params: params.clone(),
-                    returns: Box::new(returns.clone()),
-                    generic_constraints: vec![],
-                };
+            //     let func_ty = Ty::Func {
+            //         params: params.clone(),
+            //         returns: Box::new(returns.clone()),
+            //         generic_constraints: vec![],
+            //     };
 
-                let id = self.constraints.next_id();
-                let child = self.constraints.add(Constraint {
-                    id,
-                    expr_id: constraint.expr_id,
-                    cause: ConstraintCause::Call,
-                    kind: ConstraintKind::Equals(callee, func_ty),
-                    parent: Some(constraint.id),
-                    children: vec![],
-                    state: ConstraintState::Pending,
-                });
+            //     let id = self.constraints.next_id();
+            //     let child = self.constraints.add(Constraint {
+            //         id,
+            //         expr_id: constraint.expr_id,
+            //         cause: ConstraintCause::Call,
+            //         kind: ConstraintKind::Equals(callee, func_ty),
+            //         parent: Some(constraint.id),
+            //         children: vec![],
+            //         state: ConstraintState::Pending,
+            //     });
 
-                constraint.children.push(child);
+            //     constraint.children.push(child);
 
-                (params, returns, vec![])
-            }
+            //     (params, returns, vec![])
+            // }
             _ => {
-                constraint.error(TypeError::Unknown("Can't call non-func type".to_string()))?;
+                tracing::debug!("not enough info to solve call, waiting");
+                constraint.wait();
+                return Ok(());
+                // constraint.error(TypeError::Unknown("Can't call non-func type".to_string()))?;
             }
         };
 
         // If it's the first time this constraint has been attempted, spawn the child
         // constraints
-        if constraint.state == ConstraintState::Pending {
+        if constraint.state == ConstraintState::Pending
+            || constraint.state == ConstraintState::Waiting
+        {
             let mut substitutions: BTreeMap<TypeParameter, TypeVar> = Default::default();
 
             // If the call is constructing a nominal type instance, prefer to reuse
@@ -660,6 +500,10 @@ impl<'a> ConstraintSolver<'a> {
             }
 
             let returns = returns.instantiate(self.context, &mut substitutions);
+            println!(
+                "Creating return constraint: {:?} = {:?}",
+                returns, returning
+            );
             let id = self.constraints.next_id();
             let child = Constraint {
                 id,

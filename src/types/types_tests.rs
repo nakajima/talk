@@ -10,10 +10,11 @@ mod tests {
             row::{ClosedRow, Label, Row},
             ty::{GenericState, Primitive, Ty, TypeParameter},
             type_checking_session::{TypeCheckingResult, TypeCheckingSession},
-            type_var_context::RowVar,
+            type_var_context::{RowVar, RowVarKind},
         },
     };
 
+    #[macro_export]
     macro_rules! btreemap {
     // trailing comma case
     ($($key:expr => $value:expr,)+) => (btreemap!($($key => $value),+));
@@ -31,6 +32,16 @@ mod tests {
 
     pub(super) fn check(code: &'static str) -> TypeCheckingResult {
         let res = check_err(code);
+        assert!(
+            res.diagnostics.is_empty(),
+            "diagnostics not empty!\n{:#?}",
+            res.diagnostics
+        );
+        res
+    }
+
+    pub(super) fn check_mult(code: &'static str) -> TypeCheckingResult {
+        let res = check_mult_err(code);
         assert!(
             res.diagnostics.is_empty(),
             "diagnostics not empty!\n{:#?}",
@@ -58,40 +69,59 @@ mod tests {
         session.solve()
     }
 
+    pub(super) fn check_mult_err(code: &'static str) -> TypeCheckingResult {
+        let parsed = parse(code, "-");
+        let symbol_table = &mut SymbolTable::base();
+        let mut resolved = NameResolver::new(
+            Scope::new(crate::builtins::default_name_scope()),
+            Default::default(),
+            "-",
+            &Default::default(),
+        )
+        .resolve(parsed, symbol_table);
+
+        synthesize_inits(&mut resolved, symbol_table, &mut Environment::new());
+
+        let meta = resolved.meta.borrow();
+        let mut session = TypeCheckingSession::new(resolved.roots(), &meta, symbol_table);
+
+        session.solve_multi()
+    }
+
     #[test]
     fn infers_int() {
-        let checked = check("123");
+        let checked = check_mult("123");
         assert_eq!(Ty::Primitive(Primitive::Int), checked.typed_roots[0].ty)
     }
 
     #[test]
     fn infers_float() {
-        let checked = check("1.23");
+        let checked = check_mult("1.23");
         assert_eq!(Ty::Primitive(Primitive::Float), checked.typed_roots[0].ty)
     }
 
     #[test]
     fn infers_bool() {
-        let checked = check("true ; false");
+        let checked = check_mult("true ; false");
         assert_eq!(Ty::Primitive(Primitive::Bool), checked.typed_roots[0].ty);
         assert_eq!(Ty::Primitive(Primitive::Bool), checked.typed_roots[1].ty);
     }
 
     #[test]
     fn infers_let() {
-        let checked = check("let x = 123; x");
+        let checked = check_mult("let x = 123; x");
         assert_eq!(Ty::Primitive(Primitive::Int), checked.typed_roots[1].ty)
     }
 
     #[test]
     fn infers_let_with_annotation() {
-        let checked = check("let x: Byte = 123; x");
+        let checked = check_mult("let x: Byte = 123; x");
         assert_eq!(Ty::Byte, checked.typed_roots[1].ty)
     }
 
     #[test]
     fn infers_annotated_func() {
-        let checked = check("func(x: Int) -> Int { x }");
+        let checked = check_mult("func(x: Int) -> Int { x }");
         assert_eq!(
             Ty::Func {
                 params: vec![Ty::Int],
@@ -117,19 +147,21 @@ mod tests {
 
     #[test]
     fn infers_identity() {
-        let checker = check(
+        let checker = check_mult(
             "
             func identity(arg) { arg }
             identity(1)
+            identity(1.23)
         ",
         );
 
         assert_eq!(Ty::Int, checker.typed_roots[1].ty);
+        assert_eq!(Ty::Float, checker.typed_roots[2].ty);
     }
 
     #[test]
     fn infers_nested_identity() {
-        let checker = check(
+        let checker = check_mult(
             "
             func identity(arg) { arg }
             identity(identity(1))
@@ -141,14 +173,14 @@ mod tests {
 
     #[test]
     fn infers_generic_func() {
-        let checked = check("func id<T>(x: T) { x }; id(123); id(1.23)");
+        let checked = check_mult("func id<T>(x: T) { x }; id(123); id(1.23)");
         assert_eq!(Ty::Int, checked.typed_roots[1].ty);
         assert_eq!(Ty::Float, checked.typed_roots[2].ty);
     }
 
     #[test]
     fn infers_unannotated_generic_func() {
-        let checked = check("func id(x) { x }; id(123); id(1.23)");
+        let checked = check_mult("func id(x) { x }; id(123); id(1.23)");
         assert_eq!(Ty::Int, checked.typed_roots[1].ty);
         assert_eq!(Ty::Float, checked.typed_roots[2].ty);
     }
@@ -156,7 +188,7 @@ mod tests {
     #[test]
     fn generic_func_type_mismatch_at_call_site() {
         // The error happens when we try to call with wrong type
-        let result = check_err("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
+        let result = check_mult_err("func bad<T>(x: T) -> T { 123 }; bad(1.5)");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
@@ -164,13 +196,13 @@ mod tests {
     fn generic_func_wrong_call() {
         // The error should happen when we try to call with wrong type
         // Using float instead of string to avoid unimplemented string literals
-        let result = check_err("func wrong<T>(x: T) -> Int { x }; wrong(1.5)");
+        let result = check_mult_err("func wrong<T>(x: T) -> Int { x }; wrong(1.5)");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
     #[test]
     fn infers_record_literal() {
-        let checked = check("{ y: 123, z: 1.23 }");
+        let checked = check_mult("{ y: 123, z: 1.23 }");
         assert_eq!(
             Ty::Product(Row::Closed(ClosedRow {
                 fields: vec!["y".into(), "z".into()],
@@ -182,14 +214,14 @@ mod tests {
 
     #[test]
     fn infers_member_record_literal() {
-        let checked = check("let x = { y: 123, z: 1.23 }; x.y ; x.z");
+        let checked = check_mult("let x = { y: 123, z: 1.23 }; x.y ; x.z");
         assert_eq!(Ty::Int, checked.typed_roots[1].ty);
         assert_eq!(Ty::Float, checked.typed_roots[2].ty);
     }
 
     #[test]
     fn infers_tuple() {
-        let checked = check("(123, 1.23)");
+        let checked = check_mult("(123, 1.23)");
         assert_eq!(
             Ty::Product(Row::Closed(ClosedRow {
                 fields: vec![Label::Int(0), Label::Int(1)],
@@ -201,7 +233,7 @@ mod tests {
 
     #[test]
     fn infers_tuple_member() {
-        let checked = check("let x = (123, 1.23) ; x.0; x.1");
+        let checked = check_mult("let x = (123, 1.23) ; x.0; x.1");
         assert_eq!(3, checked.typed_roots.len());
         assert_eq!(Ty::Int, checked.typed_roots[1].ty);
         assert_eq!(Ty::Float, checked.typed_roots[2].ty);
@@ -209,7 +241,7 @@ mod tests {
 
     #[test]
     fn infers_if() {
-        let checked = check(
+        let checked = check_mult(
             "
         if true {
            456 
@@ -221,7 +253,7 @@ mod tests {
 
     #[test]
     fn infers_if_else() {
-        let checked = check(
+        let checked = check_mult(
             "
         if true {
             123
@@ -236,19 +268,19 @@ mod tests {
     #[test]
     fn generic_func_breaks_parametricity() {
         let result =
-            check_err("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
+            check_mult_err("func broken<T>(x: T) -> T { if true { x } else { 42 } }; broken(1.2)");
         assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     }
 
     #[test]
     fn condition_must_be_bool() {
-        let result = check_err("if 123 { 345 }");
+        let result = check_mult_err("if 123 { 345 }");
         assert_eq!(result.diagnostics.len(), 1);
     }
 
     #[test]
     fn struct_properties() {
-        let checked = check(
+        let checked = check_mult(
             "
         struct Person {
             let name: Float 
@@ -267,12 +299,12 @@ mod tests {
                         fields: vec!["name".into(), "age".into()],
                         values: vec![Ty::Float, Ty::Int]
                     }),
-                    methods: Row::Open(RowVar::new(1)),
-                    generics: GenericState::Template(vec![])
+                    methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
+                    generics: GenericState::Instance(Default::default())
                 }
                 .into(),
-                properties: Row::Open(RowVar::new(2)),
-                methods: Row::Open(RowVar::new(3))
+                properties: Row::Open(RowVar::new(2, RowVarKind::Canonical)),
+                methods: Row::Open(RowVar::new(3, RowVarKind::Canonical))
             },
             checked.typed_roots[0].ty
         );
@@ -282,7 +314,7 @@ mod tests {
 
     #[test]
     fn struct_init() {
-        let checked = check(
+        let checked = check_mult(
             "
         struct Person {
             let name: Float 
@@ -300,7 +332,7 @@ mod tests {
                     fields: vec!["name".into(), "age".into()],
                     values: vec![Ty::Float, Ty::Int]
                 }),
-                methods: Row::Open(RowVar::new(1)),
+                methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                 generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[1].ty
@@ -309,7 +341,7 @@ mod tests {
 
     #[test]
     fn struct_methods() {
-        let checked = check(
+        let checked = check_mult(
             "
         struct Person {
             func fizz(x: Int) { x }
@@ -323,8 +355,29 @@ mod tests {
     }
 
     #[test]
+    fn generic_struct_property_with_unannotated_init() {
+        let checked = check_mult(
+            "
+        struct Person<T> {
+            let member: T
+
+            init(member: T) {
+                self.member = member
+            }
+        }
+
+        Person(member: 123).member
+        Person(member: 1.23).member
+        ",
+        );
+
+        assert_eq!(Ty::Int, checked.typed_roots[1].ty);
+        assert_eq!(Ty::Float, checked.typed_roots[2].ty);
+    }
+
+    #[test]
     fn generic_struct_property_with_annotated_init() {
-        let checked = check(
+        let checked = check_mult(
             "
         struct Person<T> {
             let member: T
@@ -538,7 +591,7 @@ mod tests {
             Ty::Nominal {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
-                methods: Row::Open(RowVar::new(1)),
+                methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                 generics: GenericState::Instance(btreemap!(
                     TypeParameter(0) => Ty::Int
                 ))
@@ -551,7 +604,7 @@ mod tests {
             Ty::Nominal {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
-                methods: Row::Open(RowVar::new(1)),
+                methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                 generics: GenericState::Instance(btreemap!(
                     TypeParameter(0) => Ty::Int
                 ))
@@ -577,7 +630,7 @@ mod tests {
             Ty::Nominal {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
-                methods: Row::Open(RowVar::new(1)),
+                methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                 generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[2].ty,

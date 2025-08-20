@@ -11,15 +11,27 @@ use crate::{
         type_var::TypeVar,
     },
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, usize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
 pub struct ConstraintId(pub usize);
 
 impl ConstraintId {
+    pub const GENERIC: ConstraintId = ConstraintId(usize::MAX);
+
     pub fn new(id: usize) -> Self {
         Self(id)
+    }
+}
+
+impl std::fmt::Debug for ConstraintId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if *self == Self::GENERIC {
+            write!(f, "ConstraintId::GENERIC")
+        } else {
+            write!(f, "ConstraintId({})", self.0)
+        }
     }
 }
 
@@ -96,7 +108,12 @@ impl ConstraintSet {
         })
     }
 
-    pub fn constrain(&mut self, expr_id: ExprID, kind: ConstraintKind, cause: ConstraintCause) {
+    pub fn constrain(
+        &mut self,
+        expr_id: ExprID,
+        kind: ConstraintKind,
+        cause: ConstraintCause,
+    ) -> ConstraintId {
         let id = self.next_id();
 
         tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
@@ -110,6 +127,14 @@ impl ConstraintSet {
             children: vec![],
             state: ConstraintState::Pending,
         });
+
+        id
+    }
+
+    pub fn extend(&mut self, constraints: &ConstraintSet) {
+        for (constraint, _) in constraints.constraints.iter() {
+            self.add(constraint.clone());
+        }
     }
 
     pub fn add(&mut self, constraint: Constraint) -> ConstraintId {

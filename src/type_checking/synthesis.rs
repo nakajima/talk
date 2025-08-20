@@ -32,6 +32,40 @@ impl InitInserter {
     }
 }
 
+#[derive(VisitorMut)]
+#[visitor(ParsedExpr(enter))]
+struct SelfReturnInserter<'a> {
+    env: &'a mut Environment,
+    struct_id: SymbolID,
+}
+
+impl<'a> SelfReturnInserter<'a> {
+    fn enter_parsed_expr(&mut self, expr: &mut ParsedExpr) {
+        if let Expr::Init(
+            sym,
+            box ParsedExpr {
+                expr:
+                    Expr::Func {
+                        body:
+                            box ParsedExpr {
+                                expr: Expr::Block(items),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            },
+        ) = &mut expr.expr
+            && *sym == Some(self.struct_id)
+        {
+            items.push(gen_expr(
+                self.env,
+                Expr::Variable(Name::_Self(self.struct_id)),
+            ));
+        }
+    }
+}
+
 pub fn synthesize_inits(
     source_file: &mut SourceFile<NameResolved>,
     symbol_table: &mut SymbolTable,
@@ -111,27 +145,11 @@ pub fn synthesize_inits(
 
             let body = gen_expr(env, Expr::Block(body_exprs));
 
-            let generics = symbol_table
-                .members_for(&sym, MemberKind::Generic)
-                .iter()
-                .map(|g| {
-                    gen_expr(
-                        env,
-                        Expr::TypeRepr {
-                            name: Name::Resolved(g.member_id, g.name.clone()),
-                            generics: vec![],
-                            conformances: vec![],
-                            introduces_type: false,
-                        },
-                    )
-                })
-                .collect();
-
             let func = gen_expr(
                 env,
                 Expr::Func {
                     name: Some(Name::Resolved(sym, "init".to_string())),
-                    generics,
+                    generics: vec![],
                     params: param_exprs,
                     body: Box::new(body),
                     ret: None,
@@ -184,6 +202,15 @@ pub fn synthesize_inits(
             //
 
             // existing_body_ids.insert(0, init_expr);
+        } else {
+            let mut inserter = SelfReturnInserter {
+                env,
+                struct_id: sym,
+            };
+
+            for root in source_file.roots_mut() {
+                root.drive_mut(&mut inserter);
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ use std::fmt::{self, Display};
 use crate::{
     expr_id::ExprID,
     types::{
-        row::{Label, Row, RowCombination},
+        row::{ClosedRow, Label, Row, RowCombination},
         ty::{Primitive, Ty, TypeParameter},
         type_var::TypeVar,
     },
@@ -43,6 +43,82 @@ pub enum ConstraintKind {
 }
 
 impl ConstraintKind {
+    pub fn canonical_vars(&self) -> Vec<TypeVar> {
+        match self {
+            ConstraintKind::Equals(ty, ty1) => {
+                let mut result = vec![];
+                result.extend(ty.canonical_type_vars());
+                result.extend(ty1.canonical_type_vars());
+                result
+            }
+            ConstraintKind::Call {
+                callee,
+                type_args,
+                args,
+                returning,
+            } => {
+                let mut result = vec![];
+                result.extend(callee.canonical_type_vars());
+                for arg in type_args {
+                    result.extend(arg.canonical_type_vars());
+                }
+                for arg in args {
+                    result.extend(arg.canonical_type_vars());
+                }
+                result.extend(returning.canonical_type_vars());
+                result
+            }
+            ConstraintKind::LiteralPrimitive(ty, _) => ty.canonical_type_vars(),
+            ConstraintKind::RowCombine(_, _row_combination) => vec![],
+            ConstraintKind::RowClosed { record } => record.canonical_type_vars(),
+            ConstraintKind::HasField { record, ty, .. } => {
+                let mut result = vec![];
+                result.extend(record.canonical_type_vars());
+                result.extend(ty.canonical_type_vars());
+                result
+            }
+            ConstraintKind::TyHasField { receiver, ty, .. } => {
+                let mut result = vec![];
+                result.extend(receiver.canonical_type_vars());
+                result.extend(ty.canonical_type_vars());
+                result
+            }
+        }
+    }
+
+    pub fn contains_scheme(&self) -> bool {
+        match self {
+            ConstraintKind::Equals(lhs, rhs) => {
+                matches!(lhs, Ty::Scheme(..)) || matches!(rhs, Ty::Scheme(..))
+            }
+            ConstraintKind::Call {
+                callee,
+                type_args,
+                args,
+                returning,
+            } => {
+                matches!(callee, Ty::Scheme(..))
+                    || type_args.iter().any(|a| matches!(a, Ty::Scheme(..)))
+                    || args.iter().any(|a| matches!(a, Ty::Scheme(..)))
+                    || matches!(returning, Ty::Scheme(..))
+            }
+            ConstraintKind::RowClosed { record: row } => match row {
+                Row::Open(_row) => false,
+                Row::Closed(ClosedRow { values, .. }) => {
+                    values.iter().any(|t| matches!(t, Ty::Scheme(..)))
+                }
+            },
+            ConstraintKind::LiteralPrimitive(ty, ..) => matches!(ty, Ty::Scheme(..)),
+            ConstraintKind::HasField { ty, .. } => matches!(ty, Ty::Scheme(..)),
+            ConstraintKind::TyHasField { receiver, ty, .. } => {
+                matches!(receiver, Ty::Scheme(..)) || matches!(ty, Ty::Scheme(..))
+            }
+            #[allow(clippy::todo)]
+            ConstraintKind::RowCombine(..) => {
+                todo!()
+            }
+        }
+    }
     pub fn contains_canonical_var(&self) -> bool {
         match self {
             ConstraintKind::Equals(lhs, rhs) => {
@@ -59,10 +135,12 @@ impl ConstraintKind {
                     || args.iter().any(|a| a.contains_canonical_var())
                     || returning.contains_canonical_var()
             }
-            ConstraintKind::RowClosed { .. } => {
-                tracing::trace!("not sure about this");
-                false
-            }
+            ConstraintKind::RowClosed { record: row } => match row {
+                Row::Open(row) => false,
+                Row::Closed(ClosedRow { values, .. }) => {
+                    values.iter().any(|t| t.contains_canonical_var())
+                }
+            },
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
             ConstraintKind::HasField { ty, .. } => ty.contains_canonical_var(),
             ConstraintKind::TyHasField { receiver, ty, .. } => {
@@ -75,64 +153,13 @@ impl ConstraintKind {
         }
     }
 
+    #[deprecated]
     pub fn instantiate(
         &self,
-        context: &mut crate::types::type_var_context::TypeVarContext,
-        substitutions: &mut std::collections::BTreeMap<TypeParameter, TypeVar>,
+        _context: &mut crate::types::type_var_context::TypeVarContext,
+        _substitutions: &mut std::collections::BTreeMap<TypeParameter, TypeVar>,
     ) -> ConstraintKind {
-        match self {
-            ConstraintKind::Equals(lhs, rhs) => ConstraintKind::Equals(
-                lhs.instantiate(context, substitutions),
-                rhs.instantiate(context, substitutions),
-            ),
-            ConstraintKind::Call {
-                callee,
-                type_args,
-                args,
-                returning,
-            } => ConstraintKind::Call {
-                callee: callee.instantiate(context, substitutions),
-                type_args: type_args
-                    .iter()
-                    .map(|t| t.instantiate(context, substitutions))
-                    .collect(),
-                args: args
-                    .iter()
-                    .map(|t| t.instantiate(context, substitutions))
-                    .collect(),
-                returning: returning.instantiate(context, substitutions),
-            },
-            ConstraintKind::LiteralPrimitive(ty, prim) => {
-                ConstraintKind::LiteralPrimitive(ty.instantiate(context, substitutions), *prim)
-            }
-            ConstraintKind::RowClosed { record } => ConstraintKind::RowClosed {
-                record: record.clone(), //record.instantiate(context, substitutions),
-            },
-            ConstraintKind::HasField {
-                record,
-                label,
-                ty,
-                index,
-            } => ConstraintKind::HasField {
-                record: record.clone(),
-                label: label.clone(),
-                ty: ty.instantiate(context, substitutions),
-                index: *index,
-            },
-            ConstraintKind::TyHasField {
-                receiver,
-                label,
-                ty,
-                index,
-            } => ConstraintKind::TyHasField {
-                receiver: receiver.instantiate(context, substitutions),
-                label: label.clone(),
-                ty: ty.instantiate(context, substitutions),
-                index: *index,
-            },
-            #[allow(clippy::todo)]
-            ConstraintKind::RowCombine(..) => todo!(),
-        }
+        ConstraintKind::LiteralPrimitive(Ty::Void, Primitive::Void)
     }
 }
 

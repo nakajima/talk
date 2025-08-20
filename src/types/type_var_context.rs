@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
+    u32,
 };
 
 use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
@@ -19,11 +20,18 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct VarKey(u32); // Only used with ena
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct RowVarKey(u32); // Only used with ena
+
 impl UnifyValue for Ty {
     type Error = TypeError;
 
     fn unify_values(lhs: &Self, rhs: &Self) -> Result<Self, TypeError> {
         match (lhs, rhs) {
+            #[allow(clippy::panic)]
+            (Ty::RawScheme(_), _) | (_, Ty::RawScheme(_)) => {
+                panic!("Cannot unify raw scheme: {lhs:?}, {rhs:?}");
+            }
             (Ty::Var(lhs), Ty::Var(rhs)) => {
                 if lhs.kind.is_more_specific_than(&rhs.kind) {
                     return Ok(Ty::Var(*lhs));
@@ -107,11 +115,33 @@ impl UnifyKey for VarKey {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
-pub struct RowVar(u32);
+pub enum RowVarKind {
+    Canonical,
+    Instantiated,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct RowVar(u32, RowVarKind);
 
 impl RowVar {
-    pub fn new(id: u32) -> Self {
-        Self(id)
+    pub fn new(id: u32, kind: RowVarKind) -> Self {
+        Self(id, kind)
+    }
+
+    pub fn is_canonical(&self) -> bool {
+        self.1 == RowVarKind::Canonical
+    }
+}
+
+impl From<RowVar> for RowVarKey {
+    fn from(val: RowVar) -> Self {
+        RowVarKey(val.0)
+    }
+}
+
+impl Default for RowVar {
+    fn default() -> Self {
+        RowVar(u32::MAX, RowVarKind::Canonical)
     }
 }
 
@@ -121,7 +151,7 @@ impl Display for RowVar {
     }
 }
 
-impl UnifyKey for RowVar {
+impl UnifyKey for RowVarKey {
     type Value = Row;
 
     fn index(&self) -> u32 {
@@ -129,7 +159,7 @@ impl UnifyKey for RowVar {
     }
 
     fn from_index(i: u32) -> Self {
-        RowVar(i)
+        RowVarKey(i)
     }
 
     fn tag() -> &'static str {
@@ -164,7 +194,7 @@ impl UnifyKey for TypeParameter {
 #[derive(Debug, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
-    row_table: InPlaceUnificationTable<RowVar>,
+    row_table: InPlaceUnificationTable<RowVarKey>,
     type_params_table: InPlaceUnificationTable<TypeParameter>,
 }
 
@@ -202,6 +232,9 @@ impl TypeVarContext {
                     TypeVarKind::FloatLiteral => {
                         self.unify_var_ty(type_var, Ty::Primitive(Primitive::Float))?
                     }
+                    TypeVarKind::BoolLiteral => {
+                        self.unify_var_ty(type_var, Ty::Primitive(Primitive::Bool))?
+                    }
                     TypeVarKind::Void => {
                         self.unify_var_ty(type_var, Ty::Primitive(Primitive::Void))?
                     }
@@ -233,6 +266,7 @@ impl TypeVarContext {
         .entered();
 
         let after = match ty {
+            Ty::Scheme(_) | Ty::RawScheme(_) => ty.clone(),
             Ty::Metatype {
                 ty,
                 properties,
@@ -314,7 +348,7 @@ impl TypeVarContext {
     pub fn resolve_row_with_seen(&mut self, row: &Row, seen: &mut BTreeMap<Ty, Ty>) -> Row {
         let after = match row {
             Row::Open(row_var) => {
-                let resolved_row = self.row_table.probe_value(*row_var);
+                let resolved_row = self.row_table.probe_value(RowVarKey(row_var.0));
                 if matches!(resolved_row, Row::Closed(_)) {
                     self.resolve_row_with_seen(&resolved_row, seen)
                 } else {
@@ -337,8 +371,9 @@ impl TypeVarContext {
         after
     }
 
-    pub fn new_row_var(&mut self) -> RowVar {
-        let var = RowVar(self.row_table.len() as u32);
+    pub fn new_row_var(&mut self, kind: RowVarKind) -> RowVar {
+        let key = RowVarKey(self.row_table.len() as u32);
+        let var = RowVar::new(key.0, kind);
         let _ = self.row_table.new_key(Row::Open(var));
         var
     }

@@ -43,7 +43,17 @@ impl std::ops::Try for TypedExprResult {
 
 macro_rules! lookup {
     ($id: expr, $ids: expr) => {{
+        use crate::types::type_var::TypeVarKind;
         if let Some(ty) = $ids.get(&$id).cloned() {
+            if let Ty::Var(var) = ty
+                && !matches!(var.kind, TypeVarKind::Canonical(_))
+            {
+                return TypedExprResult::Err(TypeError::Unknown(format!(
+                    "Type for {:?} not resolved: {:?}",
+                    $id, ty
+                )));
+            }
+
             ty
         } else {
             return TypedExprResult::Err(TypeError::Unknown(format!(
