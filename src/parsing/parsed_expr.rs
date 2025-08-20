@@ -1,7 +1,8 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    SymbolID, name::Name, parsing::expr_id::ExprID, token_kind::TokenKind, types::row::Label,
+    SymbolID, name::Name, parsing::expr_id::ExprID, raw_formatter::RawFormatter,
+    token_kind::TokenKind, types::row::Label,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
@@ -60,7 +61,7 @@ pub enum Pattern {
     // PatternRef(Box<Pattern>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Clone, PartialEq, Eq, DriveMut, Drive)]
 pub enum Expr {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
@@ -286,7 +287,7 @@ pub enum Expr {
     Import(#[drive(skip)] String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Clone, PartialEq, Eq, DriveMut, Drive)]
 pub struct ParsedExpr {
     #[drive(skip)]
     pub id: ExprID,
@@ -324,5 +325,17 @@ impl ParsedExpr {
         }
 
         None
+    }
+}
+
+impl std::fmt::Debug for ParsedExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Parsed({}, {:?})", self.id.0, self.expr)
+    }
+}
+
+impl std::fmt::Debug for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", RawFormatter::format_single_expr(self))
     }
 }

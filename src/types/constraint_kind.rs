@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_visitor::DriveMut, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, derive_visitor::DriveMut, PartialOrd, Ord)]
 pub enum ConstraintKind {
     Equals(Ty, Ty),
     Call {
@@ -136,13 +136,15 @@ impl ConstraintKind {
                     || returning.contains_canonical_var()
             }
             ConstraintKind::RowClosed { record: row } => match row {
-                Row::Open(row) => false,
+                Row::Open(row) => row.is_canonical(),
                 Row::Closed(ClosedRow { values, .. }) => {
                     values.iter().any(|t| t.contains_canonical_var())
                 }
             },
             ConstraintKind::LiteralPrimitive(ty, ..) => ty.contains_canonical_var(),
-            ConstraintKind::HasField { ty, .. } => ty.contains_canonical_var(),
+            ConstraintKind::HasField { record, ty, .. } => {
+                ty.contains_canonical_var() || record.contains_canonical_var()
+            }
             ConstraintKind::TyHasField { receiver, ty, .. } => {
                 receiver.contains_canonical_var() || ty.contains_canonical_var()
             }
@@ -163,73 +165,47 @@ impl ConstraintKind {
     }
 }
 
-impl Display for ConstraintKind {
+impl std::fmt::Display for ConstraintKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConstraintKind::Equals(lhs, rhs) => {
-                write!(f, "EQUALS {lhs} = {rhs}")
-            }
+            ConstraintKind::Equals(ty, ty1) => write!(f, "[{ty}] = [{ty1}]"),
             ConstraintKind::Call {
                 callee,
                 type_args,
                 args,
                 returning,
-            } => {
-                write!(
-                    f,
-                    "call {}({})",
-                    callee,
-                    args.iter()
-                        .map(|a| a.to_string())
-                        .collect::<Vec<_>>()
+            } => write!(
+                f,
+                "[{callee}{}({}) -> {returning}]",
+                if type_args.is_empty() {
+                    "".to_string()
+                } else {
+                    type_args
+                        .iter()
+                        .map(|a| format!("{a}"))
+                        .collect::<Vec<String>>()
                         .join(", ")
-                )?;
-                if !type_args.is_empty() {
-                    write!(
-                        f,
-                        "<{}>)",
-                        type_args
-                            .iter()
-                            .map(|t| t.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )?;
-                }
-                write!(f, " -> {returning}")
-            }
-            ConstraintKind::LiteralPrimitive(ty, prim) => {
-                write!(f, "LITERAL {ty} : {prim:?}")
-            }
-            ConstraintKind::RowClosed { record } => {
-                write!(f, "row_closed({record:?})")
-            }
+                },
+                args.iter()
+                    .map(|a| format!("{a}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+            ConstraintKind::LiteralPrimitive(ty, primitive) => write!(f, "[{ty} :: {primitive:?}]"),
+            ConstraintKind::RowCombine(expr_id, row_combination) => todo!(),
+            ConstraintKind::RowClosed { record } => write!(f, "Row Close ⟨{record:?}⟩"),
             ConstraintKind::HasField {
                 record,
                 label,
                 ty,
                 index,
-            } => {
-                write!(f, "{record:?}.{label:?} : {ty}")?;
-                if let Some(idx) = index {
-                    write!(f, " [idx:{idx}]")?;
-                }
-                Ok(())
-            }
+            } => write!(f, "[{record:?} ∈ {label} : {ty} {index:?}]"),
             ConstraintKind::TyHasField {
                 receiver,
                 label,
                 ty,
                 index,
-            } => {
-                write!(f, "{receiver:?}.{label:?} : {ty}")?;
-                if let Some(idx) = index {
-                    write!(f, " [idx:{idx}]")?;
-                }
-                Ok(())
-            }
-            ConstraintKind::RowCombine(id, combination) => {
-                write!(f, "row_combine({id}, {combination:?})")
-            }
+            } => write!(f, "[⊤ {receiver} ∈ {label} : {ty} {index:?}]"),
         }
     }
 }

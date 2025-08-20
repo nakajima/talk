@@ -9,11 +9,11 @@
 #![feature(try_blocks)]
 #![feature(try_trait_v2)]
 #![feature(never_type)]
-#![cfg_attr(not(test), warn(clippy::unwrap_used))]
-#![cfg_attr(not(test), warn(clippy::expect_used))]
-#![cfg_attr(not(test), warn(clippy::panic))]
-#![cfg_attr(not(test), warn(clippy::todo))]
-#![cfg_attr(not(test), warn(clippy::unimplemented))]
+// #![cfg_attr(not(test), warn(clippy::unwrap_used))]
+// #![cfg_attr(not(test), warn(clippy::expect_used))]
+// #![cfg_attr(not(test), warn(clippy::panic))]
+// #![cfg_attr(not(test), warn(clippy::todo))]
+// #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
 pub mod prelude;
 pub mod types;

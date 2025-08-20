@@ -108,6 +108,14 @@ impl ConstraintSet {
         })
     }
 
+    pub fn to_vec(mut self) -> Vec<Constraint> {
+        self.constraints.drain().map(|c| c.0).collect()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = Constraint> {
+        self.constraints.into_iter().map(|c| c.0)
+    }
+
     pub fn constrain(
         &mut self,
         expr_id: ExprID,
@@ -116,7 +124,7 @@ impl ConstraintSet {
     ) -> ConstraintId {
         let id = self.next_id();
 
-        tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
+        tracing::trace!("Constraining {id:?} kind: {kind} cause: {cause:?}");
 
         self.add(Constraint {
             id,

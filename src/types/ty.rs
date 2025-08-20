@@ -51,6 +51,32 @@ pub enum InferredDefinition {
     Concrete(Box<Ty>),
 }
 
+impl InferredDefinition {
+    pub(crate) fn specialize(&self, substitutions: &Substitutions) -> Result<Ty, TypeError> {
+        match self {
+            Self::Concrete(ty) => ty.clone().substituting(substitutions),
+            Self::TypeParameter(tp) => {
+                if let Some(var) = substitutions.get_type_parameter(tp) {
+                    Ok(Ty::Var(*var))
+                } else {
+                    Err(TypeError::Unknown(
+                        "Did not find substitution for type parameter".to_string(),
+                    ))
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for InferredDefinition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InferredDefinition::TypeParameter(tp) => write!(f, "T{}", tp.0),
+            InferredDefinition::Concrete(ty) => write!(f, "{ty}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, DriveMut, PartialOrd, Ord)]
 pub enum Ty {
     Primitive(#[drive(skip)] Primitive),
@@ -85,8 +111,33 @@ pub enum Ty {
 impl Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Ty::Primitive(primitive) => write!(f, "{primitive:?}"),
-            _ => write!(f, "{self:?}"),
+            Ty::Primitive(primitive) => write!(f, "{primitive}"),
+            Ty::Metatype { ty, .. } => write!(f, "{ty}.Type"),
+            Ty::RawScheme(type_scheme) => {
+                write!(f, "∀ (raw) {type_scheme}")
+            }
+            Ty::Scheme(type_scheme) => write!(f, "∀ {type_scheme}"),
+            Ty::Func {
+                params,
+                returns,
+                generic_constraints,
+            } => {
+                write!(
+                    f,
+                    "({}) -> {returns}",
+                    params
+                        .iter()
+                        .map(|p| format!("{p}"))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            }
+            Ty::Nominal { name, .. } => write!(f, "{}", name.name_str(),),
+            Ty::Product(row) => write!(f, "{row:?}"),
+            Ty::Var(type_var) => write!(f, "α{}", type_var.id),
+            Ty::TypeParameter(type_parameter) => write!(f, "τ{}", type_parameter.0),
+            Ty::Sum(row) => todo!(),
+            Ty::Label(label, ty) => write!(f, "({label}: {ty})"),
         }
     }
 }

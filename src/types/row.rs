@@ -84,6 +84,15 @@ impl Row {
         }
     }
 
+    pub(crate) fn contains_canonical_var(&self) -> bool {
+        match self {
+            Row::Open(var) => var.is_canonical(),
+            Row::Closed(ClosedRow { values, .. }) => {
+                values.iter().any(|v| v.contains_canonical_var())
+            }
+        }
+    }
+
     pub(crate) fn substituting(self, substitutions: &Substitutions) -> Result<Row, TypeError> {
         let row = match self {
             Row::Open(var) => {

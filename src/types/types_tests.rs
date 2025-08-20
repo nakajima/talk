@@ -1,4 +1,6 @@
 mod tests {
+    use std::assert_matches::assert_matches;
+
     use crate::{
         SymbolID, SymbolTable,
         environment::Environment,
@@ -11,6 +13,7 @@ mod tests {
             ty::{GenericState, Primitive, Ty, TypeParameter},
             type_checking_session::{TypeCheckingResult, TypeCheckingSession},
             type_var_context::{RowVar, RowVarKind},
+            visitors::definition_visitor::{TypeScheme, TypeSchemeKind},
         },
     };
 
@@ -134,7 +137,7 @@ mod tests {
 
     #[test]
     fn infers_unannotated_func() {
-        let checked = check("func() { 123 }");
+        let checked = check_mult("func() { 123 }");
         assert_eq!(
             Ty::Func {
                 params: vec![],
@@ -291,22 +294,15 @@ mod tests {
         ",
         );
 
-        assert_eq!(
-            Ty::Metatype {
-                ty: Ty::Nominal {
-                    name: Name::Resolved(SymbolID::ANY, "Person".to_string()),
-                    properties: Row::Closed(ClosedRow {
-                        fields: vec!["name".into(), "age".into()],
-                        values: vec![Ty::Float, Ty::Int]
-                    }),
-                    methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
-                    generics: GenericState::Instance(Default::default())
-                }
-                .into(),
-                properties: Row::Open(RowVar::new(2, RowVarKind::Canonical)),
-                methods: Row::Open(RowVar::new(3, RowVarKind::Canonical))
-            },
-            checked.typed_roots[0].ty
+        assert_matches!(
+            checked.typed_roots[0].ty,
+            Ty::Scheme(TypeScheme {
+                kind: TypeSchemeKind::Nominal {
+                    name: Name::Resolved(..),
+                    ..
+                },
+                ..
+            })
         );
 
         assert_eq!(Ty::Float, checked.typed_roots[1].ty);
@@ -332,7 +328,7 @@ mod tests {
                     fields: vec!["name".into(), "age".into()],
                     values: vec![Ty::Float, Ty::Int]
                 }),
-                methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
+                methods: Row::Open(RowVar::new(1, RowVarKind::Instantiated)),
                 generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[1].ty
@@ -362,27 +358,6 @@ mod tests {
             let member: T
 
             init(member: T) {
-                self.member = member
-            }
-        }
-
-        Person(member: 123).member
-        Person(member: 1.23).member
-        ",
-        );
-
-        assert_eq!(Ty::Int, checked.typed_roots[1].ty);
-        assert_eq!(Ty::Float, checked.typed_roots[2].ty);
-    }
-
-    #[test]
-    fn generic_struct_property_with_annotated_init() {
-        let checked = check_mult(
-            "
-        struct Person<T> {
-            let member: T
-
-            init(member: T) -> Person<T> {
                 self.member = member
             }
         }

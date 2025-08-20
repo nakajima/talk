@@ -13,7 +13,8 @@ use crate::{
         row::{ClosedRow, Label, Row},
         ty::{GenericState, Primitive, Ty, TypeParameter},
         type_var::{TypeVar, TypeVarKind},
-        type_var_context::{RowVar, TypeVarContext},
+        type_var_context::{InstantiationKey, RowVar, TypeVarContext},
+        visitors::definition_visitor::TypeSchemeKind,
     },
 };
 
@@ -46,9 +47,6 @@ impl<'a> ConstraintSolver<'a> {
 
     pub fn solve(mut self) -> BTreeSet<Constraint> {
         let mut failed_attempts = 0;
-
-        println!("Solving constraints: {:#?}", self.constraints);
-
         loop {
             let mut made_progress = false;
             let mut deferred = vec![];
@@ -69,7 +67,7 @@ impl<'a> ConstraintSolver<'a> {
                 match self.solve_constraint(&mut constraint) {
                     Ok(_) => (),
                     Err(err) => {
-                        tracing::error!("Error resolving {constraint:?}: {err:?}");
+                        tracing::error!("Error resolving {constraint}: {err:#?}");
                         self.errored.insert(constraint);
                         continue;
                     }
@@ -119,9 +117,10 @@ impl<'a> ConstraintSolver<'a> {
         let _s = trace_span!(
             "solve_constraint",
             id = constraint.id.0,
+            kind = %constraint.kind,
+            expr_id = %constraint.expr_id,
             state = %constraint.state,
             cause = %constraint.cause,
-            kind = %constraint.kind,
             priority = constraint.priority()
         )
         .entered();
@@ -152,7 +151,9 @@ impl<'a> ConstraintSolver<'a> {
         };
 
         match result {
-            Ok(_) => (),
+            Ok(_) => {
+                tracing::trace!("{}", constraint.state);
+            }
             Err(err) => {
                 constraint.state = ConstraintState::Error(err.clone());
                 self.errored.insert(constraint.clone());
@@ -179,7 +180,11 @@ impl<'a> ConstraintSolver<'a> {
         }
 
         match receiver {
-            Ty::Metatype { properties, methods, .. } => {
+            Ty::Metatype {
+                properties,
+                methods,
+                ..
+            } => {
                 // Prefer static methods and initializers first
                 if let Ok(field_ty) = self.get_field_type(&methods, &label) {
                     self.context.unify_ty_ty(&ty, &field_ty)?;
@@ -197,7 +202,11 @@ impl<'a> ConstraintSolver<'a> {
                 constraint.wait();
                 Ok(())
             }
-            Ty::Nominal { properties, methods, .. } => {
+            Ty::Nominal {
+                properties,
+                methods,
+                ..
+            } => {
                 // Prefer instance properties first
                 if let Ok(field_ty) = self.get_field_type(&properties, &label) {
                     self.context.unify_ty_ty(&ty, &field_ty)?;
@@ -392,6 +401,7 @@ impl<'a> ConstraintSolver<'a> {
         returning: Ty,
     ) -> Result<(), TypeError> {
         let callee = self.context.resolve(&callee);
+        println!("callee: {callee:?}");
         let (params, returns, generic_constraints) = match callee {
             Ty::Func {
                 params,
@@ -430,7 +440,6 @@ impl<'a> ConstraintSolver<'a> {
             //     (params, returns, vec![])
             // }
             _ => {
-                tracing::debug!("not enough info to solve call, waiting");
                 constraint.wait();
                 return Ok(());
                 // constraint.error(TypeError::Unknown("Can't call non-func type".to_string()))?;
@@ -443,24 +452,6 @@ impl<'a> ConstraintSolver<'a> {
             || constraint.state == ConstraintState::Waiting
         {
             let mut substitutions: BTreeMap<TypeParameter, TypeVar> = Default::default();
-
-            // If the call is constructing a nominal type instance, prefer to reuse
-            // the same instantiated type variables for this call's generic
-            // substitutions, so arguments constrain the same vars that appear in
-            // the returned instance's properties/methods.
-            if let Ty::Nominal {
-                generics: GenericState::Instance(instantiations),
-                ..
-            } = &returning
-            {
-                for (canonical, bound_ty) in instantiations.iter() {
-                    if let Ty::Var(instantiated) = bound_ty
-                        && instantiated.kind == TypeVarKind::Instantiated
-                    {
-                        substitutions.insert(*canonical, *instantiated);
-                    }
-                }
-            }
 
             if self.current_depth > 128 {
                 tracing::trace!("Ran into 128 depth");

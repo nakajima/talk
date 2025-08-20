@@ -19,6 +19,65 @@ pub enum Definition {
     Infer,
 }
 
+impl std::fmt::Display for Definition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Definition::TypeParameter(type_parameter) => write!(f, "T{}", type_parameter.0),
+            Definition::Concrete(symbol_id) => write!(f, "@{}", symbol_id.0),
+            Definition::Infer => write!(f, "[infer]"),
+        }
+    }
+}
+
+impl std::fmt::Display for TypeScheme<Definition> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            TypeSchemeKind::Func {
+                quantified_vars,
+                params,
+                returns,
+                ..
+            } => {
+                write!(
+                    f,
+                    "({}){} -> {returns}",
+                    params
+                        .iter()
+                        .map(|p| format!("{p}"))
+                        .collect::<Vec<String>>()
+                        .join(", "),
+                    if quantified_vars.is_empty() {
+                        "".to_string()
+                    } else {
+                        quantified_vars
+                            .iter()
+                            .map(|a| format!("{a}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    }
+                )
+            }
+            TypeSchemeKind::Property { name, value } => {
+                write!(f, ".{} -> {value}", name.name_str())
+            }
+            TypeSchemeKind::Nominal {
+                name,
+                quantified_vars,
+                ..
+            } => write!(
+                f,
+                "{}<{}>",
+                name.name_str(),
+                quantified_vars
+                    .iter()
+                    .map(|p| format!("{p}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TypeSchemeKind<Def> {
     Func {
@@ -35,8 +94,6 @@ pub enum TypeSchemeKind<Def> {
         name: Name,
         quantified_vars: Vec<TypeParameter>,
         constraints: Vec<Constraint>,
-        methods: Vec<(Label, TypeScheme<Def>)>,
-        properties: Vec<(Label, Def)>,
         canonical_rows: NominalRowSet,
     },
 }
@@ -45,14 +102,6 @@ pub enum TypeSchemeKind<Def> {
 pub struct TypeScheme<Def> {
     pub kind: TypeSchemeKind<Def>,
     pub named_generics: BTreeMap<SymbolID, TypeParameter>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct NominalScope {
-    meta_methods: Vec<(Label, TypeScheme<Definition>)>,
-    meta_properties: Vec<(Label, Definition)>,
-    methods: Vec<(Label, TypeScheme<Definition>)>,
-    properties: Vec<(Label, Definition)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -66,7 +115,6 @@ pub struct GenericScope {
 pub struct DefinitionVisitor {
     pub definitions: BTreeMap<ExprID, TypeScheme<Definition>>,
     generic_scopes: Vec<GenericScope>,
-    nominal_scopes: Vec<NominalScope>,
     last_type_parameter_id: u32,
     errors: Vec<TypeError>,
 }
@@ -76,7 +124,6 @@ impl DefinitionVisitor {
         Self {
             definitions: Default::default(),
             generic_scopes: Default::default(),
-            nominal_scopes: Default::default(),
             last_type_parameter_id: 0,
             errors: vec![],
         }
@@ -89,21 +136,8 @@ impl DefinitionVisitor {
         });
     }
 
-    fn start_nominal_scope(&mut self) {
-        self.nominal_scopes.push(NominalScope {
-            properties: Default::default(),
-            methods: Default::default(),
-            meta_properties: Default::default(),
-            meta_methods: Default::default(),
-        })
-    }
-
     fn end_scope(&mut self) {
         self.generic_scopes.pop();
-    }
-
-    fn end_nominal_scope(&mut self) -> NominalScope {
-        self.nominal_scopes.pop().expect("no nominal scope to end")
     }
 
     // Helper to extract symbol from TypeRepr
@@ -216,7 +250,6 @@ impl DefinitionVisitor {
             }
             Expr::Struct { name, generics, .. } | Expr::EnumDecl { name, generics, .. } => {
                 self.start_scope(true);
-                self.start_nominal_scope();
                 let quantified_vars = self.handle_generics_list(generics);
 
                 self.definitions.insert(
@@ -228,9 +261,6 @@ impl DefinitionVisitor {
                             name: name.clone(),
                             quantified_vars,
                             constraints: vec![],
-
-                            methods: Default::default(),
-                            properties: Default::default(),
                         },
                     },
                 );
@@ -250,20 +280,6 @@ impl DefinitionVisitor {
                 } else {
                     Definition::Infer
                 };
-
-                let Some(nominal_scope) = self.nominal_scopes.last_mut() else {
-                    unreachable!("no nominal scope");
-                };
-
-                if *is_static {
-                    nominal_scope
-                        .meta_properties
-                        .push((Label::String(name.name_str().to_string()), property_def.clone()));
-                } else {
-                    nominal_scope
-                        .properties
-                        .push((Label::String(name.name_str().to_string()), property_def.clone()));
-                }
 
                 self.definitions.insert(
                     parsed.id,
@@ -320,7 +336,6 @@ impl DefinitionVisitor {
             }
             Expr::Struct { .. } | Expr::EnumDecl { .. } => {
                 self.end_scope();
-                self.end_nominal_scope();
             }
             _ => (),
         }
@@ -504,9 +519,6 @@ mod tests {
                     name: Name::Resolved(SymbolID::ANY, "Person".to_string()),
                     quantified_vars: vec![],
                     constraints: vec![],
-
-                    methods: Default::default(),
-                    properties: Default::default(),
                 }
             }
         );
@@ -529,9 +541,6 @@ mod tests {
                     canonical_rows: Default::default(),
                     quantified_vars: vec![TypeParameter(1)],
                     constraints: vec![],
-
-                    methods: Default::default(),
-                    properties: Default::default(),
                 }
             }
         );
@@ -702,49 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn visits_generic_struct_method() {
-        let (roots, definitions) = visit(
-            "struct Person<T> {
-                let age: T
-
-                func getAge() {
-                    self.age
-                }
-            }",
-        );
-
-        let Expr::Struct {
-            body:
-                box ParsedExpr {
-                    expr: Expr::Block(body_exprs),
-                    ..
-                },
-            ..
-        } = &roots[0].expr
-        else {
-            unreachable!()
-        };
-
-        let Expr::Method { func, .. } = &body_exprs[2].expr else {
-            unreachable!()
-        };
-
-        let definition = definitions.get(&func.id).unwrap();
-        assert_eq!(
-            definition,
-            &TypeScheme {
-                named_generics: btreemap!(SymbolID::ANY => TypeParameter(1)),
-                kind: TypeSchemeKind::Func {
-                    quantified_vars: vec![TypeParameter(1)],
-                    params: vec![],
-                    returns: Definition::Infer,
-                    constraints: vec![],
-                }
-            }
-        );
-    }
-
-    #[test]
     fn visits_generic_struct_generic_method() {
         let (roots, definitions) = visit(
             "struct Person<T> {
@@ -798,12 +764,9 @@ mod tests {
                 named_generics: Default::default(),
                 kind: TypeSchemeKind::Nominal {
                     constraints: vec![],
-
                     canonical_rows: Default::default(),
                     name: Name::Resolved(SymbolID::ANY, "Fizz".to_string()),
                     quantified_vars: vec![],
-                    methods: Default::default(),
-                    properties: Default::default(),
                 }
             }
         );
@@ -826,9 +789,6 @@ mod tests {
                     canonical_rows: Default::default(),
                     quantified_vars: vec![TypeParameter(1)],
                     constraints: vec![],
-
-                    methods: Default::default(),
-                    properties: Default::default(),
                 }
             }
         );

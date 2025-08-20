@@ -186,12 +186,13 @@ impl<'a> Visitor<'a> {
     ) -> Result<ConstraintId, TypeError> {
         let id = self.constraints.next_id();
 
-        tracing::trace!("Constraining {id:?} kind: {kind:?} cause: {cause:?}");
+        tracing::trace!("Constraining {id:?} kind: {kind} cause: {cause:?}");
 
         // If this constraint involves canonical type variables and we're in a generic function,
         // track it for later enforcement
         if kind.contains_canonical_var() && self.context.in_generic_function() {
             self.context.add_generic_constraint(kind.clone());
+            return Ok(ConstraintId::GENERIC);
         }
 
         self.constraints.add(Constraint {

@@ -235,30 +235,8 @@ impl Display for ConstraintCause {
     }
 }
 
-impl Display for Constraint {
+impl std::fmt::Display for Constraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[C{} @ E{}] {} | {} | ",
-            self.id, self.expr_id, self.state, self.cause
-        )?;
-
-        write!(f, "{}", self.kind)?;
-
-        if let Some(parent) = self.parent {
-            write!(f, "parent:{parent} | ")?;
-        }
-
-        if !self.children.is_empty() {
-            write!(f, " | children:")?;
-            for (i, child) in self.children.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ",")?;
-                }
-                write!(f, "C{child}")?;
-            }
-        }
-
-        Ok(())
+        write!(f, "[{:?} ⊑ {} {:?}]", self.expr_id, self.kind, self.cause,)
     }
 }

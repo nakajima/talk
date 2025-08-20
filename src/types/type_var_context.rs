@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
+    hash::{DefaultHasher, Hash, Hasher},
     u32,
 };
 
@@ -11,9 +12,15 @@ use crate::{
     builtins,
     type_checker::TypeError,
     types::{
+        constraint::Constraint,
         row::{ClosedRow, Row},
-        ty::{GenericState, Primitive, Ty, TypeParameter},
+        row_kind::RowKind,
+        ty::{GenericState, InferredDefinition, Primitive, Ty, TypeParameter},
         type_var::{TypeVar, TypeVarKind},
+        visitors::{
+            definition_visitor::{TypeScheme, TypeSchemeKind},
+            inference_visitor::{NominalRowSet, Substitutions},
+        },
     },
 };
 
@@ -57,7 +64,7 @@ impl UnifyValue for Ty {
             }
             (Ty::Var(_), ty) | (ty, Ty::Var(_)) => Ok(ty.clone()),
             _ => {
-                tracing::trace!("unify_values: {lhs:?} <> {rhs:?}");
+                tracing::trace!("unify_values: {lhs} ⊔ {rhs}");
                 Ok(lhs.clone())
             }
         }
@@ -191,11 +198,32 @@ impl UnifyKey for TypeParameter {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InstantiationKey {
+    Key(u64),
+}
+
+impl InstantiationKey {
+    pub fn one<A: std::hash::Hash>(a: &A) -> Self {
+        let mut hasher = DefaultHasher::new();
+        a.hash(&mut hasher);
+        InstantiationKey::Key(hasher.finish())
+    }
+
+    pub fn two<A: std::hash::Hash, B: std::hash::Hash>(a: &A, b: &B) -> Self {
+        let mut hasher = DefaultHasher::new();
+        a.hash(&mut hasher);
+        b.hash(&mut hasher);
+        InstantiationKey::Key(hasher.finish())
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
     row_table: InPlaceUnificationTable<RowVarKey>,
     type_params_table: InPlaceUnificationTable<TypeParameter>,
+    instantiation_cache: BTreeMap<InstantiationKey, (Ty, Substitutions, Vec<Constraint>)>,
 }
 
 impl TypeVarContext {
@@ -247,6 +275,169 @@ impl TypeVarContext {
         Ok(())
     }
 
+    fn type_parameter_substitutions(
+        &mut self,
+        type_parameters: &[TypeParameter],
+        kind: TypeVarKind,
+    ) -> BTreeMap<TypeParameter, TypeVar> {
+        type_parameters
+            .iter()
+            .map(|param| (*param, self.new_var(kind)))
+            .collect()
+    }
+
+    pub(crate) fn instantiate<KEY: Hash>(
+        &mut self,
+        key: &KEY,
+        scheme: &TypeScheme<InferredDefinition>,
+    ) -> Result<(Ty, Substitutions, Vec<Constraint>), TypeError> {
+        if let Some(cached) = self.instantiation_cache.get(&InstantiationKey::one(key)) {
+            return Ok(cached.clone());
+        }
+
+        tracing::debug!("instantiating scheme: {scheme:?}");
+
+        let mut constraints = vec![];
+
+        let (instantiated, substitutions, constraints) = match scheme {
+            TypeScheme {
+                kind:
+                    TypeSchemeKind::Nominal {
+                        name,
+                        quantified_vars,
+                        constraints: nominal_constraints,
+                        canonical_rows,
+                        ..
+                    },
+                ..
+            } => {
+                let type_parameter_substitutions =
+                    self.type_parameter_substitutions(quantified_vars, TypeVarKind::Instantiated);
+                let row_substitutions = self.row_var_substitutions(canonical_rows);
+                let substitutions = Substitutions {
+                    type_parameters: type_parameter_substitutions,
+                    rows: row_substitutions,
+                };
+
+                for constraint in nominal_constraints {
+                    let instantiated_constraint = constraint.instantiate(&substitutions)?;
+                    tracing::trace!(
+                        "instantiated constraint {constraint} -> {instantiated_constraint}"
+                    );
+                    constraints.push(instantiated_constraint);
+                }
+
+                #[allow(clippy::unwrap_used)]
+                let nominal_ty = Ty::Nominal {
+                    name: name.clone(),
+                    properties: Row::Open(
+                        *substitutions.get_row(&canonical_rows.properties).unwrap(),
+                    ),
+                    methods: Row::Open(*substitutions.get_row(&canonical_rows.methods).unwrap()),
+                    generics: GenericState::Instance(Default::default()),
+                };
+
+                // Return a Metatype wrapping the nominal, using the correct meta row vars
+                #[allow(clippy::unwrap_used)]
+                let metatype = Ty::Metatype {
+                    ty: Box::new(nominal_ty),
+                    properties: Row::Open(
+                        *substitutions
+                            .get_row(&canonical_rows.meta_properties)
+                            .unwrap(),
+                    ),
+                    methods: Row::Open(
+                        *substitutions.get_row(&canonical_rows.meta_methods).unwrap(),
+                    ),
+                };
+
+                (metatype, substitutions, constraints)
+            }
+            TypeScheme {
+                kind:
+                    TypeSchemeKind::Func {
+                        quantified_vars,
+                        params,
+                        returns,
+                        constraints: func_constraints,
+                    },
+                ..
+            } => {
+                let substitutions = Substitutions {
+                    type_parameters: self
+                        .type_parameter_substitutions(quantified_vars, TypeVarKind::Instantiated),
+                    rows: Default::default(),
+                };
+
+                for constraint in func_constraints {
+                    let instantiated_constraint = constraint.instantiate(&substitutions)?;
+                    constraints.push(instantiated_constraint);
+                }
+
+                let params = params
+                    .iter()
+                    .map(|p| p.specialize(&substitutions))
+                    .collect::<Result<Vec<Ty>, TypeError>>()?;
+
+                let returns = returns.specialize(&substitutions)?;
+
+                (
+                    Ty::Func {
+                        params,
+                        returns: Box::new(returns),
+                        generic_constraints: constraints
+                            .clone()
+                            .to_vec()
+                            .iter()
+                            .map(|c| c.kind.clone())
+                            .collect(),
+                    },
+                    substitutions,
+                    constraints,
+                )
+            }
+            _ => todo!(),
+        };
+
+        tracing::trace!(
+            "instantiated: {instantiated:?}, substitutions: {substitutions:?}, constraints: {constraints:?}"
+        );
+
+        self.instantiation_cache.insert(
+            InstantiationKey::one(key),
+            (
+                instantiated.clone(),
+                substitutions.clone(),
+                constraints.clone(),
+            ),
+        );
+        Ok((instantiated, substitutions, constraints))
+    }
+
+    fn row_var_substitutions(
+        &mut self,
+        canonical_rows: &NominalRowSet,
+    ) -> BTreeMap<RowVar, RowVar> {
+        let mut result = BTreeMap::new();
+        result.insert(
+            canonical_rows.properties,
+            self.new_row_var(RowVarKind::Instantiated),
+        );
+        result.insert(
+            canonical_rows.methods,
+            self.new_row_var(RowVarKind::Instantiated),
+        );
+        result.insert(
+            canonical_rows.meta_methods,
+            self.new_row_var(RowVarKind::Instantiated),
+        );
+        result.insert(
+            canonical_rows.meta_properties,
+            self.new_row_var(RowVarKind::Instantiated),
+        );
+        result
+    }
+
     pub fn resolve(&mut self, ty: &Ty) -> Ty {
         self.resolve_with_seen(ty, &mut Default::default())
     }
@@ -258,12 +449,7 @@ impl TypeVarContext {
 
         seen.insert(ty.clone(), ty.clone());
 
-        let _s = trace_span!(
-            "resolve",
-            ty = format!("{ty:?}"),
-            seen = format!("{seen:?}")
-        )
-        .entered();
+        let _s = trace_span!("resolve", ty = format!("{ty}")).entered();
 
         let after = match ty {
             Ty::Scheme(_) | Ty::RawScheme(_) => ty.clone(),
@@ -336,10 +522,12 @@ impl TypeVarContext {
             }
         };
 
+        _s.record("ty", format!("{after}"));
+
         seen.insert(ty.clone(), after.clone());
 
         if ty != &after {
-            tracing::trace!("resolve ty: before: {ty:?} after: {after:?}");
+            tracing::trace!("resolve ty: before: {ty} after: {after}");
         }
 
         after
@@ -348,6 +536,10 @@ impl TypeVarContext {
     pub fn resolve_row_with_seen(&mut self, row: &Row, seen: &mut BTreeMap<Ty, Ty>) -> Row {
         let after = match row {
             Row::Open(row_var) => {
+                if matches!(row_var.1, RowVarKind::Canonical) {
+                    return row.clone();
+                }
+
                 let resolved_row = self.row_table.probe_value(RowVarKey(row_var.0));
                 if matches!(resolved_row, Row::Closed(_)) {
                     self.resolve_row_with_seen(&resolved_row, seen)
@@ -438,7 +630,7 @@ impl TypeVarContext {
             return Err(TypeError::OccursConflict);
         }
 
-        tracing::trace!("unify: {type_var:?} <> {ty:?}");
+        tracing::trace!("unify: {type_var:?} ⊔ {ty:?}");
 
         // Check if this type var is already bound to something
         let current = self.table.probe_value(VarKey(type_var.id));
@@ -466,7 +658,7 @@ impl TypeVarContext {
         let seen = &mut Default::default();
         let lhs = self.resolve_with_seen(lhs, seen);
         let rhs = self.resolve_with_seen(rhs, seen);
-        let _s = trace_span!("unify", lhs = format!("{lhs:?}"), rhs = format!("{rhs:?}")).entered();
+        let _s = trace_span!("unify", lhs = format!("{lhs}"), rhs = format!("{rhs}")).entered();
 
         match (&lhs, &rhs) {
             (Ty::Var(lhs_var), Ty::Var(rhs_var)) => {
