@@ -6,6 +6,8 @@ Just figures out high level type info like what is generic and what's not. This 
 
 It also gathers members of nominal types. We store these instead of relying on HasField constraints bebecause I clearly have not read enough papers to know how to combine generics with HasField.
 
+We're also trying out letting DefinitionVisitor handle init resolution. So like calling Person() would get replaced by the init in the DefinitionVisitor to make things easier at inference time?
+
 ## Hoister
 Hoists named things so they can be accessed out of order. In practice these things have all been visited by the DefinitionVisitor so we just use those.
 

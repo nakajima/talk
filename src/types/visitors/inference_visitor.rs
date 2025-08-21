@@ -389,7 +389,9 @@ impl<'a> InferenceVisitor<'a> {
     ) -> Result<ConstraintId, TypeError> {
         if kind.contains_canonical_var() {
             let Some((_, constraints)) = self.generic_constraints.last_mut() else {
-                panic!("attempted to constraint canonical variable outside of generic context");
+                panic!(
+                    "attempted to constraint canonical variable outside of generic context: {kind:?}"
+                );
             };
 
             tracing::trace!("Constraint contains canonical var: {kind:?}");
@@ -812,7 +814,7 @@ impl<'a> InferenceVisitor<'a> {
         let generic_constraints = self.collect_generic_constraints(id)?;
 
         #[allow(clippy::expect_used)]
-        let ty = if generic_constraints.is_empty() {
+        let ty = if substitutions.is_empty() {
             Ty::Func {
                 params: typed_params,
                 returns: Box::new(body_ty),
