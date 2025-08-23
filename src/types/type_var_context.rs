@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
-    u32,
 };
 
 use ena::unify::{EqUnifyValue, InPlace, InPlaceUnificationTable, Snapshot, UnifyKey, UnifyValue};
@@ -13,9 +12,9 @@ use crate::{
     type_checker::TypeError,
     types::{
         constraint::Constraint,
+        constraint_set::ConstraintSet,
         row::{ClosedRow, Row},
-        row_kind::RowKind,
-        ty::{GenericState, InferredDefinition, Primitive, Ty, TypeParameter},
+        ty::{InferredDefinition, Primitive, Ty, TypeParameter},
         type_var::{TypeVar, TypeVarKind},
         visitors::{
             definition_visitor::{TypeScheme, TypeSchemeKind},
@@ -128,7 +127,7 @@ pub enum RowVarKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
-pub struct RowVar(u32, RowVarKind);
+pub struct RowVar(pub u32, pub RowVarKind);
 
 impl RowVar {
     pub fn new(id: u32, kind: RowVarKind) -> Self {
@@ -223,7 +222,6 @@ pub struct TypeVarContext {
     table: InPlaceUnificationTable<VarKey>,
     row_table: InPlaceUnificationTable<RowVarKey>,
     type_params_table: InPlaceUnificationTable<TypeParameter>,
-    instantiation_cache: BTreeMap<InstantiationKey, (Ty, Substitutions, Vec<Constraint>)>,
 }
 
 impl TypeVarContext {
@@ -286,26 +284,19 @@ impl TypeVarContext {
             .collect()
     }
 
-    pub(crate) fn instantiate<KEY: Hash>(
+    pub(crate) fn instantiate(
         &mut self,
-        key: &KEY,
         scheme: &TypeScheme<InferredDefinition>,
-    ) -> Result<(Ty, Substitutions, Vec<Constraint>), TypeError> {
-        if let Some(cached) = self.instantiation_cache.get(&InstantiationKey::one(key)) {
-            return Ok(cached.clone());
-        }
+        constraints: &mut ConstraintSet,
+    ) -> Result<(Ty, Substitutions), TypeError> {
+        tracing::debug!("instantiating scheme: {scheme}");
 
-        tracing::debug!("instantiating scheme: {scheme:?}");
-
-        let mut constraints = vec![];
-
-        let (instantiated, substitutions, constraints) = match scheme {
+        let (instantiated, substitutions) = match scheme {
             TypeScheme {
                 kind:
                     TypeSchemeKind::Nominal {
                         name,
                         quantified_vars,
-                        constraints: nominal_constraints,
                         canonical_rows,
                         ..
                     },
@@ -315,16 +306,28 @@ impl TypeVarContext {
                     self.type_parameter_substitutions(quantified_vars, TypeVarKind::Instantiated);
                 let row_substitutions = self.row_var_substitutions(canonical_rows);
                 let substitutions = Substitutions {
-                    type_parameters: type_parameter_substitutions,
-                    rows: row_substitutions,
+                    type_parameters: type_parameter_substitutions.clone(),
+                    rows: row_substitutions.clone(),
                 };
 
-                for constraint in nominal_constraints {
-                    let instantiated_constraint = constraint.instantiate(&substitutions)?;
-                    tracing::trace!(
-                        "instantiated constraint {constraint} -> {instantiated_constraint}"
-                    );
-                    constraints.push(instantiated_constraint);
+                for type_parameter in type_parameter_substitutions.keys() {
+                    for constraint in
+                        constraints.instantiate_type_parameter(*type_parameter, &substitutions)?
+                    {
+                        tracing::trace!(
+                            "instantiated type parameter ({type_parameter}) constraint: {constraint}"
+                        );
+                        constraints.add(constraint);
+                    }
+                }
+
+                for row_var in row_substitutions.keys() {
+                    for constraint in constraints.instantiate_row_var(*row_var, &substitutions)? {
+                        tracing::trace!(
+                            "instantiated row var ({row_var:?}) constraint: {constraint}"
+                        );
+                        constraints.add(constraint);
+                    }
                 }
 
                 #[allow(clippy::unwrap_used)]
@@ -334,7 +337,6 @@ impl TypeVarContext {
                         *substitutions.get_row(&canonical_rows.properties).unwrap(),
                     ),
                     methods: Row::Open(*substitutions.get_row(&canonical_rows.methods).unwrap()),
-                    generics: GenericState::Instance(Default::default()),
                 };
 
                 // Return a Metatype wrapping the nominal, using the correct meta row vars
@@ -351,7 +353,7 @@ impl TypeVarContext {
                     ),
                 };
 
-                (metatype, substitutions, constraints)
+                (metatype, substitutions)
             }
             TypeScheme {
                 kind:
@@ -359,7 +361,6 @@ impl TypeVarContext {
                         quantified_vars,
                         params,
                         returns,
-                        constraints: func_constraints,
                     },
                 ..
             } => {
@@ -369,49 +370,23 @@ impl TypeVarContext {
                     rows: Default::default(),
                 };
 
-                for constraint in func_constraints {
-                    let instantiated_constraint = constraint.instantiate(&substitutions)?;
-                    constraints.push(instantiated_constraint);
-                }
-
-                let params = params
-                    .iter()
-                    .map(|p| p.specialize(&substitutions))
-                    .collect::<Result<Vec<Ty>, TypeError>>()?;
-
-                let returns = returns.specialize(&substitutions)?;
+                let params = params.clone().substituting(&substitutions)?;
+                let returns = returns.substituting(&substitutions)?;
 
                 (
                     Ty::Func {
                         params,
                         returns: Box::new(returns),
-                        generic_constraints: constraints
-                            .clone()
-                            .to_vec()
-                            .iter()
-                            .map(|c| c.kind.clone())
-                            .collect(),
                     },
                     substitutions,
-                    constraints,
                 )
             }
             _ => todo!(),
         };
 
-        tracing::trace!(
-            "instantiated: {instantiated:?}, substitutions: {substitutions:?}, constraints: {constraints:?}"
-        );
+        tracing::trace!("substitutions: {substitutions:#?}");
 
-        self.instantiation_cache.insert(
-            InstantiationKey::one(key),
-            (
-                instantiated.clone(),
-                substitutions.clone(),
-                constraints.clone(),
-            ),
-        );
-        Ok((instantiated, substitutions, constraints))
+        Ok((instantiated, substitutions))
     }
 
     fn row_var_substitutions(
@@ -449,8 +424,6 @@ impl TypeVarContext {
 
         seen.insert(ty.clone(), ty.clone());
 
-        let _s = trace_span!("resolve", ty = format!("{ty}")).entered();
-
         let after = match ty {
             Ty::Scheme(_) | Ty::RawScheme(_) => ty.clone(),
             Ty::Metatype {
@@ -471,46 +444,24 @@ impl TypeVarContext {
                     _ => self.resolve_with_seen(&new_ty, seen),
                 }
             }
-            Ty::Func {
-                params,
-                returns,
-                generic_constraints,
-            } => Ty::Func {
-                params: params
-                    .iter()
-                    .map(|p| self.resolve_with_seen(p, seen))
-                    .collect(),
+            Ty::Func { params, returns } => Ty::Func {
+                params: self.resolve_row_with_seen(params, seen),
                 returns: Box::new(self.resolve_with_seen(returns, seen)),
-                generic_constraints: generic_constraints.clone(), // TODO: might need to resolve types in constraints
             },
             Ty::Primitive(..) => ty.clone(),
             Ty::Nominal {
                 name,
                 properties,
                 methods,
-                generics,
             } => {
                 // Resolve rows and specialize generic params to current bindings
                 let resolved_properties = self.resolve_row_with_seen(properties, seen);
                 let resolved_methods = self.resolve_row_with_seen(methods, seen);
 
-                // Build updated instantiations: resolve existing values and add
-                // entries for any type params that are now bound.
-                let mut new_instantiations = BTreeMap::new();
-                let mut generics = generics.clone();
-                if let GenericState::Instance(instantiations) = generics {
-                    for (k, v) in instantiations {
-                        new_instantiations.insert(k, self.resolve_with_seen(&v, seen));
-                    }
-
-                    generics = GenericState::Instance(new_instantiations);
-                }
-
                 Ty::Nominal {
                     name: name.clone(),
                     properties: resolved_properties,
                     methods: resolved_methods,
-                    generics,
                 }
             }
             Ty::Product(row) => Ty::Product(self.resolve_row_with_seen(row, seen)),
@@ -521,8 +472,6 @@ impl TypeVarContext {
                 Ty::Label(label.clone(), Box::new(self.resolve_with_seen(value, seen)))
             }
         };
-
-        _s.record("ty", format!("{after}"));
 
         seen.insert(ty.clone(), after.clone());
 
@@ -685,18 +634,6 @@ impl TypeVarContext {
                     ..
                 },
             ) => {
-                if lhs_params.len() != rhs_params.len() {
-                    return Err(TypeError::ArgumentError(format!(
-                        "Function parameter count mismatch: {} vs {}",
-                        lhs_params.len(),
-                        rhs_params.len()
-                    )));
-                }
-
-                for (lhs, rhs) in lhs_params.iter().zip(rhs_params) {
-                    self.unify_ty_ty(lhs, rhs)?;
-                }
-
                 self.unify_ty_ty(lhs_returns, rhs_returns)?;
 
                 Ok(())
@@ -731,9 +668,7 @@ impl TypeVarContext {
 fn occurs(tv: TypeVar, ty: &Ty, ctx: &mut TypeVarContext) -> bool {
     match ctx.resolve(ty) {
         Ty::Var(tv2) => tv == tv2,
-        Ty::Func {
-            params, returns, ..
-        } => params.iter().any(|p| occurs(tv, p, ctx)) || occurs(tv, &returns, ctx),
+        Ty::Func { returns, .. } => occurs(tv, &returns, ctx),
         Ty::Product(Row::Closed(cr)) | Ty::Sum(Row::Closed(cr)) => {
             cr.values.iter().any(|v| occurs(tv, v, ctx))
         }

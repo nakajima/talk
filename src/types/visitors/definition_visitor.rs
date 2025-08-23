@@ -5,7 +5,10 @@ use crate::{
     parsed_expr::{Expr, ParsedExpr},
     type_checker::TypeError,
     types::{
-        constraint::Constraint, row::Label, ty::TypeParameter, type_var::TypeVar,
+        constraint::Constraint,
+        row::Row,
+        ty::TypeParameter,
+        type_var_context::{RowVarKind, TypeVarContext},
         visitors::inference_visitor::NominalRowSet,
     },
 };
@@ -40,12 +43,8 @@ impl std::fmt::Display for TypeScheme<Definition> {
             } => {
                 write!(
                     f,
-                    "({}){} -> {returns}",
-                    params
-                        .iter()
-                        .map(|p| format!("{p}"))
-                        .collect::<Vec<String>>()
-                        .join(", "),
+                    "({:?}){} -> {returns}",
+                    params,
                     if quantified_vars.is_empty() {
                         "".to_string()
                     } else {
@@ -82,9 +81,8 @@ impl std::fmt::Display for TypeScheme<Definition> {
 pub enum TypeSchemeKind<Def> {
     Func {
         quantified_vars: Vec<TypeParameter>,
-        params: Vec<Def>,
+        params: Row,
         returns: Def,
-        constraints: Vec<Constraint>,
     },
     Property {
         name: Name,
@@ -93,7 +91,6 @@ pub enum TypeSchemeKind<Def> {
     Nominal {
         name: Name,
         quantified_vars: Vec<TypeParameter>,
-        constraints: Vec<Constraint>,
         canonical_rows: NominalRowSet,
     },
 }
@@ -110,21 +107,21 @@ pub struct GenericScope {
     in_nominal_context: bool,
 }
 
-#[derive(Visitor, Debug, Default)]
+#[derive(Visitor, Debug)]
 #[visitor(ParsedExpr)]
-pub struct DefinitionVisitor {
+pub struct DefinitionVisitor<'a> {
     pub definitions: BTreeMap<ExprID, TypeScheme<Definition>>,
     generic_scopes: Vec<GenericScope>,
-    last_type_parameter_id: u32,
+    context: &'a mut TypeVarContext,
     errors: Vec<TypeError>,
 }
 
-impl DefinitionVisitor {
-    pub fn new() -> Self {
+impl<'a> DefinitionVisitor<'a> {
+    pub fn new(context: &'a mut TypeVarContext) -> Self {
         Self {
             definitions: Default::default(),
             generic_scopes: Default::default(),
-            last_type_parameter_id: 0,
+            context,
             errors: vec![],
         }
     }
@@ -172,32 +169,6 @@ impl DefinitionVisitor {
         }
     }
 
-    // Helper to process a parameter
-    fn process_parameter(
-        &mut self,
-        param: &ParsedExpr,
-        quantified_vars: &mut Vec<TypeParameter>,
-    ) -> Definition {
-        tracing::trace!(
-            "process parameter: {:?}, in nominal: {:?}",
-            param,
-            self.in_nominal_context()
-        );
-        match &param.expr {
-            Expr::Parameter(_, Some(type_expr)) => self
-                .get_type_repr_symbol(type_expr)
-                .map(|(sym, _string)| self.resolve_type_annotation(sym))
-                .unwrap_or(Definition::Infer),
-            Expr::Parameter(_, None) if !self.in_nominal_context() => {
-                // No annotation - create implicit type parameter
-                let type_param = self.new_type_parameter();
-                quantified_vars.push(type_param);
-                Definition::TypeParameter(type_param)
-            }
-            _ => Definition::Infer, // Shouldn't happen but graceful fallback
-        }
-    }
-
     pub fn enter_parsed_expr(&mut self, parsed: &ParsedExpr) {
         match &parsed.expr {
             Expr::Func {
@@ -223,10 +194,12 @@ impl DefinitionVisitor {
                 }
 
                 // Process parameters
-                let params = params
-                    .iter()
-                    .map(|p| self.process_parameter(p, &mut quantified_vars))
-                    .collect();
+                // Use canonical row for generic functions, instantiated for non-generic
+                let params = if quantified_vars.is_empty() {
+                    Row::Open(self.context.new_row_var(RowVarKind::Instantiated))
+                } else {
+                    Row::Open(self.context.new_row_var(RowVarKind::Canonical))
+                };
 
                 // Process return type
                 let returns = ret
@@ -243,7 +216,6 @@ impl DefinitionVisitor {
                             quantified_vars,
                             params,
                             returns,
-                            constraints: vec![],
                         },
                     },
                 );
@@ -260,7 +232,6 @@ impl DefinitionVisitor {
                             canonical_rows: Default::default(),
                             name: name.clone(),
                             quantified_vars,
-                            constraints: vec![],
                         },
                     },
                 );
@@ -297,20 +268,7 @@ impl DefinitionVisitor {
                     return;
                 }
 
-                let params = values
-                    .iter()
-                    .map(|p| {
-                        if let Some((symbol_id, _)) = self.get_type_repr_symbol(p) {
-                            self.resolve_type_annotation(symbol_id)
-                        } else {
-                            self.errors.push(TypeError::Unknown(
-                                "Unable to determine enum variant value".to_string(),
-                            ));
-
-                            Definition::Infer
-                        }
-                    })
-                    .collect();
+                let params = Row::Open(self.context.new_row_var(RowVarKind::Canonical));
 
                 self.definitions.insert(
                     parsed.id,
@@ -320,7 +278,6 @@ impl DefinitionVisitor {
                             quantified_vars: self.current_type_parameters(),
                             params,
                             returns: Definition::Infer,
-                            constraints: vec![],
                         },
                     },
                 );
@@ -351,9 +308,9 @@ impl DefinitionVisitor {
 
     #[allow(clippy::unwrap_used)]
     fn declare(&mut self, symbol_id: &SymbolID, name: &str) -> TypeParameter {
-        tracing::trace!("declaring {name} -> {:?}", self.last_type_parameter_id + 1);
-
         let param = self.new_type_parameter();
+
+        tracing::trace!("declaring {name} -> {:?}", param);
 
         self.generic_scopes
             .last_mut()
@@ -383,17 +340,14 @@ impl DefinitionVisitor {
     #[allow(clippy::unwrap_used)]
     fn lookup(&self, symbol_id: &SymbolID) -> Option<TypeParameter> {
         self.generic_scopes
-            .last()
-            .unwrap()
-            .type_parameters
-            .get(symbol_id)
-            .cloned()
+            .iter()
+            .rev()
+            .find_map(|frame| frame.type_parameters.get(symbol_id))
+            .copied()
     }
 
     fn new_type_parameter(&mut self) -> TypeParameter {
-        self.last_type_parameter_id += 1;
-
-        TypeParameter(self.last_type_parameter_id)
+        self.context.new_type_param()
     }
 }
 
@@ -408,6 +362,7 @@ mod tests {
         name_resolver::{NameResolver, Scope},
         parser::parse,
         synthesis::synthesize_inits,
+        types::type_var_context::{RowVar, RowVarKind},
     };
 
     fn visit(code: &'static str) -> (Vec<ParsedExpr>, BTreeMap<ExprID, TypeScheme<Definition>>) {
@@ -423,7 +378,8 @@ mod tests {
 
         synthesize_inits(&mut resolved, symbol_table, &mut Environment::new());
 
-        let mut visitor = DefinitionVisitor::new();
+        let mut context = TypeVarContext::default();
+        let mut visitor = DefinitionVisitor::new(&mut context);
 
         for root in resolved.roots() {
             root.drive(&mut visitor);
@@ -444,9 +400,8 @@ mod tests {
                 named_generics: Default::default(),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![],
-                    params: vec![Definition::Concrete(SymbolID::INT)],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Concrete(SymbolID::INT),
-                    constraints: vec![],
                 }
             }
         );
@@ -462,9 +417,8 @@ mod tests {
                 named_generics: btreemap!(SymbolID::ANY => TypeParameter(1)),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1)],
-                    params: vec![Definition::TypeParameter(TypeParameter(1))],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::TypeParameter(TypeParameter(1)),
-                    constraints: vec![],
                 }
             }
         );
@@ -480,9 +434,8 @@ mod tests {
                 named_generics: btreemap!(SymbolID::ANY => TypeParameter(1)),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1)],
-                    params: vec![Definition::TypeParameter(TypeParameter(1))],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );
@@ -498,9 +451,8 @@ mod tests {
                 named_generics: Default::default(),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1)],
-                    params: vec![Definition::TypeParameter(TypeParameter(1))],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );
@@ -518,7 +470,6 @@ mod tests {
                     canonical_rows: Default::default(),
                     name: Name::Resolved(SymbolID::ANY, "Person".to_string()),
                     quantified_vars: vec![],
-                    constraints: vec![],
                 }
             }
         );
@@ -540,7 +491,6 @@ mod tests {
                     name: Name::Resolved(SymbolID::ANY, "Person".to_string()),
                     canonical_rows: Default::default(),
                     quantified_vars: vec![TypeParameter(1)],
-                    constraints: vec![],
                 }
             }
         );
@@ -552,7 +502,7 @@ mod tests {
             "struct Person<T> {
                 let age: T
 
-                init(age) {
+                init(age: T) {
                     self.age = age
                 }
             }",
@@ -581,9 +531,8 @@ mod tests {
                 named_generics: btreemap!(SymbolID::ANY => TypeParameter(1)),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1)],
-                    params: vec![Definition::Infer],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );
@@ -702,9 +651,8 @@ mod tests {
                 named_generics: Default::default(),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![],
-                    params: vec![],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );
@@ -745,9 +693,8 @@ mod tests {
                 named_generics: btreemap!(SymbolID(2) => TypeParameter(1), SymbolID(5) => TypeParameter(2)),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1), TypeParameter(2)],
-                    params: vec![Definition::TypeParameter(TypeParameter(2))],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );
@@ -763,7 +710,6 @@ mod tests {
             &TypeScheme {
                 named_generics: Default::default(),
                 kind: TypeSchemeKind::Nominal {
-                    constraints: vec![],
                     canonical_rows: Default::default(),
                     name: Name::Resolved(SymbolID::ANY, "Fizz".to_string()),
                     quantified_vars: vec![],
@@ -788,7 +734,6 @@ mod tests {
                     name: Name::Resolved(SymbolID::ANY, "Person".to_string()),
                     canonical_rows: Default::default(),
                     quantified_vars: vec![TypeParameter(1)],
-                    constraints: vec![],
                 }
             }
         );
@@ -812,9 +757,8 @@ mod tests {
                 named_generics: Default::default(),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1)],
-                    params: vec![Definition::TypeParameter(TypeParameter(1))],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );
@@ -851,9 +795,8 @@ mod tests {
                 named_generics: btreemap!(SymbolID::ANY => TypeParameter(1)),
                 kind: TypeSchemeKind::Func {
                     quantified_vars: vec![TypeParameter(1)],
-                    params: vec![],
+                    params: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
                     returns: Definition::Infer,
-                    constraints: vec![],
                 }
             }
         );

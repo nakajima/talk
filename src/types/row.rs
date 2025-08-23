@@ -62,24 +62,12 @@ pub struct ClosedRow {
 }
 
 impl Row {
-    pub fn instantiate_row(
-        &self,
-        _context: &mut TypeVarContext,
-        substitutions: &mut BTreeMap<TypeParameter, TypeVar>,
-    ) -> Row {
+    /// Returns true if this row contains non-canonical type variables
+    pub(crate) fn contains_non_canonical_var(&self) -> bool {
         match self {
-            Row::Closed(ClosedRow { fields, values }) => Row::Closed(ClosedRow {
-                fields: fields.clone(),
-                values: values
-                    .iter()
-                    .map(|v| v.instantiate(_context, substitutions))
-                    .collect(),
-            }),
-            Row::Open(var) => {
-                // For open rows, keep the same row variable
-                // The fields are already defined for this row variable, and instantiation
-                // only affects the types of those fields (via substitutions), not the structure
-                Row::Open(*var)
+            Row::Open(var) => !var.is_canonical(),
+            Row::Closed(ClosedRow { values, .. }) => {
+                values.iter().any(|v| v.contains_non_canonical_var())
             }
         }
     }

@@ -3,18 +3,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use tracing::trace_span;
 
 use crate::{
-    MemberKind, SymbolTable,
-    name::Name,
     type_checker::TypeError,
     types::{
         constraint::{Constraint, ConstraintCause, ConstraintState},
         constraint_kind::ConstraintKind,
         constraint_set::ConstraintSet,
         row::{ClosedRow, Label, Row},
-        ty::{GenericState, Primitive, Ty, TypeParameter},
-        type_var::{TypeVar, TypeVarKind},
-        type_var_context::{InstantiationKey, RowVar, TypeVarContext},
-        visitors::definition_visitor::TypeSchemeKind,
+        ty::{Primitive, Ty},
+        type_var::TypeVarKind,
+        type_var_context::{RowVar, TypeVarContext},
     },
 };
 
@@ -25,22 +22,16 @@ pub struct ConstraintSolver<'a> {
     constraints: &'a mut ConstraintSet,
     record_fields: BTreeMap<RowVar, IndexMap<Label, Ty>>,
     errored: BTreeSet<Constraint>,
-    symbols: &'a SymbolTable,
     current_depth: u8,
 }
 
 impl<'a> ConstraintSolver<'a> {
-    pub fn new(
-        context: &'a mut TypeVarContext,
-        constraints: &'a mut ConstraintSet,
-        symbols: &'a SymbolTable,
-    ) -> Self {
+    pub fn new(context: &'a mut TypeVarContext, constraints: &'a mut ConstraintSet) -> Self {
         Self {
             context,
             constraints,
             record_fields: Default::default(),
             errored: Default::default(),
-            symbols,
             current_depth: 0,
         }
     }
@@ -130,12 +121,6 @@ impl<'a> ConstraintSolver<'a> {
             ConstraintKind::LiteralPrimitive(ty, primitive) => {
                 self.solve_literal_primitive(constraint, &ty, &primitive)
             }
-            ConstraintKind::Call {
-                callee,
-                args,
-                type_args,
-                returning,
-            } => self.solve_call(constraint, callee, type_args, args, returning),
             ConstraintKind::HasField {
                 record, label, ty, ..
             } => self.solve_has_field(constraint, &record, label, ty),
@@ -185,7 +170,7 @@ impl<'a> ConstraintSolver<'a> {
                 methods,
                 ..
             } => {
-                // Prefer static methods and initializers first
+                // TODO: use symbols to actually know which type this member is
                 if let Ok(field_ty) = self.get_field_type(&methods, &label) {
                     self.context.unify_ty_ty(&ty, &field_ty)?;
                     constraint.state = ConstraintState::Solved;
@@ -207,19 +192,31 @@ impl<'a> ConstraintSolver<'a> {
                 methods,
                 ..
             } => {
+                tracing::debug!(
+                    "solve_ty_has_field: Nominal with properties: {:?}, methods: {:?}, looking for: {:?}",
+                    properties,
+                    methods,
+                    label
+                );
                 // Prefer instance properties first
                 if let Ok(field_ty) = self.get_field_type(&properties, &label) {
+                    tracing::debug!("Found field type in properties: {:?}", field_ty);
                     self.context.unify_ty_ty(&ty, &field_ty)?;
                     constraint.state = ConstraintState::Solved;
                     return Ok(());
                 }
 
                 if let Ok(method_ty) = self.get_field_type(&methods, &label) {
+                    tracing::debug!("Found field type in methods: {:?}", method_ty);
                     self.context.unify_ty_ty(&ty, &method_ty)?;
                     constraint.state = ConstraintState::Solved;
                     return Ok(());
                 }
 
+                // If the row is open, we need to wait for HasField constraints to populate it
+                tracing::debug!(
+                    "Field not found yet in either properties or methods, waiting for row to be populated"
+                );
                 constraint.wait();
                 Ok(())
             }
@@ -244,10 +241,18 @@ impl<'a> ConstraintSolver<'a> {
                 )))
             }
             Row::Open(row_var) => {
-                if let Some(fields) = self.record_fields.get(row_var)
-                    && let Some(ty) = fields.get(label)
-                {
-                    return Ok(ty.clone());
+                tracing::trace!("Looking for field {:?} in open row {:?}", label, row_var);
+                if let Some(fields) = self.record_fields.get(row_var) {
+                    tracing::trace!(
+                        "Found fields in record_fields: {:?}",
+                        fields.keys().collect::<Vec<_>>()
+                    );
+                    if let Some(ty) = fields.get(label) {
+                        tracing::trace!("Found field type: {:?}", ty);
+                        return Ok(ty.clone());
+                    }
+                } else {
+                    tracing::trace!("No fields found in record_fields for row_var {:?}", row_var);
                 }
 
                 Err(TypeError::Unknown(format!(
@@ -255,42 +260,6 @@ impl<'a> ConstraintSolver<'a> {
                 )))
             }
         }
-    }
-
-    fn find_base_field_type(
-        &self,
-        name: &Name,
-        row: &RowVar,
-        label: &Label,
-    ) -> Result<Ty, TypeError> {
-        if let Some(fields) = self.record_fields.get(row) {
-            println!("Found fields: {:?}", fields.keys().collect::<Vec<_>>());
-            if let Some(ty) = fields.get(label) {
-                tracing::debug!("Found base field type for {label:?}: {ty:?}");
-                return Ok(ty.clone());
-            }
-        }
-
-        Err(TypeError::Unknown(format!(
-            "Field {label:?} not found in struct {name:?}"
-        )))
-    }
-
-    fn find_base_method_type(
-        &self,
-        _name: &crate::name::Name,
-        row_var: &RowVar,
-        label: &Label,
-    ) -> Result<Ty, TypeError> {
-        if let Some(methods) = self.record_fields.get(row_var)
-            && let Some(ty) = methods.get(label)
-        {
-            return Ok(ty.clone());
-        }
-
-        Err(TypeError::Unknown(format!(
-            "Method {label:?} not found in base struct {_name:?}"
-        )))
     }
 
     fn solve_has_field(
@@ -388,154 +357,6 @@ impl<'a> ConstraintSolver<'a> {
 
         // We don't have enough yet
         constraint.state = ConstraintState::Waiting;
-
-        Ok(())
-    }
-
-    fn solve_call(
-        &mut self,
-        constraint: &mut Constraint,
-        callee: Ty,
-        _type_args: Vec<Ty>,
-        args: Vec<Ty>,
-        returning: Ty,
-    ) -> Result<(), TypeError> {
-        let callee = self.context.resolve(&callee);
-        println!("callee: {callee:?}");
-        let (params, returns, generic_constraints) = match callee {
-            Ty::Func {
-                params,
-                returns,
-                generic_constraints,
-            } => (params, *returns, generic_constraints),
-            // Ty::Var(_) => {
-            //     // Create a synthetic function type that matches the call
-            //     // This will be unified with the actual function type later
-            //     let params: Vec<Ty> = args
-            //         .iter()
-            //         .map(|_| Ty::Var(self.context.new_var(TypeVarKind::None)))
-            //         .collect();
-
-            //     let returns = Ty::Var(self.context.new_var(TypeVarKind::None));
-
-            //     let func_ty = Ty::Func {
-            //         params: params.clone(),
-            //         returns: Box::new(returns.clone()),
-            //         generic_constraints: vec![],
-            //     };
-
-            //     let id = self.constraints.next_id();
-            //     let child = self.constraints.add(Constraint {
-            //         id,
-            //         expr_id: constraint.expr_id,
-            //         cause: ConstraintCause::Call,
-            //         kind: ConstraintKind::Equals(callee, func_ty),
-            //         parent: Some(constraint.id),
-            //         children: vec![],
-            //         state: ConstraintState::Pending,
-            //     });
-
-            //     constraint.children.push(child);
-
-            //     (params, returns, vec![])
-            // }
-            _ => {
-                constraint.wait();
-                return Ok(());
-                // constraint.error(TypeError::Unknown("Can't call non-func type".to_string()))?;
-            }
-        };
-
-        // If it's the first time this constraint has been attempted, spawn the child
-        // constraints
-        if constraint.state == ConstraintState::Pending
-            || constraint.state == ConstraintState::Waiting
-        {
-            let mut substitutions: BTreeMap<TypeParameter, TypeVar> = Default::default();
-
-            if self.current_depth > 128 {
-                tracing::trace!("Ran into 128 depth");
-                let var = self.context.new_var(TypeVarKind::Void);
-                self.context.unify_ty_ty(&returns, &Ty::Var(var))?;
-                constraint.state = ConstraintState::Solved;
-                return Ok(());
-            }
-
-            self.current_depth += 1;
-
-            // Check for arity mismatch
-            if params.len() != args.len() {
-                constraint.error(TypeError::Unknown(format!(
-                    "Arity mismatch: expected {} arguments, got {}",
-                    params.len(),
-                    args.len()
-                )))?;
-            }
-
-            for (param, arg) in params.iter().zip(args.iter()) {
-                let param = param.instantiate(self.context, &mut substitutions);
-
-                let id = self.constraints.next_id();
-                let child = Constraint {
-                    id,
-                    expr_id: constraint.expr_id, // TODO: It'd be nicer to use the arg id
-                    cause: ConstraintCause::Call,
-                    kind: ConstraintKind::Equals(param.clone(), arg.clone()),
-                    parent: Some(constraint.id),
-                    children: vec![],
-                    state: ConstraintState::Pending,
-                };
-
-                self.constraints.add(child);
-                constraint.children.push(id);
-            }
-
-            let returns = returns.instantiate(self.context, &mut substitutions);
-            println!(
-                "Creating return constraint: {:?} = {:?}",
-                returns, returning
-            );
-            let id = self.constraints.next_id();
-            let child = Constraint {
-                id,
-                expr_id: constraint.expr_id, // TODO: It'd be nicer to use the ret id
-                cause: ConstraintCause::Call,
-                kind: ConstraintKind::Equals(returns.clone(), returning.clone()),
-                parent: Some(constraint.id),
-                children: vec![],
-                state: ConstraintState::Pending,
-            };
-            self.constraints.add(child);
-            constraint.children.push(id);
-
-            // Add generic constraints as children
-            for generic_constraint in generic_constraints {
-                let instantiated = generic_constraint.instantiate(self.context, &mut substitutions);
-                let id = self.constraints.next_id();
-                let child = Constraint {
-                    id,
-                    expr_id: constraint.expr_id,
-                    cause: ConstraintCause::Call,
-                    kind: instantiated,
-                    parent: Some(constraint.id),
-                    children: vec![],
-                    state: ConstraintState::Pending,
-                };
-                self.constraints.add(child);
-                constraint.children.push(id);
-            }
-
-            constraint.state = ConstraintState::Waiting;
-        } else if constraint.state == ConstraintState::Waiting
-            && constraint
-                .children
-                .iter()
-                .all(|c| self.constraints.state_for(c) == Some(ConstraintState::Solved))
-        {
-            constraint.state = ConstraintState::Solved;
-        } else {
-            constraint.state = ConstraintState::Waiting;
-        }
 
         Ok(())
     }

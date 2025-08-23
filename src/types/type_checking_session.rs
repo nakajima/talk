@@ -12,12 +12,10 @@ use crate::{
         constraint::ConstraintState,
         constraint_set::ConstraintSet,
         constraint_solver::ConstraintSolver,
-        hoister::Hoister,
         ty::Ty,
         type_var::{TypeVar, TypeVarKind},
         type_var_context::TypeVarContext,
         typed_expr::{TypedExpr, TypedExprResult},
-        visitor::Visitor,
         visitors::{
             self, definition_visitor::DefinitionVisitor, inference_visitor::InferenceVisitor,
         },
@@ -59,99 +57,21 @@ impl<'a> TypeCheckingSession<'a> {
         }
     }
 
-    pub fn solve(&mut self) -> TypeCheckingResult {
-        let _s = trace_span!("type checking").entered();
-
-        let mut visitor = Visitor::new(
-            &mut self.type_var_context,
-            &mut self.constraints,
-            &mut self.typed_expr_ids,
-            self.meta,
-            self.symbols,
-        );
-
-        if Hoister::hoist(&mut visitor, self.parsed_roots).is_err() {
-            return TypeCheckingResult {
-                typed_roots: vec![],
-                diagnostics: self.diagnostics.clone(),
-            };
-        }
-
-        for root in self.parsed_roots {
-            match visitor.visit(root) {
-                Ok(_) => (),
-                Err(err) => {
-                    self.diagnostics.push(Diagnostic::typing(
-                        self.meta.path.clone(),
-                        self.meta.span(&root.id).unwrap_or_default().into(),
-                        err,
-                    ));
-                }
-            }
-        }
-
-        let solver = ConstraintSolver::new(
-            &mut self.type_var_context,
-            &mut self.constraints,
-            self.symbols,
-        );
-        let errored = solver.solve();
-
-        for constraint in errored {
-            let ConstraintState::Error(err) = constraint.state else {
-                continue;
-            };
-            self.diagnostics.push(crate::diagnostic::Diagnostic::typing(
-                self.meta.path.clone(),
-                self.meta
-                    .span(&constraint.expr_id)
-                    .unwrap_or_default()
-                    .into(),
-                err,
-            ));
-        }
-
-        // Apply the most recent substitutions to our types
-        for ty in self.typed_expr_ids.values_mut() {
-            *ty = self.type_var_context.resolve(ty);
-        }
-
-        let mut typed_roots = vec![];
-        for root in self.parsed_roots {
-            match root.to_typed(&self.typed_expr_ids) {
-                TypedExprResult::Ok(typed) => {
-                    typed_roots.push(*typed);
-                }
-                TypedExprResult::Err(err) => {
-                    self.diagnostics.push(Diagnostic::typing(
-                        self.meta.path.clone(),
-                        self.meta.span(&root.id).unwrap_or_default().into(),
-                        err,
-                    ));
-                }
-                TypedExprResult::None => {}
-            }
-        }
-
-        TypeCheckingResult {
-            typed_roots,
-            diagnostics: self.diagnostics.clone(),
-        }
-    }
-
     pub fn solve_multi(&mut self) -> TypeCheckingResult {
         let _s = trace_span!("type checking").entered();
 
-        let mut definition_visitor = DefinitionVisitor::new();
+        let mut definition_visitor = DefinitionVisitor::new(&mut self.type_var_context);
 
         for root in self.parsed_roots {
             root.drive(&mut definition_visitor);
         }
 
+        let definitions = definition_visitor.definitions;
+
         let mut inference_visitor = InferenceVisitor::new(
             &mut self.type_var_context,
             &mut self.typed_expr_ids,
-            &definition_visitor.definitions,
+            &definitions,
         );
 
         visitors::inference_visitor_hoisting::Hoister::hoist(
@@ -175,11 +95,7 @@ impl<'a> TypeCheckingSession<'a> {
 
         self.constraints.extend(&inference_visitor.constraints);
 
-        let solver = ConstraintSolver::new(
-            &mut self.type_var_context,
-            &mut self.constraints,
-            self.symbols,
-        );
+        let solver = ConstraintSolver::new(&mut self.type_var_context, &mut self.constraints);
         let errored = solver.solve();
 
         for constraint in errored {

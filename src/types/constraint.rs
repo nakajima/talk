@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Display};
 use std::hash::Hash;
 
+use crate::types::constraint_set::GenericConstraintKey;
+use crate::types::row::Row;
 use crate::types::ty::TypeParameter;
+use crate::types::type_var_context::{RowVar, RowVarKind};
 use crate::types::visitors::inference_visitor::Substitutions;
 use crate::{
     expr_id::ExprID,
@@ -26,6 +29,7 @@ pub enum ConstraintCause {
     Annotation(ExprID),
     Assignment(ExprID),
     FuncReturn(ExprID),
+    FuncParam,
     PrimitiveLiteral(ExprID, Primitive),
     EnumLiteral,
     RecordLiteral,
@@ -51,8 +55,6 @@ pub struct Constraint {
     pub expr_id: ExprID,
     pub cause: ConstraintCause,
     pub kind: ConstraintKind,
-    pub parent: Option<ConstraintId>,
-    pub children: Vec<ConstraintId>,
     pub state: ConstraintState,
 }
 
@@ -84,29 +86,6 @@ impl Constraint {
                 lhs.substituting(substitutions)?,
                 rhs.substituting(substitutions)?,
             ),
-            ConstraintKind::Call {
-                callee,
-                type_args,
-                args,
-                returning,
-            } => {
-                let mut new_type_args = vec![];
-                let mut new_args = vec![];
-
-                for arg in type_args {
-                    new_type_args.push(arg.substituting(substitutions)?);
-                }
-
-                for arg in args {
-                    new_args.push(arg.substituting(substitutions)?);
-                }
-                ConstraintKind::Call {
-                    callee: callee.substituting(substitutions)?,
-                    type_args: new_type_args,
-                    args: new_args,
-                    returning: returning.substituting(substitutions)?,
-                }
-            }
             ConstraintKind::LiteralPrimitive(ty, primitive) => {
                 ConstraintKind::LiteralPrimitive(ty.substituting(substitutions)?, primitive)
             }
@@ -141,14 +120,43 @@ impl Constraint {
         };
 
         Ok(Constraint {
-            id: self.id,
+            id: ConstraintId::GENERIC, // Will get a fresh ID when added to constraint set
             expr_id: self.expr_id,
             cause: self.cause.clone(),
             kind,
-            parent: self.parent,
-            children: self.children.clone(),
-            state: self.state.clone(),
+            state: ConstraintState::Pending, // Reset state for instantiated constraint
         })
+    }
+
+    pub fn generic_index_keys(&self) -> Vec<GenericConstraintKey> {
+        let mut result = vec![];
+        match &self.kind {
+            ConstraintKind::Equals(ty, ty1) => {
+                result.extend(ty.generic_index_keys());
+                result.extend(ty1.generic_index_keys());
+            }
+            ConstraintKind::LiteralPrimitive(ty, _) => {
+                result.extend(ty.generic_index_keys());
+            }
+            ConstraintKind::RowCombine(_, _) => todo!(),
+            ConstraintKind::RowClosed { record } => {
+                if let Row::Open(row_var @ RowVar(_, RowVarKind::Canonical)) = record {
+                    result.push(GenericConstraintKey::RowVar(*row_var))
+                }
+            }
+            ConstraintKind::HasField { record, ty, .. } => {
+                if let Row::Open(row_var @ RowVar(_, RowVarKind::Canonical)) = record {
+                    result.push(GenericConstraintKey::RowVar(*row_var))
+                }
+
+                result.extend(ty.generic_index_keys());
+            }
+            ConstraintKind::TyHasField { receiver, ty, .. } => {
+                result.extend(receiver.generic_index_keys());
+                result.extend(ty.generic_index_keys());
+            }
+        }
+        result
     }
 
     pub fn type_vars(&self) -> Vec<TypeVar> {
@@ -157,19 +165,6 @@ impl Constraint {
                 [lhs, rhs].iter().flat_map(|t| t.type_vars()).collect()
             }
             ConstraintKind::LiteralPrimitive(ty, _) => ty.type_vars(),
-            ConstraintKind::Call {
-                callee,
-                args,
-                returning,
-                type_args,
-            } => {
-                let mut res = vec![];
-                res.extend(callee.type_vars());
-                res.extend(args.iter().flat_map(|t| t.type_vars()));
-                res.extend(type_args.iter().flat_map(|t| t.type_vars()));
-                res.extend(returning.type_vars());
-                res
-            }
             ConstraintKind::HasField { ty, .. } => {
                 let mut res = vec![];
                 res.extend(ty.type_vars());
@@ -192,7 +187,6 @@ impl Constraint {
     pub fn priority(&self) -> usize {
         match &self.kind {
             ConstraintKind::Equals(..) => 100,
-            ConstraintKind::Call { .. } => 50,
             ConstraintKind::LiteralPrimitive(..) => 100,
             ConstraintKind::HasField {
                 index: Some(index), ..

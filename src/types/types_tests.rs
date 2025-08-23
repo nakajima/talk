@@ -19,28 +19,18 @@ mod tests {
 
     #[macro_export]
     macro_rules! btreemap {
-    // trailing comma case
-    ($($key:expr => $value:expr,)+) => (btreemap!($($key => $value),+));
+        // trailing comma case
+        ($($key:expr => $value:expr,)+) => (btreemap!($($key => $value),+));
 
-    ( $($key:expr => $value:expr),* ) => {
-        {
-            let mut _map = ::std::collections::BTreeMap::new();
-            $(
-                let _ = _map.insert($key, $value);
-            )*
-            _map
-        }
-    };
-}
-
-    pub(super) fn check(code: &'static str) -> TypeCheckingResult {
-        let res = check_err(code);
-        assert!(
-            res.diagnostics.is_empty(),
-            "diagnostics not empty!\n{:#?}",
-            res.diagnostics
-        );
-        res
+        ( $($key:expr => $value:expr),* ) => {
+            {
+                let mut _map = ::std::collections::BTreeMap::new();
+                $(
+                    let _ = _map.insert($key, $value);
+                )*
+                _map
+            }
+        };
     }
 
     pub(super) fn check_mult(code: &'static str) -> TypeCheckingResult {
@@ -51,25 +41,6 @@ mod tests {
             res.diagnostics
         );
         res
-    }
-
-    pub(super) fn check_err(code: &'static str) -> TypeCheckingResult {
-        let parsed = parse(code, "-");
-        let symbol_table = &mut SymbolTable::base();
-        let mut resolved = NameResolver::new(
-            Scope::new(crate::builtins::default_name_scope()),
-            Default::default(),
-            "-",
-            &Default::default(),
-        )
-        .resolve(parsed, symbol_table);
-
-        synthesize_inits(&mut resolved, symbol_table, &mut Environment::new());
-
-        let meta = resolved.meta.borrow();
-        let mut session = TypeCheckingSession::new(resolved.roots(), &meta, symbol_table);
-
-        session.solve()
     }
 
     pub(super) fn check_mult_err(code: &'static str) -> TypeCheckingResult {
@@ -127,9 +98,11 @@ mod tests {
         let checked = check_mult("func(x: Int) -> Int { x }");
         assert_eq!(
             Ty::Func {
-                params: vec![Ty::Int],
+                params: Row::Closed(ClosedRow {
+                    fields: vec!["x".into()],
+                    values: vec![Ty::Int]
+                }),
                 returns: Box::new(Ty::Int),
-                generic_constraints: vec![],
             },
             checked.typed_roots[0].ty
         )
@@ -140,9 +113,11 @@ mod tests {
         let checked = check_mult("func() { 123 }");
         assert_eq!(
             Ty::Func {
-                params: vec![],
+                params: Row::Closed(ClosedRow {
+                    fields: vec![],
+                    values: vec![]
+                }),
                 returns: Box::new(Ty::Int),
-                generic_constraints: vec![],
             },
             checked.typed_roots[0].ty
         )
@@ -318,6 +293,7 @@ mod tests {
         }
 
         Person(name: 1.23, age: 123)
+        Person(name: 1.23, age: 123).name
         ",
         );
 
@@ -329,10 +305,11 @@ mod tests {
                     values: vec![Ty::Float, Ty::Int]
                 }),
                 methods: Row::Open(RowVar::new(1, RowVarKind::Instantiated)),
-                generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[1].ty
         );
+
+        assert_eq!(checked.typed_roots[2].ty, Ty::Float,);
     }
 
     #[test]
@@ -373,7 +350,7 @@ mod tests {
 
     #[test]
     fn generic_struct_property_with_synthesized_init() {
-        let checked = check(
+        let checked = check_mult(
             "
         struct Person<T> {
             let member: T
@@ -390,7 +367,7 @@ mod tests {
 
     #[test]
     fn checks_method_out_of_order() {
-        let checked = check(
+        let checked = check_mult(
             "
         struct Person {
             let age: Int
@@ -413,7 +390,7 @@ mod tests {
 
     #[test]
     fn checks_constructor_args() {
-        let checked = check_err(
+        let checked = check_mult_err(
             "struct Person {
             let age: Int
 
@@ -434,7 +411,7 @@ mod tests {
 
     #[test]
     fn checks_setter() {
-        let checked = check_err(
+        let checked = check_mult_err(
             "struct Person {
             let age: Int
         }
@@ -449,7 +426,7 @@ mod tests {
 
     #[test]
     fn checks_recursive_generic() {
-        let checked = check(
+        let checked = check_mult(
             "
         func rec(n) {
             rec(n)
@@ -459,11 +436,7 @@ mod tests {
         );
 
         // The function should have one parameter
-        if let Ty::Func {
-            params, returns, ..
-        } = &checked.typed_roots[0].ty
-        {
-            assert_eq!(params.len(), 1, "rec should have 1 parameter");
+        if let Ty::Func { returns, .. } = &checked.typed_roots[0].ty {
             assert_eq!(**returns, Ty::Void, "rec should return Void");
         } else {
             panic!("Expected function type");
@@ -472,7 +445,7 @@ mod tests {
 
     #[test]
     fn checks_recursive_terminating() {
-        let checked = check_err(
+        let checked = check_mult_err(
             "
         func rec(n) {
             if n < 10 {
@@ -495,7 +468,7 @@ mod tests {
 
     #[test]
     fn check_mutual_recursion() {
-        let checker = check(
+        let checker = check_mult(
             "
         func even(n: Int) -> Int {
             odd(n)
@@ -512,7 +485,7 @@ mod tests {
 
     #[test]
     fn check_static_property() {
-        let checker = check(
+        let checker = check_mult(
             "
         struct Person {
             static let age = 123
@@ -527,7 +500,7 @@ mod tests {
 
     #[test]
     fn check_static_method() {
-        let checker = check(
+        let checker = check_mult(
             "
         struct Person {
             static func getAge() {
@@ -548,7 +521,7 @@ mod tests {
 
     #[test]
     fn checks_let_with_enum_case() {
-        let checked = check(
+        let checked = check_mult(
             "
         enum Maybe<T> {
           case definitely(T), nope
@@ -567,9 +540,6 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
                 methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
-                generics: GenericState::Instance(btreemap!(
-                    TypeParameter(0) => Ty::Int
-                ))
             },
             checked.typed_roots[2].ty,
         );
@@ -580,9 +550,6 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
                 methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
-                generics: GenericState::Instance(btreemap!(
-                    TypeParameter(0) => Ty::Int
-                ))
             },
             checked.typed_roots[3].ty,
         );
@@ -590,7 +557,7 @@ mod tests {
 
     #[test]
     fn checks_non_generic_enum() {
-        let checked = check(
+        let checked = check_mult(
             "
         enum Maybe {
           case definitely(Int), nope
@@ -606,7 +573,6 @@ mod tests {
                 name: Name::Resolved(SymbolID::ANY, "Maybe".to_string()),
                 properties: Row::Closed(ClosedRow::default()),
                 methods: Row::Open(RowVar::new(1, RowVarKind::Canonical)),
-                generics: GenericState::Instance(btreemap!())
             },
             checked.typed_roots[2].ty,
         );
@@ -614,7 +580,7 @@ mod tests {
 
     #[test]
     fn checks_basic_match_expression() {
-        let checker = check(
+        let checker = check_mult(
             "
             enum Boolean {
                 case yes, no
@@ -632,7 +598,7 @@ mod tests {
 
     #[test]
     fn errors_basic_match_expression_if_bodies_dont_agree() {
-        let checker = check_err(
+        let checker = check_mult_err(
             "
             enum Boolean {
                 case yes, no
@@ -652,7 +618,7 @@ mod tests {
 
     #[test]
     fn checks_match_bind() {
-        let checker = check(
+        let checker = check_mult(
             "
             enum Option<T> {
                 case some(T)

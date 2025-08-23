@@ -36,8 +36,8 @@ impl TypeVarKind {
         match (self, other) {
             // Literal kinds are most specific
             (IntLiteral | FloatLiteral, _) => true,
-            // Canonical/Instantiated are more specific than None
-            (Instantiated, None) => true,
+            // Canonical and Instantiated are more specific than generic kinds like Member, Let, etc
+            (Canonical(_) | Instantiated, Member | Let | FuncParam | FuncRet | None) => true,
             // Everything else is not more specific
             _ => false,
         }

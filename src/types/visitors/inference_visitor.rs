@@ -49,12 +49,8 @@ impl std::fmt::Display for TypeScheme<InferredDefinition> {
             } => {
                 write!(
                     f,
-                    "({}){} -> {returns}",
-                    params
-                        .iter()
-                        .map(|p| format!("{p}"))
-                        .collect::<Vec<String>>()
-                        .join(", "),
+                    "({:?}){} -> {returns}",
+                    params,
                     if quantified_vars.is_empty() {
                         "".to_string()
                     } else {
@@ -125,7 +121,8 @@ pub struct InferenceVisitor<'a> {
     scope_stack: Vec<Scope>,
     expected_type_stack: Vec<Ty>,
     typed_expr_ids: &'a mut BTreeMap<ExprID, Ty>,
-    generic_constraints: Vec<(ExprID, Vec<Constraint>)>,
+    // Single stack for all generic constraint contexts
+    generic_constraint_stack: Vec<(ExprID, Vec<Constraint>)>,
     self_row_stack: Vec<SelfRow>,
 }
 
@@ -144,7 +141,7 @@ impl<'a> InferenceVisitor<'a> {
             scope_stack: vec![builtins::default_type_checker_scope()],
             expected_type_stack: Default::default(),
             typed_expr_ids,
-            generic_constraints: Default::default(),
+            generic_constraint_stack: Default::default(),
             self_row_stack: Default::default(),
         }
     }
@@ -301,12 +298,10 @@ impl<'a> InferenceVisitor<'a> {
             name: name.clone(),
             properties: Row::Open(canonical_rows.properties),
             methods: Row::Open(canonical_rows.methods),
-            generics: GenericState::Instance(Default::default()),
         };
 
         let metatype = Ty::Metatype {
             ty: Box::new(nominal_type.clone()),
-
             properties: Row::Open(canonical_rows.meta_properties),
             methods: Row::Open(canonical_rows.meta_methods),
         };
@@ -324,7 +319,7 @@ impl<'a> InferenceVisitor<'a> {
 
         self.start_scope();
         self.self_row_stack.push(self_row);
-        self.capture_generic_constraints(parsed_expr.id);
+        self.push_generic_constraint_context(parsed_expr.id);
         self.register_named_generics(&named_generics, &substitutions)?;
         self.visit_mult(generics)?;
 
@@ -357,13 +352,12 @@ impl<'a> InferenceVisitor<'a> {
             },
         )?;
 
-        let generic_constraints = self.collect_generic_constraints(parsed_expr.id)?;
+        let generic_constraints = self.pop_generic_constraint_context(parsed_expr.id)?;
         let ty = Ty::Scheme(TypeScheme {
             kind: TypeSchemeKind::Nominal {
                 name: name.clone(),
                 canonical_rows: nominal_row_set,
                 quantified_vars: quantified_vars.to_vec(),
-                constraints: generic_constraints,
             },
             named_generics: named_generics.clone(),
         });
@@ -375,9 +369,7 @@ impl<'a> InferenceVisitor<'a> {
     }
 
     pub fn add_child(&mut self, parent: ConstraintId, child: ConstraintId) {
-        if let Some(c) = self.constraints.find_mut(&parent) {
-            c.children.push(child)
-        }
+        self.constraints.add_child(parent, child);
     }
 
     #[allow(clippy::panic)]
@@ -387,30 +379,8 @@ impl<'a> InferenceVisitor<'a> {
         kind: ConstraintKind,
         cause: ConstraintCause,
     ) -> Result<ConstraintId, TypeError> {
-        if kind.contains_canonical_var() {
-            let Some((_, constraints)) = self.generic_constraints.last_mut() else {
-                panic!(
-                    "attempted to constraint canonical variable outside of generic context: {kind:?}"
-                );
-            };
-
-            tracing::trace!("Constraint contains canonical var: {kind:?}");
-
-            constraints.push(Constraint {
-                id: ConstraintId::GENERIC,
-                expr_id,
-                cause,
-                kind,
-                parent: None,
-                children: vec![],
-                state: ConstraintState::Pending,
-            });
-
-            Ok(ConstraintId::GENERIC)
-        } else {
-            println!("kind: {kind}");
-            Ok(self.constraints.constrain(expr_id, kind, cause))
-        }
+        // Either no canonical vars, has non-canonical vars, or is a method/init definition - solve immediately
+        Ok(self.constraints.constrain(expr_id, kind, cause))
     }
 
     fn definition_to_ty(
@@ -508,22 +478,24 @@ impl<'a> InferenceVisitor<'a> {
         self.scope_stack.pop();
     }
 
-    fn capture_generic_constraints(&mut self, expr_id: ExprID) {
-        self.generic_constraints.push((expr_id, Default::default()));
+    fn push_generic_constraint_context(&mut self, expr_id: ExprID) {
+        self.generic_constraint_stack
+            .push((expr_id, Default::default()));
     }
 
-    fn collect_generic_constraints(
+    fn pop_generic_constraint_context(
         &mut self,
         expr_id: ExprID,
     ) -> Result<Vec<Constraint>, TypeError> {
-        let Some((popped_expr_id, constraints)) = self.generic_constraints.pop() else {
+        let Some((popped_expr_id, constraints)) = self.generic_constraint_stack.pop() else {
             return Err(TypeError::Unknown(format!(
                 "Did not get generic constraints for expr id {expr_id:?}"
             )));
         };
 
         if popped_expr_id != expr_id {
-            self.generic_constraints.push((popped_expr_id, constraints));
+            self.generic_constraint_stack
+                .push((popped_expr_id, constraints));
             return Err(TypeError::Unknown(format!(
                 "Wrong generic constraint set. Expected {expr_id:?}, got {popped_expr_id:}"
             )));
@@ -561,12 +533,24 @@ impl<'a> InferenceVisitor<'a> {
     }
 
     fn visit_init(&mut self, func: &ParsedExpr) -> Result<Ty, TypeError> {
-        // let Ty::Scheme(init_ty) = self.visit(func)? else {
-        //     unreachable!("funcs always return schemes");
-        // };
+        let Some(mut self_row) = self.self_row_stack.last().cloned() else {
+            return Err(TypeError::Unknown("did not get self".to_string()));
+        };
 
-        // Ok(Ty::Scheme(init_ty))
-        self.visit(func)
+        let init = self.visit(func)?;
+
+        self.constrain(
+            func.id,
+            ConstraintKind::HasField {
+                record: Row::Open(self_row.rows.meta_methods),
+                label: "init".into(),
+                ty: init.clone(),
+                index: None,
+            },
+            ConstraintCause::InitializerDefinition,
+        )?;
+
+        Ok(init)
     }
 
     fn visit_property(
@@ -581,7 +565,6 @@ impl<'a> InferenceVisitor<'a> {
         let default_value_ty = default_value.as_ref().map(|t| self.visit(t)).transpose()?;
 
         if let (Some(type_repr_ty), Some(default_value_ty)) = (type_repr_ty, default_value_ty) {
-            #[allow(clippy::unwrap_used)]
             self.constrain(
                 type_repr.as_ref().unwrap().id,
                 ConstraintKind::Equals(type_repr_ty.clone(), default_value_ty),
@@ -732,8 +715,6 @@ impl<'a> InferenceVisitor<'a> {
             )));
         };
 
-        self.capture_generic_constraints(id);
-
         let func_substitutions = self.canonicalized_type_parameter_substitutions(&quantified_vars);
         let substitutions = if let Some(self_row) = self.self_row_stack.last() {
             let mut subs = self_row.substitutions.clone();
@@ -749,25 +730,34 @@ impl<'a> InferenceVisitor<'a> {
             self.visit(generic)?;
         }
 
-        let mut typed_params = vec![];
-        for (param, scheme_param) in params.iter().zip(&scheme_params) {
-            let param_ty = match scheme_param {
-                Definition::TypeParameter(tp) => {
-                    if let Some(tv) = substitutions.get(tp) {
-                        Ty::Var(*tv)
-                    } else {
-                        return Err(TypeError::Unknown(
-                            "Did not get canonical substitution for type parameter".to_string(),
-                        ));
-                    }
-                }
-                Definition::Concrete(sym) => self.lookup(sym)?,
-                Definition::Infer => Ty::Var(self.new_type_var(TypeVarKind::FuncParam)),
+        for (i, param) in params.iter().enumerate() {
+            let param_ty = Ty::Var(self.new_type_var(TypeVarKind::FuncParam));
+            self.expect(param_ty.clone());
+            self.visit(param)?;
+
+            let Expr::Parameter(name, _) = &param.expr else {
+                unreachable!()
             };
 
-            self.expect(param_ty);
-            typed_params.push(self.visit(param)?);
+            self.constrain(
+                param.id,
+                ConstraintKind::HasField {
+                    record: scheme_params.clone(),
+                    label: name.name_str().into(),
+                    ty: param_ty,
+                    index: Some(i),
+                },
+                ConstraintCause::FuncParam,
+            )?;
         }
+
+        self.constrain(
+            id,
+            ConstraintKind::RowClosed {
+                record: scheme_params.clone(),
+            },
+            ConstraintCause::FuncParam,
+        )?;
 
         let body_ty = self.visit(body)?;
 
@@ -811,31 +801,21 @@ impl<'a> InferenceVisitor<'a> {
         }
 
         self.end_scope();
-        let generic_constraints = self.collect_generic_constraints(id)?;
 
         #[allow(clippy::expect_used)]
         let ty = if substitutions.is_empty() {
             Ty::Func {
-                params: typed_params,
+                params: scheme_params,
                 returns: Box::new(body_ty),
-                generic_constraints: vec![],
             }
         } else {
             let kind = TypeSchemeKind::<InferredDefinition>::Func {
                 quantified_vars,
-                params: scheme_params
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| match p {
-                        Definition::TypeParameter(tp) => InferredDefinition::TypeParameter(*tp),
-                        _ => InferredDefinition::Concrete(typed_params[i].clone().into()),
-                    })
-                    .collect(),
+                params: scheme_params,
                 returns: match scheme_returns {
                     Definition::TypeParameter(tp) => InferredDefinition::TypeParameter(tp),
                     _ => InferredDefinition::Concrete(body_ty.clone().into()),
                 },
-                constraints: generic_constraints,
             };
 
             Ty::Scheme(TypeScheme {
@@ -946,89 +926,45 @@ impl<'a> InferenceVisitor<'a> {
         type_args: &[ParsedExpr],
         args: &[ParsedExpr],
     ) -> Result<Ty, TypeError> {
+        let _s = tracing::info_span!(
+            "visit_call",
+            callee = format!("{callee:?}"),
+            args = format!("{args:?}")
+        )
+        .entered();
+
         let ty = self.visit(callee)?;
-        let callee_ty = match ty {
-            Ty::Func { .. } => ty.clone(),
-            Ty::Var(var) => {
-                let ret = Ty::Var(self.new_type_var(TypeVarKind::FuncRet));
-                // Create a fake callee
-                let callee = Ty::Func {
-                    params: args
-                        .iter()
-                        .map(|_| Ty::Var(self.new_type_var(TypeVarKind::FuncRet)))
-                        .collect(),
-                    returns: Box::new(ret),
-                    generic_constraints: vec![],
-                };
+        let (params, returns) = match &ty {
+            Ty::Func { params, returns } => (params.clone(), returns.clone()),
+            Ty::Scheme(scheme) => {
+                let (instantiated, _) = self.context.instantiate(scheme, &mut self.constraints)?;
 
-                self.constrain(
-                    expr_id,
-                    ConstraintKind::Equals(Ty::Var(var), callee.clone()),
-                    ConstraintCause::Call,
-                )?;
+                match &instantiated {
+                    Ty::Func { params, returns } => (params.clone(), returns.clone()),
+                    Ty::Metatype { ty, methods, .. } => {
+                        let init_params_var = self.new_row_type_var(RowVarKind::Instantiated);
+                        let init_ty = Ty::Func {
+                            params: Row::Open(init_params_var),
+                            returns: ty.clone(),
+                        };
+                        self.constrain(
+                            callee.id,
+                            ConstraintKind::HasField {
+                                record: methods.clone(),
+                                label: "init".into(),
+                                ty: init_ty,
+                                index: None,
+                            },
+                            ConstraintCause::InitializerCall,
+                        )?;
 
-                callee
+                        (Row::Open(init_params_var), ty.clone())
+                    }
+                    _ => unreachable!(),
+                }
             }
-            Ty::Scheme(scheme) => match &scheme.kind {
-                TypeSchemeKind::Func { .. } => {
-                    let (instantiated, _, constraints) =
-                        self.context.instantiate(&expr_id, &scheme)?;
-
-                    for constraint in constraints {
-                        self.constraints.add(constraint);
-                    }
-
-                    instantiated
-                }
-                TypeSchemeKind::Nominal { .. } => {
-                    // It's a nominal constructor
-                    let (metatype, substitutions, constraints) =
-                        self.context.instantiate(&expr_id, &scheme)?;
-
-                    let Ty::Metatype {
-                        ty: box instance,
-                        methods,
-                        ..
-                    } = metatype
-                    else {
-                        unreachable!();
-                    };
-
-                    for constraint in constraints {
-                        self.constraints.add(constraint);
-                    }
-
-                    let init_ty = Ty::Func {
-                        params: args
-                            .iter()
-                            .map(|_| Ty::Var(self.new_type_var(TypeVarKind::FuncParam)))
-                            .collect(),
-                        returns: Box::new(instance.substituting(&substitutions)?),
-                        generic_constraints: vec![],
-                    };
-
-                    // self.constrain(
-                    //     expr_id,
-                    //     ConstraintKind::HasField {
-                    //         record: methods,
-                    //         label: "init".into(),
-                    //         ty: init_ty.clone(),
-                    //         index: None,
-                    //     },
-                    //     ConstraintCause::InitializerCall,
-                    // )?;
-
-                    init_ty
-                }
-                TypeSchemeKind::Property { .. } => unreachable!("properties aren't callable"),
-            },
             _ => unreachable!("don't know how to call {ty}"),
         };
-
-        let mut typed_args = vec![];
-        for arg in args {
-            typed_args.push(self.visit(arg)?);
-        }
 
         let mut typed_type_args = vec![];
         for type_arg in type_args {
@@ -1037,27 +973,38 @@ impl<'a> InferenceVisitor<'a> {
 
         let returning = Ty::Var(self.new_type_var(TypeVarKind::FuncRet));
 
-        // self.constrain(
-        //     expr_id,
-        //     ConstraintKind::Equals(
-        //         Ty::Func {
-        //             params: typed_args.clone(),
-        //             returns: Box::new(returning.clone()),
-        //             generic_constraints: Default::default(),
-        //         },
-        //         callee_ty.clone(),
-        //     ),
-        //     ConstraintCause::Call,
-        // )?;
+        let args_row_var = self.new_row_type_var(RowVarKind::Instantiated);
+        let args_row = Row::Open(args_row_var);
+
+        for (i, arg) in args.iter().enumerate() {
+            let arg_ty = self.visit(arg)?;
+            let Expr::CallArg { label, .. } = &arg.expr else {
+                unreachable!()
+            };
+            self.constrain(
+                arg.id,
+                ConstraintKind::HasField {
+                    record: args_row.clone(),
+                    label: label
+                        .as_ref()
+                        .map(|name| name.name_str().into())
+                        .unwrap_or_else(|| Label::Int(i as u32)),
+                    ty: arg_ty,
+                    index: Some(i),
+                },
+                ConstraintCause::Call,
+            )?;
+        }
+
+        self.constrain(
+            callee.id,
+            ConstraintKind::Equals(Ty::Product(params), Ty::Product(args_row)),
+            ConstraintCause::Call,
+        )?;
 
         self.constrain(
             expr_id,
-            ConstraintKind::Call {
-                callee: callee_ty,
-                type_args: typed_type_args,
-                args: typed_args,
-                returning: returning.clone(),
-            },
+            ConstraintKind::Equals(returning.clone(), *returns),
             ConstraintCause::Call,
         )?;
 
