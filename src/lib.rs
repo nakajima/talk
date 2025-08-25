@@ -17,8 +17,8 @@
 
 pub mod parsing;
 pub use parsing::*;
-pub mod diagnostic;
-pub mod id_generator;
+pub mod common;
+pub use common::*;
 
 // #[cfg(feature = "cli")]
 // pub mod lsp;
