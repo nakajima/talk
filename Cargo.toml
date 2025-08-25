@@ -46,6 +46,7 @@ derive-visitor = "0.4.0"
 miette = { version = "7.6.0", features = ["fancy"] }
 bincode = "2.0.1"
 priority-queue = "2.5.0"
+anyhow = "1.0.99"
 
 [features]
 default = ["cli"]

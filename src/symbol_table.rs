@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{compiling::compiled_module::ImportedSymbol, parsing::expr_id::ExprID, span::Span};
+use crate::{compiling::compiled_module::ImportedSymbol, parsing::node_id::NodeID, span::Span};
 
 #[derive(Default, Copy, Clone, Eq, PartialOrd, Ord)]
 pub struct SymbolID(pub i32);
@@ -123,7 +123,7 @@ pub enum MemberKind {
 pub struct MemberSymbol {
     pub name: String,
     pub member_id: SymbolID,
-    pub expr_id: ExprID,
+    pub expr_id: NodeID,
     pub kind: MemberKind,
 }
 
@@ -131,7 +131,7 @@ pub struct MemberSymbol {
 pub struct SymbolInfo {
     pub name: String,
     pub kind: SymbolKind,
-    pub expr_id: ExprID,
+    pub expr_id: NodeID,
     pub is_captured: bool,
     pub definition: Option<Definition>,
     pub documentation: Option<String>,
@@ -185,7 +185,7 @@ impl SymbolTable {
             .unwrap_or_default()
     }
 
-    pub fn initializers_for(&self, symbol_id: &SymbolID) -> Vec<&ExprID> {
+    pub fn initializers_for(&self, symbol_id: &SymbolID) -> Vec<&NodeID> {
         self.types
             .get(symbol_id)
             .map(|t| {
@@ -219,7 +219,7 @@ impl SymbolTable {
             .unwrap_or_default()
     }
 
-    pub fn methods_for(&self, symbol_id: &SymbolID) -> Vec<&ExprID> {
+    pub fn methods_for(&self, symbol_id: &SymbolID) -> Vec<&NodeID> {
         self.types
             .get(symbol_id)
             .map(|t| {
@@ -256,7 +256,7 @@ impl SymbolTable {
         &mut self,
         name: &str,
         kind: SymbolKind,
-        expr_id: ExprID,
+        expr_id: NodeID,
         definition: Option<Definition>,
     ) -> SymbolID {
         tracing::trace!(
@@ -295,7 +295,7 @@ impl SymbolTable {
         &mut self,
         type_id: SymbolID,
         name: String,
-        expr_id: ExprID,
+        expr_id: NodeID,
         member_id: SymbolID,
         is_static: bool,
     ) {
@@ -315,7 +315,7 @@ impl SymbolTable {
         &mut self,
         type_id: SymbolID,
         name: String,
-        expr_id: ExprID,
+        expr_id: NodeID,
         member_id: SymbolID,
         is_static: bool,
     ) {
@@ -335,7 +335,7 @@ impl SymbolTable {
         &mut self,
         type_id: SymbolID,
         name: String,
-        expr_id: ExprID,
+        expr_id: NodeID,
         member_id: SymbolID,
     ) {
         self.types.entry(type_id).or_default().push(MemberSymbol {
@@ -350,7 +350,7 @@ impl SymbolTable {
         &mut self,
         type_id: SymbolID,
         name: String,
-        expr_id: ExprID,
+        expr_id: NodeID,
         member_id: SymbolID,
     ) {
         self.types.entry(type_id).or_default().push(MemberSymbol {
@@ -365,7 +365,7 @@ impl SymbolTable {
         &mut self,
         type_id: SymbolID,
         name: String,
-        expr_id: ExprID,
+        expr_id: NodeID,
         member_id: SymbolID,
     ) {
         self.types.entry(type_id).or_default().push(MemberSymbol {
@@ -376,7 +376,7 @@ impl SymbolTable {
         });
     }
 
-    pub fn initializer_for(&self, struct_id: &SymbolID) -> Option<ExprID> {
+    pub fn initializer_for(&self, struct_id: &SymbolID) -> Option<NodeID> {
         self.types.get(struct_id).and_then(|table| {
             table.iter().find_map(|t| {
                 if t.kind == MemberKind::Initializer {

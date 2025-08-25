@@ -15,31 +15,13 @@
 // #![cfg_attr(not(test), warn(clippy::todo))]
 // #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
-pub mod prelude;
-pub mod types;
-
-pub mod builtins;
-pub use builtins::*;
-pub mod semantic_index;
-pub mod source_file;
-pub mod span_index;
-pub use source_file::*;
-pub mod symbol_table;
-pub use symbol_table::*;
-pub mod lexing;
-pub use lexing::*;
-pub mod type_checking;
-pub use type_checking::*;
 pub mod parsing;
 pub use parsing::*;
-pub mod compiling;
 pub mod diagnostic;
-// pub mod interpret;
-// pub mod lowering;
-// pub mod transforms;
+pub mod id_generator;
 
-#[cfg(feature = "cli")]
-pub mod lsp;
+// #[cfg(feature = "cli")]
+// pub mod lsp;
 
 #[cfg(test)]
 pub mod test_utils;

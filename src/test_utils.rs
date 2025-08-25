@@ -1,10 +1,20 @@
 #[macro_export]
 macro_rules! any_expr {
     ($expr:expr) => {{
-        use $crate::expr_id::ExprID;
-        ParsedExpr {
-            id: ExprID::ANY,
-            expr: $expr,
+        Expr {
+            id: NodeID::ANY,
+            kind: $expr,
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! any_block {
+    ($expr:expr) => {{
+        Block {
+            id: NodeID::ANY,
+            args: vec![],
+            body: $expr,
         }
     }};
 }
@@ -12,9 +22,9 @@ macro_rules! any_expr {
 #[macro_export]
 macro_rules! any_typed {
     ($expr:expr, $ty: expr) => {{
-        use $crate::expr_id::ExprID;
+        use $crate::node_id::NodeID;
         TypedExpr {
-            id: ExprID::ANY,
+            id: NodeID::ANY,
             expr: $expr,
             ty: $ty,
         }

@@ -1,5 +1,5 @@
 use crate::{
-    expr_id::ExprID, lexing::span::Span, span_index::SpanIndex, symbol_table::SymbolID, ty::Ty2,
+    node_id::NodeID, lexing::span::Span, span_index::SpanIndex, symbol_table::SymbolID, ty::Ty2,
 };
 use std::collections::HashMap;
 
@@ -11,14 +11,14 @@ pub enum ResolvedExpr {
         ty: Ty2,
     },
     MemberAccess {
-        receiver: ExprID,
+        receiver: NodeID,
         member_name: String,
         resolved_symbol: Option<SymbolID>,
         ty: Ty2,
     },
     FunctionCall {
-        func: ExprID,
-        args: Vec<ExprID>,
+        func: NodeID,
+        args: Vec<NodeID>,
         ty: Ty2,
     },
     Literal {
@@ -62,7 +62,7 @@ pub enum MemberKind {
 #[derive(Debug, Default, Clone)]
 pub struct SemanticIndex {
     /// Maps expression IDs to their resolved semantic information
-    expressions: HashMap<ExprID, ResolvedExpr>,
+    expressions: HashMap<NodeID, ResolvedExpr>,
 
     /// Maps symbols to their definition locations
     definitions: HashMap<SymbolID, Location>,
@@ -71,7 +71,7 @@ pub struct SemanticIndex {
     type_info: HashMap<SymbolID, TypeInfo>,
 
     /// Maps expression IDs to their spans (for reverse lookup)
-    expr_spans: HashMap<ExprID, Span>,
+    expr_spans: HashMap<NodeID, Span>,
 
     /// Spatial index for efficient span lookups
     span_index: SpanIndex,
@@ -88,7 +88,7 @@ impl SemanticIndex {
     }
 
     /// Debug method to list member accesses
-    pub fn debug_member_accesses(&self) -> Vec<(&ExprID, &str, Option<SymbolID>)> {
+    pub fn debug_member_accesses(&self) -> Vec<(&NodeID, &str, Option<SymbolID>)> {
         let mut result = Vec::new();
         for (expr_id, expr) in &self.expressions {
             if let ResolvedExpr::MemberAccess {
@@ -109,7 +109,7 @@ impl SemanticIndex {
     }
 
     /// Record semantic information about an expression
-    pub fn record_expression(&mut self, expr_id: ExprID, resolved: ResolvedExpr) {
+    pub fn record_expression(&mut self, expr_id: NodeID, resolved: ResolvedExpr) {
         self.expressions.insert(expr_id, resolved);
     }
 
@@ -124,13 +124,13 @@ impl SemanticIndex {
     }
 
     /// Record the span of an expression
-    pub fn record_expr_span(&mut self, expr_id: ExprID, span: Span) {
+    pub fn record_expr_span(&mut self, expr_id: NodeID, span: Span) {
         self.expr_spans.insert(expr_id, span.clone());
         self.span_index.insert(expr_id, span);
     }
 
     /// Get semantic information about an expression
-    pub fn get_expression(&self, expr_id: &ExprID) -> Option<&ResolvedExpr> {
+    pub fn get_expression(&self, expr_id: &NodeID) -> Option<&ResolvedExpr> {
         self.expressions.get(expr_id)
     }
 
@@ -145,7 +145,7 @@ impl SemanticIndex {
     }
 
     /// Find expression by span (for LSP queries)
-    pub fn find_expr_by_span(&self, span: Span) -> Option<ExprID> {
+    pub fn find_expr_by_span(&self, span: Span) -> Option<NodeID> {
         // This is inefficient but works for now
         // In production, we'd want a more efficient spatial index
         self.expr_spans
@@ -159,7 +159,7 @@ impl SemanticIndex {
         &self,
         position: &crate::diagnostic::Position,
         path: &std::path::PathBuf,
-    ) -> Option<ExprID> {
+    ) -> Option<NodeID> {
         self.span_index.find_at_position(position, path)
     }
 
@@ -173,10 +173,10 @@ impl SemanticIndex {
 /// Query interface for the semantic index
 pub trait QueryDatabase {
     /// What type does this expression have?
-    fn expr_type(&self, expr: ExprID) -> Option<Ty2>;
+    fn expr_type(&self, expr: NodeID) -> Option<Ty2>;
 
     /// What symbol does this expression resolve to?
-    fn expr_symbol(&self, expr: ExprID) -> Option<SymbolID>;
+    fn expr_symbol(&self, expr: NodeID) -> Option<SymbolID>;
 
     /// Where is this symbol defined?
     fn symbol_definition(&self, symbol: SymbolID) -> Option<&Location>;
@@ -185,11 +185,11 @@ pub trait QueryDatabase {
     fn type_members(&self, type_symbol: SymbolID) -> Option<&[MemberInfo]>;
 
     /// Find the expression at a given span
-    fn expr_at_span(&self, span: Span) -> Option<ExprID>;
+    fn expr_at_span(&self, span: Span) -> Option<NodeID>;
 }
 
 impl QueryDatabase for SemanticIndex {
-    fn expr_type(&self, expr: ExprID) -> Option<Ty2> {
+    fn expr_type(&self, expr: NodeID) -> Option<Ty2> {
         self.expressions.get(&expr).map(|resolved| match resolved {
             ResolvedExpr::Variable { ty, .. } => ty.clone(),
             ResolvedExpr::MemberAccess { ty, .. } => ty.clone(),
@@ -199,7 +199,7 @@ impl QueryDatabase for SemanticIndex {
         })
     }
 
-    fn expr_symbol(&self, expr: ExprID) -> Option<SymbolID> {
+    fn expr_symbol(&self, expr: NodeID) -> Option<SymbolID> {
         self.expressions
             .get(&expr)
             .and_then(|resolved| match resolved {
@@ -221,7 +221,7 @@ impl QueryDatabase for SemanticIndex {
             .map(|info| &info.members[..])
     }
 
-    fn expr_at_span(&self, span: Span) -> Option<ExprID> {
+    fn expr_at_span(&self, span: Span) -> Option<NodeID> {
         self.find_expr_by_span(span)
     }
 }

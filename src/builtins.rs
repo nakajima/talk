@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
     SymbolID, SymbolInfo, SymbolKind, SymbolTable,
     name::Name,
-    parsing::expr_id::ExprID,
+    parsing::node_id::NodeID,
     ty::Ty2,
     type_checker::Scheme,
     type_def::{TypeDef, TypeDefKind},
@@ -27,7 +27,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Int".to_string(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: ExprID(-1),
+                expr_id: NodeID(-1),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -47,7 +47,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Float".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: ExprID(-2),
+                expr_id: NodeID(-2),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -67,7 +67,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Bool".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: ExprID(-3),
+                expr_id: NodeID(-3),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -87,7 +87,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Pointer".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: ExprID(-4),
+                expr_id: NodeID(-4),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -107,7 +107,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__alloc".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-5),
+                expr_id: NodeID(-5),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -119,13 +119,13 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 0,
                     kind: TypeVarKind::Element,
-                    expr_id: ExprID(-5),
+                    expr_id: NodeID(-5),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 0,
                 kind: TypeVarKind::Element,
-                expr_id: ExprID(-5),
+                expr_id: NodeID(-5),
             }],
             type_def: None,
         },
@@ -134,7 +134,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__realloc".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-6),
+                expr_id: NodeID(-6),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -146,13 +146,13 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 1,
                     kind: TypeVarKind::Element,
-                    expr_id: ExprID(-6),
+                    expr_id: NodeID(-6),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 1,
                 kind: TypeVarKind::Element,
-                expr_id: ExprID(-6),
+                expr_id: NodeID(-6),
             }],
             type_def: None,
         },
@@ -161,7 +161,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__free".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-7),
+                expr_id: NodeID(-7),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -176,7 +176,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__store".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-8),
+                expr_id: NodeID(-8),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -189,20 +189,20 @@ pub fn builtins() -> Vec<Builtin> {
                     Ty2::TypeVar(TypeVarID {
                         id: 2,
                         kind: TypeVarKind::Element,
-                        expr_id: ExprID(-8),
+                        expr_id: NodeID(-8),
                     }),
                 ],
                 Ty2::Void.into(),
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 2,
                     kind: TypeVarKind::Element,
-                    expr_id: ExprID(-8),
+                    expr_id: NodeID(-8),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 2,
                 kind: TypeVarKind::Element,
-                expr_id: ExprID(-8),
+                expr_id: NodeID(-8),
             }],
             type_def: None,
         },
@@ -211,7 +211,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__load".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-9),
+                expr_id: NodeID(-9),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -222,19 +222,19 @@ pub fn builtins() -> Vec<Builtin> {
                 Ty2::TypeVar(TypeVarID {
                     id: 3,
                     kind: TypeVarKind::Element,
-                    expr_id: ExprID(-9),
+                    expr_id: NodeID(-9),
                 })
                 .into(),
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 3,
                     kind: TypeVarKind::Element,
-                    expr_id: ExprID(-9),
+                    expr_id: NodeID(-9),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 3,
                 kind: TypeVarKind::Element,
-                expr_id: ExprID(-9),
+                expr_id: NodeID(-9),
             }],
             type_def: None,
         },
@@ -244,7 +244,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "print".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-11),
+                expr_id: NodeID(-11),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -254,19 +254,19 @@ pub fn builtins() -> Vec<Builtin> {
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
-                    expr_id: ExprID(-11),
+                    expr_id: NodeID(-11),
                 })],
                 Ty2::Void.into(),
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 4,
                     kind: TypeVarKind::FuncParam("printable".into()),
-                    expr_id: ExprID(-11),
+                    expr_id: NodeID(-11),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 4,
                 kind: TypeVarKind::FuncParam("printable".into()),
-                expr_id: ExprID(-11),
+                expr_id: NodeID(-11),
             }],
             type_def: None,
         },
@@ -275,7 +275,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "__ir_instr".into(),
                 kind: SymbolKind::BuiltinFunc,
-                expr_id: ExprID(-12),
+                expr_id: NodeID(-12),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -286,19 +286,19 @@ pub fn builtins() -> Vec<Builtin> {
                 Ty2::TypeVar(TypeVarID {
                     id: 5,
                     kind: TypeVarKind::CallReturn,
-                    expr_id: ExprID(-12),
+                    expr_id: NodeID(-12),
                 })
                 .into(),
                 vec![Ty2::TypeVar(TypeVarID {
                     id: 5,
                     kind: TypeVarKind::CallReturn,
-                    expr_id: ExprID(-12),
+                    expr_id: NodeID(-12),
                 })],
             ),
             unbound_vars: vec![TypeVarID {
                 id: 5,
                 kind: TypeVarKind::CallReturn,
-                expr_id: ExprID(-12),
+                expr_id: NodeID(-12),
             }],
             type_def: None,
         },
@@ -307,7 +307,7 @@ pub fn builtins() -> Vec<Builtin> {
             info: SymbolInfo {
                 name: "Byte".into(),
                 kind: SymbolKind::BuiltinType,
-                expr_id: ExprID(-13),
+                expr_id: NodeID(-13),
                 is_captured: false,
                 definition: None,
                 documentation: None,
@@ -494,7 +494,7 @@ mod tests {
 mod optional_tests {
     use crate::{
         any_expr,
-        parsed_expr::{self, ParsedExpr},
+        parsed_node::{self, ParsedNode},
         parser::parse,
     };
 
@@ -504,12 +504,12 @@ mod optional_tests {
 
         assert_eq!(
             parsed.roots()[0],
-            any_expr!(parsed_expr::Expr::Let(
+            any_expr!(parsed_node::Expr::Let(
                 "a".into(),
                 Some(
-                    any_expr!(parsed_expr::Expr::TypeRepr {
+                    any_expr!(parsed_node::Expr::TypeRepr {
                         name: "Optional".into(),
-                        generics: vec![any_expr!(parsed_expr::Expr::TypeRepr {
+                        generics: vec![any_expr!(parsed_node::Expr::TypeRepr {
                             name: "Int".into(),
                             generics: vec![],
                             conformances: vec![],
