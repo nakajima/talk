@@ -3,6 +3,7 @@ macro_rules! any_expr {
     ($expr:expr) => {{
         Expr {
             id: NodeID::ANY,
+            span: $crate::parsing::span::Span::ANY,
             kind: $expr,
         }
     }};
@@ -13,6 +14,7 @@ macro_rules! any_block {
     ($expr:expr) => {{
         Block {
             id: NodeID::ANY,
+            span: $crate::parsing::span::Span::ANY,
             args: vec![],
             body: $expr,
         }

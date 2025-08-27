@@ -1,44 +1,35 @@
-use derive_visitor::{Drive, DriveMut};
-
 use crate::{
+    impl_into_node,
     label::Label,
     name::Name,
     node::Node,
     node_id::NodeID,
     node_kinds::{
-        attribute::Attribute, block::Block, generic_decl::GenericDecl,
+        attribute::Attribute, block::Block, call_arg::CallArg, generic_decl::GenericDecl,
         incomplete_expr::IncompleteExpr, match_arm::MatchArm, parameter::Parameter,
-        record_field::RecordField, type_annotation::TypeAnnotation,
+        pattern::Pattern, record_field::RecordField, type_annotation::TypeAnnotation,
     },
+    parsing::span::Span,
     token_kind::TokenKind,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, DriveMut, Drive)]
-pub struct CallArg {
-    #[drive(skip)]
-    pub id: NodeID,
-    #[drive(skip)]
-    pub label: Label,
-    pub value: Expr,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExprKind {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
 
     // Start of the real expressions
     LiteralArray(Vec<Expr>),
-    #[drive(skip)]
+
     LiteralInt(String),
-    #[drive(skip)]
+
     LiteralFloat(String),
     LiteralTrue,
     LiteralFalse,
-    #[drive(skip)]
+
     LiteralString(String),
-    Unary(#[drive(skip)] TokenKind, Box<Expr>),
-    Binary(Box<Expr>, #[drive(skip)] TokenKind, Box<Expr>),
+    Unary(TokenKind, Box<Expr>),
+    Binary(Box<Expr>, TokenKind, Box<Expr>),
     Tuple(Vec<Expr>),
     Block(Block),
     Call {
@@ -48,7 +39,7 @@ pub enum ExprKind {
     },
 
     // A dot thing
-    Member(Option<Box<Expr>> /* receiver */, #[drive(skip)] Label),
+    Member(Option<Box<Expr>> /* receiver */, Label),
 
     // Function stuff
     Func {
@@ -56,11 +47,11 @@ pub enum ExprKind {
         params: Vec<Parameter>,      /* params tuple */
         body: Block,                 /* body */
         ret: Option<TypeAnnotation>, /* return type */
-        #[drive(skip)]
+
         attributes: Vec<Attribute>,
     },
 
-    Variable(#[drive(skip)] Name),
+    Variable(Name),
 
     // Control flow
     If(
@@ -77,38 +68,26 @@ pub enum ExprKind {
 
     // Patterns (for match arms)
     PatternVariant(
-        #[drive(skip)] Option<Name>, // enum name (None for unqualified .some)
-        #[drive(skip)] Name,         // variant name: "some"
-        Vec<Node>,                   // bindings: ["wrapped"]
+        Option<Name>, // enum name (None for unqualified .some)
+        Name,         // variant name: "some"
+        Vec<Pattern>, // bindings: ["wrapped"]
     ),
 
     // Record literal: {x: 1, y: 2}
     RecordLiteral(Vec<RecordField>), // List of RecordField expressions
 
     // Row variable in type context: ..R
-    RowVariable(#[drive(skip)] Name),
+    RowVariable(Name),
 
     // Spread in record literal: ...obj
     Spread(Box<Node>),
-
-    FuncSignature {
-        #[drive(skip)]
-        name: Name,
-        params: Vec<Node>,
-        generics: Vec<Node>,
-        ret: Box<Node>,
-    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expr {
-    #[drive(skip)]
     pub id: NodeID,
     pub kind: ExprKind,
+    pub span: Span,
 }
 
-impl From<Expr> for Node {
-    fn from(val: Expr) -> Self {
-        Node::Expr(val)
-    }
-}
+impl_into_node!(Expr);

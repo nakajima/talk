@@ -1,12 +1,14 @@
-use crate::{name::Name, node_id::NodeID, node_kinds::type_annotation::TypeAnnotation};
-use derive_visitor::{Drive, DriveMut};
+use crate::{
+    parsing::span::Span, impl_into_node, name::Name, node::Node, node_id::NodeID, node_kinds::expr::Expr,
+};
 
 // Single field in a record literal
-#[derive(Clone, Debug, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordField {
-    #[drive(skip)]
     pub id: NodeID,
-    #[drive(skip)]
     pub label: Name,
-    pub value: TypeAnnotation,
+    pub value: Expr,
+    pub span: Span,
 }
+
+impl_into_node!(RecordField);

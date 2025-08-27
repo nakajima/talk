@@ -19,6 +19,7 @@ pub mod parsing;
 pub use parsing::*;
 pub mod common;
 pub use common::*;
+pub mod types;
 
 // #[cfg(feature = "cli")]
 // pub mod lsp;

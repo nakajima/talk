@@ -1,13 +1,12 @@
-use derive_visitor::{Drive, DriveMut};
+use crate::{parsing::span::Span, impl_into_node, name::Name, node::Node, node_id::NodeID};
 
-use crate::{name::Name, node_id::NodeID};
-
-#[derive(Debug, Clone, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericDecl {
-    #[drive(skip)]
     pub id: NodeID,
-    #[drive(skip)]
     pub name: Name,
     pub generics: Vec<GenericDecl>,
     pub conformances: Vec<GenericDecl>,
+    pub span: Span,
 }
+
+impl_into_node!(GenericDecl);

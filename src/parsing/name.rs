@@ -1,16 +1,12 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SymbolID(u32);
+use crate::types::symbol::Symbol;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
     Raw(String),
-    Resolved(SymbolID, String),
-    _Self(SymbolID),
+    Resolved(Symbol, String),
+    _Self(Symbol),
     SelfType,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ResolvedName(pub SymbolID, pub String);
 
 impl Name {
     pub fn name_str(&self) -> String {
@@ -35,7 +31,7 @@ impl From<&str> for Name {
     }
 }
 
-impl From<Name> for SymbolID {
+impl From<Name> for Symbol {
     #[allow(clippy::panic)]
     fn from(value: Name) -> Self {
         let Name::Resolved(id, _) = value else {

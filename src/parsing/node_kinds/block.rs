@@ -1,12 +1,11 @@
-use derive_visitor::{Drive, DriveMut};
+use crate::{parsing::span::Span, impl_into_node, name::Name, node::Node, node_id::NodeID};
 
-use crate::{name::Name, node::Node, node_id::NodeID};
-
-#[derive(Debug, Clone, PartialEq, Eq, DriveMut, Drive)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
-    #[drive(skip)]
     pub id: NodeID,
-    #[drive(skip)]
     pub args: Vec<Name>,
     pub body: Vec<Node>,
+    pub span: Span,
 }
+
+impl_into_node!(Block);

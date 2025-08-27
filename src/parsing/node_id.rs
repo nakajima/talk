@@ -1,15 +1,15 @@
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Default, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
-pub struct NodeID(pub i32);
+pub struct NodeID(pub u32);
 
 impl NodeID {
     #[cfg(test)]
-    pub const ANY: NodeID = NodeID(i32::MIN);
+    pub const ANY: NodeID = NodeID(u32::MIN);
 }
 
 impl std::fmt::Debug for NodeID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0 == i32::MIN {
+        if self.0 == u32::MIN {
             write!(f, "NodeID(ANY)")?;
         } else {
             write!(f, "NodeID({})", self.0)?;
@@ -25,8 +25,8 @@ impl std::fmt::Display for NodeID {
     }
 }
 
-impl From<i32> for NodeID {
-    fn from(other: i32) -> Self {
+impl From<u32> for NodeID {
+    fn from(other: u32) -> Self {
         Self(other)
     }
 }

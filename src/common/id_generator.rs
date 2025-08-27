@@ -1,10 +1,10 @@
 #[derive(Default, Debug, Clone)]
 pub struct IDGenerator {
-    last: i32,
+    last: u32,
 }
 
 impl IDGenerator {
-    pub fn next_id(&mut self) -> i32 {
+    pub fn next_id(&mut self) -> u32 {
         self.last += 1;
         self.last
     }
