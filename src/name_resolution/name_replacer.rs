@@ -1,4 +1,4 @@
-use crate::{fold::Fold, name::Name, node::NodeType, types::symbol::Symbol};
+use crate::{name::Name, name_resolution::symbol::Symbol, node::NodeType, traversal::fold::Fold};
 
 #[derive(Debug)]
 pub struct NameReplacer {

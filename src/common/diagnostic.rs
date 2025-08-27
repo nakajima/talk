@@ -1,6 +1,8 @@
 use std::error::Error;
 
-use crate::{parser_error::ParserError, span::Span, types::name_resolver::NameResolverError};
+use crate::{
+    name_resolution::name_resolver::NameResolverError, parser_error::ParserError, span::Span,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic<E: Error> {

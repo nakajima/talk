@@ -1,8 +1,8 @@
 //! AST Fold trait for functional transformations
-//! 
+//!
 //! This module provides a Fold trait that allows traversal and transformation
 //! of AST nodes in a functional style (consume and produce new nodes).
-//! 
+//!
 //! Key features:
 //! - Enter/exit hooks for all node types
 //! - Specific handlers for each Decl variant  
@@ -11,8 +11,12 @@
 
 use tracing::instrument;
 
-use super::node::Node;
-use super::node_kinds::{
+use crate::label::Label;
+use crate::lexing::token_kind::TokenKind;
+use crate::name::Name;
+use crate::node::Node;
+use crate::node_id::NodeID;
+use crate::node_kinds::{
     attribute::Attribute,
     block::Block,
     call_arg::CallArg,
@@ -27,10 +31,6 @@ use super::node_kinds::{
     stmt::{Stmt, StmtKind},
     type_annotation::{TypeAnnotation, TypeAnnotationKind},
 };
-use crate::label::Label;
-use crate::lexing::token_kind::TokenKind;
-use crate::name::Name;
-use crate::node_id::NodeID;
 
 pub trait Fold: Sized + std::fmt::Debug {
     // Enter methods - called before visiting children

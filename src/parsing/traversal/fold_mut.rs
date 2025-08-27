@@ -1,8 +1,8 @@
 //! AST FoldMut trait for in-place mutations
-//! 
+//!
 //! This module provides a FoldMut trait that allows traversal and mutation
 //! of AST nodes in-place using mutable references.
-//! 
+//!
 //! Key features:
 //! - Enter/exit hooks for all node types with mutable access
 //! - Specific handlers for each Decl variant with mutable access
@@ -11,8 +11,8 @@
 
 use tracing::instrument;
 
-use super::node::Node;
-use super::node_kinds::{
+use crate::node::Node;
+use crate::node_kinds::{
     attribute::Attribute,
     block::Block,
     call_arg::CallArg,

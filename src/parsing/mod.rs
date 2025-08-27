@@ -1,6 +1,4 @@
 pub mod ast;
-pub mod fold;
-pub mod fold_mut;
 pub mod label;
 pub mod lexing;
 pub mod name;
@@ -14,12 +12,7 @@ pub mod precedence;
 pub use lexing::*;
 pub mod parser_error;
 pub mod span;
+pub mod traversal;
 
-#[cfg(test)]
-pub mod fold_tests;
-#[cfg(test)]
-pub mod fold_mut_tests;
-#[cfg(test)]
-pub mod fold_expr_tests;
 #[cfg(test)]
 pub mod parser_tests;

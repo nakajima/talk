@@ -4,7 +4,7 @@ pub mod tests {
 
     use crate::{
         any_block, any_expr,
-        ast::AST,
+        ast::{AST, Parsed},
         id_generator::IDGenerator,
         label::Label,
         lexer::Lexer,
@@ -74,7 +74,7 @@ pub mod tests {
     #[macro_export]
     macro_rules! any_decl {
         ($expr:expr) => {
-            Decl {
+            $crate::node_kinds::decl::Decl {
                 id: NodeID::ANY,
                 span: $crate::parsing::span::Span::ANY,
                 kind: $expr,
@@ -104,7 +104,7 @@ pub mod tests {
         };
     }
 
-    pub fn parse(code: &'static str) -> AST {
+    pub fn parse(code: &'static str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
         let ids = &mut IDGenerator::default();
         let parser = Parser::new("-", ids, lexer);

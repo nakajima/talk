@@ -1,4 +1,4 @@
-use crate::types::symbol::Symbol;
+use crate::name_resolution::symbol::Symbol;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {

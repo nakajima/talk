@@ -12,7 +12,7 @@ macro_rules! any_expr {
 #[macro_export]
 macro_rules! any_block {
     ($expr:expr) => {{
-        Block {
+        $crate::node_kinds::block::Block {
             id: NodeID::ANY,
             span: $crate::parsing::span::Span::ANY,
             args: vec![],

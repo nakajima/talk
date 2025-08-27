@@ -1,5 +1,3 @@
-use std::u32;
-
 #[derive(Clone, Copy, Debug, Eq)]
 pub struct Span {
     pub start: u32,

@@ -1,4 +1,4 @@
-use crate::ast::AST;
+use crate::ast::{AST, NewAST, Parsed};
 use crate::id_generator::IDGenerator;
 use crate::label::Label;
 use crate::lexer::Lexer;
@@ -41,12 +41,6 @@ pub enum BlockContext {
     None,
 }
 
-impl BlockContext {
-    fn allows_decls(&self) -> bool {
-        matches!(self, Self::Struct | Self::Enum | Self::Extend)
-    }
-}
-
 // for tracking begin/end tokens
 pub struct SourceLocationStart {
     token: Token,
@@ -75,16 +69,17 @@ impl<'a> Parser<'a> {
             previous: None,
             previous_before_newline: None,
             source_location_stack: Default::default(),
-            ast: AST {
+            ast: AST::<NewAST> {
                 path: path.into(),
                 roots: Default::default(),
                 diagnostics: Default::default(),
                 meta: Default::default(),
+                phase: (),
             },
         }
     }
 
-    pub fn parse(mut self) -> Result<AST> {
+    pub fn parse(mut self) -> Result<AST<Parsed>> {
         self.advance();
         self.advance();
         self.skip_semicolons_and_newlines();
@@ -110,7 +105,15 @@ impl<'a> Parser<'a> {
             self.skip_semicolons_and_newlines();
         }
 
-        Ok(self.ast)
+        let ast = AST::<Parsed> {
+            path: self.ast.path,
+            roots: self.ast.roots,
+            diagnostics: self.ast.diagnostics,
+            meta: self.ast.meta,
+            phase: Parsed,
+        };
+
+        Ok(ast)
     }
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
@@ -136,7 +139,7 @@ impl<'a> Parser<'a> {
         let node: Node = match &current.kind {
             Static => {
                 self.consume(TokenKind::Static)?;
-                self.decl(context, true)?.into()
+                self.decl(context, true)?
             }
             Enum => self
                 .nominal_decl(TokenKind::Enum, BlockContext::Enum)?
@@ -1114,7 +1117,7 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            body.push(self.decl(context, false)?.into());
+            body.push(self.decl(context, false)?);
 
             self.skip_semicolons_and_newlines();
         }
