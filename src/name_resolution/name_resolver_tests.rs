@@ -3,7 +3,7 @@ pub mod tests {
     use rustc_hash::FxHashSet;
 
     use crate::{
-        any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
+        annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
         diagnostic::{AnyDiagnostic, Diagnostic},
         name::Name,
@@ -11,13 +11,17 @@ pub mod tests {
             name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{DeclId, LocalId, Symbol},
         },
+        node::Node,
         node_id::NodeID,
         node_kinds::{
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
+            generic_decl::GenericDecl,
+            match_arm::MatchArm,
             parameter::Parameter,
-            pattern::PatternKind,
+            pattern::{Pattern, PatternKind},
             stmt::StmtKind,
+            type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
         parsing::parser_tests::tests::parse,
         span::Span,
@@ -29,6 +33,14 @@ pub mod tests {
                 id: NodeID::ANY,
                 name: Name::Resolved($id.into(), $name.into()),
                 type_annotation: None,
+                span: Span::ANY,
+            }
+        };
+        ($id:expr, $name:expr, $ty:expr) => {
+            Parameter {
+                id: NodeID::ANY,
+                name: Name::Resolved($id.into(), $name.into()),
+                type_annotation: Some($ty),
                 span: Span::ANY,
             }
         };
@@ -259,6 +271,45 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_func_generics() {
+        let resolved = resolve(
+            "
+        func fizz<T>(t: T) -> T { t }
+        ",
+        );
+
+        assert_eq_diff!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Func {
+                name: Name::Resolved(Symbol::Value(DeclId(1)), "fizz".into()),
+                generics: vec![GenericDecl {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                }],
+                params: vec![param!(
+                    LocalId(1),
+                    "t",
+                    annotation!(TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                        generics: vec![]
+                    })
+                ),],
+                body: any_block!(vec![
+                    any_stmt!(StmtKind::Expr(variable!(LocalId(1), "t"))).into(),
+                ]),
+                ret: Some(annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                    generics: vec![]
+                })),
+                attributes: vec![],
+            }),
+        );
+    }
+
+    #[test]
     fn resolves_struct() {
         let resolved = resolve("struct Person {}");
         assert_eq!(
@@ -270,5 +321,288 @@ pub mod tests {
                 body: any_block!(vec![])
             })
         )
+    }
+
+    #[test]
+    fn resolves_struct_properties() {
+        let resolved = resolve(
+            "
+        struct Person {
+            let me: Person
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
+                    name: Name::Resolved(Symbol::Value(DeclId(2)), "me".into()),
+                    is_static: false,
+                    type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                        generics: vec![]
+                    })),
+                    default_value: None
+                }))])
+            })
+        )
+    }
+
+    #[test]
+    fn resolves_generic_struct_properties() {
+        let resolved = resolve(
+            "
+        struct Person<T> {
+            let me: T
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                generics: vec![GenericDecl {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                    generics: vec![],
+                    conformances: vec![],
+                    span: Span::ANY
+                }],
+                conformances: vec![],
+                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
+                    name: Name::Resolved(Symbol::Value(DeclId(3)), "me".into()),
+                    is_static: false,
+                    type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                        generics: vec![]
+                    })),
+                    default_value: None
+                }))])
+            })
+        )
+    }
+
+    #[test]
+    fn resolves_struct_methods() {
+        let resolved = resolve(
+            "struct Person {
+                func fizz() {
+                    self.buzz()
+                }
+
+                func buzz() {
+                    self.fizz()
+                }
+            }",
+        );
+        assert_eq_diff!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Method {
+                        func: Box::new(any_decl!(DeclKind::Func {
+                            name: Name::Resolved(Symbol::Value(DeclId(2)), "fizz".into()),
+                            generics: vec![],
+                            params: vec![],
+                            body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
+                                callee: any_expr!(ExprKind::Member(
+                                    Some(any_expr!(ExprKind::Variable(Name::_Self)).into()),
+                                    "buzz".into()
+                                ))
+                                .into(),
+                                type_args: vec![],
+                                args: vec![]
+                            })]),
+                            ret: None,
+                            attributes: vec![]
+                        })),
+                        is_static: false
+                    })
+                    .into(),
+                    any_decl!(DeclKind::Method {
+                        func: Box::new(any_decl!(DeclKind::Func {
+                            name: Name::Resolved(Symbol::Value(DeclId(3)), "buzz".into()),
+                            generics: vec![],
+                            params: vec![],
+                            body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
+                                callee: any_expr!(ExprKind::Member(
+                                    Some(any_expr!(ExprKind::Variable(Name::_Self)).into()),
+                                    "fizz".into()
+                                ))
+                                .into(),
+                                type_args: vec![],
+                                args: vec![]
+                            })]),
+                            ret: None,
+                            attributes: vec![]
+                        })),
+                        is_static: false
+                    })
+                    .into()
+                ])
+            })
+        )
+    }
+
+    #[test]
+    fn resolves_enum() {
+        let resolved = resolve(
+            "
+        enum Fizz {
+            case foo, bar
+        }
+        ",
+        );
+
+        assert_eq!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Enum {
+                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
+                conformances: vec![],
+                generics: vec![],
+                body: any_block!(vec![
+                    Node::Decl(any_decl!(DeclKind::EnumVariant(
+                        Name::Resolved(Symbol::Type(DeclId(2)), "foo".into()),
+                        vec![]
+                    ))),
+                    Node::Decl(any_decl!(DeclKind::EnumVariant(
+                        Name::Resolved(Symbol::Type(DeclId(3)), "bar".into()),
+                        vec![]
+                    ))),
+                ])
+            })
+        )
+    }
+
+    #[test]
+    fn resolves_protocol() {
+        let resolved = resolve(
+            "
+            protocol Fizzable {
+                func buzz() -> ()
+            }
+        ",
+        );
+
+        assert_eq_diff!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Protocol {
+                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizzable".into()),
+                conformances: vec![],
+                generics: vec![],
+                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Method {
+                    is_static: false,
+                    func: any_decl!(DeclKind::FuncSignature {
+                        name: Name::Resolved(Symbol::Type(DeclId(2)), "buzz".into()),
+                        params: vec![],
+                        generics: vec![],
+                        ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
+                    })
+                    .into()
+                })),])
+            })
+        )
+    }
+
+    #[test]
+    fn resolves_protocol_associated_types() {
+        let resolved = resolve(
+            "
+            protocol Fizzable {
+                associated T
+
+                func buzz() -> T
+            }
+        ",
+        );
+
+        assert_eq_diff!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Protocol {
+                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizzable".into()),
+                conformances: vec![],
+                generics: vec![],
+                body: any_block!(vec![
+                    Node::Decl(any_decl!(DeclKind::Associated {
+                        generic: GenericDecl {
+                            id: NodeID::ANY,
+                            name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                            generics: vec![],
+                            conformances: vec![],
+                            span: Span::ANY
+                        }
+                    })),
+                    Node::Decl(any_decl!(DeclKind::Method {
+                        is_static: false,
+                        func: any_decl!(DeclKind::FuncSignature {
+                            name: Name::Resolved(Symbol::Type(DeclId(3)), "buzz".into()),
+                            params: vec![],
+                            generics: vec![],
+                            ret: Box::new(annotation!(TypeAnnotationKind::Nominal {
+                                name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                                generics: vec![]
+                            }))
+                        })
+                        .into()
+                    })),
+                ])
+            })
+        )
+    }
+
+    #[test]
+    fn resolves_match() {
+        let resolved = resolve(
+            "
+        let a = 123
+        match a {
+            b -> b
+        }
+        ",
+        );
+
+        assert_eq!(
+            *resolved.roots[1].as_stmt(),
+            any_expr_stmt!(ExprKind::Match(
+                Box::new(variable!(LocalId(1), "a")),
+                vec![MatchArm {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    pattern: Pattern {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        kind: PatternKind::Bind(Name::Resolved(
+                            Symbol::Local(LocalId(2)),
+                            "b".into()
+                        ))
+                    },
+                    body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
+                        Symbol::Local(LocalId(2)),
+                        "b".into()
+                    )))])
+                }]
+            ))
+        );
+    }
+
+    #[test]
+    fn match_doesnt_leak() {
+        let resolved = resolve_err(
+            "
+        match 123 {
+            b -> b
+        }
+
+        b
+        ",
+        );
+
+        assert_eq!(resolved.diagnostics.len(), 1, "{:?}", resolved.diagnostics);
     }
 }

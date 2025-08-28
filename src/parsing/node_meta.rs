@@ -25,13 +25,6 @@ impl NodeMeta {
             .collect()
     }
 
-    pub fn span(&self) -> (usize, usize) {
-        (
-            self.start.start as usize,
-            self.end.end.saturating_sub(self.start.start) as usize,
-        )
-    }
-
     pub fn source_range(&self) -> Range<u32> {
         self.start.start..self.end.end
     }

@@ -22,6 +22,7 @@ pub enum TokenKind {
     Underscore,
 
     Protocol,
+    Associated,
 
     // More
     At,
@@ -91,6 +92,7 @@ impl TokenKind {
         let text = match &self {
             TokenKind::LineComment(text) => &format!("// {text}"),
             TokenKind::If => "if",
+            TokenKind::Associated => "associated",
             TokenKind::Else => "else",
             TokenKind::Loop => "loop",
             TokenKind::Return => "return",

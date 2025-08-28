@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt::Display,
-};
+use std::{error::Error, fmt::Display};
 
 use generational_arena::{Arena, Index};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -13,16 +9,16 @@ use crate::{
     name::Name,
     name_resolution::{
         decl_declarer::DeclDeclarer,
-        symbol::{LocalId, Symbol, Symbols},
+        symbol::{Symbol, Symbols},
     },
     node::Node,
     node_id::NodeID,
     node_kinds::{
-        block::Block,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
-        pattern::{Pattern, PatternKind},
+        match_arm::MatchArm,
         stmt::{Stmt, StmtKind},
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
     traversal::fold_mut::FoldMut,
@@ -61,12 +57,6 @@ impl Scope {
     }
 }
 
-#[derive(Default, Debug)]
-pub struct CurrentFunc {
-    capturable_locals: BTreeSet<LocalId>,
-    captures: BTreeSet<LocalId>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct NameResolved {
     pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
@@ -81,7 +71,6 @@ pub struct NameResolver {
     pub(super) symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
     phase: NameResolved,
-    current_funcs: Vec<CurrentFunc>,
 
     // Scope stuff
     pub(super) scopes: Arena<Scope>,
@@ -174,8 +163,14 @@ impl NameResolver {
         None
     }
 
-    fn lookup(&mut self, name: &Name) -> Option<Symbol> {
-        self.lookup_in_scope(name, self.current_scope.expect("no scope to declare in"))
+    fn lookup(&mut self, name: &Name) -> Option<Name> {
+        if name.name_str() == "self" {
+            return Some(Name::_Self);
+        }
+
+        let symbol =
+            self.lookup_in_scope(name, self.current_scope.expect("no scope to declare in"))?;
+        Some(Name::Resolved(symbol, name.name_str()))
     }
 
     fn diagnostic(&mut self, span: Span, err: NameResolverError) {
@@ -250,6 +245,19 @@ impl NameResolver {
 
 impl FoldMut for NameResolver {
     ///////////////////////////////////////////////////////////////////////////
+    // Type lookups
+    ///////////////////////////////////////////////////////////////////////////
+    fn enter_type_annotation_mut(&mut self, ty: &mut TypeAnnotation) {
+        if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
+            if let Some(resolved_name) = self.lookup(name) {
+                *name = resolved_name
+            } else {
+                self.diagnostic(ty.span, NameResolverError::UndefinedName(name.name_str()));
+            }
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
     fn enter_stmt_mut(&mut self, stmt: &mut Stmt) {
@@ -276,6 +284,14 @@ impl FoldMut for NameResolver {
     // Locals scoping
     ///////////////////////////////////////////////////////////////////////////
 
+    fn enter_match_arm_mut(&mut self, arm: &mut MatchArm) {
+        self.enter_scope(arm.id);
+    }
+
+    fn exit_match_arm_mut(&mut self, _arm: &mut MatchArm) {
+        self.exit_scope();
+    }
+
     fn enter_expr_variable_mut(&mut self, expr: &mut Expr) {
         let Expr {
             kind: ExprKind::Variable(name),
@@ -285,12 +301,12 @@ impl FoldMut for NameResolver {
             unreachable!()
         };
 
-        let Some(sym) = self.lookup(name) else {
+        let Some(resolved_name) = self.lookup(name) else {
             self.diagnostic(expr.span, NameResolverError::UndefinedName(name.name_str()));
             return;
         };
 
-        *name = Name::Resolved(sym, name.name_str());
+        *name = resolved_name
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -332,5 +348,46 @@ impl FoldMut for NameResolver {
         };
 
         self.exit_scope();
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Nominal scoping
+    ///////////////////////////////////////////////////////////////////////////
+    fn enter_decl_struct_mut(&mut self, decl: &mut Decl) {
+        self.enter_scope(decl.id);
+    }
+
+    fn enter_decl_protocol_mut(&mut self, decl: &mut Decl) {
+        self.enter_scope(decl.id);
+    }
+
+    fn enter_decl_enum_mut(&mut self, decl: &mut Decl) {
+        self.enter_scope(decl.id);
+    }
+
+    fn exit_decl_struct_mut(&mut self, _decl: &mut Decl) {
+        self.exit_scope();
+    }
+
+    fn exit_decl_protocol_mut(&mut self, _decl: &mut Decl) {
+        self.exit_scope();
+    }
+
+    fn exit_decl_enum_mut(&mut self, _decl: &mut Decl) {
+        self.exit_scope();
+    }
+
+    fn enter_decl_property_mut(&mut self, decl: &mut Decl) {
+        let Decl {
+            kind:
+                DeclKind::Property {
+                    name: Name::Resolved(_sym, _),
+                    ..
+                },
+            ..
+        } = decl
+        else {
+            unreachable!()
+        };
     }
 }

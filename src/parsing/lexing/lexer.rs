@@ -278,6 +278,7 @@ impl<'a> Lexer<'a> {
 
         let string = self.string_from(starting_at, self.current);
 
+        // Keyword handling
         match string.as_str() {
             "func" => Func,
             "let" => Let,
@@ -297,6 +298,7 @@ impl<'a> Lexer<'a> {
             "protocol" => Protocol,
             "import" => Import,
             "static" => Static,
+            "associated" => Associated,
             _ => Identifier(string),
         }
     }

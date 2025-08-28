@@ -130,6 +130,8 @@ pub trait FoldMut: Sized {
 
     // Enter methods - called before visiting children
     #[instrument(skip(self))]
+    fn enter_decl_associated_mut(&mut self, _associated: &mut Decl) {}
+    #[instrument(skip(self))]
     fn enter_node_mut(&mut self, _node: &mut Node) {}
     #[instrument(skip(self))]
     fn enter_attribute_mut(&mut self, _attr: &mut Attribute) {}
@@ -208,6 +210,8 @@ pub trait FoldMut: Sized {
     fn enter_expr_spread_mut(&mut self, _expr: &mut Expr) {}
 
     // Exit methods - called after visiting children
+    #[instrument(skip(self))]
+    fn exit_decl_associated_mut(&mut self, _decl: &mut Decl) {}
     fn exit_node_mut(&mut self, _node: &mut Node) {}
     fn exit_attribute_mut(&mut self, _attr: &mut Attribute) {}
     fn exit_decl_mut(&mut self, _decl: &mut Decl) {}
@@ -298,6 +302,7 @@ pub fn walk_decl_mut<F: FoldMut>(fold: &mut F, decl: &mut Decl) {
                 DeclKind::Enum { .. } => fold.enter_decl_enum_mut(decl),
                 DeclKind::EnumVariant(..) => fold.enter_decl_enum_variant_mut(decl),
                 DeclKind::FuncSignature { .. } => fold.enter_decl_func_signature_mut(decl),
+                DeclKind::Associated { .. } => fold.enter_decl_associated_mut(decl),
                 _ => {}
             }
         }
@@ -305,6 +310,9 @@ pub fn walk_decl_mut<F: FoldMut>(fold: &mut F, decl: &mut Decl) {
 
     // Walk children
     match &mut decl.kind {
+        DeclKind::Associated { generic } => {
+            fold.fold_generic_decl_mut(generic);
+        }
         DeclKind::Import(_) => {}
         DeclKind::Struct {
             generics,

@@ -13,6 +13,7 @@ pub enum ParserError {
     ExpectedDecl(TokenKind),
     LetNotAllowed(BlockContext),
     InitNotAllowed(BlockContext),
+    IncompleteFuncSignature(String),
 }
 
 impl Display for ParserError {
@@ -45,6 +46,7 @@ impl Display for ParserError {
             Self::ExpectedDecl(actual) => write!(f, "Expected declaration, got {actual:?}"),
             Self::LetNotAllowed(context) => write!(f, "Cannot use `let` in {context:?} body"),
             Self::InitNotAllowed(_context) => write!(f, "Cannot use `init` in this context"),
+            Self::IncompleteFuncSignature(msg) => write!(f, "{}", msg),
         }
     }
 }

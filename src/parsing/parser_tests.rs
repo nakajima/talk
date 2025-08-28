@@ -1445,13 +1445,18 @@ pub mod tests {
                     ))
                     .into(),
                     any_decl!(DeclKind::EnumVariant(Name::Raw("nope".into()), vec![])).into(),
-                    any_decl!(DeclKind::Func {
-                        name: Name::Raw("fizz".into()),
-                        generics: vec![],
-                        params: vec![],
-                        body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
-                        ret: None,
-                        attributes: vec![],
+                    any_decl!(DeclKind::Method {
+                        is_static: false,
+                        func: Box::new(any_decl!(DeclKind::Func {
+                            name: Name::Raw("fizz".into()),
+                            generics: vec![],
+                            params: vec![],
+                            body: any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                                "123".into()
+                            ))]),
+                            ret: None,
+                            attributes: vec![],
+                        }))
                     })
                     .into()
                 ])
@@ -1864,6 +1869,94 @@ pub mod tests {
                             ))
                             .into()
                         ]),
+                    })
+                    .into()
+                ])
+            })
+        );
+    }
+
+    #[test]
+    fn parses_empty_protocol_def() {
+        let parsed = parse(
+            "
+        protocol Person {}
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Protocol {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![])
+            })
+        );
+    }
+
+    #[test]
+    fn parses_protocol_method_req() {
+        let parsed = parse(
+            "
+        protocol Person {
+            func me() -> Person
+        }
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Protocol {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Method {
+                        is_static: false,
+                        func: any_decl!(DeclKind::FuncSignature {
+                            name: "me".into(),
+                            params: vec![],
+                            generics: vec![],
+                            ret: annotation!(TypeAnnotationKind::Nominal {
+                                name: "Person".into(),
+                                generics: vec![]
+                            })
+                            .into()
+                        })
+                        .into()
+                    })
+                    .into()
+                ])
+            })
+        );
+    }
+
+    #[test]
+    fn parses_protocol_associated_type() {
+        let parsed = parse(
+            "
+        protocol Person {
+            associated T
+        }
+        ",
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Protocol {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Associated {
+                        generic: GenericDecl {
+                            id: NodeID::ANY,
+                            name: "T".into(),
+                            generics: vec![],
+                            conformances: vec![],
+                            span: Span::ANY
+                        }
                     })
                     .into()
                 ])

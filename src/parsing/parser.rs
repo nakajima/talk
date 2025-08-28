@@ -32,6 +32,7 @@ pub struct LocToken;
 #[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord)]
 pub enum BlockContext {
     Struct,
+    Protocol,
     Enum,
     Func,
     If,
@@ -118,7 +119,7 @@ impl<'a> Parser<'a> {
 
     fn next_root(&mut self, kind: &TokenKind) -> Result<Node, ParserError> {
         use TokenKind::*;
-        if matches!(kind, Struct | Enum | Let | Func | Case | Extend) {
+        if matches!(kind, Protocol | Struct | Enum | Let | Func | Case | Extend) {
             self.decl(BlockContext::None, false)
         } else {
             Ok(Node::Stmt(self.stmt()?))
@@ -141,6 +142,9 @@ impl<'a> Parser<'a> {
                 self.consume(TokenKind::Static)?;
                 self.decl(context, true)?
             }
+            Protocol => self
+                .nominal_decl(TokenKind::Protocol, BlockContext::Protocol)?
+                .into(),
             Enum => self
                 .nominal_decl(TokenKind::Enum, BlockContext::Enum)?
                 .into(),
@@ -164,8 +168,11 @@ impl<'a> Parser<'a> {
                 _ => return Err(ParserError::LetNotAllowed(context)),
             },
             Func => match context {
-                BlockContext::Extend | BlockContext::Struct => self.method_decl(is_static)?.into(),
-                _ => self.func_decl(true)?.into(),
+                BlockContext::Extend
+                | BlockContext::Struct
+                | BlockContext::Enum
+                | BlockContext::Protocol => self.method_decl(context, is_static)?.into(),
+                _ => self.func_decl(context, true)?.into(),
             },
             _ => self.stmt()?.into(),
         };
@@ -192,8 +199,8 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(skip(self))]
-    fn method_decl(&mut self, is_static: bool) -> Result<Decl, ParserError> {
-        let func_decl = self.func_decl(true)?;
+    fn method_decl(&mut self, context: BlockContext, is_static: bool) -> Result<Decl, ParserError> {
+        let func_decl = self.func_decl(context, true)?;
         Ok(Decl {
             id: func_decl.id,
             span: func_decl.span,
@@ -292,6 +299,12 @@ impl<'a> Parser<'a> {
                 generics,
                 body,
             },
+            BlockContext::Protocol => DeclKind::Protocol {
+                name: name.into(),
+                conformances,
+                generics,
+                body,
+            },
             _ => unreachable!("tried to call nominal_decl with wrong context: {context:?}"),
         };
         Ok(Decl { id, span, kind })
@@ -328,7 +341,11 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(skip(self))]
-    pub(crate) fn func_decl(&mut self, consume_func_keyword: bool) -> Result<Decl, ParserError> {
+    pub(crate) fn func_decl(
+        &mut self,
+        context: BlockContext,
+        consume_func_keyword: bool,
+    ) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
 
         if consume_func_keyword {
@@ -347,6 +364,27 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+
+        if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
+            let (id, span) = self.save_meta(tok)?;
+
+            let Some(ret) = ret else {
+                return Err(ParserError::IncompleteFuncSignature(
+                    "return value not specified".into(),
+                ));
+            };
+
+            return Ok(Decl {
+                id,
+                span,
+                kind: DeclKind::FuncSignature {
+                    name: name.into(),
+                    generics,
+                    params,
+                    ret: Box::new(ret),
+                },
+            });
+        }
 
         let body = self.block(BlockContext::Func)?;
         let (id, span) = self.save_meta(tok)?;
@@ -1117,6 +1155,11 @@ impl<'a> Parser<'a> {
                 }
             }
 
+            if context == BlockContext::Protocol && self.peek_is(TokenKind::Associated) {
+                body.push(self.associated_type()?.into());
+                continue;
+            }
+
             body.push(self.decl(context, false)?);
 
             self.skip_semicolons_and_newlines();
@@ -1129,6 +1172,18 @@ impl<'a> Parser<'a> {
             span,
             args: vec![],
             body,
+        })
+    }
+
+    fn associated_type(&mut self) -> Result<Decl, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Associated)?;
+        let generic = self.generic()?;
+        let (id, span) = self.save_meta(tok)?;
+        Ok(Decl {
+            id,
+            span,
+            kind: DeclKind::Associated { generic },
         })
     }
 

@@ -52,6 +52,10 @@ pub enum DeclKind {
         is_static: bool,
     },
 
+    Associated {
+        generic: GenericDecl,
+    },
+
     // Function stuff
     Func {
         name: Name,
