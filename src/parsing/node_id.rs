@@ -4,12 +4,12 @@ pub struct NodeID(pub u32);
 
 impl NodeID {
     #[cfg(test)]
-    pub const ANY: NodeID = NodeID(u32::MIN);
+    pub const ANY: NodeID = NodeID(u32::MAX);
 }
 
 impl std::fmt::Debug for NodeID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.0 == u32::MIN {
+        if self.0 == u32::MAX {
             write!(f, "NodeID(ANY)")?;
         } else {
             write!(f, "NodeID({})", self.0)?;

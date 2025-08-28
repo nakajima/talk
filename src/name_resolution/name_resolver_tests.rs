@@ -1,19 +1,23 @@
 #[cfg(test)]
 pub mod tests {
+    use rustc_hash::FxHashSet;
+
     use crate::{
-        any_block, any_decl, any_expr, any_expr_stmt, assert_eq_diff,
+        any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
+        diagnostic::{AnyDiagnostic, Diagnostic},
         name::Name,
         name_resolution::{
-            name_resolver::{NameResolved, NameResolver},
+            name_resolver::{NameResolved, NameResolver, NameResolverError},
             symbol::{DeclId, LocalId, Symbol},
         },
         node_id::NodeID,
         node_kinds::{
-            decl::DeclKind,
+            decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
             parameter::Parameter,
             pattern::PatternKind,
+            stmt::StmtKind,
         },
         parsing::parser_tests::tests::parse,
         span::Span,
@@ -23,9 +27,26 @@ pub mod tests {
         ($id:expr, $name:expr) => {
             Parameter {
                 id: NodeID::ANY,
-                name: Name::Resolved(Symbol::LocalId($id), $name.into()),
+                name: Name::Resolved($id.into(), $name.into()),
                 type_annotation: None,
                 span: Span::ANY,
+            }
+        };
+    }
+
+    macro_rules! variable {
+        ($id:expr, $name:expr) => {
+            Expr {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: ExprKind::Variable(Name::Resolved($id.into(), $name.into())),
+            }
+        };
+        ($name:expr) => {
+            Expr {
+                id: NodeID::ANY,
+                span: Span::ANY,
+                kind: ExprKind::Variable(Name::Raw($name.into())),
             }
         };
     }
@@ -61,7 +82,7 @@ pub mod tests {
         assert_eq!(
             *tree.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                Symbol::LocalId(LocalId(1)),
+                Symbol::Local(LocalId(1)),
                 "hello".into()
             )))
         );
@@ -69,8 +90,23 @@ pub mod tests {
 
     #[test]
     fn block_scoping_prevents_let_leak() {
-        let resolved = resolve_err("{ let x = 123 }; x");
+        let resolved = resolve_err(
+            "{
+            let x = 123
+            x // This one is fine.
+        }
+        x // This one is not
+        ",
+        );
         assert_eq!(1, resolved.diagnostics.len());
+        assert_eq!(
+            resolved.diagnostics[0],
+            AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
+                path: "".into(),
+                span: Span::ANY,
+                kind: NameResolverError::UndefinedName("x".into())
+            })
+        )
     }
 
     #[test]
@@ -80,18 +116,12 @@ pub mod tests {
         assert_eq_diff!(
             *tree.roots[0].as_decl(),
             any_decl!(DeclKind::Func {
-                name: Name::Resolved(Symbol::DeclId(DeclId(1)), "foo".into()),
+                name: Name::Resolved(Symbol::Value(DeclId(1)), "foo".into()),
                 generics: vec![],
                 params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y"),],
                 body: any_block!(vec![
-                    any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::LocalId(LocalId(1)),
-                        "x".into()
-                    ))),
-                    any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::LocalId(LocalId(2)),
-                        "y".into()
-                    ))),
+                    any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
+                    any_stmt!(StmtKind::Expr(variable!(LocalId(2), "y"))).into(),
                 ]),
                 ret: None,
                 attributes: vec![],
@@ -108,45 +138,33 @@ pub mod tests {
           ",
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Func {
-                name: Name::Resolved(DeclId(1).into(), "odd".into()),
+                name: Name::Resolved(Symbol::Value(DeclId(1)), "odd".into()),
                 generics: vec![],
                 params: vec![],
-                body: any_block!(vec![
-                    any_expr!(ExprKind::Call {
-                        callee: Box::new(any_expr!(ExprKind::Variable(Name::Resolved(
-                            LocalId(2).into(),
-                            "even".into()
-                        )))),
-                        type_args: vec![],
-                        args: vec![]
-                    })
-                    .into()
-                ]),
+                body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
+                    callee: Box::new(variable!(Symbol::Value(DeclId(2)), "even")),
+                    type_args: vec![],
+                    args: vec![]
+                })]),
                 ret: None,
                 attributes: vec![]
             })
         );
 
-        assert_eq!(
-            *resolved.roots[0].as_decl(),
+        assert_eq_diff!(
+            *resolved.roots[1].as_decl(),
             any_decl!(DeclKind::Func {
-                name: Name::Resolved(DeclId(2).into(), "even".into()),
+                name: Name::Resolved(Symbol::Value(DeclId(2)), "even".into()),
                 generics: vec![],
                 params: vec![],
-                body: any_block!(vec![
-                    any_expr!(ExprKind::Call {
-                        callee: Box::new(any_expr!(ExprKind::Variable(Name::Resolved(
-                            LocalId(1).into(),
-                            "odd".into()
-                        )))),
-                        type_args: vec![],
-                        args: vec![]
-                    })
-                    .into()
-                ]),
+                body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
+                    callee: Box::new(variable!(Symbol::Value(DeclId(1)), "odd")),
+                    type_args: vec![],
+                    args: vec![]
+                })]),
                 ret: None,
                 attributes: vec![]
             })
@@ -160,32 +178,23 @@ pub mod tests {
         assert_eq_diff!(
             *tree.roots[0].as_decl(),
             any_decl!(DeclKind::Func {
-                name: Name::Resolved(Symbol::DeclId(DeclId(1)), "foo".into()),
+                name: Name::Resolved(Symbol::Value(DeclId(1)), "foo".into()),
                 generics: vec![],
                 params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y")],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Func {
-                        name: Name::Resolved(Symbol::DeclId(DeclId(2)), "bar".into()),
+                        name: Name::Resolved(Symbol::Value(DeclId(2)), "bar".into()),
                         generics: vec![],
                         params: vec![param!(LocalId(3), "x")],
                         body: any_block!(vec![
-                            any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                                Symbol::LocalId(LocalId(3)),
-                                "x".into()
-                            ))),
-                            any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                                Symbol::LocalId(LocalId(2)),
-                                "y".into()
-                            )))
+                            any_stmt!(StmtKind::Expr(variable!(LocalId(3), "x"))).into(),
+                            any_stmt!(StmtKind::Expr(variable!(LocalId(2), "y"))).into(),
                         ]),
                         ret: None,
                         attributes: vec![],
                     })
                     .into(),
-                    any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::LocalId(LocalId(1)),
-                        "x".into()
-                    ))),
+                    any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
                 ]),
                 ret: None,
                 attributes: vec![],
@@ -218,34 +227,34 @@ pub mod tests {
             })
         );
 
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.roots[1].as_decl(),
-            any_decl!(DeclKind::Func {
-                name: Name::Resolved(DeclId(1).into(), "counter".into()),
-                generics: vec![],
-                params: vec![param!(LocalId(2), "x")],
-                body: any_block!(vec![
-                    any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::LocalId(LocalId(2)),
-                        "x".into()
-                    ))),
-                    any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::LocalId(LocalId(1)),
-                        "count".into()
-                    ))),
-                    any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::LocalId(LocalId(1)),
-                        "count".into()
-                    )))
-                ]),
-                ret: None,
-                attributes: vec![]
-            })
+            Decl {
+                id: NodeID(9),
+                span: Span::ANY,
+                kind: DeclKind::Func {
+                    name: Name::Resolved(Symbol::Value(DeclId(1)), "counter".into()),
+                    generics: vec![],
+                    params: vec![param!(LocalId(2), "x")],
+                    body: any_block!(vec![
+                        any_stmt!(StmtKind::Expr(variable!(LocalId(2), "x"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(LocalId(1), "count"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(LocalId(1), "count"))).into(),
+                    ]),
+                    ret: None,
+                    attributes: vec![]
+                }
+            }
         );
 
+        let mut expected = FxHashSet::default();
+        expected.insert(Symbol::Local(LocalId(1)));
+
         assert_eq!(
-            resolved.phase.captures.get(&DeclId(1).into()),
-            Some(&[LocalId(1)].into())
+            resolved.phase.captures.get(&NodeID(9)),
+            Some(&expected),
+            "{:?}",
+            resolved.phase.captures
         );
     }
 

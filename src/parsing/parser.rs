@@ -1224,7 +1224,6 @@ impl<'a> Parser<'a> {
         Ok(false)
     }
 
-    #[instrument(skip(self))]
     pub(super) fn peek_is(&self, expected: TokenKind) -> bool {
         if let Some(Token { kind: actual, .. }) = &self.current {
             *actual == expected
@@ -1233,14 +1232,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    #[instrument(skip(self))]
     fn skip_newlines(&mut self) {
         while self.peek_is(TokenKind::Newline) {
             self.advance();
         }
     }
 
-    #[instrument(skip(self))]
     fn skip_semicolons_and_newlines(&mut self) {
         while self.peek_is(TokenKind::Semicolon) || self.peek_is(TokenKind::Newline) {
             tracing::trace!("Skipping {:?}", self.current);

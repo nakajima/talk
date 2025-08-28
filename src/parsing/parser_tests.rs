@@ -96,7 +96,7 @@ pub mod tests {
     #[macro_export]
     macro_rules! any_stmt {
         ($expr:expr) => {
-            Stmt {
+            $crate::node_kinds::stmt::Stmt {
                 id: NodeID::ANY,
                 kind: $expr,
                 span: $crate::parsing::span::Span::ANY,

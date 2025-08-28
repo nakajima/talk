@@ -4,16 +4,25 @@ use std::{
     fmt::Display,
 };
 
+use generational_arena::{Arena, Index};
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use crate::{
     ast::{AST, ASTPhase, Parsed},
     diagnostic::Diagnostic,
     name::Name,
-    name_resolution::symbol::{DeclId, LocalId, Symbol, Symbols},
+    name_resolution::{
+        decl_declarer::DeclDeclarer,
+        symbol::{LocalId, Symbol, Symbols},
+    },
+    node::Node,
+    node_id::NodeID,
     node_kinds::{
         block::Block,
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         pattern::{Pattern, PatternKind},
+        stmt::{Stmt, StmtKind},
     },
     span::Span,
     traversal::fold_mut::FoldMut,
@@ -34,9 +43,22 @@ impl Display for NameResolverError {
 
 #[derive(Default, Debug)]
 pub struct Scope {
-    decls: BTreeMap<String, DeclId>,
-    locals: BTreeMap<String, LocalId>,
-    // fields: BTreeMap<String, FieldId>,
+    pub node_id: NodeID,
+    pub parent_id: Option<ScopeId>,
+
+    pub values: FxHashMap<String, Symbol>,
+    pub types: FxHashMap<String, Symbol>,
+}
+
+impl Scope {
+    pub fn new(node_id: NodeID, parent_id: Option<ScopeId>) -> Self {
+        Scope {
+            node_id,
+            parent_id,
+            values: Default::default(),
+            types: Default::default(),
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -45,25 +67,27 @@ pub struct CurrentFunc {
     captures: BTreeSet<LocalId>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct NameResolved {
+    pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
+    pub is_captured: FxHashSet<Symbol>,
+}
+
+pub type ScopeId = Index;
+
 #[derive(Default, Debug)]
 pub struct NameResolver {
     path: String,
-    scopes: Vec<Scope>,
-    symbols: Symbols,
+    pub(super) symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
     phase: NameResolved,
     current_funcs: Vec<CurrentFunc>,
-}
 
-pub enum NameResolverPass {
-    Decls,
-    Bodies,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct NameResolved {
-    pub captures: BTreeMap<Symbol, BTreeSet<LocalId>>,
-    pub is_captured: BTreeSet<LocalId>,
+    // Scope stuff
+    pub(super) scopes: Arena<Scope>,
+    pub(super) scopes_by_node_id: FxHashMap<NodeID, ScopeId>,
+    pub(super) node_ids_by_scope: FxHashMap<ScopeId, NodeID>,
+    pub(super) current_scope: Option<ScopeId>,
 }
 
 impl ASTPhase for NameResolved {}
@@ -79,8 +103,22 @@ impl NameResolver {
         } = ast;
 
         let mut resolver = NameResolver::default();
-        resolver.start_scope();
-        let roots = roots
+
+        // Declare stuff
+        let mut declarer = DeclDeclarer::new(&mut resolver);
+
+        declarer.start_scope(NodeID(0));
+
+        let roots: Vec<Node> = roots
+            .into_iter()
+            .map(|mut root| {
+                declarer.fold_node_mut(&mut root);
+                root
+            })
+            .collect();
+
+        // Resolve stuff
+        let roots: Vec<Node> = roots
             .into_iter()
             .map(|mut root| {
                 resolver.fold_node_mut(&mut root);
@@ -101,75 +139,43 @@ impl NameResolver {
         }
     }
 
+    fn lookup_in_scope(&mut self, name: &Name, scope_id: ScopeId) -> Option<Symbol> {
+        tracing::debug!(
+            "looking up {name:?} in scope {scope_id:?}. scopes: {:?}. scope map: {:?}",
+            self.scopes,
+            self.scopes_by_node_id
+        );
+
+        let scope = self.scopes.get_mut(scope_id).expect("scope not found");
+
+        if let Some(symbol) = scope.types.get(&name.name_str()) {
+            return Some(*symbol);
+        }
+
+        if let Some(symbol) = scope.values.get(&name.name_str()) {
+            return Some(*symbol);
+        }
+
+        if let Some(parent) = scope.parent_id
+            && let Some(captured) = self.lookup_in_scope(name, parent)
+        {
+            let scope = self.scopes.get(scope_id).expect("did not find scope");
+
+            self.phase
+                .captures
+                .entry(scope.node_id)
+                .or_default()
+                .insert(captured);
+            self.phase.is_captured.insert(captured);
+
+            return Some(captured);
+        }
+
+        None
+    }
+
     fn lookup(&mut self, name: &Name) -> Option<Symbol> {
-        if let Some(sym) = self.lookup_decl(name) {
-            return Some(Symbol::DeclId(sym));
-        }
-
-        if let Some(sym) = self.lookup_local(name) {
-            return Some(Symbol::LocalId(sym));
-        }
-
-        None
-    }
-
-    fn declare_decl(&mut self, name: &Name) -> DeclId {
-        let Some(scope) = self.scopes.last_mut() else {
-            unreachable!("No scope specified");
-        };
-
-        tracing::debug!("declare decl {name:?}");
-
-        let id = self.symbols.next_decl();
-        scope.decls.insert(name.name_str(), id);
-
-        id
-    }
-    fn lookup_decl(&mut self, name: &Name) -> Option<DeclId> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(symbol_id) = scope.decls.get(&name.name_str()) {
-                return Some(*symbol_id);
-            }
-        }
-
-        None
-    }
-
-    fn declare_local(&mut self, name: &Name) -> LocalId {
-        let Some(scope) = self.scopes.last_mut() else {
-            unreachable!("No scope specified");
-        };
-
-        let id = self.symbols.next_local();
-        scope.locals.insert(name.name_str(), id);
-
-        tracing::debug!("declare decl {name:?} -> {id:?}");
-
-        id
-    }
-    fn lookup_local(&mut self, name: &Name) -> Option<LocalId> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(id) = scope.locals.get(&name.name_str()) {
-                if let Some(func) = self.current_funcs.last_mut()
-                    && func.capturable_locals.contains(id)
-                {
-                    self.phase.is_captured.insert(*id);
-                    func.captures.insert(*id);
-                }
-
-                return Some(*id);
-            }
-        }
-
-        None
-    }
-
-    fn start_scope(&mut self) {
-        self.scopes.push(Default::default());
-    }
-
-    fn end_scope(&mut self) {
-        self.scopes.pop();
+        self.lookup_in_scope(name, self.current_scope.expect("no scope to declare in"))
     }
 
     fn diagnostic(&mut self, span: Span, err: NameResolverError) {
@@ -179,29 +185,96 @@ impl NameResolver {
             span,
         });
     }
+
+    fn enter_scope(&mut self, node_id: NodeID) {
+        let scope_id = self
+            .scopes_by_node_id
+            .get(&node_id)
+            .expect("no scope found for node");
+
+        self.current_scope = Some(*scope_id);
+    }
+
+    fn exit_scope(&mut self) {
+        let current_scope_id = self.current_scope.expect("no scope to exit");
+        let current_scope = self
+            .scopes
+            .get(current_scope_id)
+            .expect("did not find current scope");
+
+        self.current_scope = current_scope.parent_id;
+    }
+
+    pub fn declare_type(&mut self, name: &Name) -> Name {
+        let scope = self
+            .scopes
+            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .expect("scope not found");
+
+        let id = self.symbols.next_decl();
+        let sym = Symbol::Type(id);
+        tracing::debug!("declare type {} -> {sym:?}", name.name_str());
+        scope.types.insert(name.name_str(), sym);
+
+        Name::Resolved(sym, name.name_str())
+    }
+
+    pub fn declare_value(&mut self, name: &Name) -> Name {
+        let scope = self
+            .scopes
+            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .expect("scope not found");
+
+        let id = self.symbols.next_decl();
+        let sym = Symbol::Value(id);
+        tracing::debug!("declare value {} -> {sym:?}", name.name_str());
+        scope.values.insert(name.name_str(), sym);
+
+        Name::Resolved(sym, name.name_str())
+    }
+
+    pub fn declare_local(&mut self, name: &Name) -> Name {
+        let scope = self
+            .scopes
+            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .expect("scope not found");
+
+        let id = self.symbols.next_local();
+        let sym = Symbol::Local(id);
+        tracing::debug!("declare local {} -> {sym:?}", name.name_str());
+        scope.values.insert(name.name_str(), sym);
+
+        Name::Resolved(sym, name.name_str())
+    }
 }
 
 impl FoldMut for NameResolver {
-    fn enter_decl_let_mut(&mut self, decl: &mut Decl) {
-        let Decl {
-            kind:
-                DeclKind::Let {
-                    lhs: Pattern { kind, .. },
-                    ..
-                },
+    ///////////////////////////////////////////////////////////////////////////
+    // Block expr decls
+    ///////////////////////////////////////////////////////////////////////////
+    fn enter_stmt_mut(&mut self, stmt: &mut Stmt) {
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Block(block),
             ..
-        } = decl
-        else {
-            unreachable!()
-        };
-
-        let PatternKind::Bind(name) = kind else {
-            unreachable!()
-        };
-
-        let id = self.declare_local(name);
-        *name = Name::Resolved(Symbol::LocalId(id), name.name_str());
+        }) = &mut stmt.kind
+        {
+            self.enter_scope(block.id);
+        }
     }
+
+    fn exit_stmt_mut(&mut self, stmt: &mut Stmt) {
+        if let StmtKind::Expr(Expr {
+            kind: ExprKind::Block(..),
+            ..
+        }) = &mut stmt.kind
+        {
+            self.exit_scope();
+        }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Locals scoping
+    ///////////////////////////////////////////////////////////////////////////
 
     fn enter_expr_variable_mut(&mut self, expr: &mut Expr) {
         let Expr {
@@ -221,65 +294,15 @@ impl FoldMut for NameResolver {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    // Scope handling
+    // Func scoping
     ///////////////////////////////////////////////////////////////////////////
-    fn enter_block_mut(&mut self, _block: &mut Block) {
-        self.start_scope();
-    }
 
-    fn exit_block_mut(&mut self, _block: &mut Block) {
-        self.end_scope();
-    }
-
-    ///////////////////////////////////////////////////////////////////////////
-    // Function handling
-    ///////////////////////////////////////////////////////////////////////////
     fn enter_decl_func_mut(&mut self, decl: &mut Decl) {
         let Decl {
             kind:
                 DeclKind::Func {
-                    name,
-                    generics: _,
+                    name: Name::Resolved(_, _),
                     params,
-                    body: _,
-                    ret: _,
-                    attributes: _,
-                },
-            ..
-        } = decl
-        else {
-            unreachable!()
-        };
-
-        let mut capturable_locals = BTreeSet::default();
-        for scope in &self.scopes {
-            capturable_locals.extend(scope.locals.values());
-        }
-        let current_func = CurrentFunc {
-            capturable_locals,
-            captures: Default::default(),
-        };
-        self.current_funcs.push(current_func);
-
-        *name = Name::Resolved(self.declare_decl(name).into(), name.name_str());
-
-        self.start_scope();
-
-        for param in params {
-            param.name = Name::Resolved(
-                self.declare_local(&param.name).into(),
-                param.name.name_str(),
-            );
-        }
-    }
-
-    fn exit_decl_func_mut(&mut self, decl: &mut Decl) {
-        self.end_scope();
-
-        let Decl {
-            kind:
-                DeclKind::Func {
-                    name: Name::Resolved(sym, _),
                     ..
                 },
             ..
@@ -288,23 +311,26 @@ impl FoldMut for NameResolver {
             unreachable!()
         };
 
-        let func = self.current_funcs.pop().unwrap();
-        self.phase.captures.insert(*sym, func.captures);
+        self.enter_scope(decl.id);
+
+        for param in params {
+            param.name = self.declare_local(&param.name);
+        }
     }
 
-    ///////////////////////////////////////////////////////////////////////////
-    // Struct handling
-    ///////////////////////////////////////////////////////////////////////////
-    fn enter_decl_struct_mut(&mut self, decl: &mut Decl) {
+    fn exit_decl_func_mut(&mut self, decl: &mut Decl) {
         let Decl {
-            kind: DeclKind::Struct { name, .. },
+            kind:
+                DeclKind::Func {
+                    name: Name::Resolved(_sym, _),
+                    ..
+                },
             ..
         } = decl
         else {
             unreachable!()
         };
 
-        let id = self.declare_decl(name);
-        *name = Name::Resolved(id.into(), name.name_str());
+        self.exit_scope();
     }
 }

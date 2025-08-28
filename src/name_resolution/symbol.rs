@@ -2,10 +2,9 @@ use crate::id_generator::IDGenerator;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
-    DeclId(DeclId),
-    LocalId(LocalId),
-    FieldId(FieldId),
-    BuiltinId(BuiltinId),
+    Type(DeclId),
+    Value(DeclId),
+    Local(LocalId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -21,7 +20,7 @@ pub struct FieldId(pub u32);
 pub struct BuiltinId(pub u32);
 
 macro_rules! impl_symbol_id {
-    ($ty: ident) => {
+    ($case:ident, $ty: ident) => {
         impl<T: Into<u32>> From<T> for $ty {
             fn from(value: T) -> Self {
                 $ty(value.into())
@@ -30,16 +29,14 @@ macro_rules! impl_symbol_id {
 
         impl From<$ty> for Symbol {
             fn from(value: $ty) -> Symbol {
-                Symbol::$ty(value)
+                Symbol::$case(value)
             }
         }
     };
 }
 
-impl_symbol_id!(DeclId);
-impl_symbol_id!(LocalId);
-impl_symbol_id!(FieldId);
-impl_symbol_id!(BuiltinId);
+impl_symbol_id!(Type, DeclId);
+impl_symbol_id!(Local, LocalId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {

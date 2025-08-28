@@ -30,84 +30,98 @@ use crate::node_kinds::{
 
 pub trait FoldMut: Sized {
     // Visit methods - these orchestrate the traversal
+    #[instrument(skip(self))]
     fn fold_node_mut(&mut self, node: &mut Node) {
         self.enter_node_mut(node);
         walk_node_mut(self, node);
         self.exit_node_mut(node);
     }
 
+    #[instrument(skip(self))]
     fn fold_attribute_mut(&mut self, attr: &mut Attribute) {
         self.enter_attribute_mut(attr);
         // Attribute has no child nodes to walk
         self.exit_attribute_mut(attr);
     }
 
+    #[instrument(skip(self))]
     fn fold_decl_mut(&mut self, decl: &mut Decl) {
         self.enter_decl_mut(decl);
         walk_decl_mut(self, decl);
         self.exit_decl_mut(decl);
     }
 
+    #[instrument(skip(self))]
     fn fold_generic_decl_mut(&mut self, generic: &mut GenericDecl) {
         self.enter_generic_decl_mut(generic);
         walk_generic_decl_mut(self, generic);
         self.exit_generic_decl_mut(generic);
     }
 
+    #[instrument(skip(self))]
     fn fold_parameter_mut(&mut self, param: &mut Parameter) {
         self.enter_parameter_mut(param);
         walk_parameter_mut(self, param);
         self.exit_parameter_mut(param);
     }
 
+    #[instrument(skip(self))]
     fn fold_stmt_mut(&mut self, stmt: &mut Stmt) {
         self.enter_stmt_mut(stmt);
         walk_stmt_mut(self, stmt);
         self.exit_stmt_mut(stmt);
     }
 
+    #[instrument(skip(self))]
     fn fold_expr_mut(&mut self, expr: &mut Expr) {
         self.enter_expr_mut(expr);
         walk_expr_mut(self, expr);
         self.exit_expr_mut(expr);
     }
 
+    #[instrument(skip(self))]
     fn fold_pattern_mut(&mut self, pattern: &mut Pattern) {
         self.enter_pattern_mut(pattern);
         walk_pattern_mut(self, pattern);
         self.exit_pattern_mut(pattern);
     }
 
+    #[instrument(skip(self))]
     fn fold_match_arm_mut(&mut self, arm: &mut MatchArm) {
         self.enter_match_arm_mut(arm);
         walk_match_arm_mut(self, arm);
         self.exit_match_arm_mut(arm);
     }
 
+    #[instrument(skip(self))]
     fn fold_block_mut(&mut self, block: &mut Block) {
         self.enter_block_mut(block);
         walk_block_mut(self, block);
         self.exit_block_mut(block);
     }
 
+    #[instrument(skip(self))]
     fn fold_type_annotation_mut(&mut self, ty: &mut TypeAnnotation) {
         self.enter_type_annotation_mut(ty);
         walk_type_annotation_mut(self, ty);
         self.exit_type_annotation_mut(ty);
     }
 
+    #[instrument(skip(self))]
     fn fold_record_field_mut(&mut self, field: &mut RecordField) {
         self.enter_record_field_mut(field);
         walk_record_field_mut(self, field);
         self.exit_record_field_mut(field);
     }
 
+    #[instrument(skip(self))]
     fn fold_incomplete_expr_mut(&mut self, expr: &mut IncompleteExpr) {
         self.enter_incomplete_expr_mut(expr);
         walk_incomplete_expr_mut(self, expr);
         self.exit_incomplete_expr_mut(expr);
     }
 
+    #[instrument(skip(self))]
     fn fold_call_arg_mut(&mut self, arg: &mut CallArg) {
         self.enter_call_arg_mut(arg);
         walk_call_arg_mut(self, arg);
