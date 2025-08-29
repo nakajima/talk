@@ -6,8 +6,8 @@ use crate::{
     node::Node,
     node_id::NodeID,
     node_kinds::{
-        attribute::Attribute, block::Block, expr::Expr, func::Func, generic_decl::GenericDecl,
-        parameter::Parameter, pattern::Pattern, type_annotation::TypeAnnotation,
+        block::Block, expr::Expr, func::Func, generic_decl::GenericDecl, parameter::Parameter,
+        pattern::Pattern, type_annotation::TypeAnnotation,
     },
     parsing::span::Span,
 };
