@@ -5,6 +5,7 @@ pub enum Symbol {
     Type(DeclId),
     Value(DeclId),
     Local(LocalId),
+    BuiltinType(BuiltinId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -9,6 +9,7 @@ use crate::node_kinds::block::Block;
 use crate::node_kinds::call_arg::CallArg;
 use crate::node_kinds::decl::{Decl, DeclKind};
 use crate::node_kinds::expr::{Expr, ExprKind};
+use crate::node_kinds::func::Func;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
 use crate::node_kinds::match_arm::MatchArm;
@@ -392,14 +393,15 @@ impl<'a> Parser<'a> {
         Ok(Decl {
             id,
             span,
-            kind: DeclKind::Func {
+            kind: DeclKind::Func(Func {
+                id,
                 name: name.into(),
                 generics,
                 params,
                 body,
                 ret,
                 attributes: vec![],
-            },
+            }),
         })
     }
 

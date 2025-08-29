@@ -1,5 +1,6 @@
 use std::{error::Error, fmt::Display};
 
+use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::{Arena, Index};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -8,6 +9,7 @@ use crate::{
     diagnostic::Diagnostic,
     name::Name,
     name_resolution::{
+        builtins,
         decl_declarer::DeclDeclarer,
         symbol::{Symbol, Symbols},
     },
@@ -16,12 +18,13 @@ use crate::{
     node_kinds::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
+        func::Func,
         match_arm::MatchArm,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
+    on,
     span::Span,
-    traversal::fold_mut::FoldMut,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,7 +68,15 @@ pub struct NameResolved {
 
 pub type ScopeId = Index;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, VisitorMut)]
+#[visitor(
+    Func(enter, exit),
+    Stmt(enter, exit),
+    MatchArm(enter, exit),
+    Decl(enter, exit),
+    Expr(enter),
+    TypeAnnotation(enter)
+)]
 pub struct NameResolver {
     path: String,
     pub(super) symbols: Symbols,
@@ -92,25 +103,29 @@ impl NameResolver {
         } = ast;
 
         let mut resolver = NameResolver::default();
+        let mut initial_scope = Scope::new(NodeID(0), None);
+        builtins::import_builtins(&mut initial_scope);
+        let id = resolver.scopes.insert(initial_scope);
+        resolver.current_scope = Some(id);
 
         // Declare stuff
         let mut declarer = DeclDeclarer::new(&mut resolver);
-
         declarer.start_scope(NodeID(0));
 
         let roots: Vec<Node> = roots
             .into_iter()
             .map(|mut root| {
-                declarer.fold_node_mut(&mut root);
+                root.drive_mut(&mut declarer);
                 root
             })
             .collect();
 
+        resolver.enter_scope(NodeID(0));
         // Resolve stuff
         let roots: Vec<Node> = roots
             .into_iter()
             .map(|mut root| {
-                resolver.fold_node_mut(&mut root);
+                root.drive_mut(&mut resolver);
                 root
             })
             .collect();
@@ -208,7 +223,11 @@ impl NameResolver {
 
         let id = self.symbols.next_decl();
         let sym = Symbol::Type(id);
-        tracing::debug!("declare type {} -> {sym:?}", name.name_str());
+        tracing::debug!(
+            "declare type {} -> {sym:?} {:?}",
+            name.name_str(),
+            self.current_scope
+        );
         scope.types.insert(name.name_str(), sym);
 
         Name::Resolved(sym, name.name_str())
@@ -222,7 +241,11 @@ impl NameResolver {
 
         let id = self.symbols.next_decl();
         let sym = Symbol::Value(id);
-        tracing::debug!("declare value {} -> {sym:?}", name.name_str());
+        tracing::debug!(
+            "declare value {} -> {sym:?} {:?}",
+            name.name_str(),
+            self.current_scope
+        );
         scope.values.insert(name.name_str(), sym);
 
         Name::Resolved(sym, name.name_str())
@@ -236,18 +259,20 @@ impl NameResolver {
 
         let id = self.symbols.next_local();
         let sym = Symbol::Local(id);
-        tracing::debug!("declare local {} -> {sym:?}", name.name_str());
+        tracing::debug!(
+            "declare local {} -> {sym:?} {:?}",
+            name.name_str(),
+            self.current_scope
+        );
         scope.values.insert(name.name_str(), sym);
 
         Name::Resolved(sym, name.name_str())
     }
-}
 
-impl FoldMut for NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     // Type lookups
     ///////////////////////////////////////////////////////////////////////////
-    fn enter_type_annotation_mut(&mut self, ty: &mut TypeAnnotation) {
+    fn enter_type_annotation(&mut self, ty: &mut TypeAnnotation) {
         if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
             if let Some(resolved_name) = self.lookup(name) {
                 *name = resolved_name
@@ -260,7 +285,7 @@ impl FoldMut for NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
-    fn enter_stmt_mut(&mut self, stmt: &mut Stmt) {
+    fn enter_stmt(&mut self, stmt: &mut Stmt) {
         if let StmtKind::Expr(Expr {
             kind: ExprKind::Block(block),
             ..
@@ -270,7 +295,7 @@ impl FoldMut for NameResolver {
         }
     }
 
-    fn exit_stmt_mut(&mut self, stmt: &mut Stmt) {
+    fn exit_stmt(&mut self, stmt: &mut Stmt) {
         if let StmtKind::Expr(Expr {
             kind: ExprKind::Block(..),
             ..
@@ -284,67 +309,53 @@ impl FoldMut for NameResolver {
     // Locals scoping
     ///////////////////////////////////////////////////////////////////////////
 
-    fn enter_match_arm_mut(&mut self, arm: &mut MatchArm) {
+    fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.enter_scope(arm.id);
     }
 
-    fn exit_match_arm_mut(&mut self, _arm: &mut MatchArm) {
+    fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
         self.exit_scope();
     }
 
-    fn enter_expr_variable_mut(&mut self, expr: &mut Expr) {
-        let Expr {
-            kind: ExprKind::Variable(name),
-            ..
-        } = expr
-        else {
-            unreachable!()
-        };
+    fn enter_expr(&mut self, expr: &mut Expr) {
+        on!(&mut expr.kind, ExprKind::Variable(name), {
+            let Some(resolved_name) = self.lookup(name) else {
+                self.diagnostic(expr.span, NameResolverError::UndefinedName(name.name_str()));
+                return;
+            };
 
-        let Some(resolved_name) = self.lookup(name) else {
-            self.diagnostic(expr.span, NameResolverError::UndefinedName(name.name_str()));
-            return;
-        };
-
-        *name = resolved_name
+            *name = resolved_name
+        });
     }
 
     ///////////////////////////////////////////////////////////////////////////
     // Func scoping
     ///////////////////////////////////////////////////////////////////////////
 
-    fn enter_decl_func_mut(&mut self, decl: &mut Decl) {
-        let Decl {
-            kind:
-                DeclKind::Func {
-                    name: Name::Resolved(_, _),
-                    params,
-                    ..
-                },
+    fn enter_func(&mut self, func: &mut Func) {
+        let Func {
+            name: Name::Resolved(_, _),
+            params,
             ..
-        } = decl
+        } = func
         else {
-            unreachable!()
+            panic!("did not resolve name")
         };
 
-        self.enter_scope(decl.id);
+        self.enter_scope(func.id);
 
         for param in params {
             param.name = self.declare_local(&param.name);
         }
     }
 
-    fn exit_decl_func_mut(&mut self, decl: &mut Decl) {
-        let Decl {
-            kind:
-                DeclKind::Func {
-                    name: Name::Resolved(_sym, _),
-                    ..
-                },
+    fn exit_func(&mut self, func: &mut Func) {
+        let Func {
+            name: Name::Resolved(_sym, _),
             ..
-        } = decl
+        } = func
         else {
-            unreachable!()
+            panic!("Did not resolve func")
         };
 
         self.exit_scope();
@@ -353,41 +364,23 @@ impl FoldMut for NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     // Nominal scoping
     ///////////////////////////////////////////////////////////////////////////
-    fn enter_decl_struct_mut(&mut self, decl: &mut Decl) {
-        self.enter_scope(decl.id);
+    fn enter_decl(&mut self, decl: &mut Decl) {
+        on!(
+            decl.kind,
+            DeclKind::Enum { .. } | DeclKind::Struct { .. } | DeclKind::Protocol { .. },
+            {
+                self.enter_scope(decl.id);
+            }
+        );
     }
 
-    fn enter_decl_protocol_mut(&mut self, decl: &mut Decl) {
-        self.enter_scope(decl.id);
-    }
-
-    fn enter_decl_enum_mut(&mut self, decl: &mut Decl) {
-        self.enter_scope(decl.id);
-    }
-
-    fn exit_decl_struct_mut(&mut self, _decl: &mut Decl) {
-        self.exit_scope();
-    }
-
-    fn exit_decl_protocol_mut(&mut self, _decl: &mut Decl) {
-        self.exit_scope();
-    }
-
-    fn exit_decl_enum_mut(&mut self, _decl: &mut Decl) {
-        self.exit_scope();
-    }
-
-    fn enter_decl_property_mut(&mut self, decl: &mut Decl) {
-        let Decl {
-            kind:
-                DeclKind::Property {
-                    name: Name::Resolved(_sym, _),
-                    ..
-                },
-            ..
-        } = decl
-        else {
-            unreachable!()
-        };
+    fn exit_decl(&mut self, decl: &mut Decl) {
+        on!(
+            decl.kind,
+            DeclKind::Enum { .. } | DeclKind::Struct { .. } | DeclKind::Protocol { .. },
+            {
+                self.exit_scope();
+            }
+        );
     }
 }

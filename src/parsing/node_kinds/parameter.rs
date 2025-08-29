@@ -1,13 +1,18 @@
+use derive_visitor::{Drive, DriveMut};
+
 use crate::{
-    parsing::span::Span, impl_into_node, name::Name, node::Node, node_id::NodeID,
-    node_kinds::type_annotation::TypeAnnotation,
+    impl_into_node, name::Name, node::Node, node_id::NodeID,
+    node_kinds::type_annotation::TypeAnnotation, parsing::span::Span,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Parameter {
+    #[drive(skip)]
     pub id: NodeID,
+    #[drive(skip)]
     pub name: Name,
     pub type_annotation: Option<TypeAnnotation>,
+    #[drive(skip)]
     pub span: Span,
 }
 

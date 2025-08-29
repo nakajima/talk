@@ -9,13 +9,14 @@ pub mod tests {
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
-            symbol::{DeclId, LocalId, Symbol},
+            symbol::{BuiltinId, DeclId, LocalId, Symbol},
         },
         node::Node,
         node_id::NodeID,
         node_kinds::{
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
+            func::Func,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
             parameter::Parameter,
@@ -101,6 +102,29 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_builtin_type() {
+        let resolved = resolve("let hello: Int");
+        assert_eq!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: PatternKind::Bind(Name::Resolved(
+                        Symbol::Local(LocalId(1)),
+                        "hello".into()
+                    ))
+                },
+                type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
+                    name: Name::Resolved(Symbol::BuiltinType(BuiltinId(1)), "Int".into()),
+                    generics: vec![]
+                })),
+                value: None
+            })
+        );
+    }
+
+    #[test]
     fn block_scoping_prevents_let_leak() {
         let resolved = resolve_err(
             "{
@@ -127,7 +151,8 @@ pub mod tests {
 
         assert_eq_diff!(
             *tree.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Resolved(Symbol::Value(DeclId(1)), "foo".into()),
                 generics: vec![],
                 params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y"),],
@@ -137,7 +162,7 @@ pub mod tests {
                 ]),
                 ret: None,
                 attributes: vec![],
-            }),
+            }))
         );
     }
 
@@ -152,7 +177,8 @@ pub mod tests {
 
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Resolved(Symbol::Value(DeclId(1)), "odd".into()),
                 generics: vec![],
                 params: vec![],
@@ -163,12 +189,13 @@ pub mod tests {
                 })]),
                 ret: None,
                 attributes: vec![]
-            })
+            }))
         );
 
         assert_eq_diff!(
             *resolved.roots[1].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Resolved(Symbol::Value(DeclId(2)), "even".into()),
                 generics: vec![],
                 params: vec![],
@@ -179,7 +206,7 @@ pub mod tests {
                 })]),
                 ret: None,
                 attributes: vec![]
-            })
+            }))
         )
     }
 
@@ -189,12 +216,14 @@ pub mod tests {
 
         assert_eq_diff!(
             *tree.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Resolved(Symbol::Value(DeclId(1)), "foo".into()),
                 generics: vec![],
                 params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y")],
                 body: any_block!(vec![
-                    any_decl!(DeclKind::Func {
+                    any_decl!(DeclKind::Func(Func {
+                        id: NodeID::ANY,
                         name: Name::Resolved(Symbol::Value(DeclId(2)), "bar".into()),
                         generics: vec![],
                         params: vec![param!(LocalId(3), "x")],
@@ -204,13 +233,13 @@ pub mod tests {
                         ]),
                         ret: None,
                         attributes: vec![],
-                    })
+                    }))
                     .into(),
                     any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
                 ]),
                 ret: None,
                 attributes: vec![],
-            }),
+            })),
         );
     }
 
@@ -244,7 +273,8 @@ pub mod tests {
             Decl {
                 id: NodeID(9),
                 span: Span::ANY,
-                kind: DeclKind::Func {
+                kind: DeclKind::Func(Func {
+                    id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Value(DeclId(1)), "counter".into()),
                     generics: vec![],
                     params: vec![param!(LocalId(2), "x")],
@@ -255,7 +285,7 @@ pub mod tests {
                     ]),
                     ret: None,
                     attributes: vec![]
-                }
+                })
             }
         );
 
@@ -280,7 +310,8 @@ pub mod tests {
 
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Resolved(Symbol::Value(DeclId(1)), "fizz".into()),
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
@@ -305,7 +336,7 @@ pub mod tests {
                     generics: vec![]
                 })),
                 attributes: vec![],
-            }),
+            })),
         );
     }
 
@@ -406,7 +437,8 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
-                        func: Box::new(any_decl!(DeclKind::Func {
+                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                            id: NodeID::ANY,
                             name: Name::Resolved(Symbol::Value(DeclId(2)), "fizz".into()),
                             generics: vec![],
                             params: vec![],
@@ -421,12 +453,13 @@ pub mod tests {
                             })]),
                             ret: None,
                             attributes: vec![]
-                        })),
+                        }))),
                         is_static: false
                     })
                     .into(),
                     any_decl!(DeclKind::Method {
-                        func: Box::new(any_decl!(DeclKind::Func {
+                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                            id: NodeID::ANY,
                             name: Name::Resolved(Symbol::Value(DeclId(3)), "buzz".into()),
                             generics: vec![],
                             params: vec![],
@@ -441,7 +474,7 @@ pub mod tests {
                             })]),
                             ret: None,
                             attributes: vec![]
-                        })),
+                        }))),
                         is_static: false
                     })
                     .into()

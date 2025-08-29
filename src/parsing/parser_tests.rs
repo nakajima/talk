@@ -15,6 +15,7 @@ pub mod tests {
             call_arg::CallArg,
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
+            func::Func,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
             parameter::Parameter,
@@ -522,7 +523,8 @@ pub mod tests {
             Decl {
                 id: NodeID::ANY,
                 span: Span::ANY,
-                kind: DeclKind::Func {
+                kind: DeclKind::Func(Func {
+                    id: NodeID::ANY,
                     name: "foo".into(),
                     generics: vec![],
                     params: vec![],
@@ -534,7 +536,7 @@ pub mod tests {
                     },
                     ret: None,
                     attributes: vec![]
-                }
+                })
             }
         );
     }
@@ -542,7 +544,7 @@ pub mod tests {
     #[test]
     fn parses_func_with_generic_param() {
         let parsed = parse("func c(a: Array<Int>) { a }");
-        let DeclKind::Func { params, .. } = &parsed.roots[0].as_decl().kind else {
+        let DeclKind::Func(Func { params, .. }) = &parsed.roots[0].as_decl().kind else {
             panic!("didn't get func");
         };
 
@@ -574,7 +576,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 generics: vec![],
                 params: vec![Parameter {
@@ -591,7 +594,7 @@ pub mod tests {
                 },
                 ret: None,
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -605,7 +608,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
@@ -630,7 +634,7 @@ pub mod tests {
                     }
                 }),
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -660,7 +664,8 @@ pub mod tests {
         assert_eq!(2, parsed.roots.len());
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("hello".to_string()),
                 generics: vec![],
                 params: vec![],
@@ -672,12 +677,13 @@ pub mod tests {
                 },
                 ret: None,
                 attributes: vec![],
-            })
+            }))
         );
 
         assert_eq!(
             *parsed.roots[1].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("world".to_string()),
                 generics: vec![],
                 params: vec![],
@@ -689,7 +695,7 @@ pub mod tests {
                 },
                 ret: None,
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -699,7 +705,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 generics: vec![],
                 params: vec![
@@ -724,7 +731,7 @@ pub mod tests {
                 },
                 ret: None,
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -733,7 +740,8 @@ pub mod tests {
         let parsed = parse("func greet(name: Int) {}");
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("greet".to_string()),
                 generics: vec![],
                 params: vec![Parameter {
@@ -748,7 +756,7 @@ pub mod tests {
                             generics: vec![]
                         }
                     }),
-                },],
+                }],
                 body: Block {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -757,7 +765,7 @@ pub mod tests {
                 },
                 ret: None,
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -884,7 +892,8 @@ pub mod tests {
         let parsed = parse("func fizz() -> Int { 123 }");
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("fizz".to_string()),
                 generics: vec![],
                 params: vec![],
@@ -903,7 +912,7 @@ pub mod tests {
                     }
                 }),
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -1374,7 +1383,8 @@ pub mod tests {
 
         assert_eq!(
             *parsed.roots[0].as_decl(),
-            any_decl!(DeclKind::Func {
+            any_decl!(DeclKind::Func(Func {
+                id: NodeID::ANY,
                 name: Name::Raw("greet".into()),
                 generics: vec![],
                 params: vec![Parameter {
@@ -1407,7 +1417,7 @@ pub mod tests {
                 body: any_block!(vec![]),
                 ret: None,
                 attributes: vec![],
-            })
+            }))
         );
     }
 
@@ -1447,7 +1457,8 @@ pub mod tests {
                     any_decl!(DeclKind::EnumVariant(Name::Raw("nope".into()), vec![])).into(),
                     any_decl!(DeclKind::Method {
                         is_static: false,
-                        func: Box::new(any_decl!(DeclKind::Func {
+                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                            id: NodeID::ANY,
                             name: Name::Raw("fizz".into()),
                             generics: vec![],
                             params: vec![],
@@ -1456,12 +1467,12 @@ pub mod tests {
                             ))]),
                             ret: None,
                             attributes: vec![],
-                        }))
+                        })))
                     })
                     .into()
                 ])
             })
-        );
+        )
     }
 
     #[test]
@@ -1615,14 +1626,15 @@ pub mod tests {
                 }],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
-                        func: Box::new(any_decl!(DeclKind::Func {
+                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                            id: NodeID::ANY,
                             name: "foo".into(),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![]),
                             ret: None,
                             attributes: vec![],
-                        })),
+                        }))),
                         is_static: false
                     })
                     .into()
@@ -1773,7 +1785,8 @@ pub mod tests {
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
                         is_static: true,
-                        func: any_decl!(DeclKind::Func {
+                        func: any_decl!(DeclKind::Func(Func {
+                            id: NodeID::ANY,
                             name: "getAge".into(),
                             generics: vec![],
                             params: vec![],
@@ -1782,10 +1795,10 @@ pub mod tests {
                             ))]),
                             ret: None,
                             attributes: vec![]
-                        })
+                        }))
                         .into()
                     })
-                    .into(),
+                    .into()
                 ])
             })
         );
@@ -1812,7 +1825,8 @@ pub mod tests {
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
                         is_static: false,
-                        func: any_decl!(DeclKind::Func {
+                        func: any_decl!(DeclKind::Func(Func {
+                            id: NodeID::ANY,
                             name: "getAge".into(),
                             generics: vec![],
                             params: vec![],
@@ -1821,10 +1835,10 @@ pub mod tests {
                             ))]),
                             ret: None,
                             attributes: vec![]
-                        })
+                        }))
                         .into()
                     })
-                    .into(),
+                    .into()
                 ])
             })
         );

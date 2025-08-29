@@ -1,12 +1,18 @@
+use derive_visitor::{Drive, DriveMut};
+
 use crate::{
-    parsing::span::Span, impl_into_node, label::Label, node::Node, node_id::NodeID, node_kinds::expr::Expr,
+    impl_into_node, label::Label, node::Node, node_id::NodeID, node_kinds::expr::Expr,
+    parsing::span::Span,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct CallArg {
+    #[drive(skip)]
     pub id: NodeID,
+    #[drive(skip)]
     pub label: Label,
     pub value: Expr,
+    #[drive(skip)]
     pub span: Span,
 }
 

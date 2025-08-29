@@ -12,7 +12,6 @@ pub mod precedence;
 pub use lexing::*;
 pub mod parser_error;
 pub mod span;
-pub mod traversal;
 
 #[cfg(test)]
 pub mod parser_tests;

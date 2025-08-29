@@ -8,9 +8,11 @@ use crate::{
     span::Span,
 };
 
+use derive_visitor::{Drive, DriveMut};
+
 pub trait NodeType: Into<Node> + From<Node> {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum Node {
     Attribute(Attribute),
     Decl(Decl),

@@ -1,3 +1,5 @@
+use derive_visitor::{Drive, DriveMut};
+
 use crate::{
     impl_into_node,
     node::Node,
@@ -6,7 +8,7 @@ use crate::{
     parsing::span::Span,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
 pub enum StmtKind {
     Expr(Expr),
     If(Expr /* condition */, Block /* then block */),
@@ -17,10 +19,12 @@ pub enum StmtKind {
     Loop(Option<Expr> /* condition */, Block /* body */),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
 pub struct Stmt {
+    #[drive(skip)]
     pub id: NodeID,
     pub kind: StmtKind,
+    #[drive(skip)]
     pub span: Span,
 }
 

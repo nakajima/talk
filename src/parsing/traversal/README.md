@@ -1,1 +1,0 @@
-this directory is all slop fyi.

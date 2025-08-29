@@ -3,6 +3,7 @@ pub mod block;
 pub mod call_arg;
 pub mod decl;
 pub mod expr;
+pub mod func;
 pub mod generic_decl;
 pub mod incomplete_expr;
 pub mod match_arm;

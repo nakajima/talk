@@ -46,6 +46,7 @@ bincode = "2.0.1"
 anyhow = "1.0.99"
 rustc-hash = "2.1.1"
 generational-arena = "0.2.9"
+derive-visitor = "0.4.0"
 
 [features]
 default = ["cli"]
