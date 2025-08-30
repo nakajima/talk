@@ -17,6 +17,7 @@ pub mod tests {
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
             func::Func,
+            func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
             parameter::Parameter,
@@ -74,7 +75,7 @@ pub mod tests {
         };
     }
 
-    fn resolve(code: &'static str) -> AST<NameResolved> {
+    pub fn resolve(code: &'static str) -> AST<NameResolved> {
         let res = resolve_err(code);
         assert!(
             res.diagnostics.is_empty(),
@@ -437,7 +438,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
-                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                        func: Box::new(Func {
                             id: NodeID::ANY,
                             name: Name::Resolved(Symbol::Value(DeclId(2)), "fizz".into()),
                             generics: vec![],
@@ -453,12 +454,12 @@ pub mod tests {
                             })]),
                             ret: None,
                             attributes: vec![]
-                        }))),
+                        }),
                         is_static: false
                     })
                     .into(),
                     any_decl!(DeclKind::Method {
-                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                        func: Box::new(Func {
                             id: NodeID::ANY,
                             name: Name::Resolved(Symbol::Value(DeclId(3)), "buzz".into()),
                             generics: vec![],
@@ -474,7 +475,7 @@ pub mod tests {
                             })]),
                             ret: None,
                             attributes: vec![]
-                        }))),
+                        }),
                         is_static: false
                     })
                     .into()
@@ -529,16 +530,14 @@ pub mod tests {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizzable".into()),
                 conformances: vec![],
                 generics: vec![],
-                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Method {
-                    is_static: false,
-                    func: any_decl!(DeclKind::FuncSignature {
+                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
+                    FuncSignature {
                         name: Name::Resolved(Symbol::Type(DeclId(2)), "buzz".into()),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
-                    })
-                    .into()
-                })),])
+                    }
+                )))])
             })
         )
     }
@@ -571,19 +570,15 @@ pub mod tests {
                             span: Span::ANY
                         }
                     })),
-                    Node::Decl(any_decl!(DeclKind::Method {
-                        is_static: false,
-                        func: any_decl!(DeclKind::FuncSignature {
-                            name: Name::Resolved(Symbol::Type(DeclId(3)), "buzz".into()),
-                            params: vec![],
-                            generics: vec![],
-                            ret: Box::new(annotation!(TypeAnnotationKind::Nominal {
-                                name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
-                                generics: vec![]
-                            }))
-                        })
-                        .into()
-                    })),
+                    Node::Decl(any_decl!(DeclKind::MethodRequirement(FuncSignature {
+                        name: Name::Resolved(Symbol::Type(DeclId(3)), "buzz".into()),
+                        params: vec![],
+                        generics: vec![],
+                        ret: Box::new(annotation!(TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                            generics: vec![]
+                        }))
+                    }))),
                 ])
             })
         )

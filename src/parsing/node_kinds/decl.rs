@@ -6,8 +6,9 @@ use crate::{
     node::Node,
     node_id::NodeID,
     node_kinds::{
-        block::Block, expr::Expr, func::Func, generic_decl::GenericDecl, parameter::Parameter,
-        pattern::Pattern, type_annotation::TypeAnnotation,
+        block::Block, expr::Expr, func::Func, func_signature::FuncSignature,
+        generic_decl::GenericDecl, parameter::Parameter, pattern::Pattern,
+        type_annotation::TypeAnnotation,
     },
     parsing::span::Span,
 };
@@ -52,7 +53,7 @@ pub enum DeclKind {
     },
 
     Method {
-        func: Box<Decl>,
+        func: Box<Func>,
         #[drive(skip)]
         is_static: bool,
     },
@@ -87,13 +88,8 @@ pub enum DeclKind {
         Vec<TypeAnnotation>, // associated types: [TypeRepr("T")]
     ),
 
-    FuncSignature {
-        #[drive(skip)]
-        name: Name,
-        params: Vec<Parameter>,
-        generics: Vec<GenericDecl>,
-        ret: Box<TypeAnnotation>,
-    },
+    FuncSignature(FuncSignature),
+    MethodRequirement(FuncSignature),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

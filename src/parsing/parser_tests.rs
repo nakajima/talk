@@ -16,6 +16,7 @@ pub mod tests {
             decl::{Decl, DeclKind},
             expr::{Expr, ExprKind},
             func::Func,
+            func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
             parameter::Parameter,
@@ -1457,7 +1458,7 @@ pub mod tests {
                     any_decl!(DeclKind::EnumVariant(Name::Raw("nope".into()), vec![])).into(),
                     any_decl!(DeclKind::Method {
                         is_static: false,
-                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                        func: Box::new(Func {
                             id: NodeID::ANY,
                             name: Name::Raw("fizz".into()),
                             generics: vec![],
@@ -1467,7 +1468,7 @@ pub mod tests {
                             ))]),
                             ret: None,
                             attributes: vec![],
-                        })))
+                        })
                     })
                     .into()
                 ])
@@ -1626,7 +1627,7 @@ pub mod tests {
                 }],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
-                        func: Box::new(any_decl!(DeclKind::Func(Func {
+                        func: Box::new(Func {
                             id: NodeID::ANY,
                             name: "foo".into(),
                             generics: vec![],
@@ -1634,7 +1635,7 @@ pub mod tests {
                             body: any_block!(vec![]),
                             ret: None,
                             attributes: vec![],
-                        }))),
+                        }),
                         is_static: false
                     })
                     .into()
@@ -1785,7 +1786,7 @@ pub mod tests {
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
                         is_static: true,
-                        func: any_decl!(DeclKind::Func(Func {
+                        func: Func {
                             id: NodeID::ANY,
                             name: "getAge".into(),
                             generics: vec![],
@@ -1795,7 +1796,7 @@ pub mod tests {
                             ))]),
                             ret: None,
                             attributes: vec![]
-                        }))
+                        }
                         .into()
                     })
                     .into()
@@ -1825,7 +1826,7 @@ pub mod tests {
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
                         is_static: false,
-                        func: any_decl!(DeclKind::Func(Func {
+                        func: Func {
                             id: NodeID::ANY,
                             name: "getAge".into(),
                             generics: vec![],
@@ -1835,7 +1836,7 @@ pub mod tests {
                             ))]),
                             ret: None,
                             attributes: vec![]
-                        }))
+                        }
                         .into()
                     })
                     .into()
@@ -1926,20 +1927,16 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
-                    any_decl!(DeclKind::Method {
-                        is_static: false,
-                        func: any_decl!(DeclKind::FuncSignature {
-                            name: "me".into(),
-                            params: vec![],
-                            generics: vec![],
-                            ret: annotation!(TypeAnnotationKind::Nominal {
-                                name: "Person".into(),
-                                generics: vec![]
-                            })
-                            .into()
+                    any_decl!(DeclKind::MethodRequirement(FuncSignature {
+                        name: "me".into(),
+                        params: vec![],
+                        generics: vec![],
+                        ret: annotation!(TypeAnnotationKind::Nominal {
+                            name: "Person".into(),
+                            generics: vec![]
                         })
                         .into()
-                    })
+                    }))
                     .into()
                 ])
             })

@@ -8,6 +8,11 @@ pub enum Symbol {
     BuiltinType(BuiltinId),
 }
 
+#[allow(non_upper_case_globals)]
+impl Symbol {
+    pub const Int: Symbol = Symbol::BuiltinType(BuiltinId(1));
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeclId(pub u32);
 

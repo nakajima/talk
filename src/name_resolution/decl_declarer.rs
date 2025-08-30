@@ -8,6 +8,7 @@ use crate::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        func_signature::FuncSignature,
         generic_decl::GenericDecl,
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind},
@@ -19,6 +20,7 @@ use crate::{
 #[derive(VisitorMut)]
 #[visitor(
     Stmt(enter, exit),
+    FuncSignature(enter),
     Pattern(enter),
     MatchArm(enter, exit),
     Func(enter, exit),
@@ -141,6 +143,12 @@ impl<'a> DeclDeclarer<'a> {
         self.end_scope();
     }
 
+    fn enter_func_signature(&mut self, func: &mut FuncSignature) {
+        on!(func, FuncSignature { name, .. }, {
+            *name = self.resolver.declare_type(name);
+        })
+    }
+
     ///////////////////////////////////////////////////////////////////////////
     // Struct decls
     ///////////////////////////////////////////////////////////////////////////
@@ -168,9 +176,13 @@ impl<'a> DeclDeclarer<'a> {
             generic.name = self.resolver.declare_type(&generic.name);
         });
 
-        on!(&mut decl.kind, DeclKind::FuncSignature { name, .. }, {
-            *name = self.resolver.declare_type(name);
-        });
+        on!(
+            &mut decl.kind,
+            DeclKind::FuncSignature(FuncSignature { name, .. }),
+            {
+                *name = self.resolver.declare_type(name);
+            }
+        );
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {

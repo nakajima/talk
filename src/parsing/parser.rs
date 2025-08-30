@@ -10,6 +10,7 @@ use crate::node_kinds::call_arg::CallArg;
 use crate::node_kinds::decl::{Decl, DeclKind};
 use crate::node_kinds::expr::{Expr, ExprKind};
 use crate::node_kinds::func::Func;
+use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
 use crate::node_kinds::match_arm::MatchArm;
@@ -202,14 +203,22 @@ impl<'a> Parser<'a> {
     #[instrument(skip(self))]
     fn method_decl(&mut self, context: BlockContext, is_static: bool) -> Result<Decl, ParserError> {
         let func_decl = self.func_decl(context, true)?;
-        Ok(Decl {
-            id: func_decl.id,
-            span: func_decl.span,
-            kind: DeclKind::Method {
-                func: Box::new(func_decl),
-                is_static,
-            },
-        })
+        match func_decl.kind {
+            DeclKind::Func(func) => Ok(Decl {
+                id: func.id,
+                span: func_decl.span,
+                kind: DeclKind::Method {
+                    func: Box::new(func),
+                    is_static,
+                },
+            }),
+            DeclKind::FuncSignature(func_sig) => Ok(Decl {
+                id: func_decl.id,
+                span: func_decl.span,
+                kind: DeclKind::MethodRequirement(func_sig),
+            }),
+            _ => unreachable!(),
+        }
     }
 
     #[instrument(skip(self))]
@@ -378,12 +387,12 @@ impl<'a> Parser<'a> {
             return Ok(Decl {
                 id,
                 span,
-                kind: DeclKind::FuncSignature {
+                kind: DeclKind::FuncSignature(FuncSignature {
                     name: name.into(),
                     generics,
                     params,
                     ret: Box::new(ret),
-                },
+                }),
             });
         }
 
