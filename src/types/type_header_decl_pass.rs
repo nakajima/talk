@@ -48,11 +48,12 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     *decl_id,
                     TypeDef {
                         name: name.clone(),
+                        span: decl.span,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Struct,
                         generics: generics
                             .iter()
-                            .map(|g| ASTTyRepr::Generic(g.clone()))
+                            .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
                             .collect(),
                         fields,
                     },
@@ -69,11 +70,12 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     *decl_id,
                     TypeDef {
                         name: name.clone(),
+                        span: decl.span,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Protocol,
                         generics: generics
                             .iter()
-                            .map(|g| ASTTyRepr::Generic(g.clone()))
+                            .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
                             .collect(),
                         fields,
                     },
@@ -91,11 +93,12 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     *decl_id,
                     TypeDef {
                         name: name.clone(),
+                        span: decl.span,
                         kind: arrow_n(Kind::Type, generics.len(), Kind::Type),
                         def: TypeDefKind::Enum,
                         generics: generics
                             .iter()
-                            .map(|g| ASTTyRepr::Generic(g.clone()))
+                            .map(|g| (g.name.clone(), ASTTyRepr::Generic(g.clone())))
                             .collect(),
                         fields,
                     },
@@ -120,7 +123,10 @@ impl<'a> TypeHeaderDeclPass<'a> {
 
         for node in body {
             let Node::Decl(Decl {
-                id: decl_id, kind, ..
+                id: decl_id,
+                kind,
+                span,
+                ..
             }) = node
             else {
                 continue;
@@ -136,7 +142,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     let ty_repr = if let Some(type_annotation) = type_annotation {
                         ASTTyRepr::Annotated(type_annotation.clone())
                     } else {
-                        ASTTyRepr::Hole(*decl_id)
+                        ASTTyRepr::Hole(*decl_id, *span)
                     };
 
                     properties.insert(
@@ -181,14 +187,14 @@ impl<'a> TypeHeaderDeclPass<'a> {
                                     if let Some(type_annotation) = &p.type_annotation {
                                         ASTTyRepr::Annotated(type_annotation.clone())
                                     } else {
-                                        ASTTyRepr::Hole(p.id)
+                                        ASTTyRepr::Hole(p.id, *span)
                                     }
                                 })
                                 .collect(),
                             ret: ret
                                 .as_ref()
                                 .map(|m| ASTTyRepr::Annotated(m.clone()))
-                                .unwrap_or(ASTTyRepr::Hole(*decl_id)),
+                                .unwrap_or(ASTTyRepr::Hole(*decl_id, *span)),
                         },
                     );
                 }
@@ -204,7 +210,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
                                     if let Some(type_annotation) = &p.type_annotation {
                                         ASTTyRepr::Annotated(type_annotation.clone())
                                     } else {
-                                        ASTTyRepr::Hole(p.id)
+                                        ASTTyRepr::Hole(p.id, *span)
                                     }
                                 })
                                 .collect(),
@@ -222,7 +228,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
                                     if let Some(type_annotation) = &p.type_annotation {
                                         ASTTyRepr::Annotated(type_annotation.clone())
                                     } else {
-                                        ASTTyRepr::Hole(p.id)
+                                        ASTTyRepr::Hole(p.id, *span)
                                     }
                                 })
                                 .collect(),
@@ -247,7 +253,6 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 associated_types,
                 method_requirements,
             },
-            TypeDefKind::Primitive(..) => TypeFields::Primitive,
         }
     }
 }
@@ -294,8 +299,9 @@ pub mod tests {
             TypeDef::<Raw> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Person".into()),
                 kind: Kind::Type,
+                span: Span::ANY,
                 def: TypeDefKind::Struct,
-                generics: vec![],
+                generics: Default::default(),
                 fields: TypeFields::Struct {
                     initializers: Default::default(),
                     methods: Default::default(),
@@ -335,18 +341,19 @@ pub mod tests {
                     in_kind: Box::new(Kind::Type),
                     out_kind: Box::new(Kind::Type)
                 },
+                span: Span::ANY,
                 def: TypeDefKind::Struct,
-                generics: vec![ASTTyRepr::Generic(GenericDecl {
+                generics: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(2)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
                     name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY,
-                })],
+                })),
                 fields: TypeFields::Struct {
                     initializers: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(4)), "init".into()) => Initializer {
                         params: vec![
-                            ASTTyRepr::Hole(NodeID(4))
+                            ASTTyRepr::Hole(NodeID(4), Span::ANY)
                         ]
                     }),
                     methods: Default::default(),
@@ -384,23 +391,24 @@ pub mod tests {
                     }
                     .into()
                 },
+                span: Span::ANY,
                 def: TypeDefKind::Struct,
-                generics: vec![
-                    ASTTyRepr::Generic(GenericDecl {
+                generics: crate::indexmap!(
+                  Name::Resolved(Symbol::Type(DeclId(2)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
                         name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY,
                     }),
-                    ASTTyRepr::Generic(GenericDecl {
+                   Name::Resolved(Symbol::Type(DeclId(3)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
                         name: Name::Resolved(Symbol::Type(DeclId(3)), "U".into()),
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY,
                     })
-                ],
+                ),
                 fields: TypeFields::Struct {
                     initializers: Default::default(),
                     methods: Default::default(),
@@ -434,8 +442,9 @@ pub mod tests {
             TypeDef::<Raw> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
                 kind: Kind::Type,
+                span: Span::ANY,
                 def: TypeDefKind::Enum,
-                generics: vec![],
+                generics: Default::default(),
                 fields: TypeFields::Enum {
                     variants: crate::indexmap!(
                         Name::Resolved(Symbol::Type(DeclId(2)), "foo".into()) => Variant {
@@ -471,8 +480,9 @@ pub mod tests {
             TypeDef::<Raw> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
                 kind: Kind::Type,
+                span: Span::ANY,
                 def: TypeDefKind::Protocol,
-                generics: vec![],
+                generics: Default::default(),
                 fields: TypeFields::Protocol {
                     initializers: Default::default(),
                     methods: Default::default(),

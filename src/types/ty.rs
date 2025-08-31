@@ -1,4 +1,6 @@
-use crate::{name::Name, node_id::NodeID, types::type_session::TypeDefKind};
+use crate::{
+    name::Name, name_resolution::symbol::DeclId, node_id::NodeID, types::type_session::TypeDefKind,
+};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Primitive {
@@ -10,6 +12,7 @@ pub enum Primitive {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Ty {
     Hole(NodeID),
+    Rigid(DeclId),
     Primitive(Primitive),
     Nominal { name: Name, kind: TypeDefKind },
 }
