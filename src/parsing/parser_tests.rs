@@ -1865,6 +1865,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Init {
+                        name: Name::Raw("init".into()),
                         params: vec![Parameter {
                             id: NodeID::ANY,
                             span: Span::ANY,

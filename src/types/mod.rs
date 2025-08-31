@@ -1,5 +1,36 @@
+use crate::types::kind::Kind;
+
 pub mod builtins;
+pub mod fields;
 pub mod kind;
 pub mod ty;
-pub mod type_header_pass;
+pub mod type_error;
+pub mod type_header_decl_pass;
+pub mod type_header_resolve_pass;
 pub mod type_session;
+
+// Helper for n-ary arrows when all args are the same:
+pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
+    (0..n).fold(ret, |acc, _| Kind::Arrow {
+        in_kind: Box::new(arg.clone()),
+        out_kind: Box::new(acc),
+    })
+}
+
+#[macro_export]
+macro_rules! fxhashmap {
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = rustc_hash::FxHashMap::default();
+        $( m.insert($k, $v); )*
+        m
+    }};
+}
+
+#[macro_export]
+macro_rules! indexmap {
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = indexmap::IndexMap::default();
+        $( m.insert($k, $v); )*
+        m
+    }};
+}

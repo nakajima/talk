@@ -196,7 +196,11 @@ impl<'a> Parser<'a> {
         Ok(Decl {
             id,
             span,
-            kind: DeclKind::Init { params, body },
+            kind: DeclKind::Init {
+                name: Name::Raw("init".into()),
+                params,
+                body,
+            },
         })
     }
 

@@ -39,6 +39,8 @@ pub enum DeclKind {
     },
 
     Init {
+        #[drive(skip)]
+        name: Name,
         params: Vec<Parameter>, /* params tuple */
         body: Block,
     },

@@ -1,66 +1,68 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
+    ast::AST,
+    id_generator::IDGenerator,
     name::Name,
-    name_resolution::symbol::DeclId,
+    name_resolution::{name_resolver::NameResolved, symbol::DeclId},
     node_id::NodeID,
-    node_kinds::type_annotation::TypeAnnotation,
-    types::{kind::Kind, ty::Ty},
+    node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
+    types::{
+        fields::TypeFields,
+        kind::Kind,
+        ty::{Primitive, Ty},
+        type_header_decl_pass::TypeHeaderDeclPass,
+    },
 };
 
-#[derive(Debug, PartialEq)]
-pub enum TyRepr {
+#[derive(Debug, PartialEq, Clone)]
+pub enum ASTTyRepr {
     Annotated(TypeAnnotation), // already resolved names
-    Hole(NodeID),              // no annotation; to be inferred later
+    Generic(GenericDecl),
+    Hole(NodeID), // no annotation; to be inferred later
 }
 
-#[derive(Debug, PartialEq)]
-pub enum TypeFieldKind {
-    Property {
-        is_static: bool,
-        ty_repr: TyRepr,
-    },
-    Method {
-        is_static: bool,
-        params: Vec<TyRepr>,
-        ret: TyRepr,
-    },
-    MethodRequirement {
-        params: Vec<TyRepr>,
-        ret: TyRepr,
-    },
-    Initializer {
-        params: Vec<TyRepr>,
-    },
-    Variant {
-        fields: Vec<TyRepr>,
-    },
-    Associated,
+pub trait TypingPhase: std::fmt::Debug + PartialEq {
+    type TyPhase: std::fmt::Debug + PartialEq + Clone;
 }
 
-#[derive(Debug, PartialEq)]
-pub struct TypeField {
-    pub kind: TypeFieldKind,
-    pub name: Name,
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDefKind {
     Struct,
     Enum,
     Protocol,
+    Primitive(Primitive),
 }
 
-#[derive(Debug, PartialEq)]
-pub struct TypeDef {
+#[derive(Debug, PartialEq, Eq, Default)]
+pub struct Raw {}
+impl TypingPhase for Raw {
+    type TyPhase = ASTTyRepr;
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypeDef<Phase: TypingPhase> {
     pub name: Name,
     pub kind: Kind,
     pub def: TypeDefKind,
-    pub fields: Vec<TypeField>,
+    pub generics: Vec<Phase::TyPhase>,
+    pub fields: TypeFields<Phase>,
 }
 
 #[derive(Debug, Default)]
-pub struct TypeSession {
-    pub type_constructors: FxHashMap<DeclId, TypeDef>,
+pub struct TypeSession<Phase: TypingPhase = Raw> {
+    pub type_constructors: FxHashMap<DeclId, TypeDef<Phase>>,
+    pub protocols: FxHashMap<DeclId, TypeDef<Phase>>,
     pub type_env: FxHashMap<DeclId, Ty>,
+    pub synthsized_ids: IDGenerator,
+}
+
+pub struct Typed {}
+
+impl<Phase: TypingPhase> TypeSession<Phase> {
+    pub fn drive(ast: &AST<NameResolved>) -> TypeSession<Raw> {
+        let mut session = TypeSession::<Raw>::default();
+        TypeHeaderDeclPass::drive(&mut session, ast);
+        session
+    }
 }

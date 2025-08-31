@@ -384,6 +384,30 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_struct_init() {
+        let resolved = resolve(
+            "
+        struct Person {
+            init() {}
+        }
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
+                    name: Name::Resolved(Symbol::Type(DeclId(2)), "init".into()),
+                    params: vec![],
+                    body: any_block!(vec![])
+                }))])
+            })
+        )
+    }
+
+    #[test]
     fn resolves_generic_struct_properties() {
         let resolved = resolve(
             "

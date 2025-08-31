@@ -6,11 +6,14 @@ pub enum Symbol {
     Value(DeclId),
     Local(LocalId),
     BuiltinType(BuiltinId),
+    Synthesized(SynthesizedId),
 }
 
 #[allow(non_upper_case_globals)]
 impl Symbol {
     pub const Int: Symbol = Symbol::BuiltinType(BuiltinId(1));
+    pub const Float: Symbol = Symbol::BuiltinType(BuiltinId(2));
+    pub const Bool: Symbol = Symbol::BuiltinType(BuiltinId(3));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -24,6 +27,9 @@ pub struct FieldId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BuiltinId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SynthesizedId(pub u32);
 
 macro_rules! impl_symbol_id {
     ($case:ident, $ty: ident) => {
@@ -49,6 +55,7 @@ pub struct Symbols {
     decls: IDGenerator,
     locals: IDGenerator,
     fields: IDGenerator,
+    synthesized: IDGenerator,
     builtins: IDGenerator,
 }
 
@@ -67,5 +74,9 @@ impl Symbols {
 
     pub fn next_builtin(&mut self) -> BuiltinId {
         BuiltinId(self.builtins.next_id())
+    }
+
+    pub fn next_synthesized(&mut self) -> SynthesizedId {
+        SynthesizedId(self.synthesized.next_id())
     }
 }

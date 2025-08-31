@@ -372,6 +372,10 @@ impl NameResolver {
                 self.enter_scope(decl.id);
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
+            *name = self.declare_type(&name);
+        })
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
