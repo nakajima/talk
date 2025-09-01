@@ -14,7 +14,8 @@ pub enum Ty {
     Hole(NodeID),
     Rigid(DeclId),
     Primitive(Primitive),
-    Nominal { name: Name, kind: TypeDefKind },
+    TypeConstructor { name: Name, kind: TypeDefKind },
+    TypeApplication(Box<Ty>, Box<Ty>),
 }
 
 #[allow(non_upper_case_globals)]

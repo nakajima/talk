@@ -125,7 +125,16 @@ impl TypeHeaderResolvePass {
                     "init".into(),
                 ),
                 Initializer {
-                    params: properties.values().map(|p| p.ty_repr.clone()).collect(),
+                    params: properties
+                        .values()
+                        .filter_map(|p| {
+                            if p.is_static {
+                                None
+                            } else {
+                                Some(p.ty_repr.clone())
+                            }
+                        })
+                        .collect(),
                 },
             );
         }
@@ -351,10 +360,25 @@ impl TypeHeaderResolvePass {
                                 });
                             }
 
-                            return Ok(Ty::Nominal {
-                                name: name.clone(),
-                                kind: type_def.def,
-                            });
+                            let ty = generic_args.iter().fold(
+                                Ty::TypeConstructor {
+                                    name: name.clone(),
+                                    kind: type_def.def,
+                                },
+                                |acc, arg| match self.resolve_type_annotation(arg) {
+                                    Ok(arg) => Ty::TypeApplication(Box::new(acc), Box::new(arg)),
+                                    Err(e) => {
+                                        self.diagnostics.push(Diagnostic {
+                                            path: self.session.path.clone(),
+                                            span: arg.span,
+                                            kind: e,
+                                        });
+                                        acc
+                                    }
+                                },
+                            );
+
+                            return Ok(ty);
                         };
 
                         if let Some(generics) = self.generics_stack.last()
@@ -379,6 +403,7 @@ impl TypeHeaderResolvePass {
 #[cfg(test)]
 pub mod tests {
     use crate::{
+        assert_eq_diff,
         ast::AST,
         name_resolution::{
             name_resolver::NameResolved, name_resolver_tests::tests::resolve, symbol::SynthesizedId,
@@ -462,12 +487,12 @@ pub mod tests {
         ",
         );
 
-        let a = Ty::Nominal {
+        let a = Ty::TypeConstructor {
             kind: TypeDefKind::Struct,
             name: Name::Resolved(Symbol::Type(DeclId(1)), "A".into()),
         };
 
-        let b = Ty::Nominal {
+        let b = Ty::TypeConstructor {
             kind: TypeDefKind::Struct,
             name: Name::Resolved(Symbol::Type(DeclId(3)), "B".into()),
         };
@@ -531,6 +556,96 @@ pub mod tests {
     }
 
     #[test]
+    fn lowers_type_application() {
+        let session = pass(
+            "
+            struct A<T, U> {} 
+            struct B {
+                let a: A<Int, Float>
+            }
+            ",
+        );
+
+        let type_application = Ty::TypeApplication(
+            Box::new(Ty::TypeApplication(
+                Box::new(Ty::TypeConstructor {
+                    name: Name::Resolved(Symbol::Type(DeclId(1)), "A".into()),
+                    kind: TypeDefKind::Struct,
+                }),
+                Box::new(Ty::Int),
+            )),
+            Box::new(Ty::Float),
+        );
+
+        assert_eq_diff!(
+            session.type_constructors.get(&DeclId(4)).unwrap().fields,
+            TypeFields::<HeadersResolved>::Struct {
+                initializers: crate::indexmap!(
+                    Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer {
+                        params: vec![
+                            type_application.clone()
+                        ]
+                }
+                ),
+                methods: Default::default(),
+                properties: crate::indexmap!(
+                    Name::Resolved(Symbol::Value(DeclId(5)), "a".into()) => Property {
+                        is_static: false,
+                        ty_repr: type_application.clone()
+                    }
+                )
+            }
+        );
+    }
+
+    #[test]
+    fn lowers_nested_type_application() {
+        let session = pass(
+            "
+            struct A<T> {} 
+            struct B<T> {} 
+            struct C {
+                let b: B<A<Int>>
+            }
+            ",
+        );
+
+        let type_application = Ty::TypeApplication(
+            Box::new(Ty::TypeConstructor {
+                name: Name::Resolved(Symbol::Type(DeclId(3)), "B".into()),
+                kind: TypeDefKind::Struct,
+            }),
+            Box::new(Ty::TypeApplication(
+                Box::new(Ty::TypeConstructor {
+                    name: Name::Resolved(Symbol::Type(DeclId(1)), "A".into()),
+                    kind: TypeDefKind::Struct,
+                }),
+                Box::new(Ty::Int),
+            )),
+        );
+
+        assert_eq_diff!(
+            session.type_constructors.get(&DeclId(5)).unwrap().fields,
+            TypeFields::<HeadersResolved>::Struct {
+                initializers: crate::indexmap!(
+                    Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer {
+                        params: vec![
+                            type_application.clone()
+                        ]
+                }
+                ),
+                methods: Default::default(),
+                properties: crate::indexmap!(
+                    Name::Resolved(Symbol::Value(DeclId(6)), "b".into()) => Property {
+                        is_static: false,
+                        ty_repr: type_application.clone()
+                    }
+                )
+            }
+        );
+    }
+
+    #[test]
     fn lowers_type_application_and_checks_arity() {
         let (ast, _session) = pass_err(
             r#"
@@ -540,7 +655,6 @@ pub mod tests {
         )
         .unwrap();
 
-        println!("{_session:?}");
         assert_eq!(ast.diagnostics.len(), 1);
     }
 }
