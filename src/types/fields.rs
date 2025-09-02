@@ -1,55 +1,55 @@
 use indexmap::IndexMap;
 
-use crate::{name::Name, types::type_session::TypingPhase};
+use crate::{label::Label, name::Name};
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum TypeFields<P: TypingPhase> {
+pub enum TypeFields<T> {
     Struct {
-        initializers: IndexMap<Name, Initializer<P>>,
-        methods: IndexMap<Name, Method<P>>,
-        properties: IndexMap<Name, Property<P>>,
+        initializers: IndexMap<Name, Initializer<T>>,
+        methods: IndexMap<Name, Method<T>>,
+        properties: IndexMap<Label, Property<T>>,
     },
     Protocol {
-        initializers: IndexMap<Name, Initializer<P>>,
-        methods: IndexMap<Name, Method<P>>,
-        method_requirements: IndexMap<Name, MethodRequirement<P>>,
-        properties: IndexMap<Name, Property<P>>,
+        initializers: IndexMap<Name, Initializer<T>>,
+        methods: IndexMap<Name, Method<T>>,
+        method_requirements: IndexMap<Name, MethodRequirement<T>>,
+        properties: IndexMap<Label, Property<T>>,
         associated_types: IndexMap<Name, Associated>,
     },
     Enum {
-        variants: IndexMap<Name, Variant<P>>,
-        methods: IndexMap<Name, Method<P>>,
+        variants: IndexMap<Name, Variant<T>>,
+        methods: IndexMap<Name, Method<T>>,
     },
     Primitive,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Property<P: TypingPhase> {
+pub struct Property<T> {
     pub is_static: bool,
-    pub ty_repr: P::TyPhase,
+    pub ty_repr: T,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Method<P: TypingPhase> {
+pub struct Method<T> {
     pub is_static: bool,
-    pub params: Vec<P::TyPhase>,
-    pub ret: P::TyPhase,
+    pub params: Vec<T>,
+    pub ret: T,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct MethodRequirement<P: TypingPhase> {
-    pub params: Vec<P::TyPhase>,
-    pub ret: P::TyPhase,
+pub struct MethodRequirement<T> {
+    pub params: Vec<T>,
+    pub ret: T,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Initializer<P: TypingPhase> {
-    pub params: Vec<P::TyPhase>,
+pub struct Initializer<T> {
+    pub params: Vec<T>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Variant<P: TypingPhase> {
-    pub fields: Vec<P::TyPhase>,
+pub struct Variant<T> {
+    pub fields: Vec<T>,
 }
 
 #[derive(Debug, PartialEq, Clone)]

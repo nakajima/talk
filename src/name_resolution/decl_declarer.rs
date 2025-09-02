@@ -2,7 +2,10 @@ use derive_visitor::VisitorMut;
 
 use crate::{
     name::Name,
-    name_resolution::name_resolver::{NameResolver, Scope},
+    name_resolution::{
+        name_resolver::{NameResolver, Scope},
+        symbol::{DeclId, Symbol},
+    },
     node_id::NodeID,
     node_kinds::{
         decl::{Decl, DeclKind},
@@ -35,8 +38,8 @@ impl<'a> DeclDeclarer<'a> {
         Self { resolver }
     }
 
-    pub fn start_scope(&mut self, id: NodeID) {
-        let scope = Scope::new(id, self.resolver.current_scope);
+    pub fn start_scope(&mut self, id: NodeID, decl_id: Option<DeclId>) {
+        let scope = Scope::new(id, self.resolver.current_scope, decl_id);
         let scope_id = self.resolver.scopes.insert(scope);
         self.resolver.scopes_by_node_id.insert(id, scope_id);
         self.resolver.node_ids_by_scope.insert(scope_id, id);
@@ -57,7 +60,7 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_nominal(&mut self, id: NodeID, name: &mut Name, generics: &mut [GenericDecl]) {
         *name = self.resolver.declare_type(name);
 
-        self.start_scope(id);
+        self.start_scope(id, None);
 
         for generic in generics {
             generic.name = self.resolver.declare_type(&generic.name);
@@ -73,7 +76,7 @@ impl<'a> DeclDeclarer<'a> {
             ..
         }) = &mut stmt.kind
         {
-            self.start_scope(block.id);
+            self.start_scope(block.id, None);
         }
     }
 
@@ -104,7 +107,7 @@ impl<'a> DeclDeclarer<'a> {
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
-        self.start_scope(arm.id);
+        self.start_scope(arm.id, None);
     }
 
     fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
@@ -130,7 +133,12 @@ impl<'a> DeclDeclarer<'a> {
             {
                 *name = self.resolver.declare_value(name);
 
-                self.start_scope(*id);
+                let Name::Resolved(Symbol::Value(decl_id), _) = &name else {
+                    unreachable!()
+                };
+
+                self.resolver.phase.dependency_graph.add_node(*decl_id);
+                self.start_scope(*id, Some(*decl_id));
 
                 for generic in generics {
                     generic.name = self.resolver.declare_type(&generic.name);
@@ -164,10 +172,6 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Property { name, .. }, {
-            *name = self.resolver.declare_value(name);
-        });
-
         on!(&mut decl.kind, DeclKind::EnumVariant(name, ..), {
             *name = self.resolver.declare_type(name);
         });
@@ -183,6 +187,16 @@ impl<'a> DeclDeclarer<'a> {
                 *name = self.resolver.declare_type(name);
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
+            *name = self.resolver.declare_type(name);
+
+            let Name::Resolved(Symbol::Type(decl_id), _) = &name else {
+                unreachable!()
+            };
+
+            self.start_scope(decl.id, Some(*decl_id));
+        });
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
@@ -193,5 +207,11 @@ impl<'a> DeclDeclarer<'a> {
                 self.end_scope();
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
+            *name = self.resolver.declare_type(name);
+
+            self.end_scope();
+        });
     }
 }

@@ -5,6 +5,7 @@ use tracing::{instrument, trace_span};
 use crate::{
     ast::AST,
     diagnostic::{AnyDiagnostic, Diagnostic},
+    label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
@@ -19,24 +20,28 @@ use crate::{
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
+        scc_pass::SCCLeveled,
         ty::Ty,
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
     },
 };
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct HeadersResolved {}
+#[derive(Debug, PartialEq, Clone)]
+pub struct HeadersResolved {
+    pub type_constructors: FxHashMap<DeclId, TypeDef<Ty>>,
+    pub protocols: FxHashMap<DeclId, TypeDef<Ty>>,
+}
+
 impl TypingPhase for HeadersResolved {
-    type TyPhase = Ty;
+    type Next = SCCLeveled;
 }
 
 #[derive(Debug)]
 pub struct TypeHeaderResolvePass {
     session: TypeSession<Raw>,
-    type_constructors: FxHashMap<DeclId, TypeDef<HeadersResolved>>,
-    protocols: FxHashMap<DeclId, TypeDef<HeadersResolved>>,
-    type_env: FxHashMap<DeclId, Ty>,
+    type_constructors: FxHashMap<DeclId, TypeDef<Ty>>,
+    protocols: FxHashMap<DeclId, TypeDef<Ty>>,
     generics_stack: Vec<IndexMap<Name, Ty>>,
     diagnostics: Vec<Diagnostic<TypeError>>,
 }
@@ -50,7 +55,6 @@ impl TypeHeaderResolvePass {
             session,
             type_constructors: Default::default(),
             protocols: Default::default(),
-            type_env: Default::default(),
             generics_stack: Default::default(),
             diagnostics: Default::default(),
         };
@@ -62,7 +66,7 @@ impl TypeHeaderResolvePass {
         mut self,
         ast: &mut AST<NameResolved>,
     ) -> Result<TypeSession<HeadersResolved>, TypeError> {
-        for (decl_id, type_def) in self.session.type_constructors.clone() {
+        for (decl_id, type_def) in self.session.phase.type_constructors.clone() {
             if let Ok(resolved) = self.resolve_type_def(&type_def) {
                 self.type_constructors.insert(decl_id, resolved);
             }
@@ -71,18 +75,15 @@ impl TypeHeaderResolvePass {
         ast.diagnostics
             .extend(self.diagnostics.into_iter().map(AnyDiagnostic::Typing));
 
-        Ok(TypeSession::<HeadersResolved> {
-            path: self.session.path,
+        Ok(self.session.advance(HeadersResolved {
             type_constructors: self.type_constructors,
             protocols: self.protocols,
-            type_env: self.type_env,
-            synthsized_ids: self.session.synthsized_ids,
-        })
+        }))
     }
 
-    fn resolve_fields(&mut self, fields: &TypeFields<Raw>) -> TypeFields<HeadersResolved> {
+    fn resolve_fields(&mut self, fields: &TypeFields<ASTTyRepr>) -> TypeFields<Ty> {
         let mut fields = match fields {
-            TypeFields::Enum { variants, methods } => TypeFields::<HeadersResolved>::Enum {
+            TypeFields::Enum { variants, methods } => TypeFields::<Ty>::Enum {
                 variants: self.resolve_variants(variants),
                 methods: self.resolve_methods(methods),
             },
@@ -90,7 +91,7 @@ impl TypeHeaderResolvePass {
                 initializers,
                 methods,
                 properties,
-            } => TypeFields::<HeadersResolved>::Struct {
+            } => TypeFields::<Ty>::Struct {
                 initializers: self.resolve_initializers(initializers),
                 methods: self.resolve_methods(methods),
                 properties: self.resolve_properties(properties),
@@ -101,14 +102,14 @@ impl TypeHeaderResolvePass {
                 method_requirements,
                 properties,
                 associated_types,
-            } => TypeFields::<HeadersResolved>::Protocol {
+            } => TypeFields::<Ty>::Protocol {
                 initializers: self.resolve_initializers(initializers),
                 methods: self.resolve_methods(methods),
                 properties: self.resolve_properties(properties),
                 method_requirements: self.resolve_method_requirements(method_requirements),
                 associated_types: self.resolve_associated_types(associated_types),
             },
-            TypeFields::Primitive => TypeFields::<HeadersResolved>::Primitive,
+            TypeFields::Primitive => TypeFields::<Ty>::Primitive,
         };
 
         if let TypeFields::Struct {
@@ -144,8 +145,8 @@ impl TypeHeaderResolvePass {
 
     fn resolve_type_def(
         &mut self,
-        type_def: &TypeDef<Raw>,
-    ) -> Result<TypeDef<HeadersResolved>, TypeError> {
+        type_def: &TypeDef<ASTTyRepr>,
+    ) -> Result<TypeDef<Ty>, TypeError> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
         let mut generics = IndexMap::default();
@@ -175,8 +176,8 @@ impl TypeHeaderResolvePass {
     #[instrument]
     fn resolve_variants(
         &mut self,
-        variants: &IndexMap<Name, Variant<Raw>>,
-    ) -> IndexMap<Name, Variant<HeadersResolved>> {
+        variants: &IndexMap<Name, Variant<ASTTyRepr>>,
+    ) -> IndexMap<Name, Variant<Ty>> {
         let mut resolved_variants = IndexMap::default();
         for (name, variant) in variants {
             resolved_variants.insert(
@@ -197,8 +198,8 @@ impl TypeHeaderResolvePass {
     #[instrument]
     fn resolve_methods(
         &mut self,
-        methods: &IndexMap<Name, Method<Raw>>,
-    ) -> IndexMap<Name, Method<HeadersResolved>> {
+        methods: &IndexMap<Name, Method<ASTTyRepr>>,
+    ) -> IndexMap<Name, Method<Ty>> {
         let mut resolved_methods = IndexMap::default();
         for (name, method) in methods {
             let Some(ret) = self.resolve_ty_repr(&method.ret) else {
@@ -224,8 +225,8 @@ impl TypeHeaderResolvePass {
     #[instrument]
     fn resolve_properties(
         &mut self,
-        properties: &IndexMap<Name, Property<Raw>>,
-    ) -> IndexMap<Name, Property<HeadersResolved>> {
+        properties: &IndexMap<Label, Property<ASTTyRepr>>,
+    ) -> IndexMap<Label, Property<Ty>> {
         let mut resolved_properties = IndexMap::default();
         for (name, prop) in properties {
             let Some(ty_repr) = self.resolve_ty_repr(&prop.ty_repr) else {
@@ -246,8 +247,8 @@ impl TypeHeaderResolvePass {
     #[instrument]
     fn resolve_initializers(
         &mut self,
-        initializers: &IndexMap<Name, Initializer<Raw>>,
-    ) -> IndexMap<Name, Initializer<HeadersResolved>> {
+        initializers: &IndexMap<Name, Initializer<ASTTyRepr>>,
+    ) -> IndexMap<Name, Initializer<Ty>> {
         let mut resolved_initializers = IndexMap::default();
         for (name, initializer) in initializers {
             resolved_initializers.insert(
@@ -281,8 +282,8 @@ impl TypeHeaderResolvePass {
     #[instrument]
     fn resolve_method_requirements(
         &mut self,
-        requirements: &IndexMap<Name, MethodRequirement<Raw>>,
-    ) -> IndexMap<Name, MethodRequirement<HeadersResolved>> {
+        requirements: &IndexMap<Name, MethodRequirement<ASTTyRepr>>,
+    ) -> IndexMap<Name, MethodRequirement<Ty>> {
         let mut resolved_method_requirements = IndexMap::default();
         for (name, method_requirement) in requirements {
             let Some(ret) = self.resolve_ty_repr(&method_requirement.ret) else {
@@ -352,7 +353,7 @@ impl TypeHeaderResolvePass {
 
                 match id {
                     Symbol::Type(id) => {
-                        if let Some(type_def) = self.session.type_constructors.get(id) {
+                        if let Some(type_def) = self.session.phase.type_constructors.get(id) {
                             if type_def.generics.len() != generic_args.len() {
                                 return Err(TypeError::GenericArgCount {
                                     expected: type_def.generics.len() as u8,
@@ -413,8 +414,8 @@ pub mod tests {
 
     use super::*;
 
-    pub fn pass(code: &'static str) -> TypeSession<HeadersResolved> {
-        let (ast, session) = pass_err(code).unwrap();
+    pub fn type_header_resolve_pass(code: &'static str) -> TypeSession<HeadersResolved> {
+        let (ast, session) = type_header_resolve_pass_err(code).unwrap();
         assert!(
             ast.diagnostics.is_empty(),
             "diagnostics not empty: {:?}",
@@ -423,7 +424,7 @@ pub mod tests {
         session
     }
 
-    pub fn pass_err(
+    pub fn type_header_resolve_pass_err(
         code: &'static str,
     ) -> Result<(AST<NameResolved>, TypeSession<HeadersResolved>), TypeError> {
         let mut resolved = resolve(code);
@@ -435,7 +436,7 @@ pub mod tests {
 
     #[test]
     fn synthesizes_init() {
-        let session = pass(
+        let session = type_header_resolve_pass(
             "
         struct Person {
             let age: Int
@@ -444,18 +445,23 @@ pub mod tests {
         );
 
         assert_eq!(
-            session.type_constructors.get(&DeclId(1)).unwrap().fields,
+            session
+                .phase
+                .type_constructors
+                .get(&DeclId(1))
+                .unwrap()
+                .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![Ty::Int] }),
                 methods: Default::default(),
-                properties: crate::indexmap!(Name::Resolved(Symbol::Value(DeclId(2)), "age".into()) => Property { is_static: false, ty_repr: Ty::Int }),
+                properties: crate::indexmap!("age".into() => Property { is_static: false, ty_repr: Ty::Int }),
             }
         )
     }
 
     #[test]
     fn resolves_method() {
-        let session = pass(
+        let session = type_header_resolve_pass(
             "
         struct Person {
             func fizz(a: Int) -> Int { a }
@@ -464,7 +470,12 @@ pub mod tests {
         );
 
         assert_eq!(
-            session.type_constructors.get(&DeclId(1)).unwrap().fields,
+            session
+                .phase
+                .type_constructors
+                .get(&DeclId(1))
+                .unwrap()
+                .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![] }),
                 methods: crate::indexmap!(Name::Resolved(Symbol::Value(DeclId(2)), "fizz".into()) => Method { is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
@@ -475,7 +486,7 @@ pub mod tests {
 
     #[test]
     fn resolves_out_of_order() {
-        let session = pass(
+        let session = type_header_resolve_pass(
             "
         struct A {
             let b: B
@@ -494,11 +505,16 @@ pub mod tests {
 
         let b = Ty::TypeConstructor {
             kind: TypeDefKind::Struct,
-            name: Name::Resolved(Symbol::Type(DeclId(3)), "B".into()),
+            name: Name::Resolved(Symbol::Type(DeclId(2)), "B".into()),
         };
 
         assert_eq!(
-            session.type_constructors.get(&DeclId(1)).unwrap().fields,
+            session
+                .phase
+                .type_constructors
+                .get(&DeclId(1))
+                .unwrap()
+                .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(
                 Name::Resolved(
@@ -506,13 +522,18 @@ pub mod tests {
                 ),
                 methods: Default::default(),
                 properties: crate::indexmap!(
-                    Name::Resolved(Symbol::Value(DeclId(2)), "b".into()) => Property { is_static: false, ty_repr: b }
+                    "b".into() => Property { is_static: false, ty_repr: b }
                 ),
             }
         );
 
         assert_eq!(
-            session.type_constructors.get(&DeclId(3)).unwrap().fields,
+            session
+                .phase
+                .type_constructors
+                .get(&DeclId(2))
+                .unwrap()
+                .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(
                 Name::Resolved(
@@ -520,7 +541,7 @@ pub mod tests {
                 ),
                 methods: Default::default(),
                 properties: crate::indexmap!(
-                    Name::Resolved(Symbol::Value(DeclId(4)), "a".into()) => Property { is_static: false, ty_repr: a }
+                    "a".into() => Property { is_static: false, ty_repr: a }
                 ),
             }
         );
@@ -528,14 +549,14 @@ pub mod tests {
 
     #[test]
     fn resolves_type_params() {
-        let session = pass(
+        let session = type_header_resolve_pass(
             "
         struct Fizz<T> {
             let t: T
         }",
         );
 
-        let type_def = session.type_constructors.get(&DeclId(1)).unwrap();
+        let type_def = session.phase.type_constructors.get(&DeclId(1)).unwrap();
 
         assert_eq!(
             type_def.generics,
@@ -548,16 +569,14 @@ pub mod tests {
         assert_eq!(
             *properties,
             crate::indexmap!(
-                Name::Resolved(
-                    Symbol::Value(DeclId(3)), "t".into()
-                ) => Property::<HeadersResolved> { is_static: false, ty_repr: Ty::Rigid(DeclId(2)) }
+                "t".into() => Property::<Ty> { is_static: false, ty_repr: Ty::Rigid(DeclId(2)) }
             )
         );
     }
 
     #[test]
     fn lowers_type_application() {
-        let session = pass(
+        let session = type_header_resolve_pass(
             "
             struct A<T, U> {} 
             struct B {
@@ -578,8 +597,13 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session.type_constructors.get(&DeclId(4)).unwrap().fields,
-            TypeFields::<HeadersResolved>::Struct {
+            session
+                .phase
+                .type_constructors
+                .get(&DeclId(4))
+                .unwrap()
+                .fields,
+            TypeFields::<Ty>::Struct {
                 initializers: crate::indexmap!(
                     Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer {
                         params: vec![
@@ -589,7 +613,7 @@ pub mod tests {
                 ),
                 methods: Default::default(),
                 properties: crate::indexmap!(
-                    Name::Resolved(Symbol::Value(DeclId(5)), "a".into()) => Property {
+                    "a".into() => Property {
                         is_static: false,
                         ty_repr: type_application.clone()
                     }
@@ -600,7 +624,7 @@ pub mod tests {
 
     #[test]
     fn lowers_nested_type_application() {
-        let session = pass(
+        let session = type_header_resolve_pass(
             "
             struct A<T> {} 
             struct B<T> {} 
@@ -625,8 +649,13 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            session.type_constructors.get(&DeclId(5)).unwrap().fields,
-            TypeFields::<HeadersResolved>::Struct {
+            session
+                .phase
+                .type_constructors
+                .get(&DeclId(5))
+                .unwrap()
+                .fields,
+            TypeFields::<Ty>::Struct {
                 initializers: crate::indexmap!(
                     Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer {
                         params: vec![
@@ -636,7 +665,7 @@ pub mod tests {
                 ),
                 methods: Default::default(),
                 properties: crate::indexmap!(
-                    Name::Resolved(Symbol::Value(DeclId(6)), "b".into()) => Property {
+                    "b".into() => Property {
                         is_static: false,
                         ty_repr: type_application.clone()
                     }
@@ -647,7 +676,7 @@ pub mod tests {
 
     #[test]
     fn lowers_type_application_and_checks_arity() {
-        let (ast, _session) = pass_err(
+        let (ast, _session) = type_header_resolve_pass_err(
             r#"
         struct W<T> {}
         struct Bad { let x: W<Int, Int> } // too many args

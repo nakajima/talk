@@ -1,6 +1,6 @@
 use crate::{diagnostic::AnyDiagnostic, node::Node, node_meta_storage::NodeMetaStorage};
 
-pub trait ASTPhase: Clone + std::fmt::Debug + PartialEq + Eq {}
+pub trait ASTPhase: Clone + std::fmt::Debug {}
 
 pub type NewAST = ();
 impl ASTPhase for NewAST {}

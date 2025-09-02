@@ -167,7 +167,8 @@ impl<'a> Parser<'a> {
                     self.property_decl(is_static)?.into()
                 }
                 BlockContext::None => self.let_decl()?.into(),
-                _ => return Err(ParserError::LetNotAllowed(context)),
+                BlockContext::Enum => return Err(ParserError::LetNotAllowed(context)),
+                _ => self.let_decl()?.into(),
             },
             Func => match context {
                 BlockContext::Extend
@@ -246,7 +247,7 @@ impl<'a> Parser<'a> {
             id,
             span,
             kind: DeclKind::Property {
-                name: name.into(),
+                label: name.into(),
                 is_static,
                 type_annotation,
                 default_value,

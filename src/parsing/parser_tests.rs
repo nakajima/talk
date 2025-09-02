@@ -1683,7 +1683,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
-                        name: Name::Raw("age".into()),
+                        label: "age".into(),
                         is_static: false,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1693,7 +1693,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Raw("count".into()),
+                        label: "count".into(),
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1703,7 +1703,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Raw("height".into()),
+                        label: "height".into(),
                         is_static: false,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None
@@ -1734,7 +1734,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Property {
-                        name: Name::Raw("age".into()),
+                        label: "age".into(),
                         is_static: true,
                         default_value: None,
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1744,7 +1744,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Raw("count".into()),
+                        label: "count".into(),
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("123".into()))),
                         type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
@@ -1754,7 +1754,7 @@ pub mod tests {
                     })
                     .into(),
                     any_decl!(DeclKind::Property {
-                        name: Name::Raw("height".into()),
+                        label: "height".into(),
                         is_static: true,
                         default_value: Some(any_expr!(ExprKind::LiteralInt("456".into()))),
                         type_annotation: None

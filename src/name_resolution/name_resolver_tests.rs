@@ -90,6 +90,23 @@ pub mod tests {
         NameResolver::resolve(parsed)
     }
 
+    fn graph_nodes(code: &'static str) -> FxHashSet<DeclId> {
+        let ast = resolve(code);
+        ast.phase
+            .dependency_graph // <-- rename if your field is different
+            .nodes()
+            .collect()
+    }
+
+    fn graph_edges(code: &'static str) -> FxHashSet<(DeclId, DeclId)> {
+        let ast = resolve(code);
+        ast.phase
+            .dependency_graph // <-- rename if your field is different
+            .all_edges()
+            .map(|(u, v, _)| (u, v))
+            .collect()
+    }
+
     #[test]
     fn resolves_simple_variable() {
         let tree = resolve("let hello = 1; hello");
@@ -371,7 +388,7 @@ pub mod tests {
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
-                    name: Name::Resolved(Symbol::Value(DeclId(2)), "me".into()),
+                    label: "me".into(),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(DeclId(1).into(), "Person".into()),
@@ -392,14 +409,14 @@ pub mod tests {
         }
         ",
         );
-        assert_eq!(
+        assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
                 name: Name::Resolved(DeclId(1).into(), "Person".into()),
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
-                    name: Name::Resolved(Symbol::Type(DeclId(2)), "init".into()),
+                    name: Name::Resolved(Symbol::Type(DeclId(4)), "init".into()),
                     params: vec![],
                     body: any_block!(vec![])
                 }))])
@@ -429,7 +446,7 @@ pub mod tests {
                 }],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
-                    name: Name::Resolved(Symbol::Value(DeclId(3)), "me".into()),
+                    label: "me".into(),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
                         name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
@@ -656,5 +673,120 @@ pub mod tests {
         );
 
         assert_eq!(resolved.diagnostics.len(), 1, "{:?}", resolved.diagnostics);
+    }
+
+    #[test]
+    fn graph_records_orphan_function_as_node() {
+        let ns = graph_nodes(
+            r#"
+        func a() { 0 }
+    "#,
+        );
+        assert!(ns.contains(&DeclId(1)), "{ns:?}");
+        let es = graph_edges(r#"func a(){ 0 }"#);
+        assert!(es.is_empty(), "{es:?}");
+    }
+
+    #[test]
+    fn graph_linear_dependency_creates_single_edge() {
+        let es = graph_edges(
+            r#"
+        func a(){ b() }
+        func b(){ 0 }
+    "#,
+        );
+        assert_eq!(es, FxHashSet::from_iter([(DeclId(1), DeclId(2))]), "{es:?}");
+    }
+
+    #[test]
+    fn graph_mutual_recursion_creates_cycle_edges() {
+        let es = graph_edges(
+            r#"
+        func odd(){ even() }
+        func even(){ odd() }
+    "#,
+        );
+        assert_eq!(
+            es,
+            FxHashSet::from_iter([(DeclId(1), DeclId(2)), (DeclId(2), DeclId(1))]),
+            "{es:?}"
+        );
+    }
+
+    #[test]
+    fn graph_ignores_locals_and_types() {
+        // Using parameters/locals or type names must NOT introduce edges.
+        let es = graph_edges(
+            r#"
+        struct Person { let age: Int }
+        func f(x: Person) { let y = x; 123 }
+        func g(){ 0 }
+    "#,
+        );
+        assert!(es.is_empty(), "{es:?}");
+    }
+
+    #[test]
+    fn graph_dedups_multiple_calls_to_same_target() {
+        let es = graph_edges(
+            r#"
+        func a(){ b(); b() }
+        func b(){ 0 }
+    "#,
+        );
+        assert_eq!(es, FxHashSet::from_iter([(DeclId(1), DeclId(2))]), "{es:?}");
+    }
+
+    #[test]
+    #[ignore = "we dont have builtin funcs yet"]
+    fn graph_ignores_builtins() {
+        // Calls to builtins (no DeclId) must not create edges.
+        let es = graph_edges(
+            r#"
+        func f(){ print(1) }
+    "#,
+        );
+        assert!(es.is_empty(), "{es:?}");
+    }
+
+    #[test]
+    fn graph_no_edge_for_property_projection() {
+        // Field access is a projection, not a term ref; no edges.
+        let es = graph_edges(
+            r#"
+        struct P { let v: Int }
+        func f(p: P) { p.v }
+    "#,
+        );
+        assert!(es.is_empty(), "{es:?}");
+    }
+
+    // If your resolver resolves method member calls to a DeclId in the body walk,
+    // you can enable this. If not yet, skip this test for now.
+    #[test]
+    fn graph_records_method_to_method_edge() {
+        let es = graph_edges(
+            r#"
+        struct S {
+            func a(){ self.b() }
+            func b(){ 0 }
+        }
+    "#,
+        );
+        // Expect a -> b (IDs consistent with your existing numbering)
+        assert_eq!(es, FxHashSet::from_iter([(DeclId(2), DeclId(3))]), "{es:?}");
+    }
+
+    // If you register init bodies as nodes and resolve their calls, enable this too.
+    #[test]
+    fn graph_records_init_to_function_edge() {
+        let es = graph_edges(
+            r#"
+        func h(){ 0 }
+        struct S { init(){ h() } }
+    "#,
+        );
+        // init -> h (adjust IDs if needed)
+        assert_eq!(es, FxHashSet::from_iter([(DeclId(3), DeclId(1))]), "{es:?}");
     }
 }

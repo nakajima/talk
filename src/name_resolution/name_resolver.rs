@@ -2,6 +2,7 @@ use std::{error::Error, fmt::Display};
 
 use derive_visitor::{DriveMut, VisitorMut};
 use generational_arena::{Arena, Index};
+use petgraph::prelude::DiGraphMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
     name_resolution::{
         builtins,
         decl_declarer::DeclDeclarer,
-        symbol::{Symbol, Symbols},
+        symbol::{DeclId, Symbol, Symbols},
     },
     node::Node,
     node_id::NodeID,
@@ -40,30 +41,34 @@ impl Display for NameResolverError {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Scope {
     pub node_id: NodeID,
     pub parent_id: Option<ScopeId>,
+
+    pub decl_id: Option<DeclId>,
 
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
 }
 
 impl Scope {
-    pub fn new(node_id: NodeID, parent_id: Option<ScopeId>) -> Self {
+    pub fn new(node_id: NodeID, parent_id: Option<ScopeId>, decl_id: Option<DeclId>) -> Self {
         Scope {
             node_id,
             parent_id,
+            decl_id,
             values: Default::default(),
             types: Default::default(),
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct NameResolved {
     pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
     pub is_captured: FxHashSet<Symbol>,
+    pub dependency_graph: DiGraphMap<DeclId, ()>,
 }
 
 pub type ScopeId = Index;
@@ -74,14 +79,14 @@ pub type ScopeId = Index;
     Stmt(enter, exit),
     MatchArm(enter, exit),
     Decl(enter, exit),
-    Expr(enter),
+    Expr(enter, exit),
     TypeAnnotation(enter)
 )]
 pub struct NameResolver {
     path: String,
     pub(super) symbols: Symbols,
     diagnostics: Vec<Diagnostic<NameResolverError>>,
-    phase: NameResolved,
+    pub(super) phase: NameResolved,
 
     // Scope stuff
     pub(super) scopes: Arena<Scope>,
@@ -103,14 +108,14 @@ impl NameResolver {
         } = ast;
 
         let mut resolver = NameResolver::default();
-        let mut initial_scope = Scope::new(NodeID(0), None);
+        let mut initial_scope = Scope::new(NodeID(0), None, None);
         builtins::import_builtins(&mut initial_scope);
         let id = resolver.scopes.insert(initial_scope);
         resolver.current_scope = Some(id);
 
         // Declare stuff
         let mut declarer = DeclDeclarer::new(&mut resolver);
-        declarer.start_scope(NodeID(0));
+        declarer.start_scope(NodeID(0), None);
 
         let roots: Vec<Node> = roots
             .into_iter()
@@ -185,6 +190,7 @@ impl NameResolver {
 
         let symbol =
             self.lookup_in_scope(name, self.current_scope.expect("no scope to declare in"))?;
+
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
@@ -324,7 +330,42 @@ impl NameResolver {
                 return;
             };
 
+            if let Name::Resolved(Symbol::Type(decl_id) | Symbol::Value(decl_id), _) =
+                &resolved_name
+                && let Some(scope_id) = self.current_scope
+                && let Some(scope) = self.scopes.get(scope_id)
+                && let Some(scope_decl_id) = scope.decl_id
+            {
+                self.phase
+                    .dependency_graph
+                    .add_edge(scope_decl_id, *decl_id, ());
+            }
+
             *name = resolved_name
+        });
+    }
+
+    fn exit_expr(&mut self, expr: &mut Expr) {
+        on!(&expr.kind, ExprKind::Call {
+            callee: box Expr {
+                kind: ExprKind::Member(
+                    Some(box Expr {
+                        kind: ExprKind::Variable(Name::_Self), .. }
+                    ),
+                    label
+                ), ..
+            }, ..
+        }, {
+            if let Some(Name::Resolved(Symbol::Type(decl_id) | Symbol::Value(decl_id), _)) =
+                self.lookup(&Name::Raw(label.to_string()))
+                && let Some(scope_id) = self.current_scope
+                && let Some(scope) = self.scopes.get(scope_id)
+                && let Some(scope_decl_id) = scope.decl_id
+            {
+                self.phase
+                    .dependency_graph
+                    .add_edge(scope_decl_id, decl_id, ());
+            }
         });
     }
 
@@ -373,8 +414,12 @@ impl NameResolver {
             }
         );
 
-        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
-            *name = self.declare_type(&name);
+        on!(&mut decl.kind, DeclKind::Init { params, .. }, {
+            self.enter_scope(decl.id);
+
+            for param in params {
+                param.name = self.declare_local(&param.name);
+            }
         })
     }
 
@@ -386,5 +431,11 @@ impl NameResolver {
                 self.exit_scope();
             }
         );
+
+        on!(&mut decl.kind, DeclKind::Init { name, .. }, {
+            *name = self.declare_type(name);
+
+            self.exit_scope();
+        })
     }
 }

@@ -1,5 +1,6 @@
 use crate::{
     ast::AST,
+    label::Label,
     name::Name,
     name_resolution::{name_resolver::NameResolved, symbol::Symbol},
     node::Node,
@@ -44,7 +45,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 ..
             } => {
                 let fields = self.collect_fields(TypeDefKind::Struct, body);
-                self.session.type_constructors.insert(
+                self.session.phase.type_constructors.insert(
                     *decl_id,
                     TypeDef {
                         name: name.clone(),
@@ -66,7 +67,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 ..
             } => {
                 let fields = self.collect_fields(TypeDefKind::Protocol, body);
-                self.session.protocols.insert(
+                self.session.phase.protocols.insert(
                     *decl_id,
                     TypeDef {
                         name: name.clone(),
@@ -89,7 +90,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
             } => {
                 let fields = self.collect_fields(TypeDefKind::Enum, body);
 
-                self.session.type_constructors.insert(
+                self.session.phase.type_constructors.insert(
                     *decl_id,
                     TypeDef {
                         name: name.clone(),
@@ -112,14 +113,15 @@ impl<'a> TypeHeaderDeclPass<'a> {
     // Helpers
     ///////////////////////////////////////////////////////////////////////////
 
-    fn collect_fields(&self, type_kind: TypeDefKind, body: &[Node]) -> TypeFields<Raw> {
+    fn collect_fields(&self, type_kind: TypeDefKind, body: &[Node]) -> TypeFields<ASTTyRepr> {
         // Collect properties
-        let mut properties: IndexMap<Name, Property<Raw>> = Default::default();
-        let mut methods: IndexMap<Name, Method<Raw>> = Default::default();
-        let mut initializers: IndexMap<Name, Initializer<Raw>> = Default::default();
-        let mut variants: IndexMap<Name, Variant<Raw>> = Default::default();
+        let mut properties: IndexMap<Label, Property<ASTTyRepr>> = Default::default();
+        let mut methods: IndexMap<Name, Method<ASTTyRepr>> = Default::default();
+        let mut initializers: IndexMap<Name, Initializer<ASTTyRepr>> = Default::default();
+        let mut variants: IndexMap<Name, Variant<ASTTyRepr>> = Default::default();
         let mut associated_types: IndexMap<Name, Associated> = Default::default();
-        let mut method_requirements: IndexMap<Name, MethodRequirement<Raw>> = Default::default();
+        let mut method_requirements: IndexMap<Name, MethodRequirement<ASTTyRepr>> =
+            Default::default();
 
         for node in body {
             let Node::Decl(Decl {
@@ -134,7 +136,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
 
             match &kind {
                 DeclKind::Property {
-                    name,
+                    label: name,
                     is_static,
                     type_annotation,
                     ..
@@ -295,8 +297,8 @@ pub mod tests {
         );
 
         assert_eq!(
-            *session.type_constructors.get(&DeclId(1)).unwrap(),
-            TypeDef::<Raw> {
+            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            TypeDef::<ASTTyRepr> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Person".into()),
                 kind: Kind::Type,
                 span: Span::ANY,
@@ -306,7 +308,7 @@ pub mod tests {
                     initializers: Default::default(),
                     methods: Default::default(),
                     properties: crate::indexmap!(
-                        Name::Resolved(Symbol::Value(DeclId(2)), "age".into()) => Property {
+                        "age".into() => Property {
                             is_static: false,
                             ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                                 name: Name::Resolved(Symbol::BuiltinType(BuiltinId(1)), "Int".into()),
@@ -334,8 +336,8 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.type_constructors.get(&DeclId(1)).unwrap(),
-            TypeDef::<Raw> {
+            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            TypeDef::<ASTTyRepr> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -351,13 +353,13 @@ pub mod tests {
                     span: Span::ANY,
                 })),
                 fields: TypeFields::Struct {
-                    initializers: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(4)), "init".into()) => Initializer {
+                    initializers: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(5)), "init".into()) => Initializer {
                         params: vec![
                             ASTTyRepr::Hole(NodeID(4), Span::ANY)
                         ]
                     }),
                     methods: Default::default(),
-                    properties: crate::indexmap!(Name::Resolved(Symbol::Value(DeclId(3)), "wrapped".into()) => Property {
+                    properties: crate::indexmap!("wrapped".into() => Property {
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
@@ -380,8 +382,8 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.type_constructors.get(&DeclId(1)).unwrap(),
-            TypeDef::<Raw> {
+            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            TypeDef::<ASTTyRepr> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
@@ -412,7 +414,7 @@ pub mod tests {
                 fields: TypeFields::Struct {
                     initializers: Default::default(),
                     methods: Default::default(),
-                    properties: crate::indexmap!(Name::Resolved(Symbol::Value(DeclId(4)), "wrapped".into()) => Property {
+                    properties: crate::indexmap!("wrapped".into() => Property {
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
@@ -438,8 +440,8 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.type_constructors.get(&DeclId(1)).unwrap(),
-            TypeDef::<Raw> {
+            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            TypeDef::<ASTTyRepr> {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 span: Span::ANY,
@@ -476,8 +478,8 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.protocols.get(&DeclId(1)).unwrap(),
-            TypeDef::<Raw> {
+            *session.phase.protocols.get(&DeclId(1)).unwrap(),
+            TypeDef {
                 name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 span: Span::ANY,

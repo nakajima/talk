@@ -3,6 +3,7 @@ use crate::types::kind::Kind;
 pub mod builtins;
 pub mod fields;
 pub mod kind;
+pub mod scc_pass;
 pub mod ty;
 pub mod type_error;
 pub mod type_header_decl_pass;
