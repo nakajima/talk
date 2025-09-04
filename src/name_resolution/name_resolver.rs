@@ -69,6 +69,7 @@ pub struct NameResolved {
     pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
     pub is_captured: FxHashSet<Symbol>,
     pub dependency_graph: DiGraphMap<DeclId, ()>,
+    pub decl_rhs: FxHashMap<DeclId, NodeID>,
 }
 
 pub type ScopeId = Index;
@@ -183,7 +184,7 @@ impl NameResolver {
         None
     }
 
-    fn lookup(&mut self, name: &Name) -> Option<Name> {
+    pub(super) fn lookup(&mut self, name: &Name) -> Option<Name> {
         if name.name_str() == "self" {
             return Some(Name::_Self);
         }

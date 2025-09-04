@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod formatter;
 pub mod label;
 pub mod lexing;
 pub mod name;

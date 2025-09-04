@@ -23,9 +23,9 @@ macro_rules! impl_into_node {
     ($variant:ident, $ty:ty) => {
         impl $crate::node::NodeType for $ty {}
 
-        impl From<Node> for $ty {
-            fn from(node: Node) -> $ty {
-                let Node::$variant(val) = node else {
+        impl From<$crate::parsing::node::Node> for $ty {
+            fn from(node: $crate::parsing::node::Node) -> $ty {
+                let $crate::parsing::node::Node::$variant(val) = node else {
                     panic!("Unable to convert {node:?} to {}", stringify!($ty));
                 };
 
@@ -33,15 +33,15 @@ macro_rules! impl_into_node {
             }
         }
 
-        impl From<$ty> for Node {
+        impl From<$ty> for $crate::parsing::node::Node {
             fn from(val: $ty) -> Self {
-                Node::$variant(val)
+                $crate::parsing::node::Node::$variant(val)
             }
         }
 
-        impl From<&$ty> for Node {
+        impl From<&$ty> for $crate::parsing::node::Node {
             fn from(val: &$ty) -> Self {
-                Node::$variant(val.clone())
+                $crate::parsing::node::Node::$variant(val.clone())
             }
         }
     };

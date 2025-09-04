@@ -1,8 +1,7 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, name::Name, node::Node, node_id::NodeID, node_kinds::expr::Expr,
-    parsing::span::Span,
+    impl_into_node, name::Name, node_id::NodeID, node_kinds::expr::Expr, parsing::span::Span,
 };
 
 // Single field in a record literal

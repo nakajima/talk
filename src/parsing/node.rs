@@ -1,6 +1,7 @@
 use crate::{
+    node_id::NodeID,
     node_kinds::{
-        attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr,
+        attribute::Attribute, block::Block, call_arg::CallArg, decl::Decl, expr::Expr, func::Func,
         generic_decl::GenericDecl, incomplete_expr::IncompleteExpr, match_arm::MatchArm,
         parameter::Parameter, pattern::Pattern, record_field::RecordField, stmt::Stmt,
         type_annotation::TypeAnnotation,
@@ -16,6 +17,7 @@ pub trait NodeType: Into<Node> + From<Node> {}
 pub enum Node {
     Attribute(Attribute),
     Decl(Decl),
+    Func(Func),
     GenericDecl(GenericDecl),
     Parameter(Parameter),
     Stmt(Stmt),
@@ -34,6 +36,7 @@ impl Node {
         match self {
             Node::Attribute(attribute) => attribute.span,
             Node::Decl(decl) => decl.span,
+            Node::Func(func) => func.body.span,
             Node::GenericDecl(generic_decl) => generic_decl.span,
             Node::Parameter(parameter) => parameter.span,
             Node::Stmt(stmt) => stmt.span,
@@ -45,6 +48,25 @@ impl Node {
             Node::RecordField(record_field) => record_field.span,
             Node::IncompleteExpr(..) => Span { start: 0, end: 0 },
             Node::CallArg(call_arg) => call_arg.span,
+        }
+    }
+
+    pub fn node_id(&self) -> NodeID {
+        match self {
+            Node::Attribute(attribute) => attribute.id,
+            Node::Decl(decl) => decl.id,
+            Node::Func(func) => func.id,
+            Node::GenericDecl(generic_decl) => generic_decl.id,
+            Node::Parameter(parameter) => parameter.id,
+            Node::Stmt(stmt) => stmt.id,
+            Node::Expr(expr) => expr.id,
+            Node::Pattern(pattern) => pattern.id,
+            Node::MatchArm(match_arm) => match_arm.id,
+            Node::Block(block) => block.id,
+            Node::TypeAnnotation(type_annotation) => type_annotation.id,
+            Node::RecordField(record_field) => record_field.id,
+            Node::IncompleteExpr(..) => NodeID(0),
+            Node::CallArg(call_arg) => call_arg.id,
         }
     }
 

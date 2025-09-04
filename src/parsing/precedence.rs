@@ -152,7 +152,7 @@ impl Precedence {
             },
 
             TokenKind::Float(_) => ParseHandler {
-                prefix: None,
+                prefix: Some(Parser::literal),
                 infix: None,
                 precedence: Precedence::Primary,
             },
@@ -249,7 +249,7 @@ impl Precedence {
 
             TokenKind::Newline => ParseHandler::NONE,
             TokenKind::Dot => ParseHandler {
-                prefix: None,
+                prefix: Some(Parser::member_prefix),
                 infix: Some(Parser::member_infix),
                 precedence: Precedence::Call,
             },

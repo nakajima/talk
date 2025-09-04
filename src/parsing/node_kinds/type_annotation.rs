@@ -1,6 +1,6 @@
 use derive_visitor::{Drive, DriveMut};
 
-use crate::{impl_into_node, name::Name, node::Node, node_id::NodeID, parsing::span::Span};
+use crate::{impl_into_node, name::Name, node_id::NodeID, parsing::span::Span};
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum TypeAnnotationKind {

@@ -367,7 +367,10 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Func)?;
         }
 
-        let name = self.identifier()?;
+        let name = self
+            .identifier()
+            .unwrap_or_else(|_| format!("#fn_{:?}", self.current));
+
         let generics = self.generics()?;
 
         self.consume(TokenKind::LeftParen)?;
@@ -432,6 +435,7 @@ impl<'a> Parser<'a> {
         match &current.kind {
             TokenKind::If => self.if_stmt(),
             TokenKind::Loop => self.loop_stmt(),
+            TokenKind::Return => self.return_stmt(),
             TokenKind::Break => {
                 let tok = self.push_source_location();
                 self.consume(TokenKind::Break)?;
@@ -500,6 +504,30 @@ impl<'a> Parser<'a> {
             id,
             span,
             kind: StmtKind::Loop(cond.map(|c| c.as_expr()), body),
+        })
+    }
+
+    #[instrument(skip(self))]
+    pub(crate) fn return_stmt(&mut self) -> Result<Stmt, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Return)?;
+
+        if self.peek_is(TokenKind::Newline) || self.peek_is(TokenKind::RightBrace) {
+            let (id, span) = self.save_meta(tok)?;
+            return Ok(Stmt {
+                id,
+                span,
+                kind: StmtKind::Return(None),
+            });
+        }
+
+        let rhs = Box::new(self.expr_with_precedence(Precedence::None)?);
+        let (id, span) = self.save_meta(tok)?;
+
+        Ok(Stmt {
+            id,
+            span,
+            kind: StmtKind::Return(Some(rhs.as_expr())),
         })
     }
 
@@ -632,6 +660,56 @@ impl<'a> Parser<'a> {
             }
         };
         Ok(fields)
+    }
+
+    #[instrument(skip(self))]
+    pub(crate) fn member_prefix(&mut self, can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::Dot)?;
+
+        let name = match self.current.clone().map(|c| c.kind) {
+            Some(TokenKind::Identifier(_)) => match self.identifier() {
+                Ok(name) => Label::Named(name),
+                Err(_) => {
+                    let incomplete_member = ExprKind::Incomplete(IncompleteExpr::Member(None));
+                    return Ok(Node::Expr(self.add_expr(incomplete_member, tok)?));
+                }
+            },
+            Some(TokenKind::Int(val)) => {
+                self.advance();
+                Label::Positional(str::parse(&val).map_err(|_| ParserError::BadLabel(val))?)
+            }
+            Some(_) | None => {
+                return Err(ParserError::ExpectedIdentifier(self.current.clone()));
+            }
+        };
+
+        let member = self.add_expr(ExprKind::Member(None, name), tok)?;
+
+        self.skip_semicolons_and_newlines();
+
+        let expr = if let Some(call_expr) = self.check_call(&member, can_assign)? {
+            call_expr
+        } else {
+            member
+        };
+
+        if self.did_match(TokenKind::Equals)? {
+            if can_assign {
+                let loc = self.push_source_location();
+                let rhs = self.expr_with_precedence(Precedence::Assignment)?;
+                let (id, span) = self.save_meta(loc)?;
+                return Ok(Node::Stmt(Stmt {
+                    id,
+                    span,
+                    kind: StmtKind::Assignment(expr, rhs.as_expr()),
+                }));
+            } else {
+                return Err(ParserError::CannotAssign);
+            }
+        }
+
+        Ok(Node::Expr(expr))
     }
 
     #[instrument(skip(self))]
@@ -1358,7 +1436,7 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        let next_id = self.ids.next_id().into();
+        let next_id = self.ids.next_id();
         self.ast.meta.insert(next_id, meta);
 
         Ok((

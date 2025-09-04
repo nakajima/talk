@@ -2,9 +2,8 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     impl_into_node,
-    node::Node,
     node_id::NodeID,
-    node_kinds::{block::Block, expr::Expr, pattern::Pattern},
+    node_kinds::{block::Block, expr::Expr},
     parsing::span::Span,
 };
 
@@ -14,7 +13,6 @@ pub enum StmtKind {
     If(Expr /* condition */, Block /* then block */),
     Return(Option<Expr>),
     Break,
-    LetAssignment(Pattern /* LHS */, Expr /* RHS */),
     Assignment(Expr /* LHS */, Expr /* RHS */),
     Loop(Option<Expr> /* condition */, Block /* body */),
 }
@@ -26,6 +24,16 @@ pub struct Stmt {
     pub kind: StmtKind,
     #[drive(skip)]
     pub span: Span,
+}
+
+impl Stmt {
+    pub fn as_expr(self) -> Expr {
+        if let StmtKind::Expr(expr) = self.kind {
+            expr
+        } else {
+            panic!("Called as_expr on non-expr statement");
+        }
+    }
 }
 
 impl_into_node!(Stmt);

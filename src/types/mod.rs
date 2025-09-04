@@ -1,7 +1,9 @@
 use crate::types::kind::Kind;
 
 pub mod builtins;
+pub mod constraints;
 pub mod fields;
+pub mod inference_pass;
 pub mod kind;
 pub mod scc_pass;
 pub mod ty;

@@ -1,8 +1,8 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, name::Name, node::Node, node_id::NodeID,
-    node_kinds::type_annotation::TypeAnnotation, parsing::span::Span,
+    impl_into_node, name::Name, node_id::NodeID, node_kinds::type_annotation::TypeAnnotation,
+    parsing::span::Span,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

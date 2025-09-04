@@ -2,7 +2,6 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{
     impl_into_node,
-    node::Node,
     node_id::NodeID,
     node_kinds::{block::Block, pattern::Pattern},
     parsing::span::Span,

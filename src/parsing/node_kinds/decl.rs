@@ -4,7 +4,6 @@ use crate::{
     impl_into_node,
     label::Label,
     name::Name,
-    node::Node,
     node_id::NodeID,
     node_kinds::{
         block::Block, expr::Expr, func::Func, func_signature::FuncSignature,

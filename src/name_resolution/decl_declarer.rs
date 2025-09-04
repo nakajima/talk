@@ -38,6 +38,21 @@ impl<'a> DeclDeclarer<'a> {
         Self { resolver }
     }
 
+    pub fn at_module_scope(&self) -> bool {
+        let current_id = self.resolver.current_scope.expect("no scope to end");
+        let current = self
+            .resolver
+            .scopes
+            .get(current_id)
+            .expect("did not find current scope");
+
+        if let Some(parent_id) = current.parent_id {
+            parent_id.into_raw_parts().0 == 0
+        } else {
+            true
+        }
+    }
+
     pub fn start_scope(&mut self, id: NodeID, decl_id: Option<DeclId>) {
         let scope = Scope::new(id, self.resolver.current_scope, decl_id);
         let scope_id = self.resolver.scopes.insert(scope);
@@ -97,7 +112,12 @@ impl<'a> DeclDeclarer<'a> {
         let Pattern { kind, .. } = pattern;
 
         match kind {
-            PatternKind::Bind(name) => *name = self.resolver.declare_local(name),
+            PatternKind::Bind(name @ Name::Raw(_)) => {
+                *name = self
+                    .resolver
+                    .lookup(name)
+                    .unwrap_or_else(|| self.resolver.declare_local(name))
+            }
             PatternKind::Wildcard => (),
             _ => todo!(),
         }
@@ -126,7 +146,7 @@ impl<'a> DeclDeclarer<'a> {
                 name,
                 generics,
                 params: _,
-                body: _,
+                body,
                 ret: _,
                 attributes: _,
             },
@@ -137,7 +157,12 @@ impl<'a> DeclDeclarer<'a> {
                     unreachable!()
                 };
 
+                // graph node
                 self.resolver.phase.dependency_graph.add_node(*decl_id);
+
+                // rhs mapping
+                self.resolver.phase.decl_rhs.insert(*decl_id, body.id);
+
                 self.start_scope(*id, Some(*decl_id));
 
                 for generic in generics {
@@ -197,6 +222,34 @@ impl<'a> DeclDeclarer<'a> {
 
             self.start_scope(decl.id, Some(*decl_id));
         });
+
+        on!(
+            &mut decl.kind,
+            // let decl names get handled by pattern so this is just to connect stuff
+            DeclKind::Let {
+                lhs: Pattern {
+                    kind: PatternKind::Bind(name),
+                    ..
+                },
+                value,
+                ..
+            },
+            {
+                if self.at_module_scope() {
+                    let Name::Resolved(Symbol::Value(decl_id), _) =
+                        self.resolver.declare_value(name)
+                    else {
+                        unreachable!()
+                    };
+
+                    self.resolver.phase.dependency_graph.add_node(decl_id);
+
+                    if let Some(value) = value {
+                        self.resolver.phase.decl_rhs.insert(decl_id, value.id);
+                    }
+                }
+            }
+        );
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {
