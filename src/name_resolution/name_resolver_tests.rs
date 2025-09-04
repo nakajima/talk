@@ -6,15 +6,16 @@ pub mod tests {
         annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
         diagnostic::{AnyDiagnostic, Diagnostic},
+        formatter::Formatter,
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
-            symbol::{BuiltinId, DeclId, LocalId, Symbol},
+            symbol::{BuiltinId, DeclId, LocalId, Symbol, ValueId},
         },
         node::Node,
         node_id::NodeID,
         node_kinds::{
-            decl::{Decl, DeclKind},
+            decl::DeclKind,
             expr::{Expr, ExprKind},
             func::Func,
             func_signature::FuncSignature,
@@ -27,6 +28,7 @@ pub mod tests {
         },
         parsing::parser_tests::tests::parse,
         span::Span,
+        types::lower_funcs_to_lets_pass::LowerFuncsToLets,
     };
 
     macro_rules! param {
@@ -86,25 +88,10 @@ pub mod tests {
     }
 
     fn resolve_err(code: &'static str) -> AST<NameResolved> {
-        let parsed = parse(code);
+        let mut parsed = parse(code);
+        LowerFuncsToLets::run(&mut parsed);
+        println!("{}", Formatter::new(&parsed.meta).format(&parsed.roots, 80));
         NameResolver::resolve(parsed)
-    }
-
-    fn graph_nodes(code: &'static str) -> FxHashSet<DeclId> {
-        let ast = resolve(code);
-        ast.phase
-            .dependency_graph // <-- rename if your field is different
-            .nodes()
-            .collect()
-    }
-
-    fn graph_edges(code: &'static str) -> FxHashSet<(DeclId, DeclId)> {
-        let ast = resolve(code);
-        ast.phase
-            .dependency_graph // <-- rename if your field is different
-            .all_edges()
-            .map(|(u, v, _)| (u, v))
-            .collect()
     }
 
     #[test]
@@ -171,7 +158,7 @@ pub mod tests {
             *tree.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(DeclId(1)), "foo".into()),
+                name: Name::Resolved(Symbol::Value(ValueId(1)), "foo".into()),
                 generics: vec![],
                 params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y"),],
                 body: any_block!(vec![
@@ -197,11 +184,11 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(DeclId(1)), "odd".into()),
+                name: Name::Resolved(Symbol::Value(ValueId(1)), "odd".into()),
                 generics: vec![],
                 params: vec![],
                 body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
-                    callee: Box::new(variable!(Symbol::Value(DeclId(2)), "even")),
+                    callee: Box::new(variable!(Symbol::Value(ValueId(2)), "even")),
                     type_args: vec![],
                     args: vec![]
                 })]),
@@ -214,11 +201,11 @@ pub mod tests {
             *resolved.roots[1].as_decl(),
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(DeclId(2)), "even".into()),
+                name: Name::Resolved(Symbol::Value(ValueId(2)), "even".into()),
                 generics: vec![],
                 params: vec![],
                 body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
-                    callee: Box::new(variable!(Symbol::Value(DeclId(1)), "odd")),
+                    callee: Box::new(variable!(Symbol::Value(ValueId(1)), "odd")),
                     type_args: vec![],
                     args: vec![]
                 })]),
@@ -236,13 +223,13 @@ pub mod tests {
             *tree.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(DeclId(1)), "foo".into()),
+                name: Name::Resolved(Symbol::Value(ValueId(1)), "foo".into()),
                 generics: vec![],
                 params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y")],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Func(Func {
                         id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::Value(DeclId(2)), "bar".into()),
+                        name: Name::Resolved(Symbol::Value(ValueId(2)), "bar".into()),
                         generics: vec![],
                         params: vec![param!(LocalId(3), "x")],
                         body: any_block!(vec![
@@ -278,7 +265,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-                    LocalId(1).into(),
+                    Symbol::Value(ValueId(1)),
                     "count".into()
                 ))),
                 type_annotation: None,
@@ -288,27 +275,30 @@ pub mod tests {
 
         assert_eq_diff!(
             *resolved.roots[1].as_decl(),
-            Decl {
-                id: NodeID(9),
-                span: Span::ANY,
-                kind: DeclKind::Func(Func {
+            any_decl!(DeclKind::Let {
+                lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
+                    Symbol::Value(ValueId(2)),
+                    "counter".into()
+                ))),
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Value(DeclId(1)), "counter".into()),
+                    name: Name::Resolved(Symbol::Value(ValueId(2)), "counter".into()),
                     generics: vec![],
-                    params: vec![param!(LocalId(2), "x")],
+                    params: vec![param!(LocalId(1), "x")],
                     body: any_block!(vec![
-                        any_stmt!(StmtKind::Expr(variable!(LocalId(2), "x"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(LocalId(1), "count"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(LocalId(1), "count"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ValueId(1), "count"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ValueId(1), "count"))).into(),
                     ]),
                     ret: None,
                     attributes: vec![]
-                })
-            }
+                })))
+            })
         );
 
         let mut expected = FxHashSet::default();
-        expected.insert(Symbol::Local(LocalId(1)));
+        expected.insert(Symbol::Value(ValueId(1)));
 
         assert_eq!(
             resolved.phase.captures.get(&NodeID(9)),
@@ -330,7 +320,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Func(Func {
                 id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(DeclId(1)), "fizz".into()),
+                name: Name::Resolved(Symbol::Value(ValueId(1)), "fizz".into()),
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -481,7 +471,7 @@ pub mod tests {
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Value(DeclId(2)), "fizz".into()),
+                            name: Name::Resolved(Symbol::Value(ValueId(2)), "fizz".into()),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -502,7 +492,7 @@ pub mod tests {
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Value(DeclId(3)), "buzz".into()),
+                            name: Name::Resolved(Symbol::Value(ValueId(3)), "buzz".into()),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -673,120 +663,5 @@ pub mod tests {
         );
 
         assert_eq!(resolved.diagnostics.len(), 1, "{:?}", resolved.diagnostics);
-    }
-
-    #[test]
-    fn graph_records_orphan_function_as_node() {
-        let ns = graph_nodes(
-            r#"
-        func a() { 0 }
-    "#,
-        );
-        assert!(ns.contains(&DeclId(1)), "{ns:?}");
-        let es = graph_edges(r#"func a(){ 0 }"#);
-        assert!(es.is_empty(), "{es:?}");
-    }
-
-    #[test]
-    fn graph_linear_dependency_creates_single_edge() {
-        let es = graph_edges(
-            r#"
-        func a(){ b() }
-        func b(){ 0 }
-    "#,
-        );
-        assert_eq!(es, FxHashSet::from_iter([(DeclId(1), DeclId(2))]), "{es:?}");
-    }
-
-    #[test]
-    fn graph_mutual_recursion_creates_cycle_edges() {
-        let es = graph_edges(
-            r#"
-        func odd(){ even() }
-        func even(){ odd() }
-    "#,
-        );
-        assert_eq!(
-            es,
-            FxHashSet::from_iter([(DeclId(1), DeclId(2)), (DeclId(2), DeclId(1))]),
-            "{es:?}"
-        );
-    }
-
-    #[test]
-    fn graph_ignores_locals_and_types() {
-        // Using parameters/locals or type names must NOT introduce edges.
-        let es = graph_edges(
-            r#"
-        struct Person { let age: Int }
-        func f(x: Person) { let y = x; 123 }
-        func g(){ 0 }
-    "#,
-        );
-        assert!(es.is_empty(), "{es:?}");
-    }
-
-    #[test]
-    fn graph_dedups_multiple_calls_to_same_target() {
-        let es = graph_edges(
-            r#"
-        func a(){ b(); b() }
-        func b(){ 0 }
-    "#,
-        );
-        assert_eq!(es, FxHashSet::from_iter([(DeclId(1), DeclId(2))]), "{es:?}");
-    }
-
-    #[test]
-    #[ignore = "we dont have builtin funcs yet"]
-    fn graph_ignores_builtins() {
-        // Calls to builtins (no DeclId) must not create edges.
-        let es = graph_edges(
-            r#"
-        func f(){ print(1) }
-    "#,
-        );
-        assert!(es.is_empty(), "{es:?}");
-    }
-
-    #[test]
-    fn graph_no_edge_for_property_projection() {
-        // Field access is a projection, not a term ref; no edges.
-        let es = graph_edges(
-            r#"
-        struct P { let v: Int }
-        func f(p: P) { p.v }
-    "#,
-        );
-        assert!(es.is_empty(), "{es:?}");
-    }
-
-    // If your resolver resolves method member calls to a DeclId in the body walk,
-    // you can enable this. If not yet, skip this test for now.
-    #[test]
-    fn graph_records_method_to_method_edge() {
-        let es = graph_edges(
-            r#"
-        struct S {
-            func a(){ self.b() }
-            func b(){ 0 }
-        }
-    "#,
-        );
-        // Expect a -> b (IDs consistent with your existing numbering)
-        assert_eq!(es, FxHashSet::from_iter([(DeclId(2), DeclId(3))]), "{es:?}");
-    }
-
-    // If you register init bodies as nodes and resolve their calls, enable this too.
-    #[test]
-    fn graph_records_init_to_function_edge() {
-        let es = graph_edges(
-            r#"
-        func h(){ 0 }
-        struct S { init(){ h() } }
-    "#,
-        );
-        // init -> h (adjust IDs if needed)
-        assert_eq!(es, FxHashSet::from_iter([(DeclId(3), DeclId(1))]), "{es:?}");
     }
 }

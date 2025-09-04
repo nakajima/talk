@@ -3,7 +3,7 @@ use crate::id_generator::IDGenerator;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
     Type(DeclId),
-    Value(DeclId),
+    Value(ValueId),
     Local(LocalId),
     BuiltinType(BuiltinId),
     Synthesized(SynthesizedId),
@@ -15,6 +15,9 @@ impl Symbol {
     pub const Float: Symbol = Symbol::BuiltinType(BuiltinId(2));
     pub const Bool: Symbol = Symbol::BuiltinType(BuiltinId(3));
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ValueId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeclId(pub u32);
@@ -49,10 +52,12 @@ macro_rules! impl_symbol_id {
 
 impl_symbol_id!(Type, DeclId);
 impl_symbol_id!(Local, LocalId);
+impl_symbol_id!(Value, ValueId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
     decls: IDGenerator,
+    values: IDGenerator,
     locals: IDGenerator,
     fields: IDGenerator,
     synthesized: IDGenerator,
@@ -62,6 +67,10 @@ pub struct Symbols {
 impl Symbols {
     pub fn next_decl(&mut self) -> DeclId {
         DeclId(self.decls.next_id())
+    }
+
+    pub fn next_value(&mut self) -> ValueId {
+        ValueId(self.values.next_id())
     }
 
     pub fn next_local(&mut self) -> LocalId {

@@ -7,9 +7,9 @@ use crate::{
     node::Node,
     node_id::NodeID,
     node_kinds::{
-        attribute::Attribute, block::Block, call_arg::CallArg, generic_decl::GenericDecl,
-        incomplete_expr::IncompleteExpr, match_arm::MatchArm, parameter::Parameter,
-        pattern::Pattern, record_field::RecordField, type_annotation::TypeAnnotation,
+        block::Block, call_arg::CallArg, func::Func, incomplete_expr::IncompleteExpr,
+        match_arm::MatchArm, pattern::Pattern, record_field::RecordField,
+        type_annotation::TypeAnnotation,
     },
     parsing::span::Span,
     token_kind::TokenKind,
@@ -44,14 +44,7 @@ pub enum ExprKind {
     Member(Option<Box<Expr>> /* receiver */, #[drive(skip)] Label),
 
     // Function stuff
-    Func {
-        generics: Vec<GenericDecl>,
-        params: Vec<Parameter>,      /* params tuple */
-        body: Block,                 /* body */
-        ret: Option<TypeAnnotation>, /* return type */
-
-        attributes: Vec<Attribute>,
-    },
+    Func(Func),
 
     Variable(#[drive(skip)] Name),
 

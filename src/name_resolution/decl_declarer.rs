@@ -4,7 +4,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, Scope},
-        symbol::{DeclId, Symbol},
+        symbol::Symbol,
     },
     node_id::NodeID,
     node_kinds::{
@@ -53,8 +53,8 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
-    pub fn start_scope(&mut self, id: NodeID, decl_id: Option<DeclId>) {
-        let scope = Scope::new(id, self.resolver.current_scope, decl_id);
+    pub fn start_scope(&mut self, id: NodeID) {
+        let scope = Scope::new(id, self.resolver.current_scope);
         let scope_id = self.resolver.scopes.insert(scope);
         self.resolver.scopes_by_node_id.insert(id, scope_id);
         self.resolver.node_ids_by_scope.insert(scope_id, id);
@@ -75,7 +75,7 @@ impl<'a> DeclDeclarer<'a> {
     fn enter_nominal(&mut self, id: NodeID, name: &mut Name, generics: &mut [GenericDecl]) {
         *name = self.resolver.declare_type(name);
 
-        self.start_scope(id, None);
+        self.start_scope(id);
 
         for generic in generics {
             generic.name = self.resolver.declare_type(&generic.name);
@@ -91,7 +91,7 @@ impl<'a> DeclDeclarer<'a> {
             ..
         }) = &mut stmt.kind
         {
-            self.start_scope(block.id, None);
+            self.start_scope(block.id);
         }
     }
 
@@ -113,10 +113,11 @@ impl<'a> DeclDeclarer<'a> {
 
         match kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
-                *name = self
-                    .resolver
-                    .lookup(name)
-                    .unwrap_or_else(|| self.resolver.declare_local(name))
+                *name = if self.at_module_scope() {
+                    self.resolver.declare_value(name)
+                } else {
+                    self.resolver.declare_local(name)
+                }
             }
             PatternKind::Wildcard => (),
             _ => todo!(),
@@ -127,7 +128,7 @@ impl<'a> DeclDeclarer<'a> {
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
-        self.start_scope(arm.id, None);
+        self.start_scope(arm.id);
     }
 
     fn exit_match_arm(&mut self, _arm: &mut MatchArm) {
@@ -135,7 +136,7 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    // Func decls
+    // Funcs
     ///////////////////////////////////////////////////////////////////////////
 
     fn enter_func(&mut self, func: &mut Func) {
@@ -145,25 +146,19 @@ impl<'a> DeclDeclarer<'a> {
                 id,
                 name,
                 generics,
-                params: _,
-                body,
+                params,
+                body: _,
                 ret: _,
                 attributes: _,
             },
             {
-                *name = self.resolver.declare_value(name);
+                println!("declaring func name");
+                *name = self
+                    .resolver
+                    .lookup(name)
+                    .unwrap_or_else(|| self.resolver.declare_value(name));
 
-                let Name::Resolved(Symbol::Value(decl_id), _) = &name else {
-                    unreachable!()
-                };
-
-                // graph node
-                self.resolver.phase.dependency_graph.add_node(*decl_id);
-
-                // rhs mapping
-                self.resolver.phase.decl_rhs.insert(*decl_id, body.id);
-
-                self.start_scope(*id, Some(*decl_id));
+                self.start_scope(*id);
 
                 for generic in generics {
                     generic.name = self.resolver.declare_type(&generic.name);
@@ -216,40 +211,12 @@ impl<'a> DeclDeclarer<'a> {
         on!(&mut decl.kind, DeclKind::Init { name, .. }, {
             *name = self.resolver.declare_type(name);
 
-            let Name::Resolved(Symbol::Type(decl_id), _) = &name else {
+            let Name::Resolved(Symbol::Type(..), _) = &name else {
                 unreachable!()
             };
 
-            self.start_scope(decl.id, Some(*decl_id));
+            self.start_scope(decl.id);
         });
-
-        on!(
-            &mut decl.kind,
-            // let decl names get handled by pattern so this is just to connect stuff
-            DeclKind::Let {
-                lhs: Pattern {
-                    kind: PatternKind::Bind(name),
-                    ..
-                },
-                value,
-                ..
-            },
-            {
-                if self.at_module_scope() {
-                    let Name::Resolved(Symbol::Value(decl_id), _) =
-                        self.resolver.declare_value(name)
-                    else {
-                        unreachable!()
-                    };
-
-                    self.resolver.phase.dependency_graph.add_node(decl_id);
-
-                    if let Some(value) = value {
-                        self.resolver.phase.decl_rhs.insert(decl_id, value.id);
-                    }
-                }
-            }
-        );
     }
 
     fn exit_decl(&mut self, decl: &mut Decl) {

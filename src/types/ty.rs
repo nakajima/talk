@@ -23,6 +23,7 @@ pub enum Primitive {
     Int,
     Float,
     Bool,
+    Void,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -40,4 +41,5 @@ impl Ty {
     pub const Int: Ty = Ty::Primitive(Primitive::Int);
     pub const Float: Ty = Ty::Primitive(Primitive::Float);
     pub const Bool: Ty = Ty::Primitive(Primitive::Bool);
+    pub const Void: Ty = Ty::Primitive(Primitive::Void);
 }

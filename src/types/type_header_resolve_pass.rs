@@ -20,7 +20,6 @@ use crate::{
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
-        scc_pass::SCCLeveled,
         ty::Ty,
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
@@ -34,7 +33,7 @@ pub struct HeadersResolved {
 }
 
 impl TypingPhase for HeadersResolved {
-    type Next = SCCLeveled;
+    type Next = HeadersResolved;
 }
 
 #[derive(Debug)]
@@ -407,7 +406,9 @@ pub mod tests {
         assert_eq_diff,
         ast::AST,
         name_resolution::{
-            name_resolver::NameResolved, name_resolver_tests::tests::resolve, symbol::SynthesizedId,
+            name_resolver::NameResolved,
+            name_resolver_tests::tests::resolve,
+            symbol::{SynthesizedId, ValueId},
         },
         types::{type_header_decl_pass::TypeHeaderDeclPass, type_session::TypeDefKind},
     };
@@ -478,7 +479,7 @@ pub mod tests {
                 .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![] }),
-                methods: crate::indexmap!(Name::Resolved(Symbol::Value(DeclId(2)), "fizz".into()) => Method { is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
+                methods: crate::indexmap!(Name::Resolved(Symbol::Value(ValueId(2)), "fizz".into()) => Method { is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
                 properties: Default::default(),
             }
         )

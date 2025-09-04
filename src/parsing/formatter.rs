@@ -187,13 +187,7 @@ impl<'a> Formatter<'a> {
                 args,
             } => self.format_call(callee, type_args, args),
             ExprKind::Member(receiver, property) => self.format_member(receiver, property),
-            ExprKind::Func {
-                generics,
-                params,
-                body,
-                ret,
-                attributes,
-            } => self.format_func_expr(generics, params, body, ret, attributes),
+            ExprKind::Func(func) => self.format_func(func),
             ExprKind::Variable(name) => self.format_name(name),
             ExprKind::If(cond, then_block, else_block) => {
                 self.format_if(cond, then_block, else_block)
@@ -801,56 +795,6 @@ impl<'a> Formatter<'a> {
         }
 
         concat_space(result, self.format_block(&func.body))
-    }
-
-    fn format_func_expr(
-        &self,
-        generics: &[GenericDecl],
-        params: &[Parameter],
-        body: &Block,
-        ret: &Option<TypeAnnotation>,
-        _attributes: &[Attribute],
-    ) -> Doc {
-        let mut result = text("func");
-
-        if !generics.is_empty() {
-            let generic_docs: Vec<_> = generics
-                .iter()
-                .map(|g| self.format_generic_decl(g))
-                .collect();
-
-            result = concat(
-                result,
-                concat(
-                    text("<"),
-                    concat(join(generic_docs, concat(text(","), text(" "))), text(">")),
-                ),
-            );
-        }
-
-        let param_docs: Vec<_> = params.iter().map(|p| self.format_parameter(p)).collect();
-
-        result = concat(
-            result,
-            concat(
-                text("("),
-                concat(join(param_docs, concat(text(","), text(" "))), text(")")),
-            ),
-        );
-
-        if let Some(ret_ty) = ret {
-            result = concat_space(
-                result,
-                concat_space(text("->"), self.format_type_annotation(ret_ty)),
-            );
-        }
-
-        // Check if the body is a single-statement block that could be formatted inline
-        if body.body.len() == 1 && !Self::contains_control_flow(&body.body[0]) {
-            return group(concat_space(result, self.format_block(body)));
-        }
-
-        concat_space(result, self.format_block(body))
     }
 
     fn format_init(&self, _name: &Name, params: &[Parameter], body: &Block) -> Doc {

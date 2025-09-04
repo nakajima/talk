@@ -14,7 +14,11 @@ use crate::{
     },
     node::Node,
     node_id::NodeID,
-    node_kinds::expr::{Expr, ExprKind},
+    node_kinds::{
+        block::Block,
+        expr::{Expr, ExprKind},
+        stmt::{Stmt, StmtKind},
+    },
     types::{
         constraints::{Constraint, ConstraintCause, Equals},
         ty::{Level, MetaId, Ty},
@@ -28,7 +32,7 @@ pub type Substitutions = FxHashMap<MetaId, Ty>;
 
 #[derive(Debug)]
 pub struct BindingGroup {
-    decl_ids: Vec<DeclId>,
+    node_ids: Vec<NodeID>,
     level: Level,
 }
 
@@ -100,7 +104,7 @@ impl InferencePass {
 
         for decl_ids in groups {
             let group = BindingGroup {
-                decl_ids,
+                node_ids: decl_ids,
                 level: Level(1),
             };
 
@@ -122,16 +126,17 @@ impl InferencePass {
         let mut wants = Wants(Default::default());
         let inner_level = group.level.next();
 
-        for &decl_id in &group.decl_ids {
+        for &decl_id in &group.node_ids {
             let m = Ty::MetaVar {
                 id: self.metavars.next_id(),
                 level: inner_level,
             };
+
             self.term_env.insert_mono(Symbol::Value(decl_id), m);
         }
 
         // 2) synth each RHS and tie to provisional
-        for &decl_id in &group.decl_ids {
+        for &decl_id in &group.node_ids {
             let symbol = Symbol::Value(decl_id);
             let rhs_expr_id = self.ast.phase.decl_rhs.get(&decl_id).copied().unwrap();
             let rhs_expr = self.ast.find(rhs_expr_id).clone();
@@ -178,7 +183,7 @@ impl InferencePass {
 
     #[instrument(skip(self))]
     fn promote_group(&mut self, group: &BindingGroup, subs: &Substitutions) {
-        for &did in &group.decl_ids {
+        for &did in &group.node_ids {
             let sym = Symbol::Value(did);
             if let Some(EnvEntry::Mono(tv)) = self.term_env.get(&sym).cloned() {
                 let mut subs_clone = subs.clone();
@@ -265,8 +270,21 @@ impl InferencePass {
     fn infer_node(&mut self, node: &Node, _level: Level, _wants: &mut Wants) -> Ty {
         match node {
             Node::Expr(expr) => self.infer_expr(expr),
-            _ => todo!(),
+            Node::Stmt(stmt) => self.infer_stmt(stmt),
+            Node::Block(block) => self.infer_block(block),
+            _ => todo!("don't know how to handle {node:?}"),
         }
+    }
+
+    fn infer_block(&mut self, block: &Block) -> Ty {
+        // Very simple semantics: return the type of the last expression statement, else Void.
+        let mut last_ty = Ty::Void;
+        for node in &block.body {
+            if let Node::Stmt(stmt) = node {
+                last_ty = self.infer_stmt(stmt);
+            }
+        }
+        last_ty
     }
 
     fn infer_expr(&mut self, expr: &Expr) -> Ty {
@@ -274,9 +292,19 @@ impl InferencePass {
             ExprKind::Incomplete(..) => todo!(),
             ExprKind::LiteralArray(..) => todo!(),
             ExprKind::LiteralInt(_) => Ty::Int,
-            ExprKind::LiteralFloat(_) => todo!(),
-            ExprKind::LiteralTrue => todo!(),
-            ExprKind::LiteralFalse => todo!(),
+            ExprKind::LiteralFloat(_) => Ty::Float,
+            ExprKind::LiteralTrue => Ty::Bool,
+            ExprKind::LiteralFalse => Ty::Bool,
+            ExprKind::Variable(Name::Resolved(sym, _)) => {
+                let ty = match self.term_env.get(sym).cloned() {
+                    Some(EnvEntry::Scheme(s)) => self.instantiate(&s, /*current*/ Level(1)), // or pass through
+                    Some(EnvEntry::Mono(t)) => t.clone(),
+                    None => panic!("unbound variable {:?}", sym),
+                };
+                // record the type for this expression node
+                self.types_by_node.insert(expr.id, ty.clone());
+                ty
+            }
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
@@ -285,14 +313,31 @@ impl InferencePass {
             ExprKind::Call { .. } => todo!(),
             ExprKind::Member(..) => todo!(),
             ExprKind::Func { .. } => todo!(),
-            ExprKind::Variable(..) => todo!(),
             ExprKind::If(..) => todo!(),
             ExprKind::Match(..) => todo!(),
             ExprKind::PatternVariant(..) => todo!(),
             ExprKind::RecordLiteral(..) => todo!(),
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::Spread(..) => todo!(),
+            _ => todo!(),
         }
+    }
+
+    fn infer_stmt(&mut self, stmt: &Stmt) -> Ty {
+        match &stmt.kind {
+            StmtKind::Expr(expr) => self.infer_expr(expr),
+            StmtKind::If(..) => Ty::Void,
+            StmtKind::Return(..) => todo!(),
+            StmtKind::Break => Ty::Void,
+            StmtKind::Assignment(..) => Ty::Void,
+            StmtKind::Loop(..) => Ty::Void,
+        }
+    }
+
+    fn instantiate(&mut self, s: &Scheme, _level: Level) -> Ty {
+        // MVP: schemes are monomorphic (foralls = []), so:
+        s.ty.clone()
+        // Later: map each MetaId in s.foralls to fresh Ty::MetaVar at `level`
     }
 }
 
@@ -345,8 +390,6 @@ pub mod tests {
     #[test]
     fn types_int() {
         let types = typecheck("let a = 123; a");
-        let expr_id = types.ast.roots[1].as_stmt().clone().as_expr().id;
-        println!("expr id: {expr_id:?}");
         assert_eq!(
             *types
                 .ast
@@ -355,6 +398,72 @@ pub mod tests {
                 .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Int
+        );
+    }
+
+    #[test]
+    fn types_float() {
+        let types = typecheck("let a = 1.23; a");
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Float
+        );
+    }
+
+    #[test]
+    fn types_bool() {
+        let types = typecheck("let a = true; a ; let b = false ; b");
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Bool
+        );
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[3].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Bool
+        );
+    }
+
+    #[test]
+    fn types_identity() {
+        let types = typecheck(
+            "
+        func identity(x) { x }
+        identity(123)
+        identity(true)
+        ",
+        );
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[2].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Bool
         );
     }
 }

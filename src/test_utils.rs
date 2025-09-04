@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! any_expr {
     ($expr:expr) => {{
-        Expr {
+        $crate::parsing::node_kinds::expr::Expr {
             id: NodeID::ANY,
             span: $crate::parsing::span::Span::ANY,
             kind: $expr,
