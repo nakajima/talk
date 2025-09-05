@@ -82,10 +82,7 @@ impl DependenciesPass {
                     },
                 value: Some(rhs),
                 ..
-            } => {
-                println!("inserting rhs: {rhs:?}");
-                (sym, BoundRHS::Expr(rhs.id))
-            }
+            } => (sym, BoundRHS::Expr(rhs.id)),
             DeclKind::Method {
                 func:
                     box func @ Func {

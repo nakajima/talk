@@ -613,4 +613,33 @@ pub mod tests {
             Ty::Bool
         );
     }
+
+    #[test]
+    fn types_nested_identity() {
+        let types = typecheck(
+            "
+        func identity(x) { x }
+        identity(identity(123))
+        identity(identity(true))
+        ",
+        );
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            *types
+                .ast
+                .phase
+                ._types_by_node
+                .get(&types.ast.roots[2].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Bool
+        );
+    }
 }
