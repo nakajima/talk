@@ -83,7 +83,7 @@ pub mod tests {
         },
         parser_tests::tests::parse,
         span::Span,
-        types::lower_funcs_to_lets_pass::LowerFuncsToLets,
+        types::passes::lower_funcs_to_lets_pass::LowerFuncsToLets,
     };
 
     #[test]

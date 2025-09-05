@@ -410,7 +410,7 @@ pub mod tests {
             name_resolver_tests::tests::resolve,
             symbol::{GlobalId, SynthesizedId},
         },
-        types::{type_header_decl_pass::TypeHeaderDeclPass, type_session::TypeDefKind},
+        types::{passes::type_header_decl_pass::TypeHeaderDeclPass, type_session::TypeDefKind},
     };
 
     use super::*;

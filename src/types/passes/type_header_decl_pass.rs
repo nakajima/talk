@@ -274,7 +274,7 @@ pub mod tests {
         types::{
             fields::{Associated, Initializer, MethodRequirement, Property, TypeFields, Variant},
             kind::Kind,
-            type_header_decl_pass::TypeHeaderDeclPass,
+            passes::type_header_decl_pass::TypeHeaderDeclPass,
             type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession},
         },
     };

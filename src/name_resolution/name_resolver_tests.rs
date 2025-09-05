@@ -27,7 +27,7 @@ pub mod tests {
         },
         parsing::parser_tests::tests::parse,
         span::Span,
-        types::lower_funcs_to_lets_pass::LowerFuncsToLets,
+        types::passes::lower_funcs_to_lets_pass::LowerFuncsToLets,
     };
 
     macro_rules! param {

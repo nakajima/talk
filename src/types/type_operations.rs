@@ -1,6 +1,6 @@
 use tracing::instrument;
 
-use crate::types::{inference_pass::Substitutions, ty::Ty, type_error::TypeError};
+use crate::types::{passes::inference_pass::Substitutions, ty::Ty, type_error::TypeError};
 
 #[instrument]
 pub(super) fn unify(

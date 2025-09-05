@@ -24,10 +24,10 @@ use crate::{
     },
     types::{
         constraints::{Constraint, ConstraintCause, Equals},
-        dependencies_pass::Binder,
+        passes::dependencies_pass::Binder,
+        passes::type_header_resolve_pass::HeadersResolved,
         ty::{Level, MetaId, Ty},
         type_error::TypeError,
-        type_header_resolve_pass::HeadersResolved,
         type_operations::{apply, unify},
         type_session::{TypeDef, TypeSession},
     },
@@ -524,8 +524,8 @@ pub struct InferenceResult {
 pub mod tests {
     use super::*;
     use crate::types::{
-        dependencies_pass::DependenciesPass,
-        type_header_resolve_pass::tests::type_header_resolve_pass_err,
+        passes::dependencies_pass::DependenciesPass,
+        passes::type_header_resolve_pass::tests::type_header_resolve_pass_err,
     };
 
     fn typecheck(code: &'static str) -> InferenceResult {

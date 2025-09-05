@@ -160,7 +160,7 @@ mod tests {
 
     use crate::{
         name_resolution::{name_resolver_tests::tests::resolve, symbol::GlobalId},
-        types::dependencies_pass::{Binder, DependenciesPass},
+        types::passes::dependencies_pass::{Binder, DependenciesPass},
     };
 
     fn graph_nodes(code: &'static str) -> Vec<Binder> {

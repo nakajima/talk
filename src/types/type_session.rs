@@ -10,8 +10,8 @@ use crate::{
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
     types::{
-        fields::TypeFields, kind::Kind, type_header_decl_pass::TypeHeaderDeclPass,
-        type_header_resolve_pass::HeadersResolved,
+        fields::TypeFields, kind::Kind, passes::type_header_decl_pass::TypeHeaderDeclPass,
+        passes::type_header_resolve_pass::HeadersResolved,
     },
 };
 
