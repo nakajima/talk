@@ -5,7 +5,7 @@ use crate::{
     ast::AST,
     id_generator::IDGenerator,
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::DeclId},
+    name_resolution::{name_resolver::NameResolved, symbol::TypeId},
     node_id::NodeID,
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
@@ -45,8 +45,8 @@ pub enum TypeDefKind {
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub struct Raw {
-    pub type_constructors: FxHashMap<DeclId, TypeDef<ASTTyRepr>>,
-    pub protocols: FxHashMap<DeclId, TypeDef<ASTTyRepr>>,
+    pub type_constructors: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
+    pub protocols: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
 }
 
 impl TypingPhase for Raw {

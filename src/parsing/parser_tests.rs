@@ -5,7 +5,6 @@ pub mod tests {
     use crate::{
         any_block, any_expr,
         ast::{AST, Parsed},
-        id_generator::IDGenerator,
         label::Label,
         lexer::Lexer,
         name::Name,
@@ -108,15 +107,13 @@ pub mod tests {
 
     pub fn parse(code: &'static str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
-        let ids = &mut IDGenerator::default();
-        let parser = Parser::new("-", ids, lexer);
+        let parser = Parser::new("-", lexer);
         parser.parse().unwrap()
     }
 
     fn parse_pattern(input: &'static str) -> Pattern {
         let lexer = Lexer::new(input);
-        let ids = &mut IDGenerator::default();
-        let mut parser = Parser::new("-", ids, lexer);
+        let mut parser = Parser::new("-", lexer);
         parser.advance();
         parser.advance();
         parser.parse_pattern().unwrap()

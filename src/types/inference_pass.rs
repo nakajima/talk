@@ -1,6 +1,6 @@
 use derive_visitor::{Drive, Visitor};
-use petgraph::algo::kosaraju_scc;
-use rustc_hash::FxHashMap;
+use petgraph::{algo::kosaraju_scc, prelude::DiGraphMap};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
 use crate::{
@@ -10,29 +10,40 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{DeclId, Symbol},
+        symbol::{Symbol, TypeId},
     },
     node::Node,
     node_id::NodeID,
     node_kinds::{
         block::Block,
+        call_arg::CallArg,
         expr::{Expr, ExprKind},
+        func::Func,
         stmt::{Stmt, StmtKind},
+        type_annotation::TypeAnnotation,
     },
     types::{
         constraints::{Constraint, ConstraintCause, Equals},
+        dependencies_pass::Binder,
         ty::{Level, MetaId, Ty},
         type_error::TypeError,
         type_header_resolve_pass::HeadersResolved,
+        type_operations::{apply, unify},
         type_session::{TypeDef, TypeSession},
     },
 };
 
 pub type Substitutions = FxHashMap<MetaId, Ty>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MetaTag {
+    pub id: MetaId,
+    pub level: Level,
+}
+
 #[derive(Debug)]
 pub struct BindingGroup {
-    node_ids: Vec<NodeID>,
+    binders: Vec<Binder>,
     level: Level,
 }
 
@@ -48,18 +59,48 @@ pub enum EnvEntry {
     Scheme(Scheme),
 }
 
-#[derive(Debug, Default)]
-pub struct TermEnv(FxHashMap<Symbol, EnvEntry>);
+#[derive(Debug)]
+pub struct TermEnv {
+    frames: Vec<FxHashMap<Symbol, EnvEntry>>,
+}
+
+impl Default for TermEnv {
+    fn default() -> Self {
+        Self {
+            frames: vec![FxHashMap::default()],
+        }
+    }
+}
 
 impl TermEnv {
-    fn insert_mono(&mut self, symbol: Symbol, ty: Ty) {
-        self.0.insert(symbol, EnvEntry::Mono(ty));
+    pub fn new() -> Self {
+        Self::default()
     }
-    fn promote(&mut self, symbol: Symbol, sch: Scheme) {
-        self.0.insert(symbol, EnvEntry::Scheme(sch));
+
+    pub fn push(&mut self) {
+        self.frames.push(FxHashMap::default());
     }
-    fn get(&self, symbol: &Symbol) -> Option<&EnvEntry> {
-        self.0.get(symbol)
+    pub fn pop(&mut self) {
+        self.frames.pop().expect("pop on empty env");
+    }
+
+    pub fn insert_mono(&mut self, sym: Symbol, ty: Ty) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .insert(sym, EnvEntry::Mono(ty));
+    }
+    pub fn promote(&mut self, sym: Symbol, sch: Scheme) {
+        // promote into the *root* frame so it’s visible everywhere (for binders)
+        self.frames[0].insert(sym, EnvEntry::Scheme(sch));
+    }
+    pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry> {
+        for frame in self.frames.iter().rev() {
+            if let Some(e) = frame.get(sym) {
+                return Some(e);
+            }
+        }
+        None
     }
 }
 
@@ -72,11 +113,12 @@ pub struct InferenceSolution {
 #[derive(Debug)]
 pub struct InferencePass {
     ast: AST<NameResolved>,
-    _type_constructors: FxHashMap<DeclId, TypeDef<Ty>>,
-    _protocols: FxHashMap<DeclId, TypeDef<Ty>>,
+    _type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
+    _protocols: FxHashMap<TypeId, TypeDef<Ty>>,
     types_by_node: FxHashMap<NodeID, Ty>,
     metavars: IDGenerator,
     term_env: TermEnv,
+    rhs_map: FxHashMap<Binder, NodeID>,
 }
 
 #[derive(Debug)]
@@ -91,27 +133,48 @@ impl InferencePass {
     pub fn perform(
         session: TypeSession<HeadersResolved>,
         ast: AST<NameResolved>,
+        dependencies: DiGraphMap<Binder, ()>,
+        rhs_map: FxHashMap<Binder, NodeID>,
     ) -> InferenceResult {
-        let groups = kosaraju_scc(&ast.phase.dependency_graph);
+        let groups = kosaraju_scc(&dependencies);
         let mut pass = InferencePass {
             ast,
             _type_constructors: session.phase.type_constructors,
             _protocols: session.phase.protocols,
             types_by_node: Default::default(),
             metavars: Default::default(),
-            term_env: Default::default(),
+            term_env: TermEnv::new(),
+            rhs_map,
         };
 
-        for decl_ids in groups {
+        // Handle binders first
+        for binders in groups {
             let group = BindingGroup {
-                node_ids: decl_ids,
+                binders,
                 level: Level(1),
             };
 
             let wants = pass.infer_group(&group);
             let subs = pass.solve(wants);
             pass.promote_group(&group, &subs);
+            pass.apply_to_self(&subs);
         }
+
+        let roots = std::mem::take(&mut pass.ast.roots);
+
+        for root in roots.iter() {
+            if !matches!(root, Node::Stmt(_)) {
+                continue;
+            }
+
+            let mut wants = Wants(vec![]);
+            let ty = pass.infer_node(root, Level(1), &mut wants);
+            pass.types_by_node.insert(root.node_id(), ty);
+            let subs = pass.solve(wants);
+            pass.apply_to_self(&subs);
+        }
+
+        _ = std::mem::replace(&mut pass.ast.roots, roots);
 
         pass.annotate_uses_after_inference();
 
@@ -126,25 +189,24 @@ impl InferencePass {
         let mut wants = Wants(Default::default());
         let inner_level = group.level.next();
 
-        for &decl_id in &group.node_ids {
+        for &binder in &group.binders {
             let m = Ty::MetaVar {
                 id: self.metavars.next_id(),
                 level: inner_level,
             };
 
-            self.term_env.insert_mono(Symbol::Value(decl_id), m);
+            self.term_env.insert_mono(binder.into(), m);
         }
 
-        // 2) synth each RHS and tie to provisional
-        for &decl_id in &group.node_ids {
-            let symbol = Symbol::Value(decl_id);
-            let rhs_expr_id = self.ast.phase.decl_rhs.get(&decl_id).copied().unwrap();
+        for &binder in &group.binders {
+            let symbol = Symbol::from(binder);
+            let rhs_expr_id = self.rhs_map.get(&binder).copied().unwrap();
             let rhs_expr = self.ast.find(rhs_expr_id).clone();
 
             let got = self.infer_node(&rhs_expr.unwrap(), inner_level, &mut wants);
             self.types_by_node.insert(rhs_expr_id, got.clone());
 
-            let tv = match self.term_env.get(&symbol).unwrap() {
+            let tv = match self.term_env.lookup(&symbol).unwrap() {
                 EnvEntry::Mono(t) => t.clone(),
                 _ => unreachable!(),
             };
@@ -156,13 +218,24 @@ impl InferencePass {
     }
 
     #[instrument(skip(self))]
+    fn apply_to_self(&mut self, substitutions: &Substitutions) {
+        for (_, ty) in self.types_by_node.iter_mut() {
+            if matches!(ty, Ty::Primitive(_)) {
+                continue;
+            }
+
+            *ty = apply(ty.clone(), substitutions);
+        }
+    }
+
+    #[instrument(skip(self))]
     fn solve(&mut self, wants: Wants) -> Substitutions {
         let mut substitutions = Substitutions::default();
         for want in wants.0 {
             match want {
-                Constraint::Equals(equals) => self
-                    .unify(&equals.lhs, &equals.rhs, &mut substitutions)
-                    .unwrap(),
+                Constraint::Equals(equals) => {
+                    unify(&equals.lhs, &equals.rhs, &mut substitutions).unwrap()
+                }
             };
         }
 
@@ -183,76 +256,33 @@ impl InferencePass {
 
     #[instrument(skip(self))]
     fn promote_group(&mut self, group: &BindingGroup, subs: &Substitutions) {
-        for &did in &group.node_ids {
-            let sym = Symbol::Value(did);
-            if let Some(EnvEntry::Mono(tv)) = self.term_env.get(&sym).cloned() {
-                let mut subs_clone = subs.clone();
-                let applied = self.apply(tv, &mut subs_clone);
-                self.term_env.promote(
-                    sym,
-                    Scheme {
-                        foralls: vec![],
-                        ty: applied,
-                    },
-                );
+        for &binder in &group.binders {
+            let sym = Symbol::from(binder);
+
+            match self.term_env.lookup(&sym).cloned() {
+                Some(EnvEntry::Mono(ty)) => {
+                    let applied = apply(ty, subs);
+                    let scheme = self.generalize(group.level, applied);
+                    self.term_env.promote(sym, scheme);
+                }
+                Some(EnvEntry::Scheme(_scheme)) => {}
+                None => panic!("didn't find {sym:?} in term env"),
             }
         }
     }
 
     #[instrument(skip(self))]
-    fn unify(
-        &mut self,
-        lhs: &Ty,
-        rhs: &Ty,
-        substitutions: &mut Substitutions,
-    ) -> Result<bool, TypeError> {
-        let lhs = self.apply(lhs.clone(), substitutions);
-        let rhs = self.apply(rhs.clone(), substitutions);
-
-        // Hole(NodeID),
-        // Rigid(DeclId),
-        // MetaVar { id: MetaId, level: Level },
-        // Primitive(Primitive),
-        // TypeConstructor { name: Name, kind: TypeDefKind },
-        // TypeApplication(Box<Ty>, Box<Ty>),
-        match (&lhs, &rhs) {
-            (Ty::Primitive(lhs), Ty::Primitive(rhs)) => {
-                if lhs == rhs {
-                    Ok(false)
-                } else {
-                    Err(TypeError::InvalidUnification(
-                        Ty::Primitive(*lhs),
-                        Ty::Primitive(*rhs),
-                    ))
-                }
-            }
-            (
-                Ty::TypeApplication(box lhs_rec, box lhs_arg),
-                Ty::TypeApplication(box rhs_rec, box rhs_arg),
-            ) => Ok(self.unify(lhs_rec, rhs_rec, substitutions)?
-                || self.unify(lhs_arg, rhs_arg, substitutions)?),
-            (ty, Ty::MetaVar { id, .. }) | (Ty::MetaVar { id, .. }, ty) => {
-                substitutions.insert(*id, ty.clone());
-                Ok(true)
-            }
-            (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
-            _ => todo!(),
-        }
-    }
-
-    #[allow(clippy::only_used_in_recursion)]
-    fn apply(&self, ty: Ty, substitutions: &mut Substitutions) -> Ty {
-        match ty {
-            Ty::Hole(..) => ty,
-            Ty::Rigid(..) => ty,
-            Ty::MetaVar { id, .. } => substitutions.get(&id).cloned().unwrap_or(ty),
-            Ty::Primitive(..) => ty,
-            Ty::TypeConstructor { .. } => todo!(),
-            Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
-                self.apply(lhs, substitutions).into(),
-                self.apply(rhs, substitutions).into(),
-            ),
-        }
+    fn generalize(&self, inner: Level, ty: Ty) -> Scheme {
+        // collect metas in ty
+        let mut metas = FxHashSet::default();
+        collect_metas(&ty, &mut metas);
+        // keep only metas born at or above inner
+        let foralls: Vec<MetaId> = metas
+            .into_iter()
+            .filter(|m| m.level >= inner)
+            .map(|m| m.id)
+            .collect();
+        Scheme { foralls, ty }
     }
 
     fn into_typed_ast(self) -> AST<Typed> {
@@ -264,31 +294,35 @@ impl InferencePass {
             phase: Typed {
                 _types_by_node: self.types_by_node,
             },
+            node_ids: self.ast.node_ids,
         }
     }
 
-    fn infer_node(&mut self, node: &Node, _level: Level, _wants: &mut Wants) -> Ty {
+    #[instrument(skip(self))]
+    fn infer_node(&mut self, node: &Node, level: Level, wants: &mut Wants) -> Ty {
         match node {
-            Node::Expr(expr) => self.infer_expr(expr),
-            Node::Stmt(stmt) => self.infer_stmt(stmt),
-            Node::Block(block) => self.infer_block(block),
+            Node::Expr(expr) => self.infer_expr(expr, level, wants),
+            Node::Stmt(stmt) => self.infer_stmt(stmt, level, wants),
+            Node::Block(block) => self.infer_block(block, level, wants),
             _ => todo!("don't know how to handle {node:?}"),
         }
     }
 
-    fn infer_block(&mut self, block: &Block) -> Ty {
+    #[instrument(skip(self))]
+    fn infer_block(&mut self, block: &Block, level: Level, wants: &mut Wants) -> Ty {
         // Very simple semantics: return the type of the last expression statement, else Void.
         let mut last_ty = Ty::Void;
         for node in &block.body {
             if let Node::Stmt(stmt) = node {
-                last_ty = self.infer_stmt(stmt);
+                last_ty = self.infer_stmt(stmt, level, wants);
             }
         }
         last_ty
     }
 
-    fn infer_expr(&mut self, expr: &Expr) -> Ty {
-        match &expr.kind {
+    #[instrument(skip(self))]
+    fn infer_expr(&mut self, expr: &Expr, level: Level, wants: &mut Wants) -> Ty {
+        let ty = match &expr.kind {
             ExprKind::Incomplete(..) => todo!(),
             ExprKind::LiteralArray(..) => todo!(),
             ExprKind::LiteralInt(_) => Ty::Int,
@@ -296,23 +330,24 @@ impl InferencePass {
             ExprKind::LiteralTrue => Ty::Bool,
             ExprKind::LiteralFalse => Ty::Bool,
             ExprKind::Variable(Name::Resolved(sym, _)) => {
-                let ty = match self.term_env.get(sym).cloned() {
-                    Some(EnvEntry::Scheme(s)) => self.instantiate(&s, /*current*/ Level(1)), // or pass through
+                match self.term_env.lookup(sym).cloned() {
+                    Some(EnvEntry::Scheme(s)) => self.instantiate(&s, level), // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
                     None => panic!("unbound variable {:?}", sym),
-                };
-                // record the type for this expression node
-                self.types_by_node.insert(expr.id, ty.clone());
-                ty
+                }
             }
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
             ExprKind::Tuple(..) => todo!(),
             ExprKind::Block(..) => todo!(),
-            ExprKind::Call { .. } => todo!(),
+            ExprKind::Call {
+                callee,
+                type_args,
+                args,
+            } => self.infer_call(callee, type_args, args, level, wants),
             ExprKind::Member(..) => todo!(),
-            ExprKind::Func { .. } => todo!(),
+            ExprKind::Func(func) => self.infer_func(func, level, wants),
             ExprKind::If(..) => todo!(),
             ExprKind::Match(..) => todo!(),
             ExprKind::PatternVariant(..) => todo!(),
@@ -320,12 +355,80 @@ impl InferencePass {
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::Spread(..) => todo!(),
             _ => todo!(),
-        }
+        };
+
+        // record the type for this expression node
+        self.types_by_node.insert(expr.id, ty.clone());
+        ty
     }
 
-    fn infer_stmt(&mut self, stmt: &Stmt) -> Ty {
+    #[instrument(skip(self))]
+    fn infer_call(
+        &mut self,
+        callee: &Expr,
+        type_args: &[TypeAnnotation],
+        args: &[CallArg],
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        let callee_ty = self.infer_expr(callee, level, wants);
+        let mut arg_tys = Vec::with_capacity(args.len());
+        for _ in args {
+            arg_tys.push(Ty::MetaVar {
+                id: self.metavars.next_id(),
+                level,
+            });
+        }
+        let returns = Ty::MetaVar {
+            id: self.metavars.next_id(),
+            level,
+        };
+
+        wants.equals(
+            callee_ty,
+            curry(arg_tys.clone(), returns.clone()),
+            ConstraintCause::Call(callee.id),
+        );
+
+        for (a, aty) in args.iter().zip(arg_tys) {
+            let got = self.infer_expr(&a.value, level, wants);
+            wants.equals(got, aty, ConstraintCause::Internal);
+        }
+
+        returns
+    }
+
+    #[instrument(skip(self))]
+    fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> Ty {
+        let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
+        for _ in &func.params {
+            param_tys.push(Ty::MetaVar {
+                id: self.metavars.next_id(),
+                level,
+            });
+        }
+        let ret_ty = Ty::MetaVar {
+            id: self.metavars.next_id(),
+            level,
+        };
+
+        for (p, ty) in func.params.iter().zip(param_tys.iter()) {
+            let Name::Resolved(sym, _) = &p.name else {
+                panic!("unresolved param");
+            };
+            self.term_env.insert_mono(*sym, ty.clone());
+        }
+
+        let body_ty = self.infer_block(&func.body, level, wants);
+        wants.equals(body_ty, ret_ty.clone(), ConstraintCause::Internal);
+
+        curry(param_tys, ret_ty)
+    }
+
+    #[instrument(skip(self))]
+    fn infer_stmt(&mut self, stmt: &Stmt, level: Level, wants: &mut Wants) -> Ty {
         match &stmt.kind {
-            StmtKind::Expr(expr) => self.infer_expr(expr),
+            StmtKind::Expr(expr) => self.infer_expr(expr, level, wants),
             StmtKind::If(..) => Ty::Void,
             StmtKind::Return(..) => todo!(),
             StmtKind::Break => Ty::Void,
@@ -334,10 +437,49 @@ impl InferencePass {
         }
     }
 
-    fn instantiate(&mut self, s: &Scheme, _level: Level) -> Ty {
-        // MVP: schemes are monomorphic (foralls = []), so:
-        s.ty.clone()
-        // Later: map each MetaId in s.foralls to fresh Ty::MetaVar at `level`
+    #[instrument(skip(self))]
+    fn instantiate(&mut self, scheme: &Scheme, level: Level) -> Ty {
+        // Map each quantified meta id to a fresh meta at this use-site level
+        let mut substitutions = Substitutions::default();
+
+        for meta in &scheme.foralls {
+            substitutions.insert(
+                *meta,
+                Ty::MetaVar {
+                    id: self.metavars.next_id(),
+                    level,
+                },
+            );
+        }
+        apply(scheme.ty.clone(), &substitutions)
+    }
+}
+
+fn curry<I: IntoIterator<Item = Ty>>(params: I, ret: Ty) -> Ty {
+    params
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rfold(ret, |acc, p| Ty::Func(Box::new(p), Box::new(acc)))
+}
+
+pub fn collect_metas(ty: &Ty, out: &mut FxHashSet<MetaTag>) {
+    match ty {
+        Ty::MetaVar { id, level } => {
+            out.insert(MetaTag {
+                id: *id,
+                level: *level,
+            });
+        }
+        Ty::Func(dom, codom) => {
+            collect_metas(dom, out);
+            collect_metas(codom, out);
+        }
+        Ty::TypeApplication(fun, arg) => {
+            collect_metas(fun, out);
+            collect_metas(arg, out);
+        }
+        Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) | Ty::TypeConstructor { .. } => {}
     }
 }
 
@@ -348,14 +490,15 @@ struct AnnotateUsesAfterInferenceVisitor<'a> {
     types_by_node: &'a mut FxHashMap<NodeID, Ty>,
 }
 impl<'a> AnnotateUsesAfterInferenceVisitor<'a> {
-    #[instrument(skip(self))]
     fn enter_expr(&mut self, expr: &Expr) {
         match &expr.kind {
-            ExprKind::Variable(Name::Resolved(name, _)) => match self.term_env.get(name) {
+            ExprKind::Variable(Name::Resolved(name, _)) => match self.term_env.lookup(name) {
                 Some(EnvEntry::Mono(ty)) => {
+                    tracing::trace!("annotating {name:?}");
                     self.types_by_node.insert(expr.id, ty.clone());
                 }
                 Some(EnvEntry::Scheme(scheme)) => {
+                    tracing::trace!("annotating {name:?}");
                     self.types_by_node.insert(expr.id, scheme.ty.clone());
                 }
                 _ => tracing::warn!("no type found for use of {:?}", expr),
@@ -380,11 +523,15 @@ pub struct InferenceResult {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::types::type_header_resolve_pass::tests::type_header_resolve_pass_err;
+    use crate::types::{
+        dependencies_pass::DependenciesPass,
+        type_header_resolve_pass::tests::type_header_resolve_pass_err,
+    };
 
     fn typecheck(code: &'static str) -> InferenceResult {
         let (ast, session) = type_header_resolve_pass_err(code).unwrap();
-        InferencePass::perform(session, ast)
+        let deps = DependenciesPass::drive(&ast);
+        InferencePass::perform(session, ast, deps.graph, deps.rhs_map)
     }
 
     #[test]

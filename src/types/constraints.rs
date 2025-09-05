@@ -4,6 +4,7 @@ use crate::{node_id::NodeID, types::ty::Ty};
 pub enum ConstraintCause {
     Literal(NodeID),
     Assignment(NodeID),
+    Call(NodeID),
     Internal,
 }
 

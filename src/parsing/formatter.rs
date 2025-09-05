@@ -1235,14 +1235,12 @@ pub fn format<Phase: ASTPhase>(ast: &AST<Phase>, width: usize) -> String {
 mod formatter_tests {
     use super::*;
     use crate::ast::Parsed;
-    use crate::id_generator::IDGenerator;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
 
     fn parse(code: &str) -> AST<Parsed> {
         let lexer = Lexer::new(code);
-        let ids = &mut IDGenerator::default();
-        let parser = Parser::new("-", ids, lexer);
+        let parser = Parser::new("-", lexer);
         parser.parse().unwrap()
     }
 

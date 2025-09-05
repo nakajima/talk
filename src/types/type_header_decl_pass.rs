@@ -266,7 +266,7 @@ pub mod tests {
         name::Name,
         name_resolution::{
             name_resolver_tests::tests::resolve,
-            symbol::{BuiltinId, DeclId, Symbol},
+            symbol::{BuiltinId, Symbol, TypeId},
         },
         node_id::NodeID,
         node_kinds::{generic_decl::GenericDecl, type_annotation::*},
@@ -297,9 +297,9 @@ pub mod tests {
         );
 
         assert_eq!(
-            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Person".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
                 kind: Kind::Type,
                 span: Span::ANY,
                 def: TypeDefKind::Struct,
@@ -336,24 +336,24 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Wrapper".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
                     out_kind: Box::new(Kind::Type)
                 },
                 span: Span::ANY,
                 def: TypeDefKind::Struct,
-                generics: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(2)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
+                generics: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => ASTTyRepr::Generic(GenericDecl {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                    name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY,
                 })),
                 fields: TypeFields::Struct {
-                    initializers: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(5)), "init".into()) => Initializer {
+                    initializers: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(5)), "init".into()) => Initializer {
                         params: vec![
                             ASTTyRepr::Hole(NodeID(4), Span::ANY)
                         ]
@@ -362,7 +362,7 @@ pub mod tests {
                     properties: crate::indexmap!("wrapped".into() => Property {
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                             generics: vec![]
                         }))
                     })
@@ -382,9 +382,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Wrapper".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()),
                 kind: Kind::Arrow {
                     in_kind: Box::new(Kind::Type),
                     out_kind: Kind::Arrow {
@@ -396,16 +396,16 @@ pub mod tests {
                 span: Span::ANY,
                 def: TypeDefKind::Struct,
                 generics: crate::indexmap!(
-                  Name::Resolved(Symbol::Type(DeclId(2)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
+                  Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) =>  ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                        name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY,
                     }),
-                   Name::Resolved(Symbol::Type(DeclId(3)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
+                   Name::Resolved(Symbol::Type(TypeId(3)), "U".into()) => ASTTyRepr::Generic(GenericDecl {
                         id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::Type(DeclId(3)), "U".into()),
+                        name: Name::Resolved(Symbol::Type(TypeId(3)), "U".into()),
                         generics: vec![],
                         conformances: vec![],
                         span: Span::ANY,
@@ -417,9 +417,9 @@ pub mod tests {
                     properties: crate::indexmap!("wrapped".into() => Property {
                         is_static: false,
                         ty_repr: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                             generics: vec![annotation!(TypeAnnotationKind::Nominal {
-                                name: Name::Resolved(Symbol::Type(DeclId(3)), "U".into()),
+                                name: Name::Resolved(Symbol::Type(TypeId(3)), "U".into()),
                                 generics: vec![]
                             })]
                         }))
@@ -440,16 +440,16 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.phase.type_constructors.get(&DeclId(1)).unwrap(),
+            *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 span: Span::ANY,
                 def: TypeDefKind::Enum,
                 generics: Default::default(),
                 fields: TypeFields::Enum {
                     variants: crate::indexmap!(
-                        Name::Resolved(Symbol::Type(DeclId(2)), "foo".into()) => Variant {
+                        Name::Resolved(Symbol::Type(TypeId(2)), "foo".into()) => Variant {
                             fields: vec![ASTTyRepr::Annotated(annotation!(
                                 TypeAnnotationKind::Nominal {
                                     name: Name::Resolved(Symbol::Int, "Int".into()),
@@ -457,7 +457,7 @@ pub mod tests {
                                 }
                             ))]
                         },
-                        Name::Resolved(Symbol::Type(DeclId(3)), "bar".into()) =>  Variant { fields: vec![] }
+                        Name::Resolved(Symbol::Type(TypeId(3)), "bar".into()) =>  Variant { fields: vec![] }
                     ),
                     methods: Default::default()
                 }
@@ -478,9 +478,9 @@ pub mod tests {
         );
 
         assert_eq_diff!(
-            *session.phase.protocols.get(&DeclId(1)).unwrap(),
+            *session.phase.protocols.get(&TypeId(1)).unwrap(),
             TypeDef {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 kind: Kind::Type,
                 span: Span::ANY,
                 def: TypeDefKind::Protocol,
@@ -489,14 +489,14 @@ pub mod tests {
                     initializers: Default::default(),
                     methods: Default::default(),
                     properties: Default::default(),
-                    method_requirements: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(3)), "foo".into()) => MethodRequirement {
+                    method_requirements: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(3)), "foo".into()) => MethodRequirement {
                         params: vec![],
                         ret: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),
                             generics: vec![]
                         }))
                     }),
-                    associated_types: crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(2)), "Buzz".into()) => Associated {})
+                    associated_types: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "Buzz".into()) => Associated {})
                 }
             }
         );

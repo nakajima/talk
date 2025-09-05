@@ -1,4 +1,4 @@
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct IDGenerator {
     last: u32,
 }

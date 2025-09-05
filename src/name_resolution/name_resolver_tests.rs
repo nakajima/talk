@@ -6,11 +6,10 @@ pub mod tests {
         annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
         diagnostic::{AnyDiagnostic, Diagnostic},
-        formatter::Formatter,
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
-            symbol::{BuiltinId, DeclId, LocalId, Symbol, ValueId},
+            symbol::{BuiltinId, DeclaredLocalId, GlobalId, ParamLocalId, Symbol, TypeId},
         },
         node::Node,
         node_id::NodeID,
@@ -90,7 +89,6 @@ pub mod tests {
     fn resolve_err(code: &'static str) -> AST<NameResolved> {
         let mut parsed = parse(code);
         LowerFuncsToLets::run(&mut parsed);
-        println!("{}", Formatter::new(&parsed.meta).format(&parsed.roots, 80));
         NameResolver::resolve(parsed)
     }
 
@@ -100,7 +98,7 @@ pub mod tests {
         assert_eq!(
             *tree.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                Symbol::Local(LocalId(1)),
+                Symbol::Global(GlobalId(1)),
                 "hello".into()
             )))
         );
@@ -116,7 +114,7 @@ pub mod tests {
                     id: NodeID::ANY,
                     span: Span::ANY,
                     kind: PatternKind::Bind(Name::Resolved(
-                        Symbol::Local(LocalId(1)),
+                        Symbol::Global(GlobalId(1)),
                         "hello".into()
                     ))
                 },
@@ -156,18 +154,29 @@ pub mod tests {
 
         assert_eq_diff!(
             *tree.roots[0].as_decl(),
-            any_decl!(DeclKind::Func(Func {
-                id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(ValueId(1)), "foo".into()),
-                generics: vec![],
-                params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y"),],
-                body: any_block!(vec![
-                    any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
-                    any_stmt!(StmtKind::Expr(variable!(LocalId(2), "y"))).into(),
-                ]),
-                ret: None,
-                attributes: vec![],
-            }))
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
+                    id: NodeID::ANY,
+                    kind: PatternKind::Bind(Name::Resolved(
+                        Symbol::Global(GlobalId(1)),
+                        "foo".into()
+                    )),
+                    span: Span::ANY
+                },
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(GlobalId(1)), "foo".into()),
+                    generics: vec![],
+                    params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y"),],
+                    body: any_block!(vec![
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(2), "y"))).into(),
+                    ]),
+                    ret: None,
+                    attributes: vec![],
+                })))
+            })
         );
     }
 
@@ -182,37 +191,59 @@ pub mod tests {
 
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
-            any_decl!(DeclKind::Func(Func {
-                id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(ValueId(1)), "odd".into()),
-                generics: vec![],
-                params: vec![],
-                body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
-                    callee: Box::new(variable!(Symbol::Value(ValueId(2)), "even")),
-                    type_args: vec![],
-                    args: vec![]
-                })]),
-                ret: None,
-                attributes: vec![]
-            }))
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: PatternKind::Bind(Name::Resolved(
+                        Symbol::Global(GlobalId(1)),
+                        "odd".into()
+                    ))
+                },
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(GlobalId(1)), "odd".into()),
+                    generics: vec![],
+                    params: vec![],
+                    body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
+                        callee: Box::new(variable!(Symbol::Global(GlobalId(2)), "even")),
+                        type_args: vec![],
+                        args: vec![]
+                    })]),
+                    ret: None,
+                    attributes: vec![]
+                })))
+            })
         );
 
         assert_eq_diff!(
             *resolved.roots[1].as_decl(),
-            any_decl!(DeclKind::Func(Func {
-                id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(ValueId(2)), "even".into()),
-                generics: vec![],
-                params: vec![],
-                body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
-                    callee: Box::new(variable!(Symbol::Value(ValueId(1)), "odd")),
-                    type_args: vec![],
-                    args: vec![]
-                })]),
-                ret: None,
-                attributes: vec![]
-            }))
-        )
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: PatternKind::Bind(Name::Resolved(
+                        Symbol::Global(GlobalId(2)),
+                        "even".into()
+                    ))
+                },
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(GlobalId(2)), "even".into()),
+                    generics: vec![],
+                    params: vec![],
+                    body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
+                        callee: Box::new(variable!(Symbol::Global(GlobalId(1)), "odd")),
+                        type_args: vec![],
+                        args: vec![]
+                    })]),
+                    ret: None,
+                    attributes: vec![]
+                })))
+            })
+        );
     }
 
     #[test]
@@ -221,30 +252,57 @@ pub mod tests {
 
         assert_eq_diff!(
             *tree.roots[0].as_decl(),
-            any_decl!(DeclKind::Func(Func {
-                id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(ValueId(1)), "foo".into()),
-                generics: vec![],
-                params: vec![param!(LocalId(1), "x"), param!(LocalId(2), "y")],
-                body: any_block!(vec![
-                    any_decl!(DeclKind::Func(Func {
-                        id: NodeID::ANY,
-                        name: Name::Resolved(Symbol::Value(ValueId(2)), "bar".into()),
-                        generics: vec![],
-                        params: vec![param!(LocalId(3), "x")],
-                        body: any_block!(vec![
-                            any_stmt!(StmtKind::Expr(variable!(LocalId(3), "x"))).into(),
-                            any_stmt!(StmtKind::Expr(variable!(LocalId(2), "y"))).into(),
-                        ]),
-                        ret: None,
-                        attributes: vec![],
-                    }))
-                    .into(),
-                    any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
-                ]),
-                ret: None,
-                attributes: vec![],
-            })),
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
+                    id: NodeID::ANY,
+                    kind: PatternKind::Bind(Name::Resolved(
+                        Symbol::Global(GlobalId(1)),
+                        "foo".into()
+                    )),
+                    span: Span::ANY
+                },
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(GlobalId(1)), "foo".into()),
+                    generics: vec![],
+                    params: vec![param!(ParamLocalId(1), "x"), param!(ParamLocalId(2), "y")],
+                    body: any_block!(vec![
+                        any_decl!(DeclKind::Let {
+                            lhs: Pattern {
+                                id: NodeID::ANY,
+                                kind: PatternKind::Bind(Name::Resolved(
+                                    Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                                    "bar".into()
+                                )),
+                                span: Span::ANY
+                            },
+                            type_annotation: None,
+                            value: Some(any_expr!(ExprKind::Func(Func {
+                                id: NodeID::ANY,
+                                name: Name::Resolved(
+                                    Symbol::DeclaredLocal(DeclaredLocalId(1)),
+                                    "bar".into()
+                                ),
+                                generics: vec![],
+                                params: vec![param!(ParamLocalId(3), "x")],
+                                body: any_block!(vec![
+                                    any_stmt!(StmtKind::Expr(variable!(ParamLocalId(3), "x")))
+                                        .into(),
+                                    any_stmt!(StmtKind::Expr(variable!(ParamLocalId(2), "y")))
+                                        .into(),
+                                ]),
+                                ret: None,
+                                attributes: vec![],
+                            })))
+                        })
+                        .into(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
+                    ]),
+                    ret: None,
+                    attributes: vec![],
+                })))
+            }),
         );
     }
 
@@ -265,7 +323,7 @@ pub mod tests {
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-                    Symbol::Value(ValueId(1)),
+                    Symbol::Global(GlobalId(1)),
                     "count".into()
                 ))),
                 type_annotation: None,
@@ -277,19 +335,19 @@ pub mod tests {
             *resolved.roots[1].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: any_pattern!(PatternKind::Bind(Name::Resolved(
-                    Symbol::Value(ValueId(2)),
+                    Symbol::Global(GlobalId(2)),
                     "counter".into()
                 ))),
                 type_annotation: None,
                 value: Some(any_expr!(ExprKind::Func(Func {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Value(ValueId(2)), "counter".into()),
+                    name: Name::Resolved(Symbol::Global(GlobalId(2)), "counter".into()),
                     generics: vec![],
-                    params: vec![param!(LocalId(1), "x")],
+                    params: vec![param!(ParamLocalId(1), "x")],
                     body: any_block!(vec![
-                        any_stmt!(StmtKind::Expr(variable!(LocalId(1), "x"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(ValueId(1), "count"))).into(),
-                        any_stmt!(StmtKind::Expr(variable!(ValueId(1), "count"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "x"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(GlobalId(1), "count"))).into(),
+                        any_stmt!(StmtKind::Expr(variable!(GlobalId(1), "count"))).into(),
                     ]),
                     ret: None,
                     attributes: vec![]
@@ -298,7 +356,7 @@ pub mod tests {
         );
 
         let mut expected = FxHashSet::default();
-        expected.insert(Symbol::Value(ValueId(1)));
+        expected.insert(Symbol::Global(GlobalId(1)));
 
         assert_eq!(
             resolved.phase.captures.get(&NodeID(9)),
@@ -318,33 +376,44 @@ pub mod tests {
 
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
-            any_decl!(DeclKind::Func(Func {
-                id: NodeID::ANY,
-                name: Name::Resolved(Symbol::Value(ValueId(1)), "fizz".into()),
-                generics: vec![GenericDecl {
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
                     id: NodeID::ANY,
-                    span: Span::ANY,
-                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
-                    generics: vec![],
-                    conformances: vec![],
-                }],
-                params: vec![param!(
-                    LocalId(1),
-                    "t",
-                    annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                    kind: PatternKind::Bind(Name::Resolved(
+                        Symbol::Global(GlobalId(1),),
+                        "fizz".into()
+                    )),
+                    span: Span::ANY
+                },
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::Func(Func {
+                    id: NodeID::ANY,
+                    name: Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()),
+                    generics: vec![GenericDecl {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        name: Name::Resolved(Symbol::Type(TypeId(1)), "T".into()),
+                        generics: vec![],
+                        conformances: vec![],
+                    }],
+                    params: vec![param!(
+                        ParamLocalId(1),
+                        "t",
+                        annotation!(TypeAnnotationKind::Nominal {
+                            name: Name::Resolved(Symbol::Type(TypeId(1)), "T".into()),
+                            generics: vec![]
+                        })
+                    ),],
+                    body: any_block!(vec![
+                        any_stmt!(StmtKind::Expr(variable!(ParamLocalId(1), "t"))).into(),
+                    ]),
+                    ret: Some(annotation!(TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::Type(TypeId(1)), "T".into()),
                         generics: vec![]
-                    })
-                ),],
-                body: any_block!(vec![
-                    any_stmt!(StmtKind::Expr(variable!(LocalId(1), "t"))).into(),
-                ]),
-                ret: Some(annotation!(TypeAnnotationKind::Nominal {
-                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
-                    generics: vec![]
-                })),
-                attributes: vec![],
-            })),
+                    })),
+                    attributes: vec![],
+                })),)
+            })
         );
     }
 
@@ -354,7 +423,7 @@ pub mod tests {
         assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
-                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                name: Name::Resolved(TypeId(1).into(), "Person".into()),
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![])
@@ -374,14 +443,14 @@ pub mod tests {
         assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
-                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                name: Name::Resolved(TypeId(1).into(), "Person".into()),
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Property {
                     label: "me".into(),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                        name: Name::Resolved(TypeId(1).into(), "Person".into()),
                         generics: vec![]
                     })),
                     default_value: None
@@ -402,11 +471,11 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
-                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                name: Name::Resolved(TypeId(1).into(), "Person".into()),
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
-                    name: Name::Resolved(Symbol::Type(DeclId(4)), "init".into()),
+                    name: Name::Resolved(Symbol::Type(TypeId(4)), "init".into()),
                     params: vec![],
                     body: any_block!(vec![])
                 }))])
@@ -426,10 +495,10 @@ pub mod tests {
         assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
-                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                name: Name::Resolved(TypeId(1).into(), "Person".into()),
                 generics: vec![GenericDecl {
                     id: NodeID::ANY,
-                    name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                    name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                     generics: vec![],
                     conformances: vec![],
                     span: Span::ANY
@@ -439,7 +508,7 @@ pub mod tests {
                     label: "me".into(),
                     is_static: false,
                     type_annotation: Some(annotation!(TypeAnnotationKind::Nominal {
-                        name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                        name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                         generics: vec![]
                     })),
                     default_value: None
@@ -464,14 +533,14 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Struct {
-                name: Name::Resolved(DeclId(1).into(), "Person".into()),
+                name: Name::Resolved(TypeId(1).into(), "Person".into()),
                 generics: vec![],
                 conformances: vec![],
                 body: any_block!(vec![
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Value(ValueId(2)), "fizz".into()),
+                            name: Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -492,7 +561,7 @@ pub mod tests {
                     any_decl!(DeclKind::Method {
                         func: Box::new(Func {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Value(ValueId(3)), "buzz".into()),
+                            name: Name::Resolved(Symbol::Global(GlobalId(2)), "buzz".into()),
                             generics: vec![],
                             params: vec![],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
@@ -528,16 +597,16 @@ pub mod tests {
         assert_eq!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizz".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into()),
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![
                     Node::Decl(any_decl!(DeclKind::EnumVariant(
-                        Name::Resolved(Symbol::Type(DeclId(2)), "foo".into()),
+                        Name::Resolved(Symbol::Type(TypeId(2)), "foo".into()),
                         vec![]
                     ))),
                     Node::Decl(any_decl!(DeclKind::EnumVariant(
-                        Name::Resolved(Symbol::Type(DeclId(3)), "bar".into()),
+                        Name::Resolved(Symbol::Type(TypeId(3)), "bar".into()),
                         vec![]
                     ))),
                 ])
@@ -558,12 +627,12 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizzable".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizzable".into()),
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::MethodRequirement(
                     FuncSignature {
-                        name: Name::Resolved(Symbol::Type(DeclId(2)), "buzz".into()),
+                        name: Name::Resolved(Symbol::Type(TypeId(2)), "buzz".into()),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Tuple(vec![])))
@@ -588,25 +657,25 @@ pub mod tests {
         assert_eq_diff!(
             *resolved.roots[0].as_decl(),
             any_decl!(DeclKind::Protocol {
-                name: Name::Resolved(Symbol::Type(DeclId(1)), "Fizzable".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Fizzable".into()),
                 conformances: vec![],
                 generics: vec![],
                 body: any_block!(vec![
                     Node::Decl(any_decl!(DeclKind::Associated {
                         generic: GenericDecl {
                             id: NodeID::ANY,
-                            name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                             generics: vec![],
                             conformances: vec![],
                             span: Span::ANY
                         }
                     })),
                     Node::Decl(any_decl!(DeclKind::MethodRequirement(FuncSignature {
-                        name: Name::Resolved(Symbol::Type(DeclId(3)), "buzz".into()),
+                        name: Name::Resolved(Symbol::Type(TypeId(3)), "buzz".into()),
                         params: vec![],
                         generics: vec![],
                         ret: Box::new(annotation!(TypeAnnotationKind::Nominal {
-                            name: Name::Resolved(Symbol::Type(DeclId(2)), "T".into()),
+                            name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()),
                             generics: vec![]
                         }))
                     }))),
@@ -629,7 +698,7 @@ pub mod tests {
         assert_eq!(
             *resolved.roots[1].as_stmt(),
             any_expr_stmt!(ExprKind::Match(
-                Box::new(variable!(LocalId(1), "a")),
+                Box::new(variable!(GlobalId(1), "a")),
                 vec![MatchArm {
                     id: NodeID::ANY,
                     span: Span::ANY,
@@ -637,12 +706,12 @@ pub mod tests {
                         id: NodeID::ANY,
                         span: Span::ANY,
                         kind: PatternKind::Bind(Name::Resolved(
-                            Symbol::Local(LocalId(2)),
+                            Symbol::DeclaredLocal(DeclaredLocalId(1)),
                             "b".into()
                         ))
                     },
                     body: any_block!(vec![any_expr_stmt!(ExprKind::Variable(Name::Resolved(
-                        Symbol::Local(LocalId(2)),
+                        Symbol::DeclaredLocal(DeclaredLocalId(1)),
                         "b".into()
                     )))])
                 }]

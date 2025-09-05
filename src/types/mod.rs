@@ -2,14 +2,16 @@ use crate::types::kind::Kind;
 
 pub mod builtins;
 pub mod constraints;
+pub mod dependencies_pass;
 pub mod fields;
-// pub mod inference_pass;
+pub mod inference_pass;
 pub mod kind;
 pub mod lower_funcs_to_lets_pass;
 pub mod ty;
 pub mod type_error;
 pub mod type_header_decl_pass;
 pub mod type_header_resolve_pass;
+pub mod type_operations;
 pub mod type_session;
 
 // Helper for n-ary arrows when all args are the same:

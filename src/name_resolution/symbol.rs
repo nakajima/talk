@@ -2,9 +2,11 @@ use crate::id_generator::IDGenerator;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
-    Type(DeclId),
-    Value(ValueId),
-    Local(LocalId),
+    Type(TypeId),
+    Global(GlobalId),
+    DeclaredLocal(DeclaredLocalId),
+    PatternBindLocal(PatternBindLocalId),
+    ParamLocal(ParamLocalId),
     BuiltinType(BuiltinId),
     Synthesized(SynthesizedId),
 }
@@ -17,13 +19,19 @@ impl Symbol {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ValueId(pub u32);
+pub struct GlobalId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DeclId(pub u32);
+pub struct TypeId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LocalId(pub u32);
+pub struct DeclaredLocalId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PatternBindLocalId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ParamLocalId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FieldId(pub u32);
@@ -50,14 +58,18 @@ macro_rules! impl_symbol_id {
     };
 }
 
-impl_symbol_id!(Type, DeclId);
-impl_symbol_id!(Local, LocalId);
-impl_symbol_id!(Value, ValueId);
+impl_symbol_id!(Type, TypeId);
+impl_symbol_id!(DeclaredLocal, DeclaredLocalId);
+impl_symbol_id!(Global, GlobalId);
+impl_symbol_id!(ParamLocal, ParamLocalId);
+impl_symbol_id!(PatternBindLocal, PatternBindLocalId);
 
 #[derive(Debug, Clone, Default)]
 pub struct Symbols {
     decls: IDGenerator,
     values: IDGenerator,
+    params: IDGenerator,
+    pattern_binds: IDGenerator,
     locals: IDGenerator,
     fields: IDGenerator,
     synthesized: IDGenerator,
@@ -65,16 +77,24 @@ pub struct Symbols {
 }
 
 impl Symbols {
-    pub fn next_decl(&mut self) -> DeclId {
-        DeclId(self.decls.next_id())
+    pub fn next_decl(&mut self) -> TypeId {
+        TypeId(self.decls.next_id())
     }
 
-    pub fn next_value(&mut self) -> ValueId {
-        ValueId(self.values.next_id())
+    pub fn next_value(&mut self) -> GlobalId {
+        GlobalId(self.values.next_id())
     }
 
-    pub fn next_local(&mut self) -> LocalId {
-        LocalId(self.locals.next_id())
+    pub fn next_param(&mut self) -> ParamLocalId {
+        ParamLocalId(self.params.next_id())
+    }
+
+    pub fn next_pattern_bind(&mut self) -> PatternBindLocalId {
+        PatternBindLocalId(self.pattern_binds.next_id())
+    }
+
+    pub fn next_local(&mut self) -> DeclaredLocalId {
+        DeclaredLocalId(self.locals.next_id())
     }
 
     pub fn next_field(&mut self) -> FieldId {

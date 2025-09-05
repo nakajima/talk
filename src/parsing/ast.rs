@@ -2,6 +2,7 @@ use derive_visitor::{Drive, Visitor};
 
 use crate::{
     diagnostic::AnyDiagnostic,
+    id_generator::IDGenerator,
     node::Node,
     node_id::NodeID,
     node_kinds::{
@@ -29,6 +30,7 @@ pub struct AST<Phase: ASTPhase = NewAST> {
     pub diagnostics: Vec<AnyDiagnostic>,
     pub meta: NodeMetaStorage,
     pub phase: Phase,
+    pub node_ids: IDGenerator,
 }
 
 impl<Phase: ASTPhase> AST<Phase> {

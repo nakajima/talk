@@ -1,5 +1,4 @@
 use crate::ast::{AST, NewAST, Parsed};
-use crate::id_generator::IDGenerator;
 use crate::label::Label;
 use crate::lexer::Lexer;
 use crate::name::Name;
@@ -52,7 +51,6 @@ pub struct SourceLocationStart {
 pub type SourceLocationStack = Vec<SourceLocationStart>;
 
 pub struct Parser<'a> {
-    ids: &'a mut IDGenerator,
     lexer: Lexer<'a>,
     source_location_stack: SourceLocationStack,
     next: Option<Token>,
@@ -63,9 +61,8 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(path: impl Into<String>, ids: &'a mut IDGenerator, lexer: Lexer<'a>) -> Self {
+    pub fn new(path: impl Into<String>, lexer: Lexer<'a>) -> Self {
         Self {
-            ids,
             lexer,
             next: None,
             current: None,
@@ -78,6 +75,7 @@ impl<'a> Parser<'a> {
                 diagnostics: Default::default(),
                 meta: Default::default(),
                 phase: (),
+                node_ids: Default::default(),
             },
         }
     }
@@ -114,6 +112,7 @@ impl<'a> Parser<'a> {
             diagnostics: self.ast.diagnostics,
             meta: self.ast.meta,
             phase: Parsed,
+            node_ids: self.ast.node_ids,
         };
 
         Ok(ast)
@@ -1436,7 +1435,7 @@ impl<'a> Parser<'a> {
             identifiers: start.identifiers,
         };
 
-        let next_id = self.ids.next_id();
+        let next_id = self.ast.node_ids.next_id();
         self.ast.meta.insert(next_id, meta);
 
         Ok((

@@ -139,6 +139,7 @@ impl NameResolver {
             diagnostics,
             meta,
             phase: resolver.phase,
+            node_ids: ast.node_ids,
         }
     }
 
@@ -233,14 +234,14 @@ impl NameResolver {
         Name::Resolved(sym, name.name_str())
     }
 
-    pub fn declare_value(&mut self, name: &Name) -> Name {
+    pub fn declare_global(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
             .get_mut(self.current_scope.expect("no scope to declare in"))
             .expect("scope not found");
 
         let id = self.symbols.next_value();
-        let sym = Symbol::Value(id);
+        let sym = Symbol::Global(id);
         tracing::debug!(
             "declare value {} -> {sym:?} {:?}",
             name.name_str(),
@@ -258,7 +259,25 @@ impl NameResolver {
             .expect("scope not found");
 
         let id = self.symbols.next_local();
-        let sym = Symbol::Local(id);
+        let sym = Symbol::DeclaredLocal(id);
+        tracing::debug!(
+            "declare local {} -> {sym:?} {:?}",
+            name.name_str(),
+            self.current_scope
+        );
+        scope.values.insert(name.name_str(), sym);
+
+        Name::Resolved(sym, name.name_str())
+    }
+
+    pub fn declare_param(&mut self, name: &Name) -> Name {
+        let scope = self
+            .scopes
+            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .expect("scope not found");
+
+        let id = self.symbols.next_param();
+        let sym = Symbol::ParamLocal(id);
         tracing::debug!(
             "declare local {} -> {sym:?} {:?}",
             name.name_str(),
@@ -335,7 +354,6 @@ impl NameResolver {
     fn enter_func(&mut self, func: &mut Func) {
         let Func {
             name: Name::Resolved(_, _),
-            params,
             ..
         } = func
         else {
@@ -343,10 +361,6 @@ impl NameResolver {
         };
 
         self.enter_scope(func.id);
-
-        for param in params {
-            param.name = self.declare_local(&param.name);
-        }
     }
 
     fn exit_func(&mut self, func: &mut Func) {

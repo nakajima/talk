@@ -114,7 +114,7 @@ impl<'a> DeclDeclarer<'a> {
         match kind {
             PatternKind::Bind(name @ Name::Raw(_)) => {
                 *name = if self.at_module_scope() {
-                    self.resolver.declare_value(name)
+                    self.resolver.declare_global(name)
                 } else {
                     self.resolver.declare_local(name)
                 }
@@ -152,16 +152,19 @@ impl<'a> DeclDeclarer<'a> {
                 attributes: _,
             },
             {
-                println!("declaring func name");
                 *name = self
                     .resolver
                     .lookup(name)
-                    .unwrap_or_else(|| self.resolver.declare_value(name));
+                    .unwrap_or_else(|| self.resolver.declare_global(name));
 
                 self.start_scope(*id);
 
                 for generic in generics {
                     generic.name = self.resolver.declare_type(&generic.name);
+                }
+
+                for param in params {
+                    param.name = self.resolver.declare_param(&param.name);
                 }
             }
         )

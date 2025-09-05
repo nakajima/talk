@@ -9,7 +9,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{DeclId, Symbol, SynthesizedId},
+        symbol::{Symbol, SynthesizedId, TypeId},
     },
     node_kinds::{
         generic_decl::GenericDecl,
@@ -28,8 +28,8 @@ use crate::{
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct HeadersResolved {
-    pub type_constructors: FxHashMap<DeclId, TypeDef<Ty>>,
-    pub protocols: FxHashMap<DeclId, TypeDef<Ty>>,
+    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
 }
 
 impl TypingPhase for HeadersResolved {
@@ -39,8 +39,8 @@ impl TypingPhase for HeadersResolved {
 #[derive(Debug)]
 pub struct TypeHeaderResolvePass {
     session: TypeSession<Raw>,
-    type_constructors: FxHashMap<DeclId, TypeDef<Ty>>,
-    protocols: FxHashMap<DeclId, TypeDef<Ty>>,
+    type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
+    protocols: FxHashMap<TypeId, TypeDef<Ty>>,
     generics_stack: Vec<IndexMap<Name, Ty>>,
     diagnostics: Vec<Diagnostic<TypeError>>,
 }
@@ -408,7 +408,7 @@ pub mod tests {
         name_resolution::{
             name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
-            symbol::{SynthesizedId, ValueId},
+            symbol::{GlobalId, SynthesizedId},
         },
         types::{type_header_decl_pass::TypeHeaderDeclPass, type_session::TypeDefKind},
     };
@@ -449,7 +449,7 @@ pub mod tests {
             session
                 .phase
                 .type_constructors
-                .get(&DeclId(1))
+                .get(&TypeId(1))
                 .unwrap()
                 .fields,
             TypeFields::Struct {
@@ -474,12 +474,12 @@ pub mod tests {
             session
                 .phase
                 .type_constructors
-                .get(&DeclId(1))
+                .get(&TypeId(1))
                 .unwrap()
                 .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![] }),
-                methods: crate::indexmap!(Name::Resolved(Symbol::Value(ValueId(2)), "fizz".into()) => Method { is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
+                methods: crate::indexmap!(Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()) => Method { is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
                 properties: Default::default(),
             }
         )
@@ -501,19 +501,19 @@ pub mod tests {
 
         let a = Ty::TypeConstructor {
             kind: TypeDefKind::Struct,
-            name: Name::Resolved(Symbol::Type(DeclId(1)), "A".into()),
+            name: Name::Resolved(Symbol::Type(TypeId(1)), "A".into()),
         };
 
         let b = Ty::TypeConstructor {
             kind: TypeDefKind::Struct,
-            name: Name::Resolved(Symbol::Type(DeclId(2)), "B".into()),
+            name: Name::Resolved(Symbol::Type(TypeId(2)), "B".into()),
         };
 
         assert_eq!(
             session
                 .phase
                 .type_constructors
-                .get(&DeclId(1))
+                .get(&TypeId(1))
                 .unwrap()
                 .fields,
             TypeFields::Struct {
@@ -532,7 +532,7 @@ pub mod tests {
             session
                 .phase
                 .type_constructors
-                .get(&DeclId(2))
+                .get(&TypeId(2))
                 .unwrap()
                 .fields,
             TypeFields::Struct {
@@ -557,11 +557,11 @@ pub mod tests {
         }",
         );
 
-        let type_def = session.phase.type_constructors.get(&DeclId(1)).unwrap();
+        let type_def = session.phase.type_constructors.get(&TypeId(1)).unwrap();
 
         assert_eq!(
             type_def.generics,
-            crate::indexmap!(Name::Resolved(Symbol::Type(DeclId(2)), "T".into()) => Ty::Rigid(DeclId(2)))
+            crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => Ty::Rigid(TypeId(2)))
         );
         let TypeFields::Struct { properties, .. } = &type_def.fields else {
             panic!("didn't get fields");
@@ -570,7 +570,7 @@ pub mod tests {
         assert_eq!(
             *properties,
             crate::indexmap!(
-                "t".into() => Property::<Ty> { is_static: false, ty_repr: Ty::Rigid(DeclId(2)) }
+                "t".into() => Property::<Ty> { is_static: false, ty_repr: Ty::Rigid(TypeId(2)) }
             )
         );
     }
@@ -589,7 +589,7 @@ pub mod tests {
         let type_application = Ty::TypeApplication(
             Box::new(Ty::TypeApplication(
                 Box::new(Ty::TypeConstructor {
-                    name: Name::Resolved(Symbol::Type(DeclId(1)), "A".into()),
+                    name: Name::Resolved(Symbol::Type(TypeId(1)), "A".into()),
                     kind: TypeDefKind::Struct,
                 }),
                 Box::new(Ty::Int),
@@ -601,7 +601,7 @@ pub mod tests {
             session
                 .phase
                 .type_constructors
-                .get(&DeclId(4))
+                .get(&TypeId(4))
                 .unwrap()
                 .fields,
             TypeFields::<Ty>::Struct {
@@ -637,12 +637,12 @@ pub mod tests {
 
         let type_application = Ty::TypeApplication(
             Box::new(Ty::TypeConstructor {
-                name: Name::Resolved(Symbol::Type(DeclId(3)), "B".into()),
+                name: Name::Resolved(Symbol::Type(TypeId(3)), "B".into()),
                 kind: TypeDefKind::Struct,
             }),
             Box::new(Ty::TypeApplication(
                 Box::new(Ty::TypeConstructor {
-                    name: Name::Resolved(Symbol::Type(DeclId(1)), "A".into()),
+                    name: Name::Resolved(Symbol::Type(TypeId(1)), "A".into()),
                     kind: TypeDefKind::Struct,
                 }),
                 Box::new(Ty::Int),
@@ -653,7 +653,7 @@ pub mod tests {
             session
                 .phase
                 .type_constructors
-                .get(&DeclId(5))
+                .get(&TypeId(5))
                 .unwrap()
                 .fields,
             TypeFields::<Ty>::Struct {

@@ -1,10 +1,10 @@
 use std::{error::Error, fmt::Display};
 
-use crate::{name_resolution::symbol::DeclId, types::ty::Ty};
+use crate::{name_resolution::symbol::TypeId, types::ty::Ty};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
-    TypeConstructorNotFound(DeclId),
+    TypeConstructorNotFound(TypeId),
     GenericArgCount { expected: u8, actual: u8 },
     InvalidUnification(Ty, Ty),
 }
