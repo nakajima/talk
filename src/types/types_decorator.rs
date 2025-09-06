@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
-    formatter::{Doc, FormatterDecorator, annotate, text, wrap},
+    formatter::{Doc, FormatterDecorator, annotate, wrap},
     node_id::NodeID,
     node_kinds::{
         decl::Decl,

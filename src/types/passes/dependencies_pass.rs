@@ -247,7 +247,7 @@ pub mod tests {
         );
         assert_eq!(
             es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId(2)), Binder::Global(GlobalId(1)))]),
+            FxHashSet::from_iter([(Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2)))]),
             "{es:?}"
         );
     }
@@ -293,7 +293,7 @@ pub mod tests {
         );
         assert_eq!(
             es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId(2)), Binder::Global(GlobalId(1)))]),
+            FxHashSet::from_iter([(Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2)))]),
             "{es:?}"
         );
     }

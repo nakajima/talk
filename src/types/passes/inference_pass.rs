@@ -257,6 +257,8 @@ impl<'a> InferencePass<'a> {
             };
         }
 
+        self.apply_to_self(&substitutions);
+
         substitutions
     }
 
