@@ -65,7 +65,6 @@ fn expr_class(kind: &ExprKind) -> &'static str {
         ExprKind::Variable(..) => "variable",
         ExprKind::If(..) => "if",
         ExprKind::Match(..) => "match",
-        ExprKind::PatternVariant(..) => "variant",
         ExprKind::RecordLiteral(..) => "record",
         ExprKind::RowVariable(..) => "row",
         ExprKind::Spread(..) => "spread",

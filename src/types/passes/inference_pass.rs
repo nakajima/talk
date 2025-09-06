@@ -474,7 +474,6 @@ impl<'a> InferencePass<'a> {
                 conseq_ty
             }
             ExprKind::Match(scrutinee, arms) => self.infer_match(scrutinee, arms, level, wants),
-            ExprKind::PatternVariant(..) => todo!(),
             ExprKind::RecordLiteral(..) => todo!(),
             ExprKind::RowVariable(..) => todo!(),
             ExprKind::Spread(..) => todo!(),

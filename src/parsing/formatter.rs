@@ -270,9 +270,6 @@ impl<'a> Formatter<'a> {
                 self.format_if(cond, then_block, else_block)
             }
             ExprKind::Match(target, arms) => self.format_match(target, arms),
-            ExprKind::PatternVariant(enum_name, variant_name, bindings) => {
-                self.format_pattern_variant(enum_name, variant_name, bindings)
-            }
             ExprKind::RecordLiteral(fields) => self.format_record_literal(fields),
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
             ExprKind::Spread(expr) => join(vec![text("..."), self.format_node(expr)], text("")),
@@ -1089,36 +1086,6 @@ impl<'a> Formatter<'a> {
             self.format_pattern(&arm.pattern),
             concat_space(text("->"), body_doc),
         )
-    }
-
-    fn format_pattern_variant(
-        &self,
-        enum_name: &Option<Name>,
-        variant_name: &Name,
-        bindings: &[Pattern],
-    ) -> Doc {
-        let mut result = if let Some(name) = enum_name {
-            concat(
-                self.format_name(name),
-                concat(text("."), self.format_name(variant_name)),
-            )
-        } else {
-            concat(text("."), self.format_name(variant_name))
-        };
-
-        if !bindings.is_empty() {
-            let binding_docs: Vec<_> = bindings.iter().map(|p| self.format_pattern(p)).collect();
-
-            result = concat(
-                result,
-                concat(
-                    text("("),
-                    concat(join(binding_docs, concat(text(","), text(" "))), text(")")),
-                ),
-            );
-        }
-
-        result
     }
 
     fn format_record_literal(&self, fields: &[RecordField]) -> Doc {

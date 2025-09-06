@@ -8,8 +8,7 @@ use crate::{
     node_id::NodeID,
     node_kinds::{
         block::Block, call_arg::CallArg, func::Func, incomplete_expr::IncompleteExpr,
-        match_arm::MatchArm, pattern::Pattern, record_field::RecordField,
-        type_annotation::TypeAnnotation,
+        match_arm::MatchArm, record_field::RecordField, type_annotation::TypeAnnotation,
     },
     parsing::span::Span,
     token_kind::TokenKind,
@@ -59,13 +58,6 @@ pub enum ExprKind {
     Match(
         Box<Expr>,     // scrutinee: the value being matched
         Vec<MatchArm>, // arms: [MatchArm(pattern, body)]
-    ),
-
-    // Patterns (for match arms)
-    PatternVariant(
-        #[drive(skip)] Option<Name>, // enum name (None for unqualified .some)
-        #[drive(skip)] Name,         // variant name: "some"
-        Vec<Pattern>,                // bindings: ["wrapped"]
     ),
 
     // Record literal: {x: 1, y: 2}
