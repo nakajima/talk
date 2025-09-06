@@ -458,6 +458,24 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(skip(self))]
+    pub(super) fn if_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::If)?;
+        let cond = self.expr()?;
+        let body = self.block(BlockContext::If)?;
+        self.consume(TokenKind::Else)?;
+        let alt = self.block(BlockContext::If)?;
+
+        let (id, span) = self.save_meta(tok)?;
+        Ok(Expr {
+            id,
+            span,
+            kind: ExprKind::If(Box::new(cond.as_expr()), body, alt),
+        }
+        .into())
+    }
+
+    #[instrument(skip(self))]
     fn if_stmt(&mut self) -> Result<Stmt, ParserError> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
@@ -641,6 +659,16 @@ impl<'a> Parser<'a> {
                     variant_name: member_name.to_string(),
                     fields,
                 }
+            }
+            TokenKind::LeftParen => {
+                self.advance();
+                let mut items = vec![];
+                while !self.did_match(TokenKind::RightParen)? {
+                    items.push(self.parse_pattern()?);
+                    self.consume(TokenKind::Comma).ok();
+                }
+
+                PatternKind::Tuple(items)
             }
 
             _ => todo!("{:?}", current.kind),

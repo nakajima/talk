@@ -27,7 +27,6 @@ pub mod tests {
         },
         parsing::parser_tests::tests::parse,
         span::Span,
-        types::passes::lower_funcs_to_lets_pass::LowerFuncsToLets,
     };
 
     macro_rules! param {
@@ -87,8 +86,7 @@ pub mod tests {
     }
 
     fn resolve_err(code: &'static str) -> AST<NameResolved> {
-        let mut parsed = parse(code);
-        LowerFuncsToLets::run(&mut parsed);
+        let parsed = parse(code);
         NameResolver::resolve(parsed)
     }
 

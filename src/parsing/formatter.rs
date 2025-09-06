@@ -34,6 +34,7 @@ pub enum Doc {
     Nest(u8, Box<Doc>),
     Concat(Box<Doc>, Box<Doc>),
     Group(Box<Doc>),
+    Annotation(String),
 }
 
 impl Doc {
@@ -46,46 +47,54 @@ impl Doc {
     }
 }
 
+pub fn wrap(before: Doc, inner: Doc, after: Doc) -> Doc {
+    concat(before, concat(inner, after))
+}
+
 // Helper functions for building documents
-fn empty() -> Doc {
+pub fn empty() -> Doc {
     Doc::Empty
 }
 
-fn text(s: impl Into<String>) -> Doc {
+pub fn text(s: impl Into<String>) -> Doc {
     Doc::Text(s.into())
 }
 
-fn line() -> Doc {
+pub fn annotate(s: impl Into<String>) -> Doc {
+    Doc::Annotation(s.into())
+}
+
+pub fn line() -> Doc {
     Doc::Line
 }
 
-fn softline() -> Doc {
+pub fn softline() -> Doc {
     Doc::Softline
 }
 
-fn hardline() -> Doc {
+pub fn hardline() -> Doc {
     Doc::Hardline
 }
 
-fn nest(indent: u8, doc: Doc) -> Doc {
+pub fn nest(indent: u8, doc: Doc) -> Doc {
     Doc::Nest(indent, Box::new(doc))
 }
 
-fn concat(lhs: Doc, rhs: Doc) -> Doc {
+pub fn concat(lhs: Doc, rhs: Doc) -> Doc {
     Doc::Concat(Box::new(lhs), Box::new(rhs))
 }
 
-fn group(doc: Doc) -> Doc {
+pub fn group(doc: Doc) -> Doc {
     Doc::Group(Box::new(doc))
 }
 
 // Concat with space operator
-fn concat_space(lhs: Doc, rhs: Doc) -> Doc {
+pub fn concat_space(lhs: Doc, rhs: Doc) -> Doc {
     concat(concat(lhs, text(" ")), rhs)
 }
 
 // Join documents with a separator
-fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
+pub fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
     docs.into_iter().fold(empty(), |acc, doc| {
         if acc.is_empty() {
             doc
@@ -95,14 +104,82 @@ fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
     })
 }
 
+pub trait FormatterDecorator {
+    fn wrap_expr(&self, expr: &Expr, doc: Doc) -> Doc;
+    fn wrap_decl(&self, decl: &Decl, doc: Doc) -> Doc;
+    fn wrap_stmt(&self, stmt: &Stmt, doc: Doc) -> Doc;
+}
+
+pub struct DefaultDecorator {}
+impl FormatterDecorator for DefaultDecorator {
+    fn wrap_expr(&self, _: &Expr, doc: Doc) -> Doc {
+        doc
+    }
+    fn wrap_decl(&self, _: &Decl, doc: Doc) -> Doc {
+        doc
+    }
+    fn wrap_stmt(&self, _: &Stmt, doc: Doc) -> Doc {
+        doc
+    }
+}
+
+pub struct DebugHTMLFormatter {}
+impl FormatterDecorator for DebugHTMLFormatter {
+    fn wrap_expr(&self, expr: &Expr, doc: Doc) -> Doc {
+        concat(
+            concat(
+                annotate(format!("<span class=\"expr\" id=\"node-{}\">", expr.id)),
+                doc,
+            ),
+            annotate("</span>"),
+        )
+    }
+
+    fn wrap_decl(&self, decl: &Decl, doc: Doc) -> Doc {
+        concat(
+            concat(
+                text(format!("<span class=\"decl\" id=\"node-{}\">", decl.id)),
+                doc,
+            ),
+            text("</span>"),
+        )
+    }
+
+    fn wrap_stmt(&self, stmt: &Stmt, doc: Doc) -> Doc {
+        concat(
+            concat(
+                text(format!("<span class=\"stmt\" id=\"node-{}\">", stmt.id)),
+                doc,
+            ),
+            text("</span>"),
+        )
+    }
+}
+
 pub struct Formatter<'a> {
     // Track expression metadata for source location info
     meta_storage: &'a NodeMetaStorage,
+    decorators: Vec<Box<dyn FormatterDecorator>>,
 }
 
 impl<'a> Formatter<'a> {
-    pub fn new(meta_storage: &'a NodeMetaStorage) -> Self {
-        Self { meta_storage }
+    pub fn new(meta_storage: &'a NodeMetaStorage) -> Formatter<'a> {
+        Self {
+            meta_storage,
+            decorators: vec![],
+        }
+    }
+}
+
+impl<'a> Formatter<'a> {
+    pub fn new_with_decorators(
+        meta_storage: &'a NodeMetaStorage,
+        decorators: Vec<Box<dyn FormatterDecorator>>,
+    ) -> Formatter<'a> {
+        Formatter {
+            meta_storage,
+            decorators,
+        }
     }
 
     fn get_meta_for_node(&self, node: &Node) -> Option<&NodeMeta> {
@@ -169,7 +246,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_expr(&self, expr: &Expr) -> Doc {
-        match &expr.kind {
+        let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
             ExprKind::LiteralArray(items) => self.format_array_literal(items),
             ExprKind::LiteralString(string) => self.format_string_literal(string),
@@ -199,11 +276,15 @@ impl<'a> Formatter<'a> {
             ExprKind::RecordLiteral(fields) => self.format_record_literal(fields),
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
             ExprKind::Spread(expr) => join(vec![text("..."), self.format_node(expr)], text("")),
-        }
+        };
+
+        self.decorators
+            .iter()
+            .fold(doc, |acc, decorator| decorator.wrap_expr(expr, acc))
     }
 
     fn format_decl(&self, decl: &Decl) -> Doc {
-        match &decl.kind {
+        let doc = match &decl.kind {
             DeclKind::Import(name) => join(vec![text("import"), text(name)], text(" ")),
             DeclKind::Struct {
                 name,
@@ -252,11 +333,15 @@ impl<'a> Formatter<'a> {
             DeclKind::EnumVariant(name, types) => self.format_enum_variant(name, types),
             DeclKind::FuncSignature(sig) => self.format_func_signature(sig),
             DeclKind::MethodRequirement(sig) => self.format_func_signature(sig),
-        }
+        };
+
+        self.decorators
+            .iter()
+            .fold(doc, |acc, decorator| decorator.wrap_decl(decl, acc))
     }
 
     fn format_stmt(&self, stmt: &Stmt) -> Doc {
-        match &stmt.kind {
+        let doc = match &stmt.kind {
             StmtKind::Expr(expr) => self.format_expr(expr),
             StmtKind::If(cond, then_block) => concat_space(
                 text("if"),
@@ -278,7 +363,11 @@ impl<'a> Formatter<'a> {
                 }
                 concat_space(result, self.format_block(body))
             }
-        }
+        };
+
+        self.decorators
+            .iter()
+            .fold(doc, |acc, decorator| decorator.wrap_stmt(stmt, acc))
     }
 
     fn format_string_literal(&self, string: &str) -> Doc {
@@ -457,6 +546,16 @@ impl<'a> Formatter<'a> {
             PatternKind::LiteralFalse => text("false"),
             PatternKind::Bind(name) => self.format_name(name),
             PatternKind::Wildcard => text("_"),
+            PatternKind::Tuple(items) => concat(
+                concat(
+                    text("("),
+                    join(
+                        items.iter().map(|item| self.format_pattern(item)).collect(),
+                        text(","),
+                    ),
+                ),
+                text(")"),
+            ),
             PatternKind::Variant {
                 enum_name,
                 variant_name,
@@ -1151,6 +1250,9 @@ impl<'a> Formatter<'a> {
         while let Some((indent, current_doc)) = queue.pop() {
             match current_doc {
                 Doc::Empty => continue,
+                Doc::Annotation(s) => {
+                    output.push_str(&s);
+                }
                 Doc::Text(s) => {
                     if was_newline {
                         output.push_str(&"\t".repeat(indent as usize));
@@ -1190,6 +1292,7 @@ impl<'a> Formatter<'a> {
             Doc::Empty | Doc::Text(_) => doc,
             Doc::Hardline => Doc::Hardline,
             Doc::Softline => Doc::Empty,
+            Doc::Annotation(_) => doc,
             Doc::Line => Doc::Text(" ".to_string()),
             Doc::Concat(left, right) => Doc::Concat(
                 Box::new(Self::flatten(*left)),
@@ -1210,6 +1313,7 @@ impl<'a> Formatter<'a> {
             #[allow(clippy::unwrap_used)]
             match queue.pop().unwrap() {
                 Doc::Empty => continue,
+                Doc::Annotation(_) => continue,
                 Doc::Text(s) => width -= s.len() as isize,
                 Doc::Line | Doc::Softline | Doc::Hardline => return true,
                 Doc::Concat(left, right) => {

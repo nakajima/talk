@@ -25,6 +25,7 @@ use crate::{
     },
     on,
     span::Span,
+    types::passes::lower_funcs_to_lets_pass::LowerFuncsToLets,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,7 +93,9 @@ pub struct NameResolver {
 impl ASTPhase for NameResolved {}
 
 impl NameResolver {
-    pub fn resolve(ast: AST<Parsed>) -> AST<NameResolved> {
+    pub fn resolve(mut ast: AST<Parsed>) -> AST<NameResolved> {
+        LowerFuncsToLets::run(&mut ast);
+
         let AST {
             path,
             roots,
@@ -216,7 +219,7 @@ impl NameResolver {
         self.current_scope = current_scope.parent_id;
     }
 
-    pub fn declare_type(&mut self, name: &Name) -> Name {
+    pub(super) fn declare_type(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
             .get_mut(self.current_scope.expect("no scope to declare in"))
@@ -234,7 +237,7 @@ impl NameResolver {
         Name::Resolved(sym, name.name_str())
     }
 
-    pub fn declare_global(&mut self, name: &Name) -> Name {
+    pub(super) fn declare_global(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
             .get_mut(self.current_scope.expect("no scope to declare in"))
@@ -252,7 +255,7 @@ impl NameResolver {
         Name::Resolved(sym, name.name_str())
     }
 
-    pub fn declare_local(&mut self, name: &Name) -> Name {
+    pub(super) fn declare_local(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
             .get_mut(self.current_scope.expect("no scope to declare in"))
@@ -270,7 +273,7 @@ impl NameResolver {
         Name::Resolved(sym, name.name_str())
     }
 
-    pub fn declare_param(&mut self, name: &Name) -> Name {
+    pub(super) fn declare_param(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
             .get_mut(self.current_scope.expect("no scope to declare in"))

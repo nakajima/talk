@@ -1,5 +1,5 @@
 use derive_visitor::{Drive, Visitor};
-use petgraph::{algo::kosaraju_scc, prelude::DiGraphMap};
+use petgraph::algo::kosaraju_scc;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 
@@ -17,23 +17,35 @@ use crate::{
     node_kinds::{
         block::Block,
         call_arg::CallArg,
+        decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        pattern::{Pattern, PatternKind},
         stmt::{Stmt, StmtKind},
         type_annotation::TypeAnnotation,
     },
     types::{
         constraints::{Constraint, ConstraintCause, Equals},
-        passes::dependencies_pass::Binder,
-        passes::type_header_resolve_pass::HeadersResolved,
+        passes::dependencies_pass::{Binder, SCCResolved},
         ty::{Level, MetaId, Ty},
         type_error::TypeError,
         type_operations::{apply, unify},
-        type_session::{TypeDef, TypeSession},
+        type_session::{TypeDef, TypeSession, TypingPhase},
     },
 };
 
 pub type Substitutions = FxHashMap<MetaId, Ty>;
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Inferenced {
+    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub types_by_node: FxHashMap<NodeID, Ty>,
+}
+
+impl TypingPhase for Inferenced {
+    type Next = Inferenced;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MetaTag {
@@ -111,10 +123,8 @@ pub struct InferenceSolution {
 }
 
 #[derive(Debug)]
-pub struct InferencePass {
-    ast: AST<NameResolved>,
-    _type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
-    _protocols: FxHashMap<TypeId, TypeDef<Ty>>,
+pub struct InferencePass<'a> {
+    ast: &'a mut AST<NameResolved>,
     types_by_node: FxHashMap<NodeID, Ty>,
     metavars: IDGenerator,
     term_env: TermEnv,
@@ -129,22 +139,18 @@ impl Wants {
     }
 }
 
-impl InferencePass {
+impl<'a> InferencePass<'a> {
     pub fn perform(
-        session: TypeSession<HeadersResolved>,
-        ast: AST<NameResolved>,
-        dependencies: DiGraphMap<Binder, ()>,
-        rhs_map: FxHashMap<Binder, NodeID>,
-    ) -> InferenceResult {
-        let groups = kosaraju_scc(&dependencies);
+        mut session: TypeSession<SCCResolved>,
+        ast: &'a mut AST<NameResolved>,
+    ) -> TypeSession<Inferenced> {
+        let groups = kosaraju_scc(&session.phase.graph);
         let mut pass = InferencePass {
             ast,
-            _type_constructors: session.phase.type_constructors,
-            _protocols: session.phase.protocols,
             types_by_node: Default::default(),
             metavars: Default::default(),
             term_env: TermEnv::new(),
-            rhs_map,
+            rhs_map: session.phase.rhs_map.clone(),
         };
 
         // Handle binders first
@@ -163,9 +169,9 @@ impl InferencePass {
         let roots = std::mem::take(&mut pass.ast.roots);
 
         for root in roots.iter() {
-            if !matches!(root, Node::Stmt(_)) {
-                continue;
-            }
+            // if !matches!(root, Node::Stmt(_)) {
+            //     continue;
+            // }
 
             let mut wants = Wants(vec![]);
             let ty = pass.infer_node(root, Level(1), &mut wants);
@@ -178,10 +184,16 @@ impl InferencePass {
 
         pass.annotate_uses_after_inference();
 
-        InferenceResult {
-            ast: pass.into_typed_ast(),
-            diagnostics: vec![], // populate from solve() if you report errors
-        }
+        let type_constructors = std::mem::take(&mut session.phase.type_constructors);
+        let protocols = std::mem::take(&mut session.phase.protocols);
+
+        let phase = Inferenced {
+            type_constructors,
+            protocols,
+            types_by_node: pass.types_by_node,
+        };
+
+        session.advance(phase)
     }
 
     #[instrument(skip(self))]
@@ -195,12 +207,18 @@ impl InferencePass {
                 level: inner_level,
             };
 
+            tracing::trace!("binding {binder:?} placeholder");
+
             self.term_env.insert_mono(binder.into(), m);
         }
 
         for &binder in &group.binders {
             let symbol = Symbol::from(binder);
-            let rhs_expr_id = self.rhs_map.get(&binder).copied().unwrap();
+            let Some(rhs_expr_id) = self.rhs_map.get(&binder).copied() else {
+                println!("Did not get rhs for {binder:?}");
+                continue;
+            };
+
             let rhs_expr = self.ast.find(rhs_expr_id).clone();
 
             let got = self.infer_node(&rhs_expr.unwrap(), inner_level, &mut wants);
@@ -285,26 +303,38 @@ impl InferencePass {
         Scheme { foralls, ty }
     }
 
-    fn into_typed_ast(self) -> AST<Typed> {
-        AST {
-            path: self.ast.path,
-            meta: self.ast.meta,
-            roots: self.ast.roots, // same nodes
-            diagnostics: self.ast.diagnostics,
-            phase: Typed {
-                _types_by_node: self.types_by_node,
-            },
-            node_ids: self.ast.node_ids,
-        }
-    }
-
     #[instrument(skip(self))]
     fn infer_node(&mut self, node: &Node, level: Level, wants: &mut Wants) -> Ty {
         match node {
             Node::Expr(expr) => self.infer_expr(expr, level, wants),
             Node::Stmt(stmt) => self.infer_stmt(stmt, level, wants),
+            Node::Decl(decl) => self.infer_decl(decl, level, wants),
             Node::Block(block) => self.infer_block(block, level, wants),
             _ => todo!("don't know how to handle {node:?}"),
+        }
+    }
+
+    #[instrument(skip(self))]
+    fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> Ty {
+        match &decl.kind {
+            DeclKind::Let { lhs, .. } => {
+                let Pattern { id, kind, .. } = &lhs;
+
+                match kind {
+                    PatternKind::Bind(Name::Resolved(sym, _)) => {
+                        let ty = match self.term_env.lookup(sym).unwrap() {
+                            EnvEntry::Mono(ty) => ty.clone(),
+                            EnvEntry::Scheme(scheme) => scheme.ty.clone(),
+                        };
+
+                        self.types_by_node.insert(*id, ty.clone());
+
+                        ty
+                    }
+                    _ => todo!(),
+                }
+            }
+            _ => todo!("unhandled: {decl:?}"),
         }
     }
 
@@ -339,7 +369,12 @@ impl InferencePass {
             ExprKind::LiteralString(_) => todo!(),
             ExprKind::Unary(..) => todo!(),
             ExprKind::Binary(..) => todo!(),
-            ExprKind::Tuple(..) => todo!(),
+            ExprKind::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|t| self.infer_expr(t, level, wants))
+                    .collect(),
+            ),
             ExprKind::Block(..) => todo!(),
             ExprKind::Call {
                 callee,
@@ -479,6 +514,11 @@ pub fn collect_metas(ty: &Ty, out: &mut FxHashSet<MetaTag>) {
             collect_metas(fun, out);
             collect_metas(arg, out);
         }
+        Ty::Tuple(items) => {
+            for item in items {
+                collect_metas(item, out);
+            }
+        }
         Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) | Ty::TypeConstructor { .. } => {}
     }
 }
@@ -523,26 +563,22 @@ pub struct InferenceResult {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::types::{
-        passes::dependencies_pass::DependenciesPass,
-        passes::type_header_resolve_pass::tests::type_header_resolve_pass_err,
-    };
+    use crate::types::passes::dependencies_pass::tests::resolve_dependencies;
 
-    fn typecheck(code: &'static str) -> InferenceResult {
-        let (ast, session) = type_header_resolve_pass_err(code).unwrap();
-        let deps = DependenciesPass::drive(&ast);
-        InferencePass::perform(session, ast, deps.graph, deps.rhs_map)
+    fn typecheck(code: &'static str) -> (AST<NameResolved>, TypeSession<Inferenced>) {
+        let (mut ast, session) = resolve_dependencies(code);
+        let session = InferencePass::perform(session, &mut ast);
+        (ast, session)
     }
 
     #[test]
     fn types_int() {
-        let types = typecheck("let a = 123; a");
+        let (ast, session) = typecheck("let a = 123; a");
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Int
         );
@@ -550,13 +586,12 @@ pub mod tests {
 
     #[test]
     fn types_float() {
-        let types = typecheck("let a = 1.23; a");
+        let (ast, session) = typecheck("let a = 1.23; a");
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Float
         );
@@ -564,22 +599,20 @@ pub mod tests {
 
     #[test]
     fn types_bool() {
-        let types = typecheck("let a = true; a ; let b = false ; b");
+        let (ast, session) = typecheck("let a = true; a ; let b = false ; b");
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Bool
         );
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[3].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[3].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Bool
         );
@@ -587,7 +620,7 @@ pub mod tests {
 
     #[test]
     fn types_identity() {
-        let types = typecheck(
+        let (ast, session) = typecheck(
             "
         func identity(x) { x }
         identity(123)
@@ -595,28 +628,55 @@ pub mod tests {
         ",
         );
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Int
         );
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[2].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[2].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Bool
         );
     }
 
     #[test]
+    fn types_call_let() {
+        let (ast, session) = typecheck(
+            "
+        func id(x) { x }
+        let a = id(123)
+        let b = id(1.23)
+        a
+        b
+        ",
+        );
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[3].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Int
+        );
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[4].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Float
+        );
+    }
+
+    #[test]
     fn types_nested_identity() {
-        let types = typecheck(
+        let (ast, session) = typecheck(
             "
         func identity(x) { x }
         identity(identity(123))
@@ -624,22 +684,79 @@ pub mod tests {
         ",
         );
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[1].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Int
         );
         assert_eq!(
-            *types
-                .ast
+            *session
                 .phase
-                ._types_by_node
-                .get(&types.ast.roots[2].as_stmt().clone().as_expr().id)
+                .types_by_node
+                .get(&ast.roots[2].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Bool
+        );
+    }
+
+    #[test]
+    fn types_multiple_args() {
+        let (ast, session) = typecheck(
+            "
+        func makeTuple(x, y) {
+            (x, y)
+        }
+
+        makeTuple(123, true)
+            ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+        );
+    }
+
+    #[test]
+    fn types_tuple_value() {
+        let (ast, session) = typecheck(
+            "
+        let z = (123, true)
+        z
+        ",
+        );
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+        );
+    }
+
+    #[test]
+    #[ignore = "waiting on rows"]
+    fn types_tuple_assignment() {
+        let (ast, session) = typecheck(
+            "
+        let z = (123, 1.23)
+        let (x, y) = z
+        ",
+        );
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Int
         );
     }
 }

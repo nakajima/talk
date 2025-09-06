@@ -28,6 +28,13 @@ pub(super) fn unify(
                 ))
             }
         }
+        (Ty::Tuple(lhs), Ty::Tuple(rhs)) => {
+            let mut did_change = false;
+            for (lhs, rhs) in lhs.iter().zip(rhs) {
+                did_change |= unify(lhs, rhs, substitutions)?;
+            }
+            Ok(did_change)
+        }
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions)?;
@@ -99,6 +106,7 @@ pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
             Box::new(apply(*params, substitutions)),
             Box::new(apply(*ret, substitutions)),
         ),
+        Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             apply(lhs, substitutions).into(),
             apply(rhs, substitutions).into(),

@@ -20,6 +20,7 @@ use crate::{
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
+        passes::dependencies_pass::SCCResolved,
         ty::Ty,
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
@@ -33,7 +34,7 @@ pub struct HeadersResolved {
 }
 
 impl TypingPhase for HeadersResolved {
-    type Next = HeadersResolved;
+    type Next = SCCResolved;
 }
 
 #[derive(Debug)]

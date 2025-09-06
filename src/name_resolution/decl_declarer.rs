@@ -119,6 +119,7 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare_local(name)
                 }
             }
+            PatternKind::Tuple(_) => (),
             PatternKind::Wildcard => (),
             _ => todo!(),
         }

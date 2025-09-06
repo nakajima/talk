@@ -8,7 +8,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{DeclaredLocalId, GlobalId, Symbol},
+        symbol::{DeclaredLocalId, GlobalId, Symbol, TypeId},
     },
     node_id::NodeID,
     node_kinds::{
@@ -17,7 +17,24 @@ use crate::{
         func::Func,
         pattern::{Pattern, PatternKind},
     },
+    types::{
+        passes::{inference_pass::Inferenced, type_header_resolve_pass::HeadersResolved},
+        ty::Ty,
+        type_session::{TypeDef, TypeSession, TypingPhase},
+    },
 };
+
+#[derive(Debug, Clone)]
+pub struct SCCResolved {
+    pub graph: DiGraphMap<Binder, ()>,
+    pub rhs_map: FxHashMap<Binder, NodeID>,
+    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
+}
+
+impl TypingPhase for SCCResolved {
+    type Next = Inferenced;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub enum Binder {
@@ -58,7 +75,10 @@ pub struct DependenciesPass {
 }
 
 impl DependenciesPass {
-    pub fn drive(ast: &AST<NameResolved>) -> DependenciesPass {
+    pub fn drive(
+        mut session: TypeSession<HeadersResolved>,
+        ast: &mut AST<NameResolved>,
+    ) -> TypeSession<SCCResolved> {
         let mut pass = DependenciesPass {
             graph: Default::default(),
             rhs_map: Default::default(),
@@ -69,7 +89,17 @@ impl DependenciesPass {
             root.drive(&mut pass);
         }
 
-        pass
+        let type_constructors = std::mem::take(&mut session.phase.type_constructors);
+        let protocols = std::mem::take(&mut session.phase.protocols);
+
+        let phase = SCCResolved {
+            graph: pass.graph,
+            rhs_map: pass.rhs_map,
+            type_constructors,
+            protocols,
+        };
+
+        session.advance(phase)
     }
 
     fn enter_decl(&mut self, decl: &Decl) {
@@ -137,14 +167,14 @@ impl DependenciesPass {
                     let binder = Binder::Global(*global_id);
 
                     if let Some((_, scope_binder)) = self.binder_stack.last() {
-                        self.graph.add_edge(binder, *scope_binder, ());
+                        self.graph.add_edge(*scope_binder, binder, ());
                     }
                 }
                 Symbol::DeclaredLocal(declared_local_id) => {
                     let binder = Binder::LocalDecl(*declared_local_id);
 
                     if let Some((_, scope_binder)) = self.binder_stack.last() {
-                        self.graph.add_edge(binder, *scope_binder, ());
+                        self.graph.add_edge(*scope_binder, binder, ());
                     }
                 }
                 _ => (),
@@ -155,26 +185,44 @@ impl DependenciesPass {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use rustc_hash::FxHashSet;
 
     use crate::{
-        name_resolution::{name_resolver_tests::tests::resolve, symbol::GlobalId},
-        types::passes::dependencies_pass::{Binder, DependenciesPass},
+        ast::AST,
+        name_resolution::{name_resolver::NameResolved, symbol::GlobalId},
+        types::{
+            passes::{
+                dependencies_pass::{Binder, DependenciesPass, SCCResolved},
+                type_header_resolve_pass::tests::type_header_resolve_pass_err,
+            },
+            type_session::TypeSession,
+        },
     };
 
+    pub fn resolve_dependencies(
+        code: &'static str,
+    ) -> (AST<NameResolved>, TypeSession<SCCResolved>) {
+        let (mut ast, session) = type_header_resolve_pass_err(code).unwrap();
+        let session = DependenciesPass::drive(session, &mut ast);
+        (ast, session)
+    }
+
     fn graph_nodes(code: &'static str) -> Vec<Binder> {
-        let ast = resolve(code);
-        let pass = DependenciesPass::drive(&ast);
-        let mut nodes: Vec<Binder> = pass.graph.nodes().collect();
+        let (_, session) = resolve_dependencies(code);
+        let mut nodes: Vec<Binder> = session.phase.graph.nodes().collect();
         nodes.sort();
         nodes
     }
 
     fn graph_edges(code: &'static str) -> FxHashSet<(Binder, Binder)> {
-        let ast = resolve(code);
-        let pass = DependenciesPass::drive(&ast);
-        pass.graph.all_edges().map(|(u, v, _)| (u, v)).collect()
+        let (_, session) = resolve_dependencies(code);
+        session
+            .phase
+            .graph
+            .all_edges()
+            .map(|(u, v, _)| (u, v))
+            .collect()
     }
 
     #[test]

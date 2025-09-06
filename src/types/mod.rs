@@ -9,6 +9,7 @@ pub mod ty;
 pub mod type_error;
 pub mod type_operations;
 pub mod type_session;
+pub mod types_decorator;
 
 // Helper for n-ary arrows when all args are the same:
 pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {

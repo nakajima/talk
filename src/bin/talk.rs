@@ -15,6 +15,7 @@ async fn main() {
     enum Commands {
         // IR { filename: PathBuf },
         Parse { filename: String },
+        Debug { filename: String },
         // Run { filename: PathBuf },
         // Lsp(LspArgs),
     }
@@ -33,6 +34,38 @@ async fn main() {
     // matches just as you would the top level cmd
     match &cli.command {
         Commands::Parse { .. } => {}
+        Commands::Debug { filename } => {
+            use talk::{
+                formatter::{DebugHTMLFormatter, Formatter},
+                lexer::Lexer,
+                name_resolution::name_resolver::NameResolver,
+                parser::Parser,
+                types::{
+                    type_session::{Raw, TypeSession},
+                    types_decorator::TypesDecorator,
+                },
+            };
+
+            let code = std::fs::read_to_string(filename).unwrap();
+            let lexer = Lexer::new(&code);
+            let parser = Parser::new(filename, lexer);
+            let parsed = parser.parse().unwrap();
+            let mut resolved = NameResolver::resolve(parsed);
+
+            let session = TypeSession::<Raw>::drive(&mut resolved);
+
+            let formatter = Formatter::new_with_decorators(
+                &resolved.meta,
+                vec![
+                    Box::new(DebugHTMLFormatter {}),
+                    Box::new(TypesDecorator {
+                        types_by_node: session.phase.types_by_node,
+                    }),
+                ],
+            );
+
+            println!("{}", formatter.format(&resolved.roots, 80));
+        }
     }
 }
 

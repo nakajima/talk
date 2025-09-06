@@ -13,6 +13,8 @@ pub enum PatternKind {
     // Variable binding (always succeeds, binds value)
     Bind(#[drive(skip)] Name),
 
+    Tuple(Vec<Pattern>),
+
     // Wildcard (always succeeds, ignores value)
     Wildcard,
 

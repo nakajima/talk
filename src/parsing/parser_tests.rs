@@ -962,6 +962,27 @@ pub mod tests {
     }
 
     #[test]
+    fn parses_if_expr() {
+        let parsed = parse("let a = if true { 123 } else { 456 }");
+        assert_eq!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: Pattern {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    kind: PatternKind::Bind("a".into())
+                },
+                type_annotation: None,
+                value: Some(any_expr!(ExprKind::If(
+                    any_expr!(ExprKind::LiteralTrue).into(),
+                    any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
+                    any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("456".into()))]),
+                )))
+            })
+        );
+    }
+
+    #[test]
     fn parses_loop() {
         let parsed = parse("loop { 123 }");
         assert_eq!(

@@ -10,8 +10,14 @@ use crate::{
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
     types::{
-        fields::TypeFields, kind::Kind, passes::type_header_decl_pass::TypeHeaderDeclPass,
-        passes::type_header_resolve_pass::HeadersResolved,
+        fields::TypeFields,
+        kind::Kind,
+        passes::{
+            dependencies_pass::DependenciesPass,
+            inference_pass::{InferencePass, Inferenced},
+            type_header_decl_pass::TypeHeaderDeclPass,
+            type_header_resolve_pass::{HeadersResolved, TypeHeaderResolvePass},
+        },
     },
 };
 
@@ -73,10 +79,12 @@ pub struct TypeSession<Phase: TypingPhase = Raw> {
 pub struct Typed {}
 
 impl<Phase: TypingPhase> TypeSession<Phase> {
-    pub fn drive(ast: &AST<NameResolved>) -> TypeSession<Raw> {
+    pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession<Inferenced> {
         let mut session = TypeSession::<Raw>::default();
         TypeHeaderDeclPass::drive(&mut session, ast);
-        session
+        let session = TypeHeaderResolvePass::drive(session, ast).unwrap();
+        let session = DependenciesPass::drive(session, ast);
+        InferencePass::perform(session, ast)
     }
 
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {

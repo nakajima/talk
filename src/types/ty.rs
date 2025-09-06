@@ -35,6 +35,7 @@ pub enum Ty {
     TypeConstructor { name: Name, kind: TypeDefKind },
     TypeApplication(Box<Ty>, Box<Ty>),
     Func(Box<Ty>, Box<Ty>),
+    Tuple(Vec<Ty>),
 }
 
 #[allow(non_upper_case_globals)]
