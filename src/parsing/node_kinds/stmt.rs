@@ -10,7 +10,11 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
 pub enum StmtKind {
     Expr(Expr),
-    If(Expr /* condition */, Block /* then block */),
+    If(
+        Expr,          /* condition */
+        Block,         /* then block */
+        Option<Block>, /* else block */
+    ),
     Return(Option<Expr>),
     Break,
     Assignment(Expr /* LHS */, Expr /* RHS */),

@@ -5,6 +5,8 @@ pub enum ConstraintCause {
     Literal(NodeID),
     Assignment(NodeID),
     Call(NodeID),
+    Condition(NodeID),
+    Pattern(NodeID),
     Internal,
 }
 

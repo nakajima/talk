@@ -121,7 +121,7 @@ impl<'a> DeclDeclarer<'a> {
             }
             PatternKind::Tuple(_) => (),
             PatternKind::Wildcard => (),
-            _ => todo!(),
+            _ => (),
         }
     }
 

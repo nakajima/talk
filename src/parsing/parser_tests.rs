@@ -942,7 +942,8 @@ pub mod tests {
                         span: Span::ANY,
                         args: vec![],
                         body: vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]
-                    }
+                    },
+                    None
                 )
             }
         );
@@ -953,10 +954,12 @@ pub mod tests {
         let parsed = parse("if true { 123 } else { 456 }");
         assert_eq!(
             *parsed.roots[0].as_stmt(),
-            any_expr_stmt!(ExprKind::If(
-                any_expr!(ExprKind::LiteralTrue).into(),
+            any_stmt!(StmtKind::If(
+                any_expr!(ExprKind::LiteralTrue),
                 any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("123".into()))]),
-                any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt("456".into()))]),
+                Some(any_block!(vec![any_expr_stmt!(ExprKind::LiteralInt(
+                    "456".into()
+                ))])),
             ))
         );
     }

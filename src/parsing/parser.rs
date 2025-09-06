@@ -488,18 +488,14 @@ impl<'a> Parser<'a> {
             Ok(Stmt {
                 id,
                 span,
-                kind: StmtKind::Expr(Expr {
-                    id,
-                    span,
-                    kind: ExprKind::If(Box::new(cond.as_expr()), body, alt),
-                }),
+                kind: StmtKind::If(cond.as_expr(), body, Some(alt)),
             })
         } else {
             let (id, span) = self.save_meta(tok)?;
             Ok(Stmt {
                 id,
                 span,
-                kind: StmtKind::If(cond.as_expr(), body),
+                kind: StmtKind::If(cond.as_expr(), body, None),
             })
         }
     }

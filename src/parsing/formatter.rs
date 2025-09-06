@@ -343,10 +343,21 @@ impl<'a> Formatter<'a> {
     fn format_stmt(&self, stmt: &Stmt) -> Doc {
         let doc = match &stmt.kind {
             StmtKind::Expr(expr) => self.format_expr(expr),
-            StmtKind::If(cond, then_block) => concat_space(
-                text("if"),
-                concat_space(self.format_expr(cond), self.format_block(then_block)),
-            ),
+            StmtKind::If(cond, then_block, else_block) => {
+                let mut result = concat_space(
+                    text("if"),
+                    concat_space(self.format_expr(cond), self.format_block(then_block)),
+                );
+
+                if let Some(else_block) = else_block {
+                    result = concat_space(
+                        result,
+                        concat_space(text("else"), self.format_block(else_block)),
+                    )
+                }
+
+                result
+            }
             StmtKind::Return(value) => match value {
                 Some(expr) => concat_space(text("return"), self.format_expr(expr)),
                 None => text("return"),

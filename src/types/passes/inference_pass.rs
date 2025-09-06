@@ -20,10 +20,12 @@ use crate::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
         func::Func,
+        match_arm::MatchArm,
         pattern::{Pattern, PatternKind},
         stmt::{Stmt, StmtKind},
         type_annotation::TypeAnnotation,
     },
+    span::Span,
     types::{
         constraints::{Constraint, ConstraintCause, Equals},
         passes::dependencies_pass::{Binder, SCCResolved},
@@ -250,11 +252,22 @@ impl<'a> InferencePass<'a> {
     fn solve(&mut self, wants: Wants) -> Substitutions {
         let mut substitutions = Substitutions::default();
         for want in wants.0 {
-            match want {
-                Constraint::Equals(equals) => {
-                    unify(&equals.lhs, &equals.rhs, &mut substitutions).unwrap()
-                }
+            let solution = match want {
+                Constraint::Equals(equals) => unify(&equals.lhs, &equals.rhs, &mut substitutions),
             };
+
+            match solution {
+                Ok(_did_unify) => (),
+                Err(e) => {
+                    self.ast
+                        .diagnostics
+                        .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                            path: self.ast.path.clone(),
+                            span: Span { start: 0, end: 0 },
+                            kind: e,
+                        }));
+                }
+            }
         }
 
         self.apply_to_self(&substitutions);
@@ -319,24 +332,85 @@ impl<'a> InferencePass<'a> {
     #[instrument(skip(self))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> Ty {
         match &decl.kind {
-            DeclKind::Let { lhs, .. } => {
-                let Pattern { id, kind, .. } = &lhs;
+            DeclKind::Let { lhs, .. } => self.infer_pattern(lhs, level, wants),
+            _ => todo!("unhandled: {decl:?}"),
+        }
+    }
 
-                match kind {
-                    PatternKind::Bind(Name::Resolved(sym, _)) => {
-                        let ty = match self.term_env.lookup(sym).unwrap() {
-                            EnvEntry::Mono(ty) => ty.clone(),
-                            EnvEntry::Scheme(scheme) => scheme.ty.clone(),
-                        };
+    #[instrument(skip(self))]
+    fn check_pattern(&mut self, pattern: &Pattern, expected: &Ty, level: Level, wants: &mut Wants) {
+        let Pattern { kind, .. } = &pattern;
 
-                        self.types_by_node.insert(*id, ty.clone());
+        match kind {
+            PatternKind::Bind(Name::Raw(name)) => {
+                panic!("Unresolved name in pattern: {name:?}");
+            }
+            PatternKind::Bind(Name::Resolved(sym, _)) => {
+                self.term_env.insert_mono(*sym, expected.clone());
+            }
+            PatternKind::Bind(Name::_Self | Name::SelfType) => {
+                todo!()
+            }
+            PatternKind::LiteralInt(_) => {
+                wants.equals(
+                    expected.clone(),
+                    Ty::Int,
+                    ConstraintCause::Pattern(pattern.id),
+                );
+            }
+            PatternKind::LiteralFloat(_) => {
+                wants.equals(
+                    expected.clone(),
+                    Ty::Float,
+                    ConstraintCause::Pattern(pattern.id),
+                );
+            }
+            PatternKind::LiteralFalse | PatternKind::LiteralTrue => {
+                wants.equals(
+                    expected.clone(),
+                    Ty::Bool,
+                    ConstraintCause::Pattern(pattern.id),
+                );
+            }
+            PatternKind::Tuple(patterns) => {
+                let betas: Vec<Ty> = (0..patterns.len())
+                    .map(|_| {
+                        let var = self.metavars.next_id();
+                        Ty::MetaVar { id: var, level }
+                    })
+                    .collect();
+                wants.equals(
+                    expected.clone(),
+                    Ty::Tuple(betas.clone()),
+                    ConstraintCause::Pattern(pattern.id),
+                );
 
-                        ty
-                    }
-                    _ => todo!(),
+                for (pi, bi) in patterns.iter().zip(betas) {
+                    self.check_pattern(pi, &bi, level, wants);
                 }
             }
-            _ => todo!("unhandled: {decl:?}"),
+            PatternKind::Wildcard => todo!(),
+            PatternKind::Variant { .. } => todo!(),
+            PatternKind::Struct { .. } => todo!(),
+        }
+    }
+
+    #[instrument(skip(self))]
+    fn infer_pattern(&mut self, pattern: &Pattern, level: Level, wants: &mut Wants) -> Ty {
+        let Pattern { id, kind, .. } = &pattern;
+
+        match kind {
+            PatternKind::Bind(Name::Resolved(sym, _)) => {
+                let ty = match self.term_env.lookup(sym).unwrap() {
+                    EnvEntry::Mono(ty) => ty.clone(),
+                    EnvEntry::Scheme(scheme) => scheme.ty.clone(),
+                };
+
+                self.types_by_node.insert(*id, ty.clone());
+
+                ty
+            }
+            _ => todo!(),
         }
     }
 
@@ -355,7 +429,7 @@ impl<'a> InferencePass<'a> {
     #[instrument(skip(self))]
     fn infer_expr(&mut self, expr: &Expr, level: Level, wants: &mut Wants) -> Ty {
         let ty = match &expr.kind {
-            ExprKind::Incomplete(..) => todo!(),
+            ExprKind::Incomplete(..) => Ty::Void,
             ExprKind::LiteralArray(..) => todo!(),
             ExprKind::LiteralInt(_) => Ty::Int,
             ExprKind::LiteralFloat(_) => Ty::Float,
@@ -377,7 +451,7 @@ impl<'a> InferencePass<'a> {
                     .map(|t| self.infer_expr(t, level, wants))
                     .collect(),
             ),
-            ExprKind::Block(..) => todo!(),
+            ExprKind::Block(block) => self.infer_block(block, level, wants),
             ExprKind::Call {
                 callee,
                 type_args,
@@ -385,8 +459,21 @@ impl<'a> InferencePass<'a> {
             } => self.infer_call(callee, type_args, args, level, wants),
             ExprKind::Member(..) => todo!(),
             ExprKind::Func(func) => self.infer_func(func, level, wants),
-            ExprKind::If(..) => todo!(),
-            ExprKind::Match(..) => todo!(),
+            ExprKind::If(box cond, conseq, alt) => {
+                let cond_ty = self.infer_expr(cond, level, wants);
+                wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
+
+                let conseq_ty = self.infer_block(conseq, level, wants);
+                let alt_ty = self.infer_block(alt, level, wants);
+
+                wants.equals(
+                    conseq_ty.clone(),
+                    alt_ty,
+                    ConstraintCause::Condition(alt.id),
+                );
+                conseq_ty
+            }
+            ExprKind::Match(scrutinee, arms) => self.infer_match(scrutinee, arms, level, wants),
             ExprKind::PatternVariant(..) => todo!(),
             ExprKind::RecordLiteral(..) => todo!(),
             ExprKind::RowVariable(..) => todo!(),
@@ -397,6 +484,27 @@ impl<'a> InferencePass<'a> {
         // record the type for this expression node
         self.types_by_node.insert(expr.id, ty.clone());
         ty
+    }
+
+    #[instrument(skip(self))]
+    fn infer_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        let mut last_arm_ty = Ty::Void;
+        let scrutinee_ty = self.infer_expr(scrutinee, level, wants);
+
+        for arm in arms {
+            self.term_env.push();
+            self.check_pattern(&arm.pattern, &scrutinee_ty, level, wants);
+            last_arm_ty = self.infer_block(&arm.body, level, wants);
+            self.term_env.pop();
+        }
+
+        last_arm_ty
     }
 
     #[instrument(skip(self))]
@@ -466,7 +574,17 @@ impl<'a> InferencePass<'a> {
     fn infer_stmt(&mut self, stmt: &Stmt, level: Level, wants: &mut Wants) -> Ty {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.infer_expr(expr, level, wants),
-            StmtKind::If(..) => Ty::Void,
+            StmtKind::If(cond, conseq, alt) => {
+                let cond_ty = self.infer_expr(cond, level, wants);
+                wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
+
+                self.infer_block(conseq, level, wants);
+                if let Some(alt) = alt {
+                    self.infer_block(alt, level, wants);
+                }
+
+                Ty::Void
+            }
             StmtKind::Return(..) => todo!(),
             StmtKind::Break => Ty::Void,
             StmtKind::Assignment(..) => Ty::Void,
@@ -759,6 +877,150 @@ pub mod tests {
                 .get(&ast.roots[1].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Int
+        );
+    }
+
+    #[test]
+    fn types_if_expr() {
+        let (ast, session) = typecheck(
+            "
+        let z = if true { 123 } else { 456 }
+        z
+        ",
+        );
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Int
+        );
+    }
+
+    #[test]
+    fn requires_if_expr_cond_to_be_bool() {
+        let (ast, _session) = typecheck(
+            "
+        let z = if 123 { 123 } else { 456 }
+        z
+        ",
+        );
+
+        assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn requires_if_expr_arms_to_match() {
+        let (ast, _session) = typecheck(
+            "
+        let z = if true { 123 } else { false }
+        z
+        ",
+        );
+
+        assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn requires_if_stmt_cond_to_be_bool() {
+        let (ast, _session) = typecheck(
+            "
+        if 123 { 123 } 
+        ",
+        );
+
+        assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn types_match() {
+        let (ast, session) = typecheck(
+            "
+        match 123 {
+            123 -> true,
+            456 -> false
+        }
+        ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[0].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Bool
+        );
+    }
+
+    #[test]
+    fn types_match_binding() {
+        let (ast, session) = typecheck(
+            "
+        match 123 {
+            a -> a,
+        }
+        ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[0].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Int
+        );
+    }
+
+    #[test]
+    fn checks_match_pattern_type() {
+        assert_eq!(
+            typecheck(
+                "
+        match 123 {
+            true -> false,
+        }
+        ",
+            )
+            .0
+            .diagnostics
+            .len(),
+            1
+        );
+        assert_eq!(
+            typecheck(
+                "
+        match 1.23 {
+            123 -> false,
+        }
+        ",
+            )
+            .0
+            .diagnostics
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn checks_tuple_match() {
+        let (ast, session) = typecheck(
+            "
+        match (123, true) {
+            (a, b) -> (b, a),
+        }
+        ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[0].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Tuple(vec![Ty::Bool, Ty::Int])
         );
     }
 }
