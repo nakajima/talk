@@ -23,15 +23,16 @@ use crate::{
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind},
         stmt::{Stmt, StmtKind},
-        type_annotation::TypeAnnotation,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
     types::{
+        builtins::builtin_scope,
         constraints::{Constraint, ConstraintCause, Equals},
         passes::dependencies_pass::{Binder, SCCResolved},
-        ty::{Level, MetaId, Ty},
+        ty::{Level, MetaId, Ty, TypeParamId},
         type_error::TypeError,
-        type_operations::{apply, unify},
+        type_operations::{apply, substitute, unify},
         type_session::{TypeDef, TypeSession, TypingPhase},
     },
 };
@@ -63,7 +64,7 @@ pub struct BindingGroup {
 
 #[derive(Debug, Clone)]
 pub struct Scheme {
-    pub foralls: Vec<MetaId>,
+    pub foralls: Vec<TypeParamId>,
     pub ty: Ty,
 }
 
@@ -81,7 +82,7 @@ pub struct TermEnv {
 impl Default for TermEnv {
     fn default() -> Self {
         Self {
-            frames: vec![FxHashMap::default()],
+            frames: vec![builtin_scope()],
         }
     }
 }
@@ -108,6 +109,7 @@ impl TermEnv {
         // promote into the *root* frame so it’s visible everywhere (for binders)
         self.frames[0].insert(sym, EnvEntry::Scheme(sch));
     }
+
     pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry> {
         for frame in self.frames.iter().rev() {
             if let Some(e) = frame.get(sym) {
@@ -129,8 +131,11 @@ pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
     types_by_node: FxHashMap<NodeID, Ty>,
     metavars: IDGenerator,
+    skolems: IDGenerator,
+    type_params: IDGenerator,
     term_env: TermEnv,
     rhs_map: FxHashMap<Binder, NodeID>,
+    annotation_map: FxHashMap<Binder, NodeID>,
 }
 
 #[derive(Debug)]
@@ -151,8 +156,11 @@ impl<'a> InferencePass<'a> {
             ast,
             types_by_node: Default::default(),
             metavars: Default::default(),
+            skolems: Default::default(),
+            type_params: Default::default(),
             term_env: TermEnv::new(),
             rhs_map: session.phase.rhs_map.clone(),
+            annotation_map: session.phase.annotation_map.clone(),
         };
 
         // Handle binders first
@@ -171,9 +179,9 @@ impl<'a> InferencePass<'a> {
         let roots = std::mem::take(&mut pass.ast.roots);
 
         for root in roots.iter() {
-            // if !matches!(root, Node::Stmt(_)) {
-            //     continue;
-            // }
+            if !matches!(root, Node::Stmt(_)) {
+                continue;
+            }
 
             let mut wants = Wants(vec![]);
             let ty = pass.infer_node(root, Level(1), &mut wants);
@@ -231,10 +239,39 @@ impl<'a> InferencePass<'a> {
                 _ => unreachable!(),
             };
 
+            if let Some(annotation_id) = self.annotation_map.get(&binder) {
+                let Some(Node::TypeAnnotation(annotation)) = self.ast.find(*annotation_id) else {
+                    panic!("didn't find type annotation for annotation id");
+                };
+
+                let annotation_ty = self.infer_type_annotation(&annotation);
+                wants.equals(
+                    got.clone(),
+                    annotation_ty,
+                    ConstraintCause::Annotation(*annotation_id),
+                );
+            }
+
             wants.equals(got, tv, ConstraintCause::Internal);
         }
 
         wants
+    }
+
+    #[instrument(skip(self))]
+    fn infer_type_annotation(&self, annotation: &TypeAnnotation) -> Ty {
+        match &annotation.kind {
+            TypeAnnotationKind::Func { .. } => todo!(),
+            TypeAnnotationKind::Tuple(..) => todo!(),
+            TypeAnnotationKind::Nominal {
+                name: Name::Resolved(sym, _),
+                ..
+            } => match self.term_env.lookup(sym).unwrap() {
+                EnvEntry::Mono(ty) => ty.clone(),
+                EnvEntry::Scheme(scheme) => scheme.ty.clone(),
+            },
+            _ => unreachable!(),
+        }
     }
 
     #[instrument(skip(self))]
@@ -305,16 +342,30 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn generalize(&self, inner: Level, ty: Ty) -> Scheme {
+    fn generalize(&mut self, inner: Level, ty: Ty) -> Scheme {
         // collect metas in ty
         let mut metas = FxHashSet::default();
-        collect_metas(&ty, &mut metas);
+        collect_metas_and_generics(&ty, &mut metas);
+
         // keep only metas born at or above inner
-        let foralls: Vec<MetaId> = metas
+        let mut foralls = vec![];
+        let substitutions: FxHashMap<Ty, Ty> = metas
             .into_iter()
-            .filter(|m| m.level >= inner)
-            .map(|m| m.id)
+            .filter(|m| {
+                if let Ty::MetaVar { level, .. } = &m {
+                    *level >= inner
+                } else {
+                    true
+                }
+            })
+            .map(|ty| {
+                let param_id = self.type_params.next_id();
+                foralls.push(param_id);
+                (ty, Ty::Param(param_id))
+            })
             .collect();
+
+        let ty = substitute(ty, &substitutions);
         Scheme { foralls, ty }
     }
 
@@ -544,16 +595,40 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> Ty {
+        self.term_env.push();
+
+        let mut skolem_map = FxHashMap::default();
+        for generic in func.generics.iter() {
+            let skolem_id = self.skolems.next_id();
+            let param_id = self.type_params.next_id();
+            skolem_map.insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
+            self.term_env.insert_mono(
+                generic.name.symbol().expect("did not get symbol"),
+                Ty::Rigid(skolem_id),
+            );
+        }
+
         let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
-        for _ in &func.params {
-            param_tys.push(Ty::MetaVar {
+        for param in &func.params {
+            let ty = if let Some(type_annotation) = &param.type_annotation {
+                self.infer_type_annotation(type_annotation)
+            } else {
+                Ty::MetaVar {
+                    id: self.metavars.next_id(),
+                    level,
+                }
+            };
+
+            param_tys.push(ty);
+        }
+
+        let ret_ty = if let Some(ret) = &func.ret {
+            self.infer_type_annotation(ret)
+        } else {
+            Ty::MetaVar {
                 id: self.metavars.next_id(),
                 level,
-            });
-        }
-        let ret_ty = Ty::MetaVar {
-            id: self.metavars.next_id(),
-            level,
+            }
         };
 
         for (p, ty) in func.params.iter().zip(param_tys.iter()) {
@@ -564,9 +639,13 @@ impl<'a> InferencePass<'a> {
         }
 
         let body_ty = self.infer_block(&func.body, level, wants);
+
+        self.term_env.pop();
+
         wants.equals(body_ty, ret_ty.clone(), ConstraintCause::Internal);
 
-        curry(param_tys, ret_ty)
+        let ty = curry(param_tys, ret_ty);
+        substitute(ty, &skolem_map)
     }
 
     #[instrument(skip(self))]
@@ -586,26 +665,40 @@ impl<'a> InferencePass<'a> {
             }
             StmtKind::Return(..) => todo!(),
             StmtKind::Break => Ty::Void,
-            StmtKind::Assignment(..) => Ty::Void,
-            StmtKind::Loop(..) => Ty::Void,
+            StmtKind::Assignment(lhs, rhs) => {
+                let lhs_ty = self.infer_expr(lhs, level, wants);
+                let rhs_ty = self.infer_expr(rhs, level, wants);
+                wants.equals(lhs_ty.clone(), rhs_ty, ConstraintCause::Assignment(stmt.id));
+                lhs_ty
+            }
+            StmtKind::Loop(cond, body) => {
+                if let Some(cond) = cond {
+                    let cond_ty = self.infer_expr(cond, level, wants);
+                    wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
+                }
+
+                self.infer_block(body, level, wants);
+
+                Ty::Void
+            }
         }
     }
 
     #[instrument(skip(self))]
     fn instantiate(&mut self, scheme: &Scheme, level: Level) -> Ty {
         // Map each quantified meta id to a fresh meta at this use-site level
-        let mut substitutions = Substitutions::default();
+        let mut substitutions = FxHashMap::default();
 
-        for meta in &scheme.foralls {
+        for param in &scheme.foralls {
             substitutions.insert(
-                *meta,
+                Ty::Param(*param),
                 Ty::MetaVar {
                     id: self.metavars.next_id(),
                     level,
                 },
             );
         }
-        apply(scheme.ty.clone(), &substitutions)
+        substitute(scheme.ty.clone(), &substitutions)
     }
 }
 
@@ -617,25 +710,25 @@ fn curry<I: IntoIterator<Item = Ty>>(params: I, ret: Ty) -> Ty {
         .rfold(ret, |acc, p| Ty::Func(Box::new(p), Box::new(acc)))
 }
 
-pub fn collect_metas(ty: &Ty, out: &mut FxHashSet<MetaTag>) {
+pub fn collect_metas_and_generics(ty: &Ty, out: &mut FxHashSet<Ty>) {
     match ty {
-        Ty::MetaVar { id, level } => {
-            out.insert(MetaTag {
-                id: *id,
-                level: *level,
-            });
+        Ty::Param(_) => {
+            out.insert(ty.clone());
+        }
+        Ty::MetaVar { .. } => {
+            out.insert(ty.clone());
         }
         Ty::Func(dom, codom) => {
-            collect_metas(dom, out);
-            collect_metas(codom, out);
+            collect_metas_and_generics(dom, out);
+            collect_metas_and_generics(codom, out);
         }
         Ty::TypeApplication(fun, arg) => {
-            collect_metas(fun, out);
-            collect_metas(arg, out);
+            collect_metas_and_generics(fun, out);
+            collect_metas_and_generics(arg, out);
         }
         Ty::Tuple(items) => {
             for item in items {
-                collect_metas(item, out);
+                collect_metas_and_generics(item, out);
             }
         }
         Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) | Ty::TypeConstructor { .. } => {}
@@ -685,6 +778,16 @@ pub mod tests {
     use crate::types::passes::dependencies_pass::tests::resolve_dependencies;
 
     fn typecheck(code: &'static str) -> (AST<NameResolved>, TypeSession<Inferenced>) {
+        let (ast, session) = typecheck_err(code);
+        assert!(
+            ast.diagnostics.is_empty(),
+            "diagnostics not empty: {:?}",
+            ast.diagnostics
+        );
+        (ast, session)
+    }
+
+    fn typecheck_err(code: &'static str) -> (AST<NameResolved>, TypeSession<Inferenced>) {
         let (mut ast, session) = resolve_dependencies(code);
         let session = InferencePass::perform(session, &mut ast);
         (ast, session)
@@ -738,6 +841,29 @@ pub mod tests {
     }
 
     #[test]
+    fn monomorphic_let_annotation() {
+        let (ast, session) = typecheck(
+            r#"
+        let a: Int = 123
+        a
+    "#,
+        );
+        let use_id = ast.roots[1].as_stmt().clone().as_expr().id;
+        assert_eq!(*session.phase.types_by_node.get(&use_id).unwrap(), Ty::Int);
+    }
+
+    #[test]
+    fn monomorphic_let_annotation_mismatch() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        let a: Bool = 123
+        a
+    "#,
+        );
+        assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
     fn types_identity() {
         let (ast, session) = typecheck(
             "
@@ -761,6 +887,64 @@ pub mod tests {
                 .get(&ast.roots[2].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Bool
+        );
+    }
+
+    #[test]
+    fn explicit_generic_function_instantiates() {
+        let (ast, session) = typecheck(
+            r#"
+        func id<T>(x: T) -> T { x }
+        id(123)
+        id(true)
+    "#,
+        );
+
+        let call1 = ast.roots[1].as_stmt().clone().as_expr().id;
+        let call2 = ast.roots[2].as_stmt().clone().as_expr().id;
+
+        assert_eq!(*session.phase.types_by_node.get(&call1).unwrap(), Ty::Int);
+        assert_eq!(*session.phase.types_by_node.get(&call2).unwrap(), Ty::Bool);
+    }
+
+    #[test]
+    fn generic_function_body_must_respect_its_own_type_vars() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        func bad<T>(x: T) -> T { 0 } // 0 == Int != T
+        bad(true)
+    "#,
+        );
+        // The error is from checking the function body (skolemized T), not only the use site
+        println!("Diagnostics: {:?}", ast.diagnostics);
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "didn't get correct diagnostic: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
+    fn generalizes_locals() {
+        let (ast, session) = typecheck(
+            "
+        func outer() {
+            func id(x) { x }
+            (id(123), id(true))
+        }
+
+        outer()
+        ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .types_by_node
+                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
+                .unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
     }
 
@@ -899,7 +1083,7 @@ pub mod tests {
 
     #[test]
     fn requires_if_expr_cond_to_be_bool() {
-        let (ast, _session) = typecheck(
+        let (ast, _session) = typecheck_err(
             "
         let z = if 123 { 123 } else { 456 }
         z
@@ -911,7 +1095,7 @@ pub mod tests {
 
     #[test]
     fn requires_if_expr_arms_to_match() {
-        let (ast, _session) = typecheck(
+        let (ast, _session) = typecheck_err(
             "
         let z = if true { 123 } else { false }
         z
@@ -923,7 +1107,7 @@ pub mod tests {
 
     #[test]
     fn requires_if_stmt_cond_to_be_bool() {
-        let (ast, _session) = typecheck(
+        let (ast, _session) = typecheck_err(
             "
         if 123 { 123 } 
         ",
@@ -976,7 +1160,7 @@ pub mod tests {
     #[test]
     fn checks_match_pattern_type() {
         assert_eq!(
-            typecheck(
+            typecheck_err(
                 "
         match 123 {
             true -> false,
@@ -989,7 +1173,7 @@ pub mod tests {
             1
         );
         assert_eq!(
-            typecheck(
+            typecheck_err(
                 "
         match 1.23 {
             123 -> false,
@@ -1020,6 +1204,37 @@ pub mod tests {
                 .get(&ast.roots[0].as_stmt().clone().as_expr().id)
                 .unwrap(),
             Ty::Tuple(vec![Ty::Bool, Ty::Int])
+        );
+    }
+
+    #[test]
+    fn checks_loop_cond_is_bool() {
+        assert_eq!(
+            typecheck_err(
+                "
+        loop 123 {}
+        ",
+            )
+            .0
+            .diagnostics
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn checks_assignment() {
+        assert_eq!(
+            typecheck_err(
+                "
+        let bool = true
+        bool = 123
+        ",
+            )
+            .0
+            .diagnostics
+            .len(),
+            1
         );
     }
 }

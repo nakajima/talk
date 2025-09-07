@@ -42,7 +42,7 @@ pub trait TypingPhase: std::fmt::Debug {
     type Next: TypingPhase;
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDefKind {
     Struct,
     Enum,

@@ -27,6 +27,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct SCCResolved {
     pub graph: DiGraphMap<Binder, ()>,
+    pub annotation_map: FxHashMap<Binder, NodeID>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
     pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
     pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
@@ -71,6 +72,7 @@ impl BoundRHS {
 pub struct DependenciesPass {
     pub graph: DiGraphMap<Binder, ()>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
+    pub annotation_map: FxHashMap<Binder, NodeID>,
     binder_stack: Vec<(NodeID, Binder)>,
 }
 
@@ -82,6 +84,7 @@ impl DependenciesPass {
         let mut pass = DependenciesPass {
             graph: Default::default(),
             rhs_map: Default::default(),
+            annotation_map: Default::default(),
             binder_stack: Default::default(),
         };
 
@@ -94,6 +97,7 @@ impl DependenciesPass {
 
         let phase = SCCResolved {
             graph: pass.graph,
+            annotation_map: pass.annotation_map,
             rhs_map: pass.rhs_map,
             type_constructors,
             protocols,
@@ -103,16 +107,21 @@ impl DependenciesPass {
     }
 
     fn enter_decl(&mut self, decl: &Decl) {
-        let (sym, rhs_id) = match &decl.kind {
+        let (sym, annotation_id, rhs_id) = match &decl.kind {
             DeclKind::Let {
                 lhs:
                     Pattern {
                         kind: PatternKind::Bind(Name::Resolved(sym, _)),
                         ..
                     },
+                type_annotation,
                 value: Some(rhs),
                 ..
-            } => (sym, BoundRHS::Expr(rhs.id)),
+            } => (
+                sym,
+                type_annotation.as_ref().map(|t| t.id),
+                BoundRHS::Expr(rhs.id),
+            ),
             DeclKind::Method {
                 func:
                     box func @ Func {
@@ -120,7 +129,7 @@ impl DependenciesPass {
                         ..
                     },
                 ..
-            } => (sym, BoundRHS::Func(func.id)),
+            } => (sym, None, BoundRHS::Func(func.id)),
 
             _ => return,
         };
@@ -129,6 +138,10 @@ impl DependenciesPass {
             Symbol::Global(global_id) => {
                 let binder = Binder::Global(*global_id);
                 self.graph.add_node(binder);
+
+                if let Some(id) = annotation_id {
+                    self.annotation_map.insert(binder, id);
+                }
 
                 self.rhs_map.insert(binder, rhs_id.id());
                 self.binder_stack.push((decl.id, binder));

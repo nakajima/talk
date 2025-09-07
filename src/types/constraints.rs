@@ -2,6 +2,7 @@ use crate::{node_id::NodeID, types::ty::Ty};
 
 #[derive(Debug)]
 pub enum ConstraintCause {
+    Annotation(NodeID),
     Literal(NodeID),
     Assignment(NodeID),
     Call(NodeID),

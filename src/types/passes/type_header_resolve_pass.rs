@@ -314,7 +314,7 @@ impl TypeHeaderResolvePass {
             ASTTyRepr::Generic(GenericDecl {
                 name: Name::Resolved(Symbol::Type(decl_id), _),
                 ..
-            }) => Ok(Ty::Rigid(*decl_id)),
+            }) => Ok(Ty::Param(decl_id.0.into())),
             _ => panic!("unresolved ty repr: {ty_repr:?}"),
         };
 
@@ -562,7 +562,7 @@ pub mod tests {
 
         assert_eq!(
             type_def.generics,
-            crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => Ty::Rigid(TypeId(2)))
+            crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(2)), "T".into()) => Ty::Param(2.into()))
         );
         let TypeFields::Struct { properties, .. } = &type_def.fields else {
             panic!("didn't get fields");
@@ -571,7 +571,7 @@ pub mod tests {
         assert_eq!(
             *properties,
             crate::indexmap!(
-                "t".into() => Property::<Ty> { is_static: false, ty_repr: Ty::Rigid(TypeId(2)) }
+                "t".into() => Property::<Ty> { is_static: false, ty_repr: Ty::Param(2.into()) }
             )
         );
     }

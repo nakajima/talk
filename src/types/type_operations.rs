@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::types::{passes::inference_pass::Substitutions, ty::Ty, type_error::TypeError};
@@ -10,13 +11,6 @@ pub(super) fn unify(
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
-
-    // Hole(NodeID),
-    // Rigid(DeclId),
-    // MetaVar { id: MetaId, level: Level },
-    // Primitive(Primitive),
-    // TypeConstructor { name: Name, kind: TypeDefKind },
-    // TypeApplication(Box<Ty>, Box<Ty>),
     match (&lhs, &rhs) {
         (Ty::Primitive(lhs), Ty::Primitive(rhs)) => {
             if lhs == rhs {
@@ -35,6 +29,7 @@ pub(super) fn unify(
             }
             Ok(did_change)
         }
+        (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(false),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions)?;
@@ -85,8 +80,38 @@ pub(super) fn unify(
 }
 
 #[instrument(ret)]
+pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
+    if let Some(subst) = substitutions.get(&ty) {
+        return subst.clone();
+    }
+    match ty {
+        Ty::Param(..) => ty,
+        Ty::Hole(..) => ty,
+        Ty::Rigid(..) => ty,
+        Ty::MetaVar { .. } => ty,
+        Ty::Primitive(..) => ty,
+        Ty::TypeConstructor { .. } => todo!(),
+        Ty::Func(params, ret) => Ty::Func(
+            Box::new(substitute(*params, substitutions)),
+            Box::new(substitute(*ret, substitutions)),
+        ),
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .into_iter()
+                .map(|t| substitute(t, substitutions))
+                .collect(),
+        ),
+        Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
+            substitute(lhs, substitutions).into(),
+            substitute(rhs, substitutions).into(),
+        ),
+    }
+}
+
+#[instrument(ret)]
 pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
     match ty {
+        Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
         Ty::MetaVar { id, .. } => match substitutions.get(&id) {

@@ -1,12 +1,26 @@
-use crate::{
-    name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::type_session::TypeDefKind,
-};
+use crate::{name::Name, node_id::NodeID, types::type_session::TypeDefKind};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct MetaId(u32);
 impl From<u32> for MetaId {
     fn from(value: u32) -> Self {
         MetaId(value)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+pub struct TypeParamId(u32);
+impl From<u32> for TypeParamId {
+    fn from(value: u32) -> Self {
+        TypeParamId(value)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+pub struct SkolemId(u32);
+impl From<u32> for SkolemId {
+    fn from(value: u32) -> Self {
+        SkolemId(value)
     }
 }
 
@@ -18,7 +32,7 @@ impl Level {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Primitive {
     Int,
     Float,
@@ -26,10 +40,11 @@ pub enum Primitive {
     Void,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Ty {
     Hole(NodeID),
-    Rigid(TypeId),
+    Param(TypeParamId),
+    Rigid(SkolemId),
     MetaVar { id: MetaId, level: Level },
     Primitive(Primitive),
     TypeConstructor { name: Name, kind: TypeDefKind },

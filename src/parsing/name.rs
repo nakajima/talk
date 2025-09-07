@@ -1,4 +1,4 @@
-use crate::name_resolution::symbol::Symbol;
+use crate::name_resolution::{name_resolver::NameResolverError, symbol::Symbol};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Name {
@@ -16,6 +16,14 @@ impl Name {
             Name::_Self => "self".into(),
             Name::SelfType => "Self".to_string(),
         }
+    }
+
+    pub fn symbol(&self) -> Result<Symbol, NameResolverError> {
+        if let Name::Resolved(sym, _) = self {
+            return Ok(*sym);
+        }
+
+        Err(NameResolverError::Unresolved(self.clone()))
     }
 }
 
