@@ -8,6 +8,8 @@ pub enum ConstraintCause {
     Call(NodeID),
     Condition(NodeID),
     Pattern(NodeID),
+    MatchArm(NodeID),
+    CallTypeArg(NodeID),
     Internal,
 }
 

@@ -100,7 +100,7 @@ pub mod tests {
             *parsed.roots[0].as_decl(),
             any_decl!(DeclKind::Let {
                 lhs: Pattern {
-                    id: NodeID(4),
+                    id: NodeID(5),
                     span: Span::ANY,
                     kind: PatternKind::Bind(Name::Raw("fizz".into()))
                 },

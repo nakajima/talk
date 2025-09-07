@@ -239,16 +239,16 @@ impl<'a> InferencePass<'a> {
                 _ => unreachable!(),
             };
 
-            if let Some(annotation_id) = self.annotation_map.get(&binder) {
-                let Some(Node::TypeAnnotation(annotation)) = self.ast.find(*annotation_id) else {
+            if let Some(annotation_id) = self.annotation_map.get(&binder).cloned() {
+                let Some(Node::TypeAnnotation(annotation)) = self.ast.find(annotation_id) else {
                     panic!("didn't find type annotation for annotation id");
                 };
 
-                let annotation_ty = self.infer_type_annotation(&annotation);
+                let annotation_ty = self.infer_type_annotation(&annotation, inner_level);
                 wants.equals(
                     got.clone(),
                     annotation_ty,
-                    ConstraintCause::Annotation(*annotation_id),
+                    ConstraintCause::Annotation(annotation_id),
                 );
             }
 
@@ -259,16 +259,16 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn infer_type_annotation(&self, annotation: &TypeAnnotation) -> Ty {
+    fn infer_type_annotation(&mut self, annotation: &TypeAnnotation, level: Level) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
                 name: Name::Resolved(sym, _),
                 ..
-            } => match self.term_env.lookup(sym).unwrap() {
+            } => match self.term_env.lookup(sym).unwrap().clone() {
                 EnvEntry::Mono(ty) => ty.clone(),
-                EnvEntry::Scheme(scheme) => scheme.ty.clone(),
+                EnvEntry::Scheme(scheme) => self.instantiate(&scheme, level),
             },
             _ => unreachable!(),
         }
@@ -478,6 +478,17 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
+    fn lookup_named_scheme(&self, expr: &Expr) -> Option<Scheme> {
+        if let ExprKind::Variable(Name::Resolved(sym, _)) = &expr.kind
+            && let Some(EnvEntry::Scheme(scheme)) = self.term_env.lookup(sym)
+        {
+            return Some(scheme.clone());
+        }
+
+        None
+    }
+
+    #[instrument(skip(self))]
     fn infer_expr(&mut self, expr: &Expr, level: Level, wants: &mut Wants) -> Ty {
         let ty = match &expr.kind {
             ExprKind::Incomplete(..) => Ty::Void,
@@ -544,17 +555,27 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        let mut last_arm_ty = Ty::Void;
+        let mut last_arm_ty: Option<Ty> = None;
         let scrutinee_ty = self.infer_expr(scrutinee, level, wants);
 
         for arm in arms {
             self.term_env.push();
             self.check_pattern(&arm.pattern, &scrutinee_ty, level, wants);
-            last_arm_ty = self.infer_block(&arm.body, level, wants);
+            let arm_ty = self.infer_block(&arm.body, level, wants);
+
+            if let Some(last_arm_ty) = &last_arm_ty {
+                wants.equals(
+                    arm_ty.clone(),
+                    last_arm_ty.clone(),
+                    ConstraintCause::MatchArm(arm.id),
+                );
+            }
+
+            last_arm_ty = Some(arm_ty);
             self.term_env.pop();
         }
 
-        last_arm_ty
+        last_arm_ty.unwrap_or(Ty::Void)
     }
 
     #[instrument(skip(self))]
@@ -566,8 +587,16 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        let callee_ty = self.infer_expr(callee, level, wants);
+        let callee_ty = if !type_args.is_empty()
+            && let Some(scheme) = self.lookup_named_scheme(callee)
+        {
+            self.instantiate_with_args(&scheme, type_args, level, wants)
+        } else {
+            self.infer_expr(callee, level, wants)
+        };
+
         let mut arg_tys = Vec::with_capacity(args.len());
+
         for _ in args {
             arg_tys.push(Ty::MetaVar {
                 id: self.metavars.next_id(),
@@ -611,7 +640,7 @@ impl<'a> InferencePass<'a> {
         let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
         for param in &func.params {
             let ty = if let Some(type_annotation) = &param.type_annotation {
-                self.infer_type_annotation(type_annotation)
+                self.infer_type_annotation(type_annotation, level)
             } else {
                 Ty::MetaVar {
                     id: self.metavars.next_id(),
@@ -623,7 +652,7 @@ impl<'a> InferencePass<'a> {
         }
 
         let ret_ty = if let Some(ret) = &func.ret {
-            self.infer_type_annotation(ret)
+            self.infer_type_annotation(ret, level)
         } else {
             Ty::MetaVar {
                 id: self.metavars.next_id(),
@@ -698,6 +727,37 @@ impl<'a> InferencePass<'a> {
                 },
             );
         }
+        substitute(scheme.ty.clone(), &substitutions)
+    }
+
+    #[instrument(skip(self))]
+    fn instantiate_with_args(
+        &mut self,
+        scheme: &Scheme,
+        args: &[TypeAnnotation],
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        // Map each quantified meta id to a fresh meta at this use-site level
+        let mut substitutions = FxHashMap::default();
+
+        for (param, arg) in scheme.foralls.iter().zip(args) {
+            let arg_ty = self.infer_type_annotation(arg, level);
+
+            let meta_var = Ty::MetaVar {
+                id: self.metavars.next_id(),
+                level,
+            };
+
+            wants.equals(
+                meta_var.clone(),
+                arg_ty,
+                ConstraintCause::CallTypeArg(arg.id),
+            );
+
+            substitutions.insert(Ty::Param(*param), meta_var);
+        }
+
         substitute(scheme.ty.clone(), &substitutions)
     }
 }
@@ -1235,6 +1295,126 @@ pub mod tests {
             .diagnostics
             .len(),
             1
+        );
+    }
+
+    #[test]
+    fn call_time_type_args_are_checked() {
+        // Should be a type error because <Bool> contradicts the actual arg 123.
+        let (ast, _session) = typecheck_err(
+            r#"
+        func id<T>(x: T) -> T { x }
+        id<Bool>(123)
+    "#,
+        );
+        assert_eq!(ast.diagnostics.len(), 1, "expected 1 diagnostic");
+    }
+
+    #[test]
+    fn match_arms_must_agree_on_result_type() {
+        // Arms return Int vs Bool → should be an error.
+        let (ast, _session) = typecheck_err(
+            r#"
+        match 123 {
+            123 -> 1,
+            456 -> true,
+        }
+    "#,
+        );
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "match arms not constrained to same type"
+        );
+    }
+
+    #[test]
+    fn param_annotation_is_enforced_at_call() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        func f(x: Int) -> Int { x }
+        f(true)
+    "#,
+        );
+        assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn return_annotation_is_enforced_in_body() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        func f(x: Int) -> Int { true }
+        f(1)
+    "#,
+        );
+        assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn recursion_is_monomorphic_within_binding_group() {
+        // Polymorphic recursion should NOT be inferred.
+        let (ast, _session) = typecheck_err(
+            r#"
+        func g(x) { 
+            // Force a shape change on the recursive call to try to “polymorphically” recurse.
+            g( (x, x) ) 
+        }
+        g(1)
+    "#,
+        );
+
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "expected failure for polymorphic recursion"
+        );
+    }
+
+    #[test]
+    #[ignore = "TypeAnnotationKind::Func not implemented"]
+    fn func_type_annotation_on_let_is_honored() {
+        // Once Func annotations work, this should typecheck and instantiate.
+        let (ast, session) = typecheck(
+            r#"
+        let id: func<T>(T) -> T = func(x) { x }
+        (id(123), id(true))
+    "#,
+        );
+        let pair = ast.roots[1].as_stmt().clone().as_expr().id;
+        assert_eq!(
+            *session.phase.types_by_node.get(&pair).unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+        );
+    }
+
+    #[test]
+    #[ignore = "TypeAnnotationKind::Tuple not implemented"]
+    fn tuple_type_annotation_on_let_is_honored() {
+        let (ast, session) = typecheck(
+            r#"
+        let z: (Int, Bool) = (123, true)
+        z
+    "#,
+        );
+        let use_id = ast.roots[1].as_stmt().clone().as_expr().id;
+        assert_eq!(
+            *session.phase.types_by_node.get(&use_id).unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
+        );
+    }
+
+    #[test]
+    fn let_generalization_for_value_bindings() {
+        let (ast, session) = typecheck(
+            r#"
+        let id = func(x) { x }
+        (id(123), id(true))
+    "#,
+        );
+        let pair = ast.roots[1].as_stmt().clone().as_expr().id;
+        assert_eq!(
+            *session.phase.types_by_node.get(&pair).unwrap(),
+            Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
     }
 }

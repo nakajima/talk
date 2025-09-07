@@ -236,7 +236,7 @@ impl Precedence {
             },
 
             TokenKind::Func => ParseHandler {
-                prefix: None,
+                prefix: Some(Parser::func_expr),
                 infix: None,
                 precedence: Precedence::Assignment,
             },

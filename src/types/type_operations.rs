@@ -1,9 +1,28 @@
 use rustc_hash::FxHashMap;
-use tracing::instrument;
+use tracing::{Level, instrument};
 
-use crate::types::{passes::inference_pass::Substitutions, ty::Ty, type_error::TypeError};
+use crate::types::{
+    passes::inference_pass::Substitutions,
+    ty::{MetaId, Ty},
+    type_error::TypeError,
+};
 
-#[instrument]
+// Helper: occurs check
+fn occurs_in(id: MetaId, ty: &Ty) -> bool {
+    match ty {
+        Ty::MetaVar { id: mid, .. } => *mid == id,
+        Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
+        Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
+        Ty::TypeApplication(f, x) => occurs_in(id, f) || occurs_in(id, x),
+        Ty::Hole(..) => false,
+        Ty::Param(..) => false,
+        Ty::Rigid(..) => false,
+        Ty::Primitive(..) => false,
+        Ty::TypeConstructor { .. } => false,
+    }
+}
+
+#[instrument(level = Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
@@ -71,7 +90,12 @@ pub(super) fn unify(
             Ok(true)
         }
         (ty, Ty::MetaVar { id, .. }) | (Ty::MetaVar { id, .. }, ty) => {
+            if occurs_in(*id, ty) {
+                return Err(TypeError::OccursCheck(ty.clone())); // or your preferred variant
+            }
+
             substitutions.insert(*id, ty.clone());
+
             Ok(true)
         }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
@@ -108,7 +132,7 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
     }
 }
 
-#[instrument(ret)]
+#[instrument(level = Level::TRACE, ret)]
 pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
     match ty {
         Ty::Param(..) => ty,

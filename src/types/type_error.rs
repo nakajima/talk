@@ -7,6 +7,7 @@ pub enum TypeError {
     TypeConstructorNotFound(TypeId),
     GenericArgCount { expected: u8, actual: u8 },
     InvalidUnification(Ty, Ty),
+    OccursCheck(Ty),
 }
 
 impl Error for TypeError {}
@@ -19,6 +20,9 @@ impl Display for TypeError {
             }
             Self::InvalidUnification(lhs, rhs) => {
                 write!(f, "Invalid unification: {lhs:?} <> {rhs:?}")
+            }
+            Self::OccursCheck(ty) => {
+                write!(f, "Recursive type not supported..... yet? {ty:?}")
             }
         }
     }

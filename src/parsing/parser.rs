@@ -30,6 +30,11 @@ use tracing::instrument;
 // it's not copyable so we always need to have one before calling add_expr
 pub struct LocToken;
 
+enum FuncOrFuncSignature {
+    Func(Func),
+    FuncSignature(FuncSignature),
+}
+
 #[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord)]
 pub enum BlockContext {
     Struct,
@@ -362,6 +367,23 @@ impl<'a> Parser<'a> {
     ) -> Result<Decl, ParserError> {
         let tok = self.push_source_location();
 
+        let kind = match self.func(context, consume_func_keyword)? {
+            FuncOrFuncSignature::Func(func) => DeclKind::Func(func),
+            FuncOrFuncSignature::FuncSignature(func_sig) => DeclKind::FuncSignature(func_sig),
+        };
+
+        let (id, span) = self.save_meta(tok)?;
+
+        Ok(Decl { id, span, kind })
+    }
+
+    fn func(
+        &mut self,
+        context: BlockContext,
+        consume_func_keyword: bool,
+    ) -> Result<FuncOrFuncSignature, ParserError> {
+        let tok = self.push_source_location();
+
         if consume_func_keyword {
             self.consume(TokenKind::Func)?;
         }
@@ -391,34 +413,26 @@ impl<'a> Parser<'a> {
                 ));
             };
 
-            return Ok(Decl {
-                id,
-                span,
-                kind: DeclKind::FuncSignature(FuncSignature {
-                    name: name.into(),
-                    generics,
-                    params,
-                    ret: Box::new(ret),
-                }),
-            });
-        }
-
-        let body = self.block(BlockContext::Func)?;
-        let (id, span) = self.save_meta(tok)?;
-
-        Ok(Decl {
-            id,
-            span,
-            kind: DeclKind::Func(Func {
-                id,
+            return Ok(FuncOrFuncSignature::FuncSignature(FuncSignature {
                 name: name.into(),
                 generics,
                 params,
-                body,
-                ret,
-                attributes: vec![],
-            }),
-        })
+                ret: Box::new(ret),
+            }));
+        }
+
+        let body = self.block(BlockContext::Func)?;
+        let (id, _span) = self.save_meta(tok)?;
+
+        Ok(FuncOrFuncSignature::Func(Func {
+            id,
+            name: name.into(),
+            generics,
+            params,
+            body,
+            ret,
+            attributes: vec![],
+        }))
     }
 
     // MARK: Statements
@@ -471,6 +485,24 @@ impl<'a> Parser<'a> {
             id,
             span,
             kind: ExprKind::If(Box::new(cond.as_expr()), body, alt),
+        }
+        .into())
+    }
+
+    #[instrument(skip(self))]
+    pub(super) fn func_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        let FuncOrFuncSignature::Func(func) = self.func(BlockContext::None, true)? else {
+            return Err(ParserError::IncompleteFuncSignature(
+                "func must have a body".into(),
+            ));
+        };
+
+        let (id, span) = self.save_meta(tok)?;
+        Ok(Expr {
+            id,
+            span,
+            kind: ExprKind::Func(func),
         }
         .into())
     }
