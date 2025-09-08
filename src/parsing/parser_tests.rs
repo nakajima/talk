@@ -20,6 +20,7 @@ pub mod tests {
             match_arm::MatchArm,
             parameter::Parameter,
             pattern::{Pattern, PatternKind},
+            record_field::RecordField,
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
@@ -2342,23 +2343,30 @@ pub mod tests {
     //     );
     // }
 
-    // #[test]
-    // fn parses_record_literal() {
-    //     let parsed = parse("{x: 1, y: 2}");
-    //     assert_eq!(
-    //         parsed.roots()[0],
-    //         any_expr!(Expr::RecordLiteral(vec![
-    //             any_expr!(Expr::RecordField {
-    //                 label: Name::Raw("x".into()),
-    //                 value: any_expr!(Expr::LiteralInt("1".into())).into()
-    //             }),
-    //             any_expr!(Expr::RecordField {
-    //                 label: Name::Raw("y".into()),
-    //                 value: any_expr!(Expr::LiteralInt("2".into())).into()
-    //             })
-    //         ]))
-    //     );
-    // }
+    #[test]
+    fn parses_record_literal() {
+        let parsed = parse("{x: 1, y: 2}");
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::RecordLiteral {
+                fields: vec![
+                    RecordField {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        label: Name::Raw("x".into()),
+                        value: any_expr!(ExprKind::LiteralInt("1".into()))
+                    },
+                    RecordField {
+                        id: NodeID::ANY,
+                        span: Span::ANY,
+                        label: Name::Raw("y".into()),
+                        value: any_expr!(ExprKind::LiteralInt("2".into()))
+                    }
+                ],
+                spread: None
+            })
+        );
+    }
 
     // #[test]
     // fn parses_empty_braces_as_block() {

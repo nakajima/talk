@@ -5,6 +5,7 @@ use crate::{name_resolution::symbol::TypeId, types::ty::Ty};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
     TypeConstructorNotFound(TypeId),
+    ExpectedRow(Ty),
     GenericArgCount { expected: u8, actual: u8 },
     InvalidUnification(Ty, Ty),
     OccursCheck(Ty),
@@ -23,6 +24,9 @@ impl Display for TypeError {
             }
             Self::OccursCheck(ty) => {
                 write!(f, "Recursive type not supported..... yet? {ty:?}")
+            }
+            Self::ExpectedRow(ty) => {
+                write!(f, "Expected row, got {ty:?}")
             }
         }
     }

@@ -1,4 +1,8 @@
-use crate::{name::Name, node_id::NodeID, types::type_session::TypeDefKind};
+use crate::{
+    name::Name,
+    node_id::NodeID,
+    types::{row::Row, type_session::TypeDefKind},
+};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct MetaId(u32);
@@ -51,6 +55,7 @@ pub enum Ty {
     TypeApplication(Box<Ty>, Box<Ty>),
     Func(Box<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
+    Record(Box<Row>),
 }
 
 #[allow(non_upper_case_globals)]

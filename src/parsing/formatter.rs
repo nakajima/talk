@@ -270,9 +270,10 @@ impl<'a> Formatter<'a> {
                 self.format_if(cond, then_block, else_block)
             }
             ExprKind::Match(target, arms) => self.format_match(target, arms),
-            ExprKind::RecordLiteral(fields) => self.format_record_literal(fields),
+            ExprKind::RecordLiteral { fields, spread } => {
+                self.format_record_literal(fields, spread)
+            }
             ExprKind::RowVariable(name) => join(vec![text(".."), text(name.name_str())], text("")),
-            ExprKind::Spread(expr) => join(vec![text("..."), self.format_node(expr)], text("")),
         };
 
         self.decorators
@@ -1088,8 +1089,8 @@ impl<'a> Formatter<'a> {
         )
     }
 
-    fn format_record_literal(&self, fields: &[RecordField]) -> Doc {
-        if fields.is_empty() {
+    fn format_record_literal(&self, fields: &[RecordField], spread: &Option<Box<Expr>>) -> Doc {
+        if fields.is_empty() && spread.is_none() {
             return text("{}");
         }
 
@@ -1098,12 +1099,21 @@ impl<'a> Formatter<'a> {
             .map(|field| self.format_record_field(field))
             .collect::<Vec<_>>();
 
+        let fields = concat(line(), join(formatted_fields, concat(text(","), line())));
+
         group(concat(
             text("{"),
             concat(
                 nest(
                     1,
-                    concat(line(), join(formatted_fields, concat(text(","), line()))),
+                    if let Some(spread) = spread {
+                        concat(
+                            fields,
+                            join(vec![text("..."), self.format_expr(spread)], text("")),
+                        )
+                    } else {
+                        fields
+                    },
                 ),
                 concat(line(), text("}")),
             ),

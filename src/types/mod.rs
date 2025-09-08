@@ -5,6 +5,7 @@ pub mod constraints;
 pub mod fields;
 pub mod kind;
 pub mod passes;
+pub mod row;
 pub mod ty;
 pub mod type_error;
 pub mod type_operations;

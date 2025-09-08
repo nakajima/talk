@@ -15,6 +15,7 @@ use crate::node_kinds::incomplete_expr::IncompleteExpr;
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::pattern::{Pattern, PatternKind};
+use crate::node_kinds::record_field::RecordField;
 use crate::node_kinds::stmt::{Stmt, StmtKind};
 use crate::node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind};
 use crate::node_meta::NodeMeta;
@@ -195,7 +196,7 @@ impl<'a> Parser<'a> {
         let params = self.parameters()?;
         self.consume(TokenKind::RightParen)?;
 
-        let body = self.block(BlockContext::Func)?;
+        let body = self.body_block(BlockContext::Func)?;
         let (id, span) = self.save_meta(tok)?;
 
         Ok(Decl {
@@ -296,7 +297,7 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        let body = self.block(context)?;
+        let body = self.body_block(context)?;
         let (id, span) = self.save_meta(tok)?;
 
         let kind = match context {
@@ -405,8 +406,6 @@ impl<'a> Parser<'a> {
         };
 
         if context == BlockContext::Protocol && !self.peek_is(TokenKind::LeftBrace) {
-            let (id, span) = self.save_meta(tok)?;
-
             let Some(ret) = ret else {
                 return Err(ParserError::IncompleteFuncSignature(
                     "return value not specified".into(),
@@ -421,7 +420,7 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        let body = self.block(BlockContext::Func)?;
+        let body = self.body_block(BlockContext::Func)?;
         let (id, _span) = self.save_meta(tok)?;
 
         Ok(FuncOrFuncSignature::Func(Func {
@@ -476,9 +475,9 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
         let cond = self.expr()?;
-        let body = self.block(BlockContext::If)?;
+        let body = self.body_block(BlockContext::If)?;
         self.consume(TokenKind::Else)?;
-        let alt = self.block(BlockContext::If)?;
+        let alt = self.body_block(BlockContext::If)?;
 
         let (id, span) = self.save_meta(tok)?;
         Ok(Expr {
@@ -512,10 +511,10 @@ impl<'a> Parser<'a> {
         let tok = self.push_source_location();
         self.consume(TokenKind::If)?;
         let cond = self.expr()?;
-        let body = self.block(BlockContext::If)?;
+        let body = self.body_block(BlockContext::If)?;
 
         if self.did_match(TokenKind::Else)? {
-            let alt = self.block(BlockContext::If)?;
+            let alt = self.body_block(BlockContext::If)?;
             let (id, span) = self.save_meta(tok)?;
             Ok(Stmt {
                 id,
@@ -543,7 +542,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let body = self.block(BlockContext::Loop)?;
+        let body = self.body_block(BlockContext::Loop)?;
         let (id, span) = self.save_meta(tok)?;
         Ok(Stmt {
             id,
@@ -611,7 +610,7 @@ impl<'a> Parser<'a> {
             let pattern = self.parse_pattern()?;
             self.consume(TokenKind::Arrow)?;
 
-            let body = self.block(BlockContext::MatchArmBody)?;
+            let body = self.body_block(BlockContext::MatchArmBody)?;
             let (id, span) = self.save_meta(arm_tok)?;
             arms.push(MatchArm {
                 id,
@@ -865,13 +864,19 @@ impl<'a> Parser<'a> {
     }
 
     #[instrument(skip(self))]
-    pub(crate) fn block_prefix(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
-        let block = self.block(BlockContext::None)?;
-        Ok(Node::Expr(Expr {
-            id: block.id,
-            span: block.span,
-            kind: ExprKind::Block(block),
-        }))
+    pub(crate) fn block_expr(&mut self, _can_assign: bool) -> Result<Node, ParserError> {
+        let tok = self.push_source_location();
+        self.consume(TokenKind::LeftBrace)?;
+
+        let kind = if self.peek_is_record_literal() {
+            self.record_literal_body()?
+        } else {
+            ExprKind::Block(self.block(BlockContext::None, false)?)
+        };
+
+        let (id, span) = self.save_meta(tok)?;
+
+        Ok(Node::Expr(Expr { id, span, kind }))
     }
 
     #[instrument(skip(self))]
@@ -1270,9 +1275,17 @@ impl<'a> Parser<'a> {
         Ok(annotations)
     }
 
+    fn body_block(&mut self, context: BlockContext) -> Result<Block, ParserError> {
+        self.block(context, true)
+    }
+
     #[instrument(skip(self))]
-    fn block(&mut self, context: BlockContext) -> Result<Block, ParserError> {
-        self.skip_semicolons_and_newlines();
+    fn block(
+        &mut self,
+        context: BlockContext,
+        consumes_left_brace: bool,
+    ) -> Result<Block, ParserError> {
+        self.skip_newlines();
         let tok = self.push_source_location();
 
         if context == BlockContext::MatchArmBody && !self.peek_is(TokenKind::LeftBrace) {
@@ -1286,7 +1299,9 @@ impl<'a> Parser<'a> {
             });
         };
 
-        self.consume(TokenKind::LeftBrace)?;
+        if consumes_left_brace {
+            self.consume(TokenKind::LeftBrace)?;
+        }
 
         self.skip_semicolons_and_newlines();
         let mut body = vec![];
@@ -1322,6 +1337,82 @@ impl<'a> Parser<'a> {
             args: vec![],
             body,
         })
+    }
+
+    fn peek_is_record_literal(&mut self) -> bool {
+        // Record literals have the pattern: { identifier: expr, ... }
+        // or { ...expr, ... }
+        // Look for identifier followed by colon, or DotDotDot
+        // Empty braces {} are always blocks, not records
+        self.skip_newlines();
+
+        match &self.current {
+            Some(Token {
+                kind: TokenKind::Identifier(_),
+                ..
+            }) => {
+                matches!(
+                    &self.next,
+                    Some(Token {
+                        kind: TokenKind::Colon,
+                        ..
+                    })
+                )
+            }
+            Some(Token {
+                kind: TokenKind::DotDotDot,
+                ..
+            }) => true,
+            Some(Token {
+                kind: TokenKind::RightBrace,
+                ..
+            }) => false, // Empty braces are blocks
+            _ => false,
+        }
+    }
+
+    fn record_literal_body(&mut self) -> Result<ExprKind, ParserError> {
+        let mut fields: Vec<RecordField> = vec![];
+        let mut spread = None;
+
+        while !self.did_match(TokenKind::RightBrace)? {
+            self.skip_newlines();
+
+            if self.peek_is(TokenKind::DotDotDot) {
+                // Spread syntax: ...expr
+                self.consume(TokenKind::DotDotDot)?;
+                let expr = self.expr_with_precedence(Precedence::Assignment)?;
+
+                spread = Some(Box::new(expr.into()));
+
+                // Spread must be the last thing in the record
+                self.consume(TokenKind::RightBrace)?;
+                break;
+            } else {
+                // Regular field: label: expr
+                let field_tok = self.push_source_location();
+                let label = self.identifier()?;
+                self.consume(TokenKind::Colon)?;
+                let value = self.expr_with_precedence(Precedence::Assignment)?;
+                let (id, span) = self.save_meta(field_tok)?;
+                fields.push(RecordField {
+                    id,
+                    span,
+                    label: Name::Raw(label),
+                    value: value.into(),
+                });
+            }
+
+            // Handle comma
+            if !self.peek_is(TokenKind::RightBrace) {
+                self.consume(TokenKind::Comma)?;
+            } else {
+                self.consume(TokenKind::Comma).ok(); // Optional trailing comma
+            }
+            self.skip_newlines();
+        }
+
+        Ok(ExprKind::RecordLiteral { fields, spread })
     }
 
     fn associated_type(&mut self) -> Result<Decl, ParserError> {

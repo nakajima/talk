@@ -7,6 +7,7 @@ use crate::{
     ast::{AST, ASTPhase},
     diagnostic::Diagnostic,
     id_generator::IDGenerator,
+    label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
@@ -22,14 +23,16 @@ use crate::{
         func::Func,
         match_arm::MatchArm,
         pattern::{Pattern, PatternKind},
+        record_field::RecordField,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
     span::Span,
     types::{
         builtins::builtin_scope,
-        constraints::{Constraint, ConstraintCause, Equals},
+        constraints::{Constraint, ConstraintCause, Equals, HasField},
         passes::dependencies_pass::{Binder, SCCResolved},
+        row::{Row, RowMetaId},
         ty::{Level, MetaId, Ty, TypeParamId},
         type_error::TypeError,
         type_operations::{apply, substitute, unify},
@@ -37,7 +40,11 @@ use crate::{
     },
 };
 
-pub type Substitutions = FxHashMap<MetaId, Ty>;
+#[derive(Debug, Clone, Default)]
+pub struct Substitutions {
+    pub row: FxHashMap<RowMetaId, Row>,
+    pub ty: FxHashMap<MetaId, Ty>,
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Inferenced {
@@ -133,6 +140,7 @@ pub struct InferencePass<'a> {
     metavars: IDGenerator,
     skolems: IDGenerator,
     type_params: IDGenerator,
+    row_metas: IDGenerator,
     term_env: TermEnv,
     rhs_map: FxHashMap<Binder, NodeID>,
     annotation_map: FxHashMap<Binder, NodeID>,
@@ -143,6 +151,15 @@ pub struct Wants(Vec<Constraint>);
 impl Wants {
     pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause) {
         self.0.push(Constraint::Equals(Equals { lhs, rhs, cause }));
+    }
+
+    pub fn has_field(&mut self, row: Row, label: Label, ty: Ty, cause: ConstraintCause) {
+        self.0.push(Constraint::HasField(HasField {
+            row,
+            label,
+            ty,
+            cause,
+        }))
     }
 }
 
@@ -158,6 +175,7 @@ impl<'a> InferencePass<'a> {
             metavars: Default::default(),
             skolems: Default::default(),
             type_params: Default::default(),
+            row_metas: Default::default(),
             term_env: TermEnv::new(),
             rhs_map: session.phase.rhs_map.clone(),
             annotation_map: session.phase.annotation_map.clone(),
@@ -286,25 +304,62 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn solve(&mut self, wants: Wants) -> Substitutions {
+    fn solve(&mut self, mut wants: Wants) -> Substitutions {
         let mut substitutions = Substitutions::default();
-        for want in wants.0 {
-            let solution = match want {
-                Constraint::Equals(equals) => unify(&equals.lhs, &equals.rhs, &mut substitutions),
-            };
+        let mut made_progress = false;
+        loop {
+            let mut next_wants = Wants(vec![]);
+            for want in wants.0.drain(..) {
+                tracing::trace!("solving {want:?}");
 
-            match solution {
-                Ok(_did_unify) => (),
-                Err(e) => {
-                    self.ast
-                        .diagnostics
-                        .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                            path: self.ast.path.clone(),
-                            span: Span { start: 0, end: 0 },
-                            kind: e,
-                        }));
+                let solution = match want {
+                    Constraint::Equals(equals) => {
+                        unify(&equals.lhs, &equals.rhs, &mut substitutions)
+                    }
+                    Constraint::HasField(has_field) => match has_field.row {
+                        Row::Empty => Ok(false),
+                        Row::Var(..) => Ok(false),
+                        Row::Extend { row, label, ty } => {
+                            if has_field.label == label {
+                                next_wants.equals(has_field.ty, ty, ConstraintCause::Internal);
+                                tracing::trace!("found match for {label:?}");
+                                Ok(true)
+                            } else {
+                                next_wants.has_field(
+                                    *row,
+                                    has_field.label,
+                                    has_field.ty,
+                                    ConstraintCause::Internal,
+                                );
+
+                                Ok(true)
+                            }
+                        }
+                    },
+                };
+
+                match solution {
+                    Ok(did_make_progress) => {
+                        made_progress |= did_make_progress;
+                    }
+                    Err(e) => {
+                        self.ast
+                            .diagnostics
+                            .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                                path: self.ast.path.clone(),
+                                span: Span { start: 0, end: 0 },
+                                kind: e,
+                            }));
+                        made_progress = false;
+                    }
                 }
             }
+
+            if !made_progress || next_wants.0.is_empty() {
+                break;
+            }
+
+            wants = next_wants;
         }
 
         self.apply_to_self(&substitutions);
@@ -519,7 +574,9 @@ impl<'a> InferencePass<'a> {
                 type_args,
                 args,
             } => self.infer_call(callee, type_args, args, level, wants),
-            ExprKind::Member(..) => todo!(),
+            ExprKind::Member(receiver, label) => {
+                self.infer_member(expr.id, receiver, label, level, wants)
+            }
             ExprKind::Func(func) => self.infer_func(func, level, wants),
             ExprKind::If(box cond, conseq, alt) => {
                 let cond_ty = self.infer_expr(cond, level, wants);
@@ -536,15 +593,78 @@ impl<'a> InferencePass<'a> {
                 conseq_ty
             }
             ExprKind::Match(scrutinee, arms) => self.infer_match(scrutinee, arms, level, wants),
-            ExprKind::RecordLiteral(..) => todo!(),
+            ExprKind::RecordLiteral { fields, spread } => {
+                self.infer_record_literal(fields, spread, level, wants)
+            }
             ExprKind::RowVariable(..) => todo!(),
-            ExprKind::Spread(..) => todo!(),
             _ => todo!(),
         };
 
         // record the type for this expression node
         self.types_by_node.insert(expr.id, ty.clone());
         ty
+    }
+
+    #[instrument(skip(self))]
+    fn infer_member(
+        &mut self,
+        id: NodeID,
+        receiver: &Option<Box<Expr>>,
+        label: &Label,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        let receiver_row = if let Some(receiver) = receiver {
+            match self.infer_expr(receiver, level, wants) {
+                Ty::Record(box row) => row,
+                ty => {
+                    self.ast
+                        .diagnostics
+                        .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                            path: self.ast.path.clone(),
+                            span: receiver.span,
+                            kind: TypeError::ExpectedRow(ty),
+                        }));
+                    return Ty::Void;
+                }
+            }
+        } else {
+            Row::Var(self.row_metas.next_id())
+        };
+
+        let member_ty = Ty::MetaVar {
+            id: self.metavars.next_id(),
+            level,
+        };
+
+        wants.has_field(
+            receiver_row,
+            label.clone(),
+            member_ty.clone(),
+            ConstraintCause::Member(id),
+        );
+
+        member_ty
+    }
+
+    #[instrument(skip(self))]
+    fn infer_record_literal(
+        &mut self,
+        fields: &[RecordField],
+        spread: &Option<Box<Expr>>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        let mut row = Row::Empty;
+        for field in fields.iter().rev() {
+            row = Row::Extend {
+                row: Box::new(row),
+                label: field.label.name_str().into(),
+                ty: self.infer_expr(&field.value, level, wants),
+            };
+        }
+
+        Ty::Record(Box::new(row))
     }
 
     #[instrument(skip(self))]
@@ -791,6 +911,14 @@ pub fn collect_metas_and_generics(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_metas_and_generics(item, out);
             }
         }
+        Ty::Record(box row) => match row {
+            Row::Empty => (),
+            Row::Var(_) => (),
+            Row::Extend { row, ty, .. } => {
+                collect_metas_and_generics(ty, out);
+                collect_metas_and_generics(&Ty::Record(row.clone()), out);
+            }
+        },
         Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) | Ty::TypeConstructor { .. } => {}
     }
 }
@@ -835,7 +963,7 @@ pub struct InferenceResult {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::types::passes::dependencies_pass::tests::resolve_dependencies;
+    use crate::types::{passes::dependencies_pass::tests::resolve_dependencies, row::ClosedRow};
 
     fn typecheck(code: &'static str) -> (AST<NameResolved>, TypeSession<Inferenced>) {
         let (ast, session) = typecheck_err(code);
@@ -853,17 +981,19 @@ pub mod tests {
         (ast, session)
     }
 
+    fn ty(i: usize, ast: &AST<NameResolved>, session: &TypeSession<Inferenced>) -> Ty {
+        session
+            .phase
+            .types_by_node
+            .get(&ast.roots[i].as_stmt().clone().as_expr().id)
+            .unwrap()
+            .clone()
+    }
+
     #[test]
     fn types_int() {
         let (ast, session) = typecheck("let a = 123; a");
-        assert_eq!(
-            *session
-                .phase
-                .types_by_node
-                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
-                .unwrap(),
-            Ty::Int
-        );
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
 
     #[test]
@@ -882,22 +1012,8 @@ pub mod tests {
     #[test]
     fn types_bool() {
         let (ast, session) = typecheck("let a = true; a ; let b = false ; b");
-        assert_eq!(
-            *session
-                .phase
-                .types_by_node
-                .get(&ast.roots[1].as_stmt().clone().as_expr().id)
-                .unwrap(),
-            Ty::Bool
-        );
-        assert_eq!(
-            *session
-                .phase
-                .types_by_node
-                .get(&ast.roots[3].as_stmt().clone().as_expr().id)
-                .unwrap(),
-            Ty::Bool
-        );
+        assert_eq!(ty(1, &ast, &session), Ty::Bool);
+        assert_eq!(ty(3, &ast, &session), Ty::Bool);
     }
 
     #[test]
@@ -908,8 +1024,7 @@ pub mod tests {
         a
     "#,
         );
-        let use_id = ast.roots[1].as_stmt().clone().as_expr().id;
-        assert_eq!(*session.phase.types_by_node.get(&use_id).unwrap(), Ty::Int);
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
 
     #[test]
@@ -975,8 +1090,6 @@ pub mod tests {
         bad(true)
     "#,
         );
-        // The error is from checking the function body (skolemized T), not only the use site
-        println!("Diagnostics: {:?}", ast.diagnostics);
         assert_eq!(
             ast.diagnostics.len(),
             1,
@@ -1416,5 +1529,43 @@ pub mod tests {
             *session.phase.types_by_node.get(&pair).unwrap(),
             Ty::Tuple(vec![Ty::Int, Ty::Bool])
         );
+    }
+
+    #[test]
+    fn types_record_literal() {
+        let (ast, session) = typecheck(
+            r#"
+        let rec = { a: true, b: 123, c: 1.23 }
+        rec
+        "#,
+        );
+
+        let Ty::Record(row) = ty(1, &ast, &session) else {
+            panic!("did not get record");
+        };
+
+        assert_eq!(
+            row.close(),
+            ClosedRow {
+                labels: vec!["a".into(), "b".into(), "c".into()],
+                values: vec![Ty::Bool, Ty::Int, Ty::Float]
+            }
+        );
+    }
+
+    #[test]
+    fn types_record_member() {
+        let (ast, session) = typecheck(
+            r#"
+        let rec = { a: true, b: 123, c: 1.23 }
+        rec.a
+        rec.b
+        rec.c
+        "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Bool);
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
+        assert_eq!(ty(3, &ast, &session), Ty::Float);
     }
 }

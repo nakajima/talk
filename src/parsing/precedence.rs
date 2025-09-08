@@ -104,7 +104,7 @@ impl Precedence {
             },
 
             TokenKind::LeftBrace => ParseHandler {
-                prefix: Some(Parser::block_prefix),
+                prefix: Some(Parser::block_expr),
                 infix: None,
                 precedence: Precedence::Call,
             },

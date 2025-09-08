@@ -4,7 +4,6 @@ use crate::{
     impl_into_node,
     label::Label,
     name::Name,
-    node::Node,
     node_id::NodeID,
     node_kinds::{
         block::Block, call_arg::CallArg, func::Func, incomplete_expr::IncompleteExpr,
@@ -61,13 +60,13 @@ pub enum ExprKind {
     ),
 
     // Record literal: {x: 1, y: 2}
-    RecordLiteral(Vec<RecordField>), // List of RecordField expressions
+    RecordLiteral {
+        fields: Vec<RecordField>,
+        spread: Option<Box<Expr>>,
+    }, // List of RecordField expressions
 
     // Row variable in type context: ..R
     RowVariable(#[drive(skip)] Name),
-
-    // Spread in record literal: ...obj
-    Spread(Box<Node>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

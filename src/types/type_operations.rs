@@ -3,9 +3,18 @@ use tracing::{Level, instrument};
 
 use crate::types::{
     passes::inference_pass::Substitutions,
+    row::Row,
     ty::{MetaId, Ty},
     type_error::TypeError,
 };
+
+fn occurs_in_row(id: MetaId, row: &Row) -> bool {
+    match row {
+        Row::Empty => false,
+        Row::Var(_) => false,
+        Row::Extend { row, ty, .. } => occurs_in(id, ty) || occurs_in_row(id, row),
+    }
+}
 
 // Helper: occurs check
 fn occurs_in(id: MetaId, ty: &Ty) -> bool {
@@ -13,6 +22,7 @@ fn occurs_in(id: MetaId, ty: &Ty) -> bool {
         Ty::MetaVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
+        Ty::Record(row) => occurs_in_row(id, row),
         Ty::TypeApplication(f, x) => occurs_in(id, f) || occurs_in(id, x),
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
@@ -22,6 +32,7 @@ fn occurs_in(id: MetaId, ty: &Ty) -> bool {
     }
 }
 
+// Unify types. Returns true if progress was made.
 #[instrument(level = Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
@@ -75,7 +86,7 @@ pub(super) fn unify(
             let picked = itertools::max([lhs_id, rhs_id]).unwrap();
             let not_picked = itertools::min([lhs_id, rhs_id]).unwrap();
 
-            substitutions.insert(
+            substitutions.ty.insert(
                 *not_picked,
                 Ty::MetaVar {
                     id: *picked,
@@ -94,12 +105,25 @@ pub(super) fn unify(
                 return Err(TypeError::OccursCheck(ty.clone())); // or your preferred variant
             }
 
-            substitutions.insert(*id, ty.clone());
+            substitutions.ty.insert(*id, ty.clone());
 
             Ok(true)
         }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => todo!("lhs: {lhs:?} {rhs:?}"),
+    }
+}
+
+#[instrument(ret)]
+pub(super) fn substitute_row(row: Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
+    match row {
+        Row::Empty => row.clone(),
+        Row::Var(..) => row.clone(),
+        Row::Extend { row, label, ty } => Row::Extend {
+            row: Box::new(substitute_row(*row, substitutions)),
+            label,
+            ty: substitute(ty, substitutions),
+        },
     }
 }
 
@@ -125,10 +149,24 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .map(|t| substitute(t, substitutions))
                 .collect(),
         ),
+        Ty::Record(row) => Ty::Record(Box::new(substitute_row(*row, substitutions))),
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             substitute(lhs, substitutions).into(),
             substitute(rhs, substitutions).into(),
         ),
+    }
+}
+
+#[instrument(level = Level::TRACE, ret)]
+pub(super) fn apply_row(row: Row, substitutions: &Substitutions) -> Row {
+    match row {
+        Row::Empty => Row::Empty,
+        Row::Var(var) => substitutions.row.get(&var).unwrap_or(&row).clone(),
+        Row::Extend { row, label, ty } => Row::Extend {
+            row: Box::new(apply_row(*row, substitutions)),
+            label,
+            ty: apply(ty, substitutions),
+        },
     }
 }
 
@@ -138,7 +176,7 @@ pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
         Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
-        Ty::MetaVar { id, .. } => match substitutions.get(&id) {
+        Ty::MetaVar { id, .. } => match substitutions.ty.get(&id) {
             Some(found @ Ty::MetaVar { id: found_id, .. }) => {
                 if *found_id == id {
                     ty
@@ -156,6 +194,7 @@ pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
             Box::new(apply(*ret, substitutions)),
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
+        Ty::Record(row) => Ty::Record(Box::new(apply_row(*row, substitutions))),
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             apply(lhs, substitutions).into(),
             apply(rhs, substitutions).into(),

@@ -1,8 +1,13 @@
-use crate::{node_id::NodeID, types::ty::Ty};
+use crate::{
+    label::Label,
+    node_id::NodeID,
+    types::{row::Row, ty::Ty},
+};
 
 #[derive(Debug)]
 pub enum ConstraintCause {
     Annotation(NodeID),
+    Member(NodeID),
     Literal(NodeID),
     Assignment(NodeID),
     Call(NodeID),
@@ -21,6 +26,15 @@ pub struct Equals {
 }
 
 #[derive(Debug)]
+pub struct HasField {
+    pub row: Row,
+    pub label: Label,
+    pub ty: Ty,
+    pub cause: ConstraintCause,
+}
+
+#[derive(Debug)]
 pub enum Constraint {
     Equals(Equals),
+    HasField(HasField),
 }
