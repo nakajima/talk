@@ -12,7 +12,7 @@ impl IDGenerator {
     pub fn next_n_ids<T: From<u32>>(&mut self, n: usize) -> Vec<T> {
         let mut result = vec![];
         for _ in 0..n {
-            result.push(self.next_id::<T>().into())
+            result.push(self.next_id::<T>())
         }
         result
     }

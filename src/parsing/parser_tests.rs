@@ -2368,11 +2368,14 @@ pub mod tests {
         );
     }
 
-    // #[test]
-    // fn parses_empty_braces_as_block() {
-    //     let parsed = parse("{}");
-    //     assert_eq!(parsed.roots()[0], any_expr!(Expr::Block(vec![])));
-    // }
+    #[test]
+    fn parses_empty_braces_as_block() {
+        let parsed = parse("{}");
+        assert_eq!(
+            parsed.roots[0],
+            any_expr_stmt!(ExprKind::Block(any_block!(vec![])))
+        );
+    }
 
     // #[test]
     // fn parses_record_literal_with_spread() {

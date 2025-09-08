@@ -32,6 +32,50 @@ fn occurs_in(id: MetaId, ty: &Ty) -> bool {
     }
 }
 
+// Unify rows. Returns true if progress was made.
+#[instrument(level = Level::DEBUG)]
+fn unify_rows(lhs: &Row, rhs: &Row, substitutions: &mut Substitutions) -> Result<bool, TypeError> {
+    match (lhs, rhs) {
+        (Row::Empty, Row::Empty) => Ok(false),
+        (Row::Var(lhs_id), Row::Var(rhs_id)) if lhs_id == rhs_id => Ok(false),
+        (Row::Var(id), row) | (row, Row::Var(id)) => {
+            // TODO: Occurs check for rows
+            substitutions.row.insert(*id, row.clone());
+            Ok(true)
+        }
+        (
+            Row::Extend {
+                row: lhs_row,
+                label: lhs_label,
+                ty: lhs_ty,
+            },
+            Row::Extend {
+                row: rhs_row,
+                label: rhs_label,
+                ty: rhs_ty,
+            },
+        ) => {
+            if lhs_label == rhs_label {
+                // Same label, unify the types and continue with the rows
+                let ty_unified = unify(lhs_ty, rhs_ty, substitutions)?;
+                let row_unified = unify_rows(lhs_row, rhs_row, substitutions)?;
+                Ok(ty_unified || row_unified)
+            } else {
+                // Different labels - need to check if we can reorder
+                // For now, let's just fail
+                Err(TypeError::InvalidUnification(
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
+                ))
+            }
+        }
+        _ => Err(TypeError::InvalidUnification(
+            Ty::Record(Box::new(lhs.clone())),
+            Ty::Record(Box::new(rhs.clone())),
+        )),
+    }
+}
+
 // Unify types. Returns true if progress was made.
 #[instrument(level = Level::DEBUG)]
 pub(super) fn unify(
@@ -109,6 +153,7 @@ pub(super) fn unify(
 
             Ok(true)
         }
+        (Ty::Record(lhs_row), Ty::Record(rhs_row)) => unify_rows(lhs_row, rhs_row, substitutions),
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => todo!("lhs: {lhs:?} {rhs:?}"),
     }

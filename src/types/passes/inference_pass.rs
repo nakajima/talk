@@ -35,7 +35,7 @@ use crate::{
         row::{Row, RowMetaId},
         ty::{Level, MetaId, Ty, TypeParamId},
         type_error::TypeError,
-        type_operations::{apply, substitute, unify},
+        type_operations::{apply, apply_row, substitute, unify},
         type_session::{TypeDef, TypeSession, TypingPhase},
     },
 };
@@ -316,26 +316,38 @@ impl<'a> InferencePass<'a> {
                     Constraint::Equals(equals) => {
                         unify(&equals.lhs, &equals.rhs, &mut substitutions)
                     }
-                    Constraint::HasField(has_field) => match has_field.row {
-                        Row::Empty => Ok(false),
-                        Row::Var(..) => Ok(false),
-                        Row::Extend { row, label, ty } => {
-                            if has_field.label == label {
-                                next_wants.equals(has_field.ty, ty, ConstraintCause::Internal);
-                                tracing::trace!("found match for {label:?}");
-                                Ok(true)
-                            } else {
+                    Constraint::HasField(has_field) => {
+                        let row = apply_row(has_field.row, &substitutions);
+                        match row {
+                            Row::Empty => Ok(false),
+                            Row::Var(..) => {
+                                // Keep the constraint for the next iteration with the applied row
                                 next_wants.has_field(
-                                    *row,
+                                    row,
                                     has_field.label,
                                     has_field.ty,
                                     ConstraintCause::Internal,
                                 );
+                                Ok(false)
+                            }
+                            Row::Extend { row, label, ty } => {
+                                if has_field.label == label {
+                                    next_wants.equals(has_field.ty, ty, ConstraintCause::Internal);
+                                    tracing::trace!("found match for {label:?}");
+                                    Ok(true)
+                                } else {
+                                    next_wants.has_field(
+                                        *row,
+                                        has_field.label,
+                                        has_field.ty,
+                                        ConstraintCause::Internal,
+                                    );
 
-                                Ok(true)
+                                    Ok(true)
+                                }
                             }
                         }
-                    },
+                    }
                 };
 
                 match solution {
@@ -615,8 +627,20 @@ impl<'a> InferencePass<'a> {
         wants: &mut Wants,
     ) -> Ty {
         let receiver_row = if let Some(receiver) = receiver {
-            match self.infer_expr(receiver, level, wants) {
+            let receiver_ty = self.infer_expr(receiver, level, wants);
+            match receiver_ty {
                 Ty::Record(box row) => row,
+                Ty::MetaVar { .. } => {
+                    // Add a constraint saying that receiver needs to be a row
+                    let row = Row::Var(self.row_metas.next_id());
+                    wants.equals(
+                        receiver_ty.clone(),
+                        Ty::Record(Box::new(row.clone())),
+                        ConstraintCause::Member(id),
+                    );
+
+                    row
+                }
                 ty => {
                     self.ast
                         .diagnostics
@@ -1567,5 +1591,31 @@ pub mod tests {
         assert_eq!(ty(1, &ast, &session), Ty::Bool);
         assert_eq!(ty(2, &ast, &session), Ty::Int);
         assert_eq!(ty(3, &ast, &session), Ty::Float);
+    }
+
+    #[test]
+    fn types_nested_record() {
+        let (ast, session) = typecheck(
+            r#"
+        let rec = { a: { b: { c: 1.23 } } }
+        rec.a.b.c
+        "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Float);
+    }
+
+    #[test]
+    fn types_record_pattern() {
+        let (ast, session) = typecheck(
+            r#"
+        let rec = { a: 123, b: true }
+        match rec {
+            { a, b } -> (a, b)
+        }
+        "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
     }
 }
