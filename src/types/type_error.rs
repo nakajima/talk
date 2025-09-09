@@ -9,6 +9,7 @@ pub enum TypeError {
     GenericArgCount { expected: u8, actual: u8 },
     InvalidUnification(Ty, Ty),
     OccursCheck(Ty),
+    MemberNotFound(Ty, String),
 }
 
 impl Error for TypeError {}
@@ -27,6 +28,9 @@ impl Display for TypeError {
             }
             Self::ExpectedRow(ty) => {
                 write!(f, "Expected row, got {ty:?}")
+            }
+            Self::MemberNotFound(ty, name) => {
+                write!(f, "{ty:?} has no member: {name}")
             }
         }
     }

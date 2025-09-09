@@ -5,7 +5,7 @@ use tracing::instrument;
 
 use crate::{
     ast::{AST, ASTPhase},
-    diagnostic::Diagnostic,
+    diagnostic::{AnyDiagnostic, Diagnostic},
     id_generator::IDGenerator,
     label::Label,
     name::Name,
@@ -22,7 +22,7 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         match_arm::MatchArm,
-        pattern::{Pattern, PatternKind},
+        pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         record_field::RecordField,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -153,12 +153,20 @@ impl Wants {
         self.0.push(Constraint::Equals(Equals { lhs, rhs, cause }));
     }
 
-    pub fn has_field(&mut self, row: Row, label: Label, ty: Ty, cause: ConstraintCause) {
+    pub fn has_field(
+        &mut self,
+        row: Row,
+        label: Label,
+        ty: Ty,
+        cause: ConstraintCause,
+        span: Span,
+    ) {
         self.0.push(Constraint::HasField(HasField {
             row,
             label,
             ty,
             cause,
+            span,
         }))
     }
 }
@@ -317,9 +325,19 @@ impl<'a> InferencePass<'a> {
                         unify(&equals.lhs, &equals.rhs, &mut substitutions)
                     }
                     Constraint::HasField(has_field) => {
-                        let row = apply_row(has_field.row, &substitutions);
+                        let row = apply_row(has_field.row.clone(), &substitutions);
                         match row {
-                            Row::Empty => Ok(false),
+                            Row::Empty => {
+                                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
+                                    path: self.ast.path.clone(),
+                                    span: has_field.span,
+                                    kind: TypeError::MemberNotFound(
+                                        Ty::Record(Box::new(has_field.row)),
+                                        has_field.label.to_string(),
+                                    ),
+                                }));
+                                Ok(false)
+                            }
                             Row::Var(..) => {
                                 // Keep the constraint for the next iteration with the applied row
                                 next_wants.has_field(
@@ -327,6 +345,7 @@ impl<'a> InferencePass<'a> {
                                     has_field.label,
                                     has_field.ty,
                                     ConstraintCause::Internal,
+                                    has_field.span,
                                 );
                                 Ok(false)
                             }
@@ -341,6 +360,7 @@ impl<'a> InferencePass<'a> {
                                         has_field.label,
                                         has_field.ty,
                                         ConstraintCause::Internal,
+                                        has_field.span,
                                     );
 
                                     Ok(true)
@@ -491,7 +511,7 @@ impl<'a> InferencePass<'a> {
                 );
             }
             PatternKind::Tuple(patterns) => {
-                let betas: Vec<Ty> = (0..patterns.len())
+                let metas: Vec<Ty> = (0..patterns.len())
                     .map(|_| {
                         let var = self.metavars.next_id();
                         Ty::MetaVar { id: var, level }
@@ -499,15 +519,59 @@ impl<'a> InferencePass<'a> {
                     .collect();
                 wants.equals(
                     expected.clone(),
-                    Ty::Tuple(betas.clone()),
+                    Ty::Tuple(metas.clone()),
                     ConstraintCause::Pattern(pattern.id),
                 );
 
-                for (pi, bi) in patterns.iter().zip(betas) {
+                for (pi, bi) in patterns.iter().zip(metas) {
                     self.check_pattern(pi, &bi, level, wants);
                 }
             }
-            PatternKind::Record { .. } => todo!(),
+            PatternKind::Record { fields } => {
+                let expected_row = self.ensure_row(pattern.id, expected, level, wants);
+                for field in fields {
+                    match &field.kind {
+                        RecordFieldPatternKind::Bind(name) => {
+                            // fresh meta for the field type
+                            let field_ty = Ty::MetaVar {
+                                id: self.metavars.next_id(),
+                                level,
+                            };
+
+                            // bind the pattern name
+                            self.term_env.insert_mono(
+                                name.symbol().expect("did not resolve name"),
+                                field_ty.clone(),
+                            );
+
+                            // ONE RowHas per field, all referring to the same row
+                            wants.has_field(
+                                expected_row.clone(),
+                                name.name_str().into(),
+                                field_ty,
+                                ConstraintCause::Pattern(field.id),
+                                pattern.span,
+                            );
+                        }
+                        RecordFieldPatternKind::Equals { name, value } => {
+                            // optional: pattern field = subpattern; same RowHas then recurse on value
+                            let field_ty = Ty::MetaVar {
+                                id: self.metavars.next_id(),
+                                level,
+                            };
+                            wants.has_field(
+                                expected_row.clone(),
+                                name.name_str().into(),
+                                field_ty.clone(),
+                                ConstraintCause::Pattern(field.id),
+                                pattern.span,
+                            );
+                            self.check_pattern(value, &field_ty, level, wants);
+                        }
+                        RecordFieldPatternKind::Rest => {}
+                    }
+                }
+            }
             PatternKind::Wildcard => todo!(),
             PatternKind::Variant { .. } => todo!(),
             PatternKind::Struct { .. } => todo!(),
@@ -530,6 +594,25 @@ impl<'a> InferencePass<'a> {
                 ty
             }
             _ => todo!(),
+        }
+    }
+
+    /// Ensure we have a row to talk about for `expected`.
+    /// If `expected` is Ty::Record(row), return that row.
+    /// Otherwise create a fresh row var ρ and add Eq(expected, Record(ρ)).
+    #[instrument(skip(self), ret)]
+    fn ensure_row(&mut self, id: NodeID, expected: &Ty, level: Level, wants: &mut Wants) -> Row {
+        match expected {
+            Ty::Record(box row) => row.clone(),
+            _ => {
+                let rho = Row::Var(self.row_metas.next_id());
+                wants.equals(
+                    expected.clone(),
+                    Ty::Record(Box::new(rho.clone())),
+                    ConstraintCause::Pattern(id),
+                );
+                rho
+            }
         }
     }
 
@@ -627,10 +710,10 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        let receiver_row = if let Some(receiver) = receiver {
+        let (receiver_row, span) = if let Some(receiver) = receiver {
             let receiver_ty = self.infer_expr(receiver, level, wants);
             match receiver_ty {
-                Ty::Record(box row) => row,
+                Ty::Record(box row) => (row, receiver.span),
                 Ty::MetaVar { .. } => {
                     // Add a constraint saying that receiver needs to be a row
                     let row = Row::Var(self.row_metas.next_id());
@@ -640,7 +723,7 @@ impl<'a> InferencePass<'a> {
                         ConstraintCause::Member(id),
                     );
 
-                    row
+                    (row, receiver.span)
                 }
                 ty => {
                     self.ast
@@ -654,7 +737,10 @@ impl<'a> InferencePass<'a> {
                 }
             }
         } else {
-            Row::Var(self.row_metas.next_id())
+            (
+                Row::Var(self.row_metas.next_id()),
+                Span { start: 0, end: 0 },
+            )
         };
 
         let member_ty = Ty::MetaVar {
@@ -667,6 +753,7 @@ impl<'a> InferencePass<'a> {
             label.clone(),
             member_ty.clone(),
             ConstraintCause::Member(id),
+            span,
         );
 
         member_ty
@@ -1618,5 +1705,24 @@ pub mod tests {
         );
 
         assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    #[test]
+    fn checks_fields_exist() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        let rec = { a: 123, b: true }
+        match rec {
+            { a, c } -> (a, c)
+        }
+        "#,
+        );
+
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "did not get diagnostic: {:?}",
+            ast.diagnostics
+        );
     }
 }

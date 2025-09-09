@@ -737,6 +737,15 @@ impl<'a> Parser<'a> {
                         });
                     }
 
+                    let (id, span) = self.save_meta(tok)?;
+                    let field = RecordFieldPattern {
+                        id,
+                        span,
+                        kind: RecordFieldPatternKind::Rest,
+                    };
+                    fields.push(field);
+                    self.consume(TokenKind::RightBrace).ok();
+
                     break;
                 }
                 TokenKind::Identifier(_) => {

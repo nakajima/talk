@@ -14,7 +14,7 @@ use crate::{
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         match_arm::MatchArm,
-        pattern::{Pattern, PatternKind},
+        pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         stmt::{Stmt, StmtKind},
     },
     on,
@@ -117,6 +117,19 @@ impl<'a> DeclDeclarer<'a> {
                     self.resolver.declare_global(name)
                 } else {
                     self.resolver.declare_local(name)
+                }
+            }
+            PatternKind::Record { fields } => {
+                for field in fields {
+                    let RecordFieldPatternKind::Bind(name) = &mut field.kind else {
+                        continue;
+                    };
+
+                    *name = if self.at_module_scope() {
+                        self.resolver.declare_global(name)
+                    } else {
+                        self.resolver.declare_local(name)
+                    }
                 }
             }
             PatternKind::Tuple(_) => (),

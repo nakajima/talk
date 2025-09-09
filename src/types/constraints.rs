@@ -1,6 +1,7 @@
 use crate::{
     label::Label,
     node_id::NodeID,
+    span::Span,
     types::{row::Row, ty::Ty},
 };
 
@@ -31,6 +32,7 @@ pub struct HasField {
     pub label: Label,
     pub ty: Ty,
     pub cause: ConstraintCause,
+    pub span: Span,
 }
 
 #[derive(Debug)]
