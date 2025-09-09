@@ -1708,6 +1708,20 @@ pub mod tests {
     }
 
     #[test]
+    fn types_record_pattern_with_equalities() {
+        let (ast, session) = typecheck(
+            r#"
+        let rec = { a: 123, b: true }
+        match rec {
+            { a: 123, b } -> b
+        }
+        "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Bool);
+    }
+
+    #[test]
     fn checks_fields_exist() {
         let (ast, _session) = typecheck_err(
             r#"
