@@ -10,6 +10,27 @@ macro_rules! any_expr {
 }
 
 #[macro_export]
+macro_rules! any {
+    // Pass an arbitrary list of fields
+    ($ty:ident, { $($fields:tt)* }) => {{
+        $ty {
+            id: NodeID::ANY,
+            span: Span::ANY,
+            $($fields)*
+        }
+    }};
+
+    // Convenience: pass just a kind expression
+    ($ty:ident, $kind:expr) => {{
+        $ty {
+            id: NodeID::ANY,
+            span: Span::ANY,
+            kind: $kind,
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! any_block {
     ($expr:expr) => {{
         $crate::node_kinds::block::Block {

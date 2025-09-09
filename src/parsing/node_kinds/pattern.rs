@@ -3,6 +3,25 @@ use derive_visitor::{Drive, DriveMut};
 use crate::{impl_into_node, name::Name, node::Node, node_id::NodeID, parsing::span::Span};
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+pub enum RecordFieldPatternKind {
+    Bind(#[drive(skip)] Name),
+    Equals {
+        #[drive(skip)]
+        name: Name,
+        value: Pattern,
+    },
+    Rest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+pub struct RecordFieldPattern {
+    #[drive(skip)]
+    pub id: NodeID,
+    #[drive(skip)]
+    pub span: Span,
+    pub kind: RecordFieldPatternKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
 pub enum PatternKind {
     // Literals that must match exactly
     LiteralInt(#[drive(skip)] String),
@@ -25,6 +44,10 @@ pub enum PatternKind {
         #[drive(skip)]
         variant_name: String,
         fields: Vec<Pattern>, // Recursive patterns for fields
+    },
+
+    Record {
+        fields: Vec<RecordFieldPattern>,
     },
 
     // Struct/Record destructuring

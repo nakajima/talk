@@ -14,7 +14,9 @@ use crate::node_kinds::generic_decl::GenericDecl;
 use crate::node_kinds::incomplete_expr::IncompleteExpr;
 use crate::node_kinds::match_arm::MatchArm;
 use crate::node_kinds::parameter::Parameter;
-use crate::node_kinds::pattern::{Pattern, PatternKind};
+use crate::node_kinds::pattern::{
+    Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
+};
 use crate::node_kinds::record_field::RecordField;
 use crate::node_kinds::stmt::{Stmt, StmtKind};
 use crate::node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind};
@@ -697,12 +699,66 @@ impl<'a> Parser<'a> {
 
                 PatternKind::Tuple(items)
             }
+            TokenKind::LeftBrace => {
+                self.advance();
+                self.parse_record_pattern()?
+            }
 
             _ => todo!("{:?}", current.kind),
         };
 
         let (id, span) = self.save_meta(tok)?;
         Ok(Pattern { id, span, kind })
+    }
+
+    fn parse_record_pattern(&mut self) -> Result<PatternKind, ParserError> {
+        self.skip_newlines();
+        let mut fields: Vec<RecordFieldPattern> = vec![];
+        while !self.did_match(TokenKind::RightBrace)? {
+            let Some(current) = &self.current.clone() else {
+                return Err(ParserError::UnexpectedEndOfInput(Some(
+                    "Expected record pattern".into(),
+                )));
+            };
+
+            let tok = self.push_source_location();
+            match &current.kind {
+                TokenKind::DotDot => {
+                    self.consume(TokenKind::DotDot).ok();
+
+                    // "rest" must be the last item
+                    if !self.peek_is(TokenKind::RightBrace) {
+                        return Err(ParserError::UnexpectedToken {
+                            expected: "}".into(),
+                            actual: format!(
+                                "got {:?}. Rest pattern must be at the end of record pattern",
+                                self.current
+                            ),
+                        });
+                    }
+
+                    break;
+                }
+                TokenKind::Identifier(_) => {
+                    let name = Name::Raw(self.identifier()?);
+                    let kind = if self.peek_is(TokenKind::Colon) {
+                        self.consume(TokenKind::Colon).ok();
+                        let value = self.parse_pattern()?;
+                        RecordFieldPatternKind::Equals { name, value }
+                    } else {
+                        RecordFieldPatternKind::Bind(name)
+                    };
+
+                    let (id, span) = self.save_meta(tok)?;
+                    let field = RecordFieldPattern { id, span, kind };
+                    fields.push(field);
+                }
+                _ => todo!("{current:?} field pattern not implemented yet"),
+            }
+            self.consume(TokenKind::Comma).ok();
+        }
+
+        Ok(PatternKind::Record { fields })
     }
 
     fn pattern_fields(&mut self) -> Result<Vec<Pattern>, ParserError> {

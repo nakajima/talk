@@ -507,6 +507,7 @@ impl<'a> InferencePass<'a> {
                     self.check_pattern(pi, &bi, level, wants);
                 }
             }
+            PatternKind::Record { .. } => todo!(),
             PatternKind::Wildcard => todo!(),
             PatternKind::Variant { .. } => todo!(),
             PatternKind::Struct { .. } => todo!(),

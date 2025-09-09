@@ -14,7 +14,7 @@ use crate::{
         generic_decl::GenericDecl,
         match_arm::MatchArm,
         parameter::Parameter,
-        pattern::{Pattern, PatternKind},
+        pattern::{Pattern, PatternKind, RecordFieldPatternKind},
         record_field::RecordField,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -593,6 +593,27 @@ impl<'a> Formatter<'a> {
                 }
 
                 result
+            }
+            PatternKind::Record { fields } => {
+                let field_docs = fields
+                    .iter()
+                    .map(|field| match &field.kind {
+                        RecordFieldPatternKind::Rest => text(".."),
+                        RecordFieldPatternKind::Bind(name) => self.format_name(name),
+                        RecordFieldPatternKind::Equals { name, value } => concat_space(
+                            concat(self.format_name(name), text(":")),
+                            self.format_pattern(value),
+                        ),
+                    })
+                    .collect();
+
+                concat(
+                    concat(
+                        text("{"),
+                        nest(1, concat(softline(), join(field_docs, text(",")))),
+                    ),
+                    text("}"),
+                )
             }
             PatternKind::Struct {
                 struct_name,

@@ -3,7 +3,7 @@ pub mod tests {
     use std::assert_matches::assert_matches;
 
     use crate::{
-        any_block, any_expr,
+        any, any_block, any_expr,
         ast::{AST, Parsed},
         label::Label,
         lexer::Lexer,
@@ -19,7 +19,7 @@ pub mod tests {
             generic_decl::GenericDecl,
             match_arm::MatchArm,
             parameter::Parameter,
-            pattern::{Pattern, PatternKind},
+            pattern::{Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind},
             record_field::RecordField,
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -1995,6 +1995,112 @@ pub mod tests {
                     .into()
                 ])
             })
+        );
+    }
+
+    #[test]
+    fn parses_record_pattern_binds() {
+        let parsed = parse(
+            r#"
+            match fizz {
+                { x, y } -> (x, y)
+            }
+            "#,
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Match(
+                Box::new(any_expr!(ExprKind::Variable("fizz".into()))),
+                vec![any!(MatchArm, {
+                    pattern: any!(Pattern, {
+                        kind: PatternKind::Record { fields: vec![
+                            any!(RecordFieldPattern, {
+                                kind: RecordFieldPatternKind::Bind("x".into())
+                            }),
+                            any!(RecordFieldPattern, {
+                                kind: RecordFieldPatternKind::Bind("y".into())
+                            })
+                        ] }
+                    }),
+                    body: any_block!(vec![
+                        any_expr_stmt!(ExprKind::Tuple(vec![
+                            any_expr!(ExprKind::Variable("x".into())),
+                            any_expr!(ExprKind::Variable("y".into())),
+                        ]))
+                    ])
+                })]
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_record_pattern_with_values() {
+        let parsed = parse(
+            r#"
+            match fizz {
+                { x: 123, y } -> ()
+            }
+            "#,
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Match(
+                Box::new(any_expr!(ExprKind::Variable("fizz".into()))),
+                vec![any!(MatchArm, {
+                    pattern: any!(Pattern, {
+                        kind: PatternKind::Record { fields: vec![
+                            any!(RecordFieldPattern, {
+                                kind: RecordFieldPatternKind::Equals { name: "x".into(), value: any!(Pattern, {
+                                    kind: PatternKind::LiteralInt("123".into())
+                                }) }
+                            }),
+                            any!(RecordFieldPattern, {
+                                kind: RecordFieldPatternKind::Bind("y".into())
+                            })
+                        ] }
+                    }),
+                    body: any_block!(vec![
+                        any_expr_stmt!(ExprKind::Tuple(vec![]))
+                    ])
+                })]
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_record_pattern_with_rest() {
+        let parsed = parse(
+            r#"
+            match fizz {
+                { x: 123, .. } -> ()
+            }
+            "#,
+        );
+
+        assert_eq!(
+            *parsed.roots[0].as_stmt(),
+            any_expr_stmt!(ExprKind::Match(
+                Box::new(any_expr!(ExprKind::Variable("fizz".into()))),
+                vec![any!(MatchArm, {
+                    pattern: any!(Pattern, {
+                        kind: PatternKind::Record { fields: vec![
+                            any!(RecordFieldPattern, {
+                                kind: RecordFieldPatternKind::Equals { name: "x".into(), value: any!(Pattern, {
+                                    kind: PatternKind::LiteralInt("123".into())
+                                }) }
+                            }),
+                            any!(RecordFieldPattern, {
+                                kind: RecordFieldPatternKind::Rest
+                            })
+                        ] }
+                    }),
+                    body: any_block!(vec![
+                        any_expr_stmt!(ExprKind::Tuple(vec![]))
+                    ])
+                })]
+            ))
         );
     }
 
