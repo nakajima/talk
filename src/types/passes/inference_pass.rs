@@ -82,14 +82,59 @@ pub enum EnvEntry {
 }
 
 #[derive(Debug)]
+pub struct EnvScope {
+    id: NodeID,
+    parent_id: Option<NodeID>,
+    entries: FxHashMap<Symbol, EnvEntry>,
+}
+
+#[derive(Debug)]
 pub struct TermEnv {
-    frames: Vec<FxHashMap<Symbol, EnvEntry>>,
+    scopes: FxHashMap<NodeID, EnvScope>,
+    current: NodeID,
+}
+
+impl std::fmt::Display for TermEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn format_scope(scope: &EnvScope, env: &TermEnv, level: usize) -> Vec<String> {
+            let mut result = vec![];
+            if level == 0 {
+                result.push(format!("Root Scope: {scope:?}"));
+            } else {
+                let indent = "  ".repeat(level);
+                result.push(format!("{indent}∟ {scope:?}"));
+            }
+
+            let child_scopes = env.child_scopes(scope.id);
+            if !child_scopes.is_empty() {
+                for scope in child_scopes {
+                    result.extend(format_scope(scope, env, level + 1))
+                }
+            }
+
+            result
+        }
+
+        let result = format_scope(self.scopes.get(&NodeID(0)).expect("no root scope"), self, 0);
+
+        write!(f, "{}", result.join("\n"))
+    }
 }
 
 impl Default for TermEnv {
     fn default() -> Self {
+        let builtin = EnvScope {
+            id: NodeID(0),
+            parent_id: None,
+            entries: builtin_scope(),
+        };
+
+        let mut scopes = FxHashMap::<NodeID, EnvScope>::default();
+        scopes.insert(NodeID(0), builtin);
+
         Self {
-            frames: vec![builtin_scope()],
+            scopes,
+            current: NodeID(0),
         }
     }
 }
@@ -99,30 +144,80 @@ impl TermEnv {
         Self::default()
     }
 
-    pub fn push(&mut self) {
-        self.frames.push(FxHashMap::default());
+    fn child_scopes(&self, parent_id: NodeID) -> Vec<&EnvScope> {
+        self.scopes
+            .iter()
+            .filter_map(|(_id, scope)| {
+                if scope.parent_id == Some(parent_id) {
+                    Some(scope)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
+
+    #[instrument(skip(self))]
+    pub fn push(&mut self, node_id: NodeID) {
+        self.scopes.insert(
+            node_id,
+            EnvScope {
+                id: node_id,
+                parent_id: Some(self.current),
+                entries: Default::default(),
+            },
+        );
+
+        self.current = node_id;
+    }
+
+    pub fn current_mut(&mut self) -> &mut EnvScope {
+        self.scopes
+            .get_mut(&self.current)
+            .expect("no current scope")
+    }
+
+    pub fn current(&self) -> &EnvScope {
+        self.scopes.get(&self.current).expect("no current scope")
+    }
+
     pub fn pop(&mut self) {
-        self.frames.pop().expect("pop on empty env");
+        self.current = self
+            .scopes
+            .get(&self.current)
+            .expect("no current scope to pop")
+            .parent_id
+            .unwrap_or(NodeID(0));
     }
 
     pub fn insert_mono(&mut self, sym: Symbol, ty: Ty) {
-        self.frames
-            .last_mut()
-            .unwrap()
-            .insert(sym, EnvEntry::Mono(ty));
+        self.current_mut().entries.insert(sym, EnvEntry::Mono(ty));
     }
+
     pub fn promote(&mut self, sym: Symbol, sch: Scheme) {
         // promote into the *root* frame so it’s visible everywhere (for binders)
-        self.frames[0].insert(sym, EnvEntry::Scheme(sch));
+        self.scopes
+            .get_mut(&NodeID(0))
+            .unwrap()
+            .entries
+            .insert(sym, EnvEntry::Scheme(sch));
     }
 
     pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry> {
-        for frame in self.frames.iter().rev() {
-            if let Some(e) = frame.get(sym) {
-                return Some(e);
-            }
+        self.lookup_in_scope(sym, self.current)
+    }
+
+    fn lookup_in_scope(&self, sym: &Symbol, scope_id: NodeID) -> Option<&EnvEntry> {
+        let scope = self.scopes.get(&scope_id)?;
+
+        if let Some(entry) = scope.entries.get(sym) {
+            return Some(entry);
         }
+
+        if let Some(parent_id) = scope.parent_id {
+            return self.lookup_in_scope(sym, parent_id);
+        }
+
         None
     }
 }
@@ -796,7 +891,7 @@ impl<'a> InferencePass<'a> {
         let scrutinee_ty = self.infer_expr(scrutinee, level, wants);
 
         for arm in arms {
-            self.term_env.push();
+            self.term_env.push(arm.id);
             self.check_pattern(&arm.pattern, &scrutinee_ty, level, wants);
             let arm_ty = self.infer_block(&arm.body, level, wants);
 
@@ -868,7 +963,7 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> Ty {
-        self.term_env.push();
+        self.term_env.push(func.id);
 
         let mut skolem_map = FxHashMap::default();
         for generic in func.generics.iter() {
@@ -908,6 +1003,7 @@ impl<'a> InferencePass<'a> {
             let Name::Resolved(sym, _) = &p.name else {
                 panic!("unresolved param");
             };
+            tracing::info!("inserting mono: {sym:?} : {ty:?}");
             self.term_env.insert_mono(*sym, ty.clone());
         }
 
