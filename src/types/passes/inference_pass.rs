@@ -1725,4 +1725,23 @@ pub mod tests {
             ast.diagnostics
         );
     }
+
+    #[test]
+    fn checks_field_types() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        let rec = { a: 123 }
+        match rec {
+            { a: true } -> ()
+        }
+        "#,
+        );
+
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "did not get diagnostic: {:?}",
+            ast.diagnostics
+        );
+    }
 }
