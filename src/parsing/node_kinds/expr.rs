@@ -69,6 +69,41 @@ pub enum ExprKind {
     RowVariable(#[drive(skip)] Name),
 }
 
+impl ExprKind {
+    pub fn is_syntactic_value(&self) -> bool {
+        match self {
+            // These perform computations, they're not just like, values. Which
+            // matters when it comes to generalization.
+            ExprKind::If(..)
+            | ExprKind::Block(..)
+            | ExprKind::Match(..)
+            | ExprKind::Call { .. }
+            | ExprKind::Unary(..)
+            | ExprKind::Binary(..)
+            | ExprKind::Member(..)
+            | ExprKind::RowVariable(..) => false,
+
+            ExprKind::Func(..) => true,
+            ExprKind::LiteralArray(items) => items.iter().all(|e| e.kind.is_syntactic_value()),
+            ExprKind::Tuple(items) => items.iter().all(|e| e.kind.is_syntactic_value()),
+            ExprKind::RecordLiteral { fields, spread } => {
+                spread.is_none()
+                    && fields
+                        .iter()
+                        .all(|field| field.value.kind.is_syntactic_value())
+            }
+
+            ExprKind::Incomplete(..) => true,
+            ExprKind::LiteralInt(..) => true,
+            ExprKind::LiteralFloat(..) => true,
+            ExprKind::LiteralTrue => true,
+            ExprKind::LiteralFalse => true,
+            ExprKind::LiteralString(..) => true,
+            ExprKind::Variable(..) => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Expr {
     #[drive(skip)]

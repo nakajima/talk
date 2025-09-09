@@ -177,6 +177,7 @@ impl<'a> InferencePass<'a> {
         ast: &'a mut AST<NameResolved>,
     ) -> TypeSession<Inferenced> {
         let groups = kosaraju_scc(&session.phase.graph);
+
         let mut pass = InferencePass {
             ast,
             types_by_node: Default::default(),
@@ -517,6 +518,7 @@ impl<'a> InferencePass<'a> {
                         Ty::MetaVar { id: var, level }
                     })
                     .collect();
+
                 wants.equals(
                     expected.clone(),
                     Ty::Tuple(metas.clone()),
@@ -652,7 +654,10 @@ impl<'a> InferencePass<'a> {
                 match self.term_env.lookup(sym).cloned() {
                     Some(EnvEntry::Scheme(s)) => self.instantiate(&s, level), // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
-                    None => panic!("unbound variable {:?}", sym),
+                    None => panic!(
+                        "variable not found in term env: {:?}, {:?}",
+                        sym, self.term_env
+                    ),
                 }
             }
             ExprKind::LiteralString(_) => todo!(),
@@ -840,6 +845,13 @@ impl<'a> InferencePass<'a> {
             level,
         };
 
+        if args.is_empty() {
+            // zero-arg call: callee must be Unit -> returns
+            let expected = Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
+            wants.equals(callee_ty, expected, ConstraintCause::Call(callee.id));
+            return returns;
+        }
+
         wants.equals(
             callee_ty,
             curry(arg_tys.clone(), returns.clone()),
@@ -905,8 +917,18 @@ impl<'a> InferencePass<'a> {
 
         wants.equals(body_ty, ret_ty.clone(), ConstraintCause::Internal);
 
-        let ty = curry(param_tys, ret_ty);
-        substitute(ty, &skolem_map)
+        // Build function type
+        let func_ty = if param_tys.is_empty() {
+            // zero-arg: Unit -> ret_ty
+            Ty::Func(
+                Box::new(Ty::Void /* or Ty::Unit */),
+                Box::new(ret_ty.clone()),
+            )
+        } else {
+            curry(param_tys, ret_ty.clone())
+        };
+
+        substitute(func_ty, &skolem_map)
     }
 
     #[instrument(skip(self))]
@@ -917,12 +939,20 @@ impl<'a> InferencePass<'a> {
                 let cond_ty = self.infer_expr(cond, level, wants);
                 wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
 
-                self.infer_block(conseq, level, wants);
+                let conseq_ty = self.infer_block(conseq, level, wants);
                 if let Some(alt) = alt {
-                    self.infer_block(alt, level, wants);
-                }
-
+                    let alt_ty = self.infer_block(alt, level, wants);
+                    // If both branches exist, unify their types and return the result
+                    wants.equals(
+                        conseq_ty.clone(),
+                        alt_ty,
+                        ConstraintCause::Condition(stmt.id),
+                    );
+                    conseq_ty
+                } else {
+                    // If no else branch, it's a statement that returns void
                 Ty::Void
+                }
             }
             StmtKind::Return(..) => todo!(),
             StmtKind::Break => Ty::Void,
@@ -1175,6 +1205,22 @@ pub mod tests {
                 .unwrap(),
             Ty::Bool
         );
+    }
+
+    #[test]
+    fn types_nested_func() {
+        let (ast, session) = typecheck(
+            r#"
+        func fizz(x) {
+            func buzz() { x }
+            buzz()
+        }
+
+        fizz(123)
+        "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
 
     #[test]
@@ -1576,6 +1622,25 @@ pub mod tests {
     }
 
     #[test]
+    fn types_recursive_func() {
+        let (ast, session) = typecheck(
+            "
+        func fizz(n) {
+            if true {
+                123
+            } else {
+                fizz(n)
+            }
+        }
+
+        fizz(456)
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
+
+    #[test]
     fn recursion_is_monomorphic_within_binding_group() {
         // Polymorphic recursion should NOT be inferred.
         let (ast, _session) = typecheck_err(
@@ -1588,10 +1653,38 @@ pub mod tests {
     "#,
         );
 
-        assert_eq!(
-            ast.diagnostics.len(),
-            1,
-            "expected failure for polymorphic recursion"
+        // We expect either an occurs check error or an invalid unification error
+        // Both indicate that polymorphic recursion is not allowed
+        assert!(
+            !ast.diagnostics.is_empty(),
+            "expected errors for polymorphic recursion"
+        );
+
+        // Check that we have the expected error types
+        let has_occurs_check = ast.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::OccursCheck(_),
+                    ..
+                })
+            )
+        });
+
+        let has_invalid_unification = ast.diagnostics.iter().any(|d| {
+            matches!(
+                d,
+                crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+                    kind: TypeError::InvalidUnification(_, _),
+                    ..
+                })
+            )
+        });
+
+        assert!(
+            has_occurs_check || has_invalid_unification,
+            "expected OccursCheck or InvalidUnification error for polymorphic recursion, got {:?}",
+            ast.diagnostics
         );
     }
 
@@ -1757,5 +1850,24 @@ pub mod tests {
             "did not get diagnostic: {:?}",
             ast.diagnostics
         );
+    }
+
+    #[test]
+    fn row_meta_levels_prevent_leak() {
+        // Outer forces r to be an open record { a: Int | ρ } by projecting r.a.
+        // Then local let k = func(){ r } must NOT generalize ρ; match should fail on { c }.
+        let (ast, _session) = typecheck_err(
+            r#"
+        func outer(r) {
+            let x = r.a;                    // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)
+            let k = func() { r }    // local let; do NOT generalize the outer row var into a Row::Param
+            match k() {
+                { c } -> c          // should be a missing-field error (no 'c' in r)
+            }
+        }
+        outer({ a: 1 })
+    "#,
+        );
+        assert_eq!(ast.diagnostics.len(), 1);
     }
 }

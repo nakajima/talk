@@ -229,7 +229,15 @@ pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
                     apply(found.clone(), substitutions)
                 }
             }
-            Some(found) => found.clone(),
+            Some(found) => {
+                // Recursively apply substitutions to handle transitive substitutions
+                match found {
+                    // Don't recurse on primitives or other simple types
+                    Ty::Primitive(_) | Ty::Param(_) | Ty::Rigid(_) | Ty::Hole(_) => found.clone(),
+                    // For complex types, recursively apply
+                    _ => apply(found.clone(), substitutions),
+                }
+            }
             None => ty,
         },
         Ty::Primitive(..) => ty,

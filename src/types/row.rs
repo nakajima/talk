@@ -14,7 +14,7 @@ pub struct ClosedRow {
     pub values: Vec<Ty>,
 }
 
-// TODO: Add Level to Var
+// TODO: Add Level to Var once we support open rows
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Row {
     Empty,
