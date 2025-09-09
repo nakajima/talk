@@ -951,7 +951,7 @@ impl<'a> InferencePass<'a> {
                     conseq_ty
                 } else {
                     // If no else branch, it's a statement that returns void
-                Ty::Void
+                    Ty::Void
                 }
             }
             StmtKind::Return(..) => todo!(),

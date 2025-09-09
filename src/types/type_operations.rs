@@ -155,7 +155,7 @@ pub(super) fn unify(
         }
         (Ty::Record(lhs_row), Ty::Record(rhs_row)) => unify_rows(lhs_row, rhs_row, substitutions),
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
-        _ => todo!("lhs: {lhs:?} {rhs:?}"),
+        _ => Err(TypeError::InvalidUnification(lhs, rhs)),
     }
 }
 
