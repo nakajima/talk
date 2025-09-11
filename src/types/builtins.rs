@@ -1,6 +1,6 @@
 use rustc_hash::FxHashMap;
 
-use crate::types::passes::inference_pass::EnvEntry;
+use crate::types::term_environment::EnvEntry;
 use crate::types::ty::{Primitive, Ty};
 
 use crate::name_resolution::symbol::Symbol;

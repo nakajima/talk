@@ -1,4 +1,5 @@
 use derive_visitor::VisitorMut;
+use tracing::instrument;
 
 use crate::{
     name::Name,
@@ -30,7 +31,7 @@ use crate::{
     Decl(enter, exit)
 )]
 pub struct DeclDeclarer<'a> {
-    resolver: &'a mut NameResolver,
+    pub(super) resolver: &'a mut NameResolver,
 }
 
 impl<'a> DeclDeclarer<'a> {
@@ -39,37 +40,33 @@ impl<'a> DeclDeclarer<'a> {
     }
 
     pub fn at_module_scope(&self) -> bool {
-        let current_id = self.resolver.current_scope.expect("no scope to end");
-        let current = self
-            .resolver
-            .scopes
-            .get(current_id)
-            .expect("did not find current scope");
-
-        if let Some(parent_id) = current.parent_id {
-            parent_id.into_raw_parts().0 == 0
-        } else {
-            true
-        }
+        self.resolver.current_scope_id == Some(NodeID(0))
     }
 
     pub fn start_scope(&mut self, id: NodeID) {
-        let scope = Scope::new(id, self.resolver.current_scope);
-        let scope_id = self.resolver.scopes.insert(scope);
-        self.resolver.scopes_by_node_id.insert(id, scope_id);
-        self.resolver.node_ids_by_scope.insert(scope_id, id);
-        self.resolver.current_scope = Some(scope_id);
+        let parent_id = self.resolver.current_scope_id;
+        let scope = Scope::new(
+            id,
+            parent_id,
+            self.resolver
+                .current_scope()
+                .map(|s| s.depth + 1)
+                .unwrap_or(1),
+        );
+        tracing::trace!("start_scope: {:?}", scope);
+        self.resolver.scopes.insert(id, scope);
+        self.resolver.current_scope_id = Some(id);
     }
 
     pub fn end_scope(&mut self) {
-        let current_id = self.resolver.current_scope.expect("no scope to end");
+        let current_id = self.resolver.current_scope_id.expect("no scope to end");
         let current = self
             .resolver
             .scopes
-            .get(current_id)
+            .get(&current_id)
             .expect("did not find current scope");
 
-        self.resolver.current_scope = current.parent_id;
+        self.resolver.current_scope_id = current.parent_id;
     }
 
     fn enter_nominal(&mut self, id: NodeID, name: &mut Name, generics: &mut [GenericDecl]) {
@@ -85,6 +82,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block expr decls
     ///////////////////////////////////////////////////////////////////////////
+    #[instrument(skip(self))]
     fn enter_stmt(&mut self, stmt: &mut Stmt) {
         if let StmtKind::Expr(Expr {
             kind: ExprKind::Block(block),
@@ -108,6 +106,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Local decls
     ///////////////////////////////////////////////////////////////////////////
+    #[instrument(skip(self))]
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
         let Pattern { kind, .. } = pattern;
 
@@ -141,6 +140,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Block scoping
     ///////////////////////////////////////////////////////////////////////////
+    #[instrument(skip(self))]
     fn enter_match_arm(&mut self, arm: &mut MatchArm) {
         self.start_scope(arm.id);
     }
@@ -152,7 +152,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Funcs
     ///////////////////////////////////////////////////////////////////////////
-
+    #[instrument(skip(self))]
     fn enter_func(&mut self, func: &mut Func) {
         on!(
             func,
@@ -188,6 +188,7 @@ impl<'a> DeclDeclarer<'a> {
         self.end_scope();
     }
 
+    #[instrument(skip(self))]
     fn enter_func_signature(&mut self, func: &mut FuncSignature) {
         on!(func, FuncSignature { name, .. }, {
             *name = self.resolver.declare_type(name);
@@ -197,7 +198,7 @@ impl<'a> DeclDeclarer<'a> {
     ///////////////////////////////////////////////////////////////////////////
     // Struct decls
     ///////////////////////////////////////////////////////////////////////////
-
+    #[instrument(skip(self))]
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(
             &mut decl.kind,

@@ -104,13 +104,19 @@ impl ExprKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, PartialEq, Eq, Drive, DriveMut)]
 pub struct Expr {
     #[drive(skip)]
     pub id: NodeID,
     pub kind: ExprKind,
     #[drive(skip)]
     pub span: Span,
+}
+
+impl std::fmt::Debug for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Expr(id: {}, kind: {:?})", self.id.0, self.kind)
+    }
 }
 
 impl_into_node!(Expr);

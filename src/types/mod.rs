@@ -2,10 +2,13 @@ use crate::types::kind::Kind;
 
 pub mod builtins;
 pub mod constraints;
+pub mod dsu;
 pub mod fields;
 pub mod kind;
 pub mod passes;
 pub mod row;
+pub mod scheme;
+pub mod term_environment;
 pub mod ty;
 pub mod type_error;
 pub mod type_operations;

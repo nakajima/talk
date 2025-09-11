@@ -1,17 +1,72 @@
 use rustc_hash::FxHashMap;
-use tracing::{Level, instrument};
+use tracing::instrument;
 
 use crate::types::{
-    passes::inference_pass::Substitutions,
-    row::Row,
-    ty::{MetaId, Ty},
+    dsu::DSU,
+    row::{Row, RowMetaId, RowParamId},
+    ty::{Level, MetaId, Ty, TypeParamId},
     type_error::TypeError,
 };
+
+#[derive(Clone)]
+pub struct UnificationSubstitutions {
+    pub row: FxHashMap<RowMetaId, Row>,
+    pub ty: FxHashMap<MetaId, Ty>,
+    ty_dsu: DSU<MetaId>,
+    row_dsu: DSU<RowMetaId>,
+    meta_levels: FxHashMap<MetaId, Level>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct InstantiationSubstitutions {
+    pub row: FxHashMap<RowParamId, RowMetaId>,
+    pub ty: FxHashMap<TypeParamId, MetaId>,
+}
+
+impl std::fmt::Debug for UnificationSubstitutions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Subs(ty: {:?}, row: {:?}, ty_dsu: {:?}",
+            self.ty, self.row, self.ty_dsu
+        )
+    }
+}
+
+impl UnificationSubstitutions {
+    pub fn new(meta_levels: FxHashMap<MetaId, Level>) -> Self {
+        Self {
+            row: Default::default(),
+            ty: Default::default(),
+            ty_dsu: Default::default(),
+            row_dsu: Default::default(),
+            meta_levels,
+        }
+    }
+
+    #[inline]
+    pub fn canon_meta(&mut self, id: MetaId) -> MetaId {
+        self.ty_dsu.find(id)
+    }
+    #[inline]
+    pub fn canon_row(&mut self, id: RowMetaId) -> RowMetaId {
+        self.row_dsu.find(id)
+    }
+    #[inline]
+    pub fn link_meta(&mut self, a: MetaId, b: MetaId) -> MetaId {
+        self.ty_dsu.union(a, b)
+    }
+    #[inline]
+    pub fn link_row(&mut self, a: RowMetaId, b: RowMetaId) -> RowMetaId {
+        self.row_dsu.union(a, b)
+    }
+}
 
 fn occurs_in_row(id: MetaId, row: &Row) -> bool {
     match row {
         Row::Empty => false,
         Row::Var(_) => false,
+        Row::Param(_) => false,
         Row::Extend { row, ty, .. } => occurs_in(id, ty) || occurs_in_row(id, row),
     }
 }
@@ -33,11 +88,29 @@ fn occurs_in(id: MetaId, ty: &Ty) -> bool {
 }
 
 // Unify rows. Returns true if progress was made.
-#[instrument(level = Level::DEBUG)]
-fn unify_rows(lhs: &Row, rhs: &Row, substitutions: &mut Substitutions) -> Result<bool, TypeError> {
+#[instrument(level = tracing::Level::DEBUG)]
+fn unify_rows(
+    lhs: &Row,
+    rhs: &Row,
+    substitutions: &mut UnificationSubstitutions,
+) -> Result<bool, TypeError> {
     match (lhs, rhs) {
         (Row::Empty, Row::Empty) => Ok(false),
         (Row::Var(lhs_id), Row::Var(rhs_id)) if lhs_id == rhs_id => Ok(false),
+        (Row::Var(lhs_id), Row::Var(rhs_id)) => {
+            let ra = substitutions.canon_row(*lhs_id);
+            let rb = substitutions.canon_row(*rhs_id);
+            if ra != rb {
+                let keep = substitutions.link_row(ra, rb);
+                let lose = if keep == ra { rb } else { ra };
+                if let Some(v) = substitutions.row.remove(&lose) {
+                    substitutions.row.entry(keep).or_insert(v);
+                }
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
         (Row::Var(id), row) | (row, Row::Var(id)) => {
             // TODO: Occurs check for rows
             substitutions.row.insert(*id, row.clone());
@@ -77,11 +150,11 @@ fn unify_rows(lhs: &Row, rhs: &Row, substitutions: &mut Substitutions) -> Result
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(level = Level::DEBUG)]
+#[instrument(level = tracing::Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
-    substitutions: &mut Substitutions,
+    substitutions: &mut UnificationSubstitutions,
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
@@ -120,29 +193,26 @@ pub(super) fn unify(
         (
             Ty::MetaVar {
                 id: lhs_id,
-                level: lhs_level,
+                level: _,
             },
             Ty::MetaVar {
                 id: rhs_id,
-                level: rhs_level,
+                level: _,
             },
         ) => {
-            let picked = itertools::max([lhs_id, rhs_id]).unwrap();
-            let not_picked = itertools::min([lhs_id, rhs_id]).unwrap();
-
-            substitutions.ty.insert(
-                *not_picked,
-                Ty::MetaVar {
-                    id: *picked,
-                    level: if picked == lhs_id {
-                        *lhs_level
-                    } else {
-                        *rhs_level
-                    },
-                },
-            );
-
-            Ok(true)
+            let ra = substitutions.canon_meta(*lhs_id);
+            let rb = substitutions.canon_meta(*rhs_id);
+            if ra != rb {
+                let keep = substitutions.link_meta(ra, rb);
+                // if the losing rep had a binding, keep it by moving once:
+                let lose = if keep == ra { rb } else { ra };
+                if let Some(v) = substitutions.ty.remove(&lose) {
+                    substitutions.ty.entry(keep).or_insert(v);
+                }
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
         (ty, Ty::MetaVar { id, .. }) | (Ty::MetaVar { id, .. }, ty) => {
             if occurs_in(*id, ty) {
@@ -162,8 +232,9 @@ pub(super) fn unify(
 #[instrument(ret)]
 pub(super) fn substitute_row(row: Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     match row {
-        Row::Empty => row.clone(),
-        Row::Var(..) => row.clone(),
+        Row::Empty => row,
+        Row::Var(..) => row,
+        Row::Param(..) => row,
         Row::Extend { row, label, ty } => Row::Extend {
             row: Box::new(substitute_row(*row, substitutions)),
             label,
@@ -202,11 +273,19 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
     }
 }
 
-#[instrument(level = Level::TRACE, ret)]
-pub(super) fn apply_row(row: Row, substitutions: &Substitutions) -> Row {
+#[instrument(level = tracing::Level::TRACE, ret)]
+pub(super) fn apply_row(row: Row, substitutions: &mut UnificationSubstitutions) -> Row {
     match row {
         Row::Empty => Row::Empty,
-        Row::Var(var) => substitutions.row.get(&var).unwrap_or(&row).clone(),
+        Row::Var(id) => {
+            let rep = substitutions.canon_row(id);
+            if let Some(bound) = substitutions.row.get(&rep).cloned() {
+                apply_row(bound, substitutions)
+            } else {
+                Row::Var(rep)
+            }
+        }
+        Row::Param(_) => row,
         Row::Extend { row, label, ty } => Row::Extend {
             row: Box::new(apply_row(*row, substitutions)),
             label,
@@ -215,31 +294,26 @@ pub(super) fn apply_row(row: Row, substitutions: &Substitutions) -> Row {
     }
 }
 
-#[instrument(level = Level::TRACE, ret)]
-pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
+#[instrument(level = tracing::Level::TRACE, ret)]
+pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty {
     match ty {
         Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
-        Ty::MetaVar { id, .. } => match substitutions.ty.get(&id) {
-            Some(found @ Ty::MetaVar { id: found_id, .. }) => {
-                if *found_id == id {
-                    ty
-                } else {
-                    apply(found.clone(), substitutions)
-                }
+        Ty::MetaVar { id, .. } => {
+            let rep = substitutions.canon_meta(id);
+            if let Some(bound) = substitutions.ty.get(&rep).cloned() {
+                apply(bound, substitutions) // keep collapsing
+            } else {
+                Ty::MetaVar {
+                    id: rep,
+                    level: *substitutions
+                        .meta_levels
+                        .get(&id)
+                        .expect("did not get level"),
+                } // normalize id to the representative
             }
-            Some(found) => {
-                // Recursively apply substitutions to handle transitive substitutions
-                match found {
-                    // Don't recurse on primitives or other simple types
-                    Ty::Primitive(_) | Ty::Param(_) | Ty::Rigid(_) | Ty::Hole(_) => found.clone(),
-                    // For complex types, recursively apply
-                    _ => apply(found.clone(), substitutions),
-                }
-            }
-            None => ty,
-        },
+        }
         Ty::Primitive(..) => ty,
         Ty::TypeConstructor { .. } => todo!(),
         Ty::Func(params, ret) => Ty::Func(
@@ -251,6 +325,67 @@ pub(super) fn apply(ty: Ty, substitutions: &Substitutions) -> Ty {
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             apply(lhs, substitutions).into(),
             apply(rhs, substitutions).into(),
+        ),
+    }
+}
+
+#[instrument(level = tracing::Level::TRACE, ret)]
+pub(super) fn instantiate_row(
+    row: Row,
+    substitutions: &InstantiationSubstitutions,
+    level: Level,
+) -> Row {
+    match row {
+        Row::Empty => row,
+        Row::Var(..) => row,
+        Row::Param(id) => {
+            if let Some(row_meta) = substitutions.row.get(&id) {
+                Row::Var(*row_meta)
+            } else {
+                row
+            }
+        }
+        Row::Extend { row, label, ty } => Row::Extend {
+            row: Box::new(instantiate_row(*row, substitutions, level)),
+            label,
+            ty: instantiate_ty(ty, substitutions, level),
+        },
+    }
+}
+
+#[instrument(ret)]
+pub(super) fn instantiate_ty(
+    ty: Ty,
+    substitutions: &InstantiationSubstitutions,
+    level: Level,
+) -> Ty {
+    match ty {
+        Ty::Param(param) => {
+            if let Some(meta) = substitutions.ty.get(&param) {
+                Ty::MetaVar { id: *meta, level }
+            } else {
+                ty
+            }
+        }
+        Ty::Hole(..) => ty,
+        Ty::Rigid(..) => ty,
+        Ty::MetaVar { .. } => ty,
+        Ty::Primitive(..) => ty,
+        Ty::TypeConstructor { .. } => todo!(),
+        Ty::Func(params, ret) => Ty::Func(
+            Box::new(instantiate_ty(*params, substitutions, level)),
+            Box::new(instantiate_ty(*ret, substitutions, level)),
+        ),
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .into_iter()
+                .map(|t| instantiate_ty(t, substitutions, level))
+                .collect(),
+        ),
+        Ty::Record(row) => Ty::Record(Box::new(instantiate_row(*row, substitutions, level))),
+        Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
+            instantiate_ty(lhs, substitutions, level).into(),
+            instantiate_ty(rhs, substitutions, level).into(),
         ),
     }
 }

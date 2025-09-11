@@ -1,12 +1,13 @@
 use std::{error::Error, fmt::Display};
 
 use derive_visitor::{DriveMut, VisitorMut};
-use generational_arena::{Arena, Index};
+use generational_arena::Index;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    ast::{AST, ASTPhase, Parsed},
+    ast::{ASTPhase, Parsed, AST},
     diagnostic::Diagnostic,
+    formatter::{self},
     name::Name,
     name_resolution::{
         builtins,
@@ -44,19 +45,21 @@ impl Display for NameResolverError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Scope {
     pub node_id: NodeID,
-    pub parent_id: Option<ScopeId>,
+    pub parent_id: Option<NodeID>,
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
+    pub depth: u32,
 }
 
 impl Scope {
-    pub fn new(node_id: NodeID, parent_id: Option<ScopeId>) -> Self {
+    pub fn new(node_id: NodeID, parent_id: Option<NodeID>, depth: u32) -> Self {
         Scope {
             node_id,
             parent_id,
+            depth,
             values: Default::default(),
             types: Default::default(),
         }
@@ -67,6 +70,7 @@ impl Scope {
 pub struct NameResolved {
     pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
     pub is_captured: FxHashSet<Symbol>,
+    pub scopes: FxHashMap<NodeID, Scope>
 }
 
 pub type ScopeId = Index;
@@ -87,10 +91,8 @@ pub struct NameResolver {
     pub(super) phase: NameResolved,
 
     // Scope stuff
-    pub(super) scopes: Arena<Scope>,
-    pub(super) scopes_by_node_id: FxHashMap<NodeID, ScopeId>,
-    pub(super) node_ids_by_scope: FxHashMap<ScopeId, NodeID>,
-    pub(super) current_scope: Option<ScopeId>,
+    pub(super) scopes: FxHashMap<NodeID, Scope>,
+    pub(super) current_scope_id: Option<NodeID>,
 }
 
 impl ASTPhase for NameResolved {}
@@ -98,6 +100,8 @@ impl ASTPhase for NameResolved {}
 impl NameResolver {
     pub fn resolve(mut ast: AST<Parsed>) -> AST<NameResolved> {
         LowerFuncsToLets::run(&mut ast);
+
+        println!("Pre name resolve:\n{}",formatter::format(&ast, 80));
 
         let AST {
             path,
@@ -108,14 +112,15 @@ impl NameResolver {
         } = ast;
 
         let mut resolver = NameResolver::default();
-        let mut initial_scope = Scope::new(NodeID(0), None);
-        builtins::import_builtins(&mut initial_scope);
-        let id = resolver.scopes.insert(initial_scope);
-        resolver.current_scope = Some(id);
 
         // Declare stuff
         let mut declarer = DeclDeclarer::new(&mut resolver);
         declarer.start_scope(NodeID(0));
+        let initial_scope = declarer
+            .resolver
+            .current_scope_mut()
+            .expect("didn't get started scope");
+        builtins::import_builtins(initial_scope);
 
         let roots: Vec<Node> = roots
             .into_iter()
@@ -149,14 +154,26 @@ impl NameResolver {
         }
     }
 
-    fn lookup_in_scope(&mut self, name: &Name, scope_id: ScopeId) -> Option<Symbol> {
-        tracing::debug!(
-            "looking up {name:?} in scope {scope_id:?}. scopes: {:?}. scope map: {:?}",
-            self.scopes,
-            self.scopes_by_node_id
-        );
+    pub(super) fn current_scope(&self) -> Option<&Scope> {
+        if let Some(current_scope_id) = self.current_scope_id {
+            return self.scopes.get(&current_scope_id);
+        }
 
-        let scope = self.scopes.get_mut(scope_id).expect("scope not found");
+        None
+    }
+
+    pub(super) fn current_scope_mut(&mut self) -> Option<&mut Scope> {
+        if let Some(current_scope_id) = self.current_scope_id {
+            return self.scopes.get_mut(&current_scope_id);
+        }
+
+        None
+    }
+
+    fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
+        tracing::debug!("looking up {name:?} in scope {:?}", self.current_scope(),);
+
+        let scope = self.scopes.get_mut(&scope_id).expect("scope not found");
 
         if let Some(symbol) = scope.types.get(&name.name_str()) {
             return Some(*symbol);
@@ -169,7 +186,7 @@ impl NameResolver {
         if let Some(parent) = scope.parent_id
             && let Some(captured) = self.lookup_in_scope(name, parent)
         {
-            let scope = self.scopes.get(scope_id).expect("did not find scope");
+            let scope = self.scopes.get(&scope_id).expect("did not find scope");
 
             self.phase
                 .captures
@@ -190,7 +207,7 @@ impl NameResolver {
         }
 
         let symbol =
-            self.lookup_in_scope(name, self.current_scope.expect("no scope to declare in"))?;
+            self.lookup_in_scope(name, self.current_scope_id.expect("no scope to declare in"))?;
 
         Some(Name::Resolved(symbol, name.name_str()))
     }
@@ -204,28 +221,23 @@ impl NameResolver {
     }
 
     fn enter_scope(&mut self, node_id: NodeID) {
-        let scope_id = self
-            .scopes_by_node_id
-            .get(&node_id)
-            .expect("no scope found for node");
-
-        self.current_scope = Some(*scope_id);
+        self.current_scope_id = Some(node_id);
     }
 
     fn exit_scope(&mut self) {
-        let current_scope_id = self.current_scope.expect("no scope to exit");
+        let current_scope_id = self.current_scope_id.expect("no scope to exit");
         let current_scope = self
             .scopes
-            .get(current_scope_id)
+            .get(&current_scope_id)
             .expect("did not find current scope");
 
-        self.current_scope = current_scope.parent_id;
+        self.current_scope_id = current_scope.parent_id;
     }
 
     pub(super) fn declare_type(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
-            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .expect("scope not found");
 
         let id = self.symbols.next_decl();
@@ -233,7 +245,7 @@ impl NameResolver {
         tracing::debug!(
             "declare type {} -> {sym:?} {:?}",
             name.name_str(),
-            self.current_scope
+            self.current_scope_id
         );
         scope.types.insert(name.name_str(), sym);
 
@@ -243,15 +255,15 @@ impl NameResolver {
     pub(super) fn declare_global(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
-            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .expect("scope not found");
 
         let id = self.symbols.next_value();
         let sym = Symbol::Global(id);
         tracing::debug!(
-            "declare value {} -> {sym:?} {:?}",
+            "declare global {} -> {sym:?} {:?}",
             name.name_str(),
-            self.current_scope
+            self.current_scope_id
         );
         scope.values.insert(name.name_str(), sym);
 
@@ -261,7 +273,7 @@ impl NameResolver {
     pub(super) fn declare_local(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
-            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .expect("scope not found");
 
         let id = self.symbols.next_local();
@@ -269,25 +281,24 @@ impl NameResolver {
         tracing::debug!(
             "declare local {} -> {sym:?} {:?}",
             name.name_str(),
-            self.current_scope
+            self.current_scope_id
         );
         scope.values.insert(name.name_str(), sym);
-
         Name::Resolved(sym, name.name_str())
     }
 
     pub(super) fn declare_param(&mut self, name: &Name) -> Name {
         let scope = self
             .scopes
-            .get_mut(self.current_scope.expect("no scope to declare in"))
+            .get_mut(&self.current_scope_id.expect("no scope to declare in"))
             .expect("scope not found");
 
         let id = self.symbols.next_param();
         let sym = Symbol::ParamLocal(id);
         tracing::debug!(
-            "declare local {} -> {sym:?} {:?}",
+            "declare param {} -> {sym:?} {:?}",
             name.name_str(),
-            self.current_scope
+            self.current_scope_id
         );
         scope.values.insert(name.name_str(), sym);
 

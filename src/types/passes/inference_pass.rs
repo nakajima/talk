@@ -29,22 +29,17 @@ use crate::{
     },
     span::Span,
     types::{
-        builtins::builtin_scope,
         constraints::{Constraint, ConstraintCause, Equals, HasField},
         passes::dependencies_pass::{Binder, SCCResolved},
-        row::{Row, RowMetaId},
-        ty::{Level, MetaId, Ty, TypeParamId},
+        row::Row,
+        scheme::{ForAll, Scheme},
+        term_environment::{EnvEntry, TermEnv},
+        ty::{Level, MetaId, Ty},
         type_error::TypeError,
-        type_operations::{apply, apply_row, substitute, unify},
+        type_operations::{UnificationSubstitutions, apply, apply_row, substitute, unify},
         type_session::{TypeDef, TypeSession, TypingPhase},
     },
 };
-
-#[derive(Debug, Clone, Default)]
-pub struct Substitutions {
-    pub row: FxHashMap<RowMetaId, Row>,
-    pub ty: FxHashMap<MetaId, Ty>,
-}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Inferenced {
@@ -69,159 +64,6 @@ pub struct BindingGroup {
     level: Level,
 }
 
-#[derive(Debug, Clone)]
-pub struct Scheme {
-    pub foralls: Vec<TypeParamId>,
-    pub ty: Ty,
-}
-
-#[derive(Debug, Clone)]
-pub enum EnvEntry {
-    Mono(Ty),
-    Scheme(Scheme),
-}
-
-#[derive(Debug)]
-pub struct EnvScope {
-    id: NodeID,
-    parent_id: Option<NodeID>,
-    entries: FxHashMap<Symbol, EnvEntry>,
-}
-
-#[derive(Debug)]
-pub struct TermEnv {
-    scopes: FxHashMap<NodeID, EnvScope>,
-    current: NodeID,
-}
-
-impl std::fmt::Display for TermEnv {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn format_scope(scope: &EnvScope, env: &TermEnv, level: usize) -> Vec<String> {
-            let mut result = vec![];
-            if level == 0 {
-                result.push(format!("Root Scope: {scope:?}"));
-            } else {
-                let indent = "  ".repeat(level);
-                result.push(format!("{indent}∟ {scope:?}"));
-            }
-
-            let child_scopes = env.child_scopes(scope.id);
-            if !child_scopes.is_empty() {
-                for scope in child_scopes {
-                    result.extend(format_scope(scope, env, level + 1))
-                }
-            }
-
-            result
-        }
-
-        let result = format_scope(self.scopes.get(&NodeID(0)).expect("no root scope"), self, 0);
-
-        write!(f, "{}", result.join("\n"))
-    }
-}
-
-impl Default for TermEnv {
-    fn default() -> Self {
-        let builtin = EnvScope {
-            id: NodeID(0),
-            parent_id: None,
-            entries: builtin_scope(),
-        };
-
-        let mut scopes = FxHashMap::<NodeID, EnvScope>::default();
-        scopes.insert(NodeID(0), builtin);
-
-        Self {
-            scopes,
-            current: NodeID(0),
-        }
-    }
-}
-
-impl TermEnv {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn child_scopes(&self, parent_id: NodeID) -> Vec<&EnvScope> {
-        self.scopes
-            .iter()
-            .filter_map(|(_id, scope)| {
-                if scope.parent_id == Some(parent_id) {
-                    Some(scope)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    #[instrument(skip(self))]
-    pub fn push(&mut self, node_id: NodeID) {
-        self.scopes.insert(
-            node_id,
-            EnvScope {
-                id: node_id,
-                parent_id: Some(self.current),
-                entries: Default::default(),
-            },
-        );
-
-        self.current = node_id;
-    }
-
-    pub fn current_mut(&mut self) -> &mut EnvScope {
-        self.scopes
-            .get_mut(&self.current)
-            .expect("no current scope")
-    }
-
-    pub fn current(&self) -> &EnvScope {
-        self.scopes.get(&self.current).expect("no current scope")
-    }
-
-    pub fn pop(&mut self) {
-        self.current = self
-            .scopes
-            .get(&self.current)
-            .expect("no current scope to pop")
-            .parent_id
-            .unwrap_or(NodeID(0));
-    }
-
-    pub fn insert_mono(&mut self, sym: Symbol, ty: Ty) {
-        self.current_mut().entries.insert(sym, EnvEntry::Mono(ty));
-    }
-
-    pub fn promote(&mut self, sym: Symbol, sch: Scheme) {
-        // promote into the *root* frame so it’s visible everywhere (for binders)
-        self.scopes
-            .get_mut(&NodeID(0))
-            .unwrap()
-            .entries
-            .insert(sym, EnvEntry::Scheme(sch));
-    }
-
-    pub fn lookup(&self, sym: &Symbol) -> Option<&EnvEntry> {
-        self.lookup_in_scope(sym, self.current)
-    }
-
-    fn lookup_in_scope(&self, sym: &Symbol, scope_id: NodeID) -> Option<&EnvEntry> {
-        let scope = self.scopes.get(&scope_id)?;
-
-        if let Some(entry) = scope.entries.get(sym) {
-            return Some(entry);
-        }
-
-        if let Some(parent_id) = scope.parent_id {
-            return self.lookup_in_scope(sym, parent_id);
-        }
-
-        None
-    }
-}
-
 #[derive(Debug)]
 pub struct InferenceSolution {
     pub diagnostics: Vec<Diagnostic<TypeError>>,
@@ -235,15 +77,21 @@ pub struct InferencePass<'a> {
     metavars: IDGenerator,
     skolems: IDGenerator,
     type_params: IDGenerator,
-    row_metas: IDGenerator,
+    row_params: IDGenerator,
+    pub(crate) row_metas: IDGenerator,
     term_env: TermEnv,
     rhs_map: FxHashMap<Binder, NodeID>,
     annotation_map: FxHashMap<Binder, NodeID>,
+    meta_levels: FxHashMap<MetaId, Level>,
 }
 
 #[derive(Debug)]
 pub struct Wants(Vec<Constraint>);
 impl Wants {
+    pub fn push(&mut self, constraint: Constraint) {
+        self.0.push(constraint)
+    }
+
     pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause) {
         self.0.push(Constraint::Equals(Equals { lhs, rhs, cause }));
     }
@@ -272,30 +120,40 @@ impl<'a> InferencePass<'a> {
         ast: &'a mut AST<NameResolved>,
     ) -> TypeSession<Inferenced> {
         let groups = kosaraju_scc(&session.phase.graph);
-
+        let term_env = TermEnv::new();
         let mut pass = InferencePass {
+            term_env,
             ast,
             types_by_node: Default::default(),
             metavars: Default::default(),
             skolems: Default::default(),
             type_params: Default::default(),
+            row_params: Default::default(),
             row_metas: Default::default(),
-            term_env: TermEnv::new(),
             rhs_map: session.phase.rhs_map.clone(),
             annotation_map: session.phase.annotation_map.clone(),
+            meta_levels: Default::default(),
         };
 
         // Handle binders first
         for binders in groups {
+            let globals: Vec<_> = binders
+                .into_iter()
+                .filter(|b| matches!(b, Binder::Global(_)))
+                .collect();
+            if globals.is_empty() {
+                continue;
+            }
+
             let group = BindingGroup {
-                binders,
+                binders: globals,
                 level: Level(1),
             };
 
             let wants = pass.infer_group(&group);
-            let subs = pass.solve(wants);
-            pass.promote_group(&group, &subs);
-            pass.apply_to_self(&subs);
+            let (mut subs, unsolved) = pass.solve(wants);
+            pass.promote_group(&group, &mut subs, unsolved);
+            pass.apply_to_self(&mut subs);
         }
 
         let roots = std::mem::take(&mut pass.ast.roots);
@@ -308,8 +166,8 @@ impl<'a> InferencePass<'a> {
             let mut wants = Wants(vec![]);
             let ty = pass.infer_node(root, Level(1), &mut wants);
             pass.types_by_node.insert(root.node_id(), ty);
-            let subs = pass.solve(wants);
-            pass.apply_to_self(&subs);
+            let (mut subs, _) = pass.solve(wants);
+            pass.apply_to_self(&mut subs);
         }
 
         _ = std::mem::replace(&mut pass.ast.roots, roots);
@@ -334,14 +192,9 @@ impl<'a> InferencePass<'a> {
         let inner_level = group.level.next();
 
         for &binder in &group.binders {
-            let m = Ty::MetaVar {
-                id: self.metavars.next_id(),
-                level: inner_level,
-            };
-
-            tracing::trace!("binding {binder:?} placeholder");
-
-            self.term_env.insert_mono(binder.into(), m);
+            let symbol = Symbol::from(binder);
+            let ty = self.new_meta_var(inner_level);
+            self.term_env.insert_mono(symbol, ty);
         }
 
         for &binder in &group.binders {
@@ -356,9 +209,9 @@ impl<'a> InferencePass<'a> {
             let got = self.infer_node(&rhs_expr.unwrap(), inner_level, &mut wants);
             self.types_by_node.insert(rhs_expr_id, got.clone());
 
-            let tv = match self.term_env.lookup(&symbol).unwrap() {
-                EnvEntry::Mono(t) => t.clone(),
-                _ => unreachable!(),
+            let tv = match self.term_env.lookup(&symbol) {
+                Some(EnvEntry::Mono(t)) => t.clone(),
+                _ => unreachable!("no env entry found for {symbol:?} {:#?}", self.term_env),
             };
 
             if let Some(annotation_id) = self.annotation_map.get(&binder).cloned() {
@@ -366,7 +219,8 @@ impl<'a> InferencePass<'a> {
                     panic!("didn't find type annotation for annotation id");
                 };
 
-                let annotation_ty = self.infer_type_annotation(&annotation, inner_level);
+                let annotation_ty =
+                    self.infer_type_annotation(&annotation, inner_level, &mut wants);
                 wants.equals(
                     got.clone(),
                     annotation_ty,
@@ -381,7 +235,12 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn infer_type_annotation(&mut self, annotation: &TypeAnnotation, level: Level) -> Ty {
+    pub(crate) fn infer_type_annotation(
+        &mut self,
+        annotation: &TypeAnnotation,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Func { .. } => todo!(),
             TypeAnnotationKind::Tuple(..) => todo!(),
@@ -390,14 +249,14 @@ impl<'a> InferencePass<'a> {
                 ..
             } => match self.term_env.lookup(sym).unwrap().clone() {
                 EnvEntry::Mono(ty) => ty.clone(),
-                EnvEntry::Scheme(scheme) => self.instantiate(&scheme, level),
+                EnvEntry::Scheme(scheme) => scheme.instantiate(self, level, wants, annotation.span),
             },
             _ => unreachable!(),
         }
     }
 
     #[instrument(skip(self))]
-    fn apply_to_self(&mut self, substitutions: &Substitutions) {
+    fn apply_to_self(&mut self, substitutions: &mut UnificationSubstitutions) {
         for (_, ty) in self.types_by_node.iter_mut() {
             if matches!(ty, Ty::Primitive(_)) {
                 continue;
@@ -408,10 +267,11 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn solve(&mut self, mut wants: Wants) -> Substitutions {
-        let mut substitutions = Substitutions::default();
-        let mut made_progress = false;
+    fn solve(&mut self, mut wants: Wants) -> (UnificationSubstitutions, Vec<Constraint>) {
+        let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
+        let mut unsolved = vec![];
         loop {
+            let mut made_progress = false;
             let mut next_wants = Wants(vec![]);
             for want in wants.0.drain(..) {
                 tracing::trace!("solving {want:?}");
@@ -421,9 +281,20 @@ impl<'a> InferencePass<'a> {
                         unify(&equals.lhs, &equals.rhs, &mut substitutions)
                     }
                     Constraint::HasField(has_field) => {
-                        let row = apply_row(has_field.row.clone(), &substitutions);
+                        let row = apply_row(has_field.row.clone(), &mut substitutions);
                         match row {
                             Row::Empty => {
+                                self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
+                                    path: self.ast.path.clone(),
+                                    span: has_field.span,
+                                    kind: TypeError::MemberNotFound(
+                                        Ty::Record(Box::new(has_field.row)),
+                                        has_field.label.to_string(),
+                                    ),
+                                }));
+                                Ok(false)
+                            }
+                            Row::Param(..) => {
                                 self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
@@ -484,15 +355,22 @@ impl<'a> InferencePass<'a> {
             }
 
             if !made_progress || next_wants.0.is_empty() {
+                unsolved.extend(next_wants.0);
                 break;
             }
 
             wants = next_wants;
         }
 
-        self.apply_to_self(&substitutions);
+        self.apply_to_self(&mut substitutions);
 
-        substitutions
+        // Apply our substitutions to the unsolved constraints
+        let unsolved = unsolved
+            .into_iter()
+            .map(|c| c.apply(&mut substitutions))
+            .collect();
+
+        (substitutions, unsolved)
     }
 
     #[instrument(skip(self))]
@@ -508,14 +386,19 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn promote_group(&mut self, group: &BindingGroup, subs: &Substitutions) {
+    fn promote_group(
+        &mut self,
+        group: &BindingGroup,
+        subs: &mut UnificationSubstitutions,
+        predicates: Vec<Constraint>,
+    ) {
         for &binder in &group.binders {
             let sym = Symbol::from(binder);
 
             match self.term_env.lookup(&sym).cloned() {
                 Some(EnvEntry::Mono(ty)) => {
                     let applied = apply(ty, subs);
-                    let scheme = self.generalize(group.level, applied);
+                    let scheme = self.generalize(group.level, applied, &predicates);
                     self.term_env.promote(sym, scheme);
                 }
                 Some(EnvEntry::Scheme(_scheme)) => {}
@@ -525,31 +408,63 @@ impl<'a> InferencePass<'a> {
     }
 
     #[instrument(skip(self))]
-    fn generalize(&mut self, inner: Level, ty: Ty) -> Scheme {
+    fn generalize(&mut self, inner: Level, ty: Ty, unsolved: &[Constraint]) -> EnvEntry {
         // collect metas in ty
         let mut metas = FxHashSet::default();
-        collect_metas_and_generics(&ty, &mut metas);
+        collect_meta(&ty, &mut metas);
+        println!("{metas:?}");
 
         // keep only metas born at or above inner
         let mut foralls = vec![];
-        let substitutions: FxHashMap<Ty, Ty> = metas
-            .into_iter()
-            .filter(|m| {
-                if let Ty::MetaVar { level, .. } = &m {
-                    *level >= inner
-                } else {
-                    true
+        let mut substitutions = UnificationSubstitutions::new(self.meta_levels.clone());
+        for m in &metas {
+            match m {
+                Ty::Param(p) => {
+                    // No substitution needed (the ty already contains Ty::Param(p)),
+                    // but we must record it in `foralls`, so instantiate() knows what to replace.
+                    if !foralls
+                        .iter()
+                        .any(|fa| matches!(fa, ForAll::Ty(q) if *q == *p))
+                    {
+                        foralls.push(ForAll::Ty(*p));
+                    }
                 }
-            })
-            .map(|ty| {
-                let param_id = self.type_params.next_id();
-                foralls.push(param_id);
-                (ty, Ty::Param(param_id))
-            })
+
+                Ty::MetaVar { level, id } => {
+                    if *level <= inner {
+                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        continue;
+                    }
+
+                    let param_id = self.type_params.next_id();
+                    tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    foralls.push(ForAll::Ty(param_id));
+                    substitutions.ty.insert(*id, Ty::Param(param_id));
+                }
+                Ty::Record(box Row::Var(id)) => {
+                    let param_id = self.row_params.next_id();
+                    tracing::trace!("generalizing {m:?} to {param_id:?}");
+                    foralls.push(ForAll::Row(param_id));
+                    substitutions.row.insert(*id, Row::Param(param_id));
+                }
+                _ => {
+                    tracing::warn!("got {m:?} for var while generalizing")
+                }
+            }
+        }
+
+        let ty = apply(ty, &mut substitutions);
+
+        if foralls.is_empty() {
+            return EnvEntry::Mono(ty);
+        }
+
+        let predicates = unsolved
+            .iter()
+            .map(|c| c.into_predicate(&mut substitutions))
             .collect();
 
-        let ty = substitute(ty, &substitutions);
-        Scheme { foralls, ty }
+        EnvEntry::Scheme(Scheme::new(foralls, predicates, ty))
     }
 
     #[instrument(skip(self))]
@@ -566,7 +481,30 @@ impl<'a> InferencePass<'a> {
     #[instrument(skip(self))]
     fn infer_decl(&mut self, decl: &Decl, level: Level, wants: &mut Wants) -> Ty {
         match &decl.kind {
-            DeclKind::Let { lhs, .. } => self.infer_pattern(lhs, level, wants),
+            DeclKind::Let {
+                lhs,
+                value,
+                type_annotation: _,
+            } => {
+                let ty = self.new_meta_var(level);
+                self.check_pattern(lhs, &ty, level, wants);
+
+                let mut rhs_wants = Wants(vec![]);
+                if let Some(expr) = value {
+                    let rhs_ty = self.infer_expr(expr, level.next(), &mut rhs_wants);
+                    rhs_wants.equals(ty.clone(), rhs_ty, ConstraintCause::Assignment(decl.id));
+                }
+
+                let (mut subs, unsolved) = self.solve(rhs_wants);
+                let applied_ty = apply(ty.clone(), &mut subs);
+
+                if let PatternKind::Bind(Name::Resolved(sym, _)) = lhs.kind {
+                    let scheme = self.generalize(level, applied_ty.clone(), &unsolved);
+                    self.term_env.promote(sym, scheme);
+                }
+
+                ty
+            }
             _ => todo!("unhandled: {decl:?}"),
         }
     }
@@ -608,10 +546,7 @@ impl<'a> InferencePass<'a> {
             }
             PatternKind::Tuple(patterns) => {
                 let metas: Vec<Ty> = (0..patterns.len())
-                    .map(|_| {
-                        let var = self.metavars.next_id();
-                        Ty::MetaVar { id: var, level }
-                    })
+                    .map(|_| self.new_meta_var(level))
                     .collect();
 
                 wants.equals(
@@ -630,10 +565,7 @@ impl<'a> InferencePass<'a> {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
                             // fresh meta for the field type
-                            let field_ty = Ty::MetaVar {
-                                id: self.metavars.next_id(),
-                                level,
-                            };
+                            let field_ty = self.new_meta_var(level);
 
                             // bind the pattern name
                             self.term_env.insert_mono(
@@ -652,10 +584,7 @@ impl<'a> InferencePass<'a> {
                         }
                         RecordFieldPatternKind::Equals { name, value } => {
                             // optional: pattern field = subpattern; same RowHas then recurse on value
-                            let field_ty = Ty::MetaVar {
-                                id: self.metavars.next_id(),
-                                level,
-                            };
+                            let field_ty = self.new_meta_var(level);
                             wants.has_field(
                                 expected_row.clone(),
                                 name.name_str().into(),
@@ -672,25 +601,6 @@ impl<'a> InferencePass<'a> {
             PatternKind::Wildcard => todo!(),
             PatternKind::Variant { .. } => todo!(),
             PatternKind::Struct { .. } => todo!(),
-        }
-    }
-
-    #[instrument(skip(self))]
-    fn infer_pattern(&mut self, pattern: &Pattern, level: Level, wants: &mut Wants) -> Ty {
-        let Pattern { id, kind, .. } = &pattern;
-
-        match kind {
-            PatternKind::Bind(Name::Resolved(sym, _)) => {
-                let ty = match self.term_env.lookup(sym).unwrap() {
-                    EnvEntry::Mono(ty) => ty.clone(),
-                    EnvEntry::Scheme(scheme) => scheme.ty.clone(),
-                };
-
-                self.types_by_node.insert(*id, ty.clone());
-
-                ty
-            }
-            _ => todo!(),
         }
     }
 
@@ -718,8 +628,14 @@ impl<'a> InferencePass<'a> {
         // Very simple semantics: return the type of the last expression statement, else Void.
         let mut last_ty = Ty::Void;
         for node in &block.body {
-            if let Node::Stmt(stmt) = node {
-                last_ty = self.infer_stmt(stmt, level, wants);
+            match node {
+                Node::Stmt(stmt) => {
+                    last_ty = self.infer_stmt(stmt, level, wants);
+                }
+                Node::Decl(decl) => {
+                    self.infer_decl(decl, level, wants);
+                }
+                _ => unreachable!("no {node:?} allowed in block body"),
             }
         }
         last_ty
@@ -747,12 +663,16 @@ impl<'a> InferencePass<'a> {
             ExprKind::LiteralFalse => Ty::Bool,
             ExprKind::Variable(Name::Resolved(sym, _)) => {
                 match self.term_env.lookup(sym).cloned() {
-                    Some(EnvEntry::Scheme(s)) => self.instantiate(&s, level), // or pass through
+                    Some(EnvEntry::Scheme(scheme)) => {
+                        scheme.instantiate(self, level, wants, expr.span)
+                    } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
-                    None => panic!(
-                        "variable not found in term env: {:?}, {:?}",
-                        sym, self.term_env
-                    ),
+                    None => {
+                        panic!(
+                            "variable not found in term env: {:?}, {:?}",
+                            sym, self.term_env
+                        )
+                    }
                 }
             }
             ExprKind::LiteralString(_) => todo!(),
@@ -843,10 +763,7 @@ impl<'a> InferencePass<'a> {
             )
         };
 
-        let member_ty = Ty::MetaVar {
-            id: self.metavars.next_id(),
-            level,
-        };
+        let member_ty = self.new_meta_var(level);
 
         wants.has_field(
             receiver_row,
@@ -891,7 +808,6 @@ impl<'a> InferencePass<'a> {
         let scrutinee_ty = self.infer_expr(scrutinee, level, wants);
 
         for arm in arms {
-            self.term_env.push(arm.id);
             self.check_pattern(&arm.pattern, &scrutinee_ty, level, wants);
             let arm_ty = self.infer_block(&arm.body, level, wants);
 
@@ -904,7 +820,6 @@ impl<'a> InferencePass<'a> {
             }
 
             last_arm_ty = Some(arm_ty);
-            self.term_env.pop();
         }
 
         last_arm_ty.unwrap_or(Ty::Void)
@@ -922,7 +837,7 @@ impl<'a> InferencePass<'a> {
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
         {
-            self.instantiate_with_args(&scheme, type_args, level, wants)
+            scheme.instantiate_with_args(type_args, self, level, wants, callee.span)
         } else {
             self.infer_expr(callee, level, wants)
         };
@@ -930,15 +845,11 @@ impl<'a> InferencePass<'a> {
         let mut arg_tys = Vec::with_capacity(args.len());
 
         for _ in args {
-            arg_tys.push(Ty::MetaVar {
-                id: self.metavars.next_id(),
-                level,
-            });
+            arg_tys.push(self.new_meta_var(level));
         }
-        let returns = Ty::MetaVar {
-            id: self.metavars.next_id(),
-            level,
-        };
+
+        tracing::trace!("adding returns meta");
+        let returns = self.new_meta_var(level);
 
         if args.is_empty() {
             // zero-arg call: callee must be Unit -> returns
@@ -963,8 +874,6 @@ impl<'a> InferencePass<'a> {
 
     #[instrument(skip(self))]
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> Ty {
-        self.term_env.push(func.id);
-
         let mut skolem_map = FxHashMap::default();
         for generic in func.generics.iter() {
             let skolem_id = self.skolems.next_id();
@@ -979,24 +888,18 @@ impl<'a> InferencePass<'a> {
         let mut param_tys: Vec<Ty> = Vec::with_capacity(func.params.len());
         for param in &func.params {
             let ty = if let Some(type_annotation) = &param.type_annotation {
-                self.infer_type_annotation(type_annotation, level)
+                self.infer_type_annotation(type_annotation, level, wants)
             } else {
-                Ty::MetaVar {
-                    id: self.metavars.next_id(),
-                    level,
-                }
+                self.new_meta_var(level)
             };
 
             param_tys.push(ty);
         }
 
         let ret_ty = if let Some(ret) = &func.ret {
-            self.infer_type_annotation(ret, level)
+            self.infer_type_annotation(ret, level, wants)
         } else {
-            Ty::MetaVar {
-                id: self.metavars.next_id(),
-                level,
-            }
+            self.new_meta_var(level)
         };
 
         for (p, ty) in func.params.iter().zip(param_tys.iter()) {
@@ -1008,8 +911,6 @@ impl<'a> InferencePass<'a> {
         }
 
         let body_ty = self.infer_block(&func.body, level, wants);
-
-        self.term_env.pop();
 
         wants.equals(body_ty, ret_ty.clone(), ConstraintCause::Internal);
 
@@ -1071,52 +972,11 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
-    fn instantiate(&mut self, scheme: &Scheme, level: Level) -> Ty {
-        // Map each quantified meta id to a fresh meta at this use-site level
-        let mut substitutions = FxHashMap::default();
-
-        for param in &scheme.foralls {
-            substitutions.insert(
-                Ty::Param(*param),
-                Ty::MetaVar {
-                    id: self.metavars.next_id(),
-                    level,
-                },
-            );
-        }
-        substitute(scheme.ty.clone(), &substitutions)
-    }
-
-    #[instrument(skip(self))]
-    fn instantiate_with_args(
-        &mut self,
-        scheme: &Scheme,
-        args: &[TypeAnnotation],
-        level: Level,
-        wants: &mut Wants,
-    ) -> Ty {
-        // Map each quantified meta id to a fresh meta at this use-site level
-        let mut substitutions = FxHashMap::default();
-
-        for (param, arg) in scheme.foralls.iter().zip(args) {
-            let arg_ty = self.infer_type_annotation(arg, level);
-
-            let meta_var = Ty::MetaVar {
-                id: self.metavars.next_id(),
-                level,
-            };
-
-            wants.equals(
-                meta_var.clone(),
-                arg_ty,
-                ConstraintCause::CallTypeArg(arg.id),
-            );
-
-            substitutions.insert(Ty::Param(*param), meta_var);
-        }
-
-        substitute(scheme.ty.clone(), &substitutions)
+    pub(crate) fn new_meta_var(&mut self, level: Level) -> Ty {
+        let id = self.metavars.next_id();
+        self.meta_levels.insert(id, level);
+        tracing::trace!("Fresh {id:?}");
+        Ty::MetaVar { id, level }
     }
 }
 
@@ -1128,7 +988,7 @@ fn curry<I: IntoIterator<Item = Ty>>(params: I, ret: Ty) -> Ty {
         .rfold(ret, |acc, p| Ty::Func(Box::new(p), Box::new(acc)))
 }
 
-pub fn collect_metas_and_generics(ty: &Ty, out: &mut FxHashSet<Ty>) {
+pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
     match ty {
         Ty::Param(_) => {
             out.insert(ty.clone());
@@ -1137,24 +997,27 @@ pub fn collect_metas_and_generics(ty: &Ty, out: &mut FxHashSet<Ty>) {
             out.insert(ty.clone());
         }
         Ty::Func(dom, codom) => {
-            collect_metas_and_generics(dom, out);
-            collect_metas_and_generics(codom, out);
+            collect_meta(dom, out);
+            collect_meta(codom, out);
         }
         Ty::TypeApplication(fun, arg) => {
-            collect_metas_and_generics(fun, out);
-            collect_metas_and_generics(arg, out);
+            collect_meta(fun, out);
+            collect_meta(arg, out);
         }
         Ty::Tuple(items) => {
             for item in items {
-                collect_metas_and_generics(item, out);
+                collect_meta(item, out);
             }
         }
         Ty::Record(box row) => match row {
             Row::Empty => (),
-            Row::Var(_) => (),
+            Row::Var(..) => {
+                out.insert(ty.clone());
+            }
+            Row::Param(..) => (),
             Row::Extend { row, ty, .. } => {
-                collect_metas_and_generics(ty, out);
-                collect_metas_and_generics(&Ty::Record(row.clone()), out);
+                collect_meta(ty, out);
+                collect_meta(&Ty::Record(row.clone()), out);
             }
         },
         Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) | Ty::TypeConstructor { .. } => {}
@@ -1226,6 +1089,12 @@ pub mod tests {
             .get(&ast.roots[i].as_stmt().clone().as_expr().id)
             .unwrap()
             .clone()
+    }
+
+    #[test]
+    fn types_int_literal() {
+        let (ast, session) = typecheck("123");
+        assert_eq!(ty(0, &ast, &session), Ty::Int);
     }
 
     #[test]
@@ -1948,6 +1817,100 @@ pub mod tests {
         );
     }
 
+    /// id over rows should generalize the *row tail* and instantiate independently.
+    #[test]
+    fn row_id_generalizes_and_instantiates() {
+        let (ast, session) = typecheck(
+            r#"
+        let id = func id(r) { r }
+        // project different fields from differently-shaped records
+        (id({ a: 1 }).a, id({ b: true }).b)
+    "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    /// Simple polymorphic projection: fstA extracts `a` from any record that has it.
+    #[test]
+    fn row_projection_polymorphic() {
+        let (ast, session) = typecheck(
+            r#"
+        func fstA(r) { r.a }
+        (fstA({ a: 1 }), fstA({ a: 2, b: true }))
+    "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+    }
+
+    /// Local `let` that returns an *env row* must NOT generalize its tail.
+    /// Matching on a field that isn't known in the env row should fail inside `outer`.
+    #[test]
+    fn row_env_tail_not_generalized_in_local_let() {
+        let (ast, _session) = typecheck_err(
+            r#"
+        func outer(r) {
+            let _x = r.a;               // forces r to have field `a`
+            let k  = func() { r };      // returns the *same* env row (no row-generalization)
+            match k() {
+                { c } -> c              // `c` is not known; should produce one error
+            }
+        }
+        outer({ a: 1 })
+    "#,
+        );
+
+        // exactly one "missing field" diagnostic
+        assert_eq!(ast.diagnostics.len(), 1, "{:?}", ast.diagnostics);
+    }
+
+    /// Local `let` with a fresh row in RHS should generalize its row tail.
+    /// Using it twice with different shapes must type independently.
+    #[test]
+    fn row_generalizes_in_local_let_when_fresh() {
+        let (ast, session) = typecheck(
+            r#"
+        func outer() {
+            let id = func(r) { r };     // fresh row metas -> generalize to a row param
+            (id({ a: 1 }).a, id({ b: true }).b)
+        }
+        outer()
+    "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    /// Instantiation stability: once a row param is instantiated at a call site,
+    /// subsequent projections line up with the instantiated fields.
+    #[test]
+    fn row_instantiation_stability_across_uses() {
+        let (ast, session) = typecheck(
+            r#"
+        let id = func id(r) { r }
+        let x  = id({ a: 1, b: true });
+        (x.a, x.b)
+    "#,
+        );
+
+        assert_eq!(ty(2, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    /// Polymorphic consumer: a function requiring presence of `a` should accept any record
+    /// with `a`, regardless of extra fields.
+    #[test]
+    fn row_presence_constraint_is_polymorphic() {
+        let (ast, session) = typecheck(
+            r#"
+        func useA(r) { r.a }            // imposes HasField(ρ, "a", Int)
+        (useA({ a: 1 }), useA({ a: 2, c: true }))
+    "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+    }
+
     #[test]
     fn row_meta_levels_prevent_leak() {
         // Outer forces r to be an open record { a: Int | ρ } by projecting r.a.
@@ -1955,10 +1918,10 @@ pub mod tests {
         let (ast, _session) = typecheck_err(
             r#"
         func outer(r) {
-            let x = r.a;                    // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)
-            let k = func() { r }    // local let; do NOT generalize the outer row var into a Row::Param
+            let x = r.a; // creates an internal Row::Var tail for r's row (your ensure_row/projection does this)
+            let k = func() { r } // local let; do NOT generalize the outer row var into a Row::Param
             match k() {
-                { c } -> c          // should be a missing-field error (no 'c' in r)
+                { c } -> c // should be a missing-field error (no 'c' in r)
             }
         }
         outer({ a: 1 })
