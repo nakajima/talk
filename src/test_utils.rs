@@ -1,4 +1,24 @@
 #[macro_export]
+macro_rules! fxhashmap {
+    ($($k:expr => $v:expr),* $(,)?) => {
+        ($k, $v) => {
+            let mut m = rustc_hash::FxHashMap::default();
+            $( m.insert($k, $v); )*
+            m
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! indexmap {
+    ($($k:expr => $v:expr),* $(,)?) => {{
+        let mut m = indexmap::IndexMap::new();
+        $( m.insert($k, $v); )*
+        m
+    }};
+}
+
+#[macro_export]
 macro_rules! any_expr {
     ($expr:expr) => {{
         $crate::parsing::node_kinds::expr::Expr {

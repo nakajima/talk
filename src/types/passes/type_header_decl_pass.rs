@@ -11,7 +11,6 @@ use crate::{
         func_signature::FuncSignature,
     },
     types::{
-        arrow_n,
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
@@ -21,6 +20,14 @@ use crate::{
 };
 use derive_visitor::{Drive, Visitor};
 use indexmap::IndexMap;
+
+// Helper for n-ary arrows when all args are the same:
+pub fn arrow_n(arg: Kind, n: usize, ret: Kind) -> Kind {
+    (0..n).fold(ret, |acc, _| Kind::Arrow {
+        in_kind: Box::new(arg.clone()),
+        out_kind: Box::new(acc),
+    })
+}
 
 #[derive(Debug, Visitor)]
 #[visitor(Decl(enter))]
