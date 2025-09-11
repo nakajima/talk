@@ -7,10 +7,10 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct MetaId(u32);
-impl From<u32> for MetaId {
+pub struct TyMetaId(u32);
+impl From<u32> for TyMetaId {
     fn from(value: u32) -> Self {
-        MetaId(value)
+        TyMetaId(value)
     }
 }
 
@@ -51,7 +51,7 @@ pub enum Ty {
     Hole(NodeID),
     Param(TypeParamId),
     Rigid(SkolemId),
-    MetaVar { id: MetaId, level: Level },
+    MetaVar { id: TyMetaId, level: Level },
     Primitive(Primitive),
     TypeConstructor { name: Name, kind: TypeDefKind },
     TypeApplication(Box<Ty>, Box<Ty>),
@@ -112,7 +112,7 @@ impl std::fmt::Debug for Ty {
                 Row::Extend { .. } => {
                     let closed = row.close();
                     let mut parts = vec![];
-                    for (field, value) in closed.labels.iter().zip(closed.values) {
+                    for (field, value) in closed {
                         parts.push(format!("{field}: {value:?}"));
                     }
                     write!(f, "{{ {} }}", parts.join(", "))

@@ -1,4 +1,12 @@
-use crate::{label::Label, types::ty::Ty};
+use std::collections::BTreeMap;
+
+use crate::{
+    label::Label,
+    types::{
+        ty::Ty,
+        type_operations::{UnificationSubstitutions, apply, apply_row},
+    },
+};
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct RowMetaId(pub u32);
@@ -22,11 +30,7 @@ impl From<u32> for RowParamId {
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
-pub struct ClosedRow {
-    pub labels: Vec<Label>,
-    pub values: Vec<Ty>,
-}
+pub type ClosedRow = BTreeMap<Label, Ty>;
 
 // TODO: Add Level to Var once we support open rows
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -49,9 +53,38 @@ fn close(row: &Row, mut closed_row: ClosedRow) -> ClosedRow {
         Row::Var(_) => panic!("Cannot close var"),
         Row::Param(_) => panic!("Cannot close param"),
         Row::Extend { row, label, ty } => {
-            closed_row.labels.push(label.clone());
-            closed_row.values.push(ty.clone());
+            closed_row.insert(label.clone(), ty.clone());
             close(row, closed_row)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowTail {
+    Empty,
+    Var(RowMetaId),
+    Param(RowParamId),
+}
+
+pub fn normalize_row(
+    mut row: Row,
+    subs: &mut UnificationSubstitutions,
+) -> (BTreeMap<Label, Ty>, RowTail) {
+    let mut map = BTreeMap::new();
+    loop {
+        row = apply_row(row, subs);
+        match row {
+            Row::Extend {
+                row: rest,
+                label,
+                ty,
+            } => {
+                map.insert(label, apply(ty, subs));
+                row = *rest;
+            }
+            Row::Empty => break (map, RowTail::Empty),
+            Row::Var(id) => break (map, RowTail::Var(subs.canon_row(id))),
+            Row::Param(id) => break (map, RowTail::Param(id)),
         }
     }
 }

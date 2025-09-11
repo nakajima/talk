@@ -1,26 +1,33 @@
+use std::collections::BTreeMap;
+
 use rustc_hash::FxHashMap;
 use tracing::instrument;
 
-use crate::types::{
-    dsu::DSU,
-    row::{Row, RowMetaId, RowParamId},
-    ty::{Level, MetaId, Ty, TypeParamId},
-    type_error::TypeError,
+use crate::{
+    id_generator::IDGenerator,
+    label::Label,
+    types::{
+        dsu::DSU,
+        passes::inference_pass::Meta,
+        row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
+        ty::{Level, Ty, TyMetaId, TypeParamId},
+        type_error::TypeError,
+    },
 };
 
 #[derive(Clone)]
 pub struct UnificationSubstitutions {
     pub row: FxHashMap<RowMetaId, Row>,
-    pub ty: FxHashMap<MetaId, Ty>,
-    ty_dsu: DSU<MetaId>,
+    pub ty: FxHashMap<TyMetaId, Ty>,
+    ty_dsu: DSU<TyMetaId>,
     row_dsu: DSU<RowMetaId>,
-    meta_levels: FxHashMap<MetaId, Level>,
+    meta_levels: FxHashMap<Meta, Level>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct InstantiationSubstitutions {
     pub row: FxHashMap<RowParamId, RowMetaId>,
-    pub ty: FxHashMap<TypeParamId, MetaId>,
+    pub ty: FxHashMap<TypeParamId, TyMetaId>,
 }
 
 impl std::fmt::Debug for UnificationSubstitutions {
@@ -34,7 +41,7 @@ impl std::fmt::Debug for UnificationSubstitutions {
 }
 
 impl UnificationSubstitutions {
-    pub fn new(meta_levels: FxHashMap<MetaId, Level>) -> Self {
+    pub fn new(meta_levels: FxHashMap<Meta, Level>) -> Self {
         Self {
             row: Default::default(),
             ty: Default::default(),
@@ -45,7 +52,7 @@ impl UnificationSubstitutions {
     }
 
     #[inline]
-    pub fn canon_meta(&mut self, id: MetaId) -> MetaId {
+    pub fn canon_meta(&mut self, id: TyMetaId) -> TyMetaId {
         self.ty_dsu.find(id)
     }
     #[inline]
@@ -53,7 +60,7 @@ impl UnificationSubstitutions {
         self.row_dsu.find(id)
     }
     #[inline]
-    pub fn link_meta(&mut self, a: MetaId, b: MetaId) -> MetaId {
+    pub fn link_meta(&mut self, a: TyMetaId, b: TyMetaId) -> TyMetaId {
         self.ty_dsu.union(a, b)
     }
     #[inline]
@@ -62,7 +69,7 @@ impl UnificationSubstitutions {
     }
 }
 
-fn occurs_in_row(id: MetaId, row: &Row) -> bool {
+fn occurs_in_row(id: TyMetaId, row: &Row) -> bool {
     match row {
         Row::Empty => false,
         Row::Var(_) => false,
@@ -72,7 +79,7 @@ fn occurs_in_row(id: MetaId, row: &Row) -> bool {
 }
 
 // Helper: occurs check
-fn occurs_in(id: MetaId, ty: &Ty) -> bool {
+fn occurs_in(id: TyMetaId, ty: &Ty) -> bool {
     match ty {
         Ty::MetaVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
@@ -87,66 +94,144 @@ fn occurs_in(id: MetaId, ty: &Ty) -> bool {
     }
 }
 
+fn row_occurs(target: RowMetaId, row: &Row, subs: &mut UnificationSubstitutions) -> bool {
+    match apply_row(row.clone(), subs) {
+        Row::Empty | Row::Param(_) => false,
+        Row::Var(id) => subs.canon_row(id) == subs.canon_row(target),
+        Row::Extend { row, ty, .. } => {
+            row_occurs(target, &row, subs)
+                || matches!(apply(ty.clone(), subs), Ty::Record(r) if row_occurs(target, &r, subs))
+        }
+    }
+}
+
 // Unify rows. Returns true if progress was made.
 #[instrument(level = tracing::Level::DEBUG)]
 fn unify_rows(
     lhs: &Row,
     rhs: &Row,
-    substitutions: &mut UnificationSubstitutions,
+    subs: &mut UnificationSubstitutions,
+    row_metas: &mut IDGenerator,
 ) -> Result<bool, TypeError> {
-    match (lhs, rhs) {
-        (Row::Empty, Row::Empty) => Ok(false),
-        (Row::Var(lhs_id), Row::Var(rhs_id)) if lhs_id == rhs_id => Ok(false),
-        (Row::Var(lhs_id), Row::Var(rhs_id)) => {
-            let ra = substitutions.canon_row(*lhs_id);
-            let rb = substitutions.canon_row(*rhs_id);
-            if ra != rb {
-                let keep = substitutions.link_row(ra, rb);
-                let lose = if keep == ra { rb } else { ra };
-                if let Some(v) = substitutions.row.remove(&lose) {
-                    substitutions.row.entry(keep).or_insert(v);
-                }
-                Ok(true)
-            } else {
-                Ok(false)
+    let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), subs);
+    let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), subs);
+
+    // Check to see if one side is closed and the other is a var. If so,
+    // just unify the var as the other side
+    if let (closed, RowTail::Empty, _, RowTail::Var(var))
+    | (_, RowTail::Var(var), closed, RowTail::Empty) =
+        (&lhs_fields, &lhs_tail, &rhs_fields, &rhs_tail)
+    {
+        tracing::debug!("unifying closed row with row var");
+        let mut acc = Row::Empty;
+        for (label, ty) in closed.iter().rev() {
+            acc = Row::Extend {
+                row: Box::new(acc),
+                label: label.clone(),
+                ty: ty.clone(),
+            };
+        }
+
+        let var = subs.canon_row(*var);
+        subs.row.insert(var, acc);
+
+        return Ok(true);
+    }
+
+    // unify common labels
+    let mut changed = false;
+    for k in lhs_fields.keys().cloned().collect::<Vec<_>>() {
+        if let Some(rv) = rhs_fields.remove(&k) {
+            let lv = lhs_fields.remove(&k).unwrap();
+            changed |= unify(&lv, &rv, subs, row_metas)?;
+        }
+    }
+
+    // helper: extend a Var tail with leftover fields (prepend over a fresh tail)
+    let mut extend_var_tail =
+        |tail_id: RowMetaId, fields: BTreeMap<Label, Ty>| -> Result<bool, TypeError> {
+            if fields.is_empty() {
+                return Ok(false);
             }
-        }
-        (Row::Var(id), row) | (row, Row::Var(id)) => {
-            // TODO: Occurs check for rows
-            substitutions.row.insert(*id, row.clone());
+            let fresh = row_metas.next_id();
+            let mut acc = Row::Var(fresh);
+            for (label, ty) in fields.into_iter().rev() {
+                acc = Row::Extend {
+                    row: Box::new(acc),
+                    label,
+                    ty,
+                };
+            }
+            if row_occurs(tail_id, &acc, subs) {
+                return Err(TypeError::OccursCheck(Ty::Record(Box::new(acc))));
+            }
+
+            let can = subs.canon_row(tail_id);
+            subs.row.insert(can, acc);
             Ok(true)
-        }
-        (
-            Row::Extend {
-                row: lhs_row,
-                label: lhs_label,
-                ty: lhs_ty,
-            },
-            Row::Extend {
-                row: rhs_row,
-                label: rhs_label,
-                ty: rhs_ty,
-            },
-        ) => {
-            if lhs_label == rhs_label {
-                // Same label, unify the types and continue with the rows
-                let ty_unified = unify(lhs_ty, rhs_ty, substitutions)?;
-                let row_unified = unify_rows(lhs_row, rhs_row, substitutions)?;
-                Ok(ty_unified || row_unified)
-            } else {
-                // Different labels - need to check if we can reorder
-                // For now, let's just fail
-                Err(TypeError::InvalidUnification(
+        };
+
+    // LHS leftovers must be absorbed by RHS tail
+    if !lhs_fields.is_empty() {
+        match rhs_tail {
+            RowTail::Var(id) => {
+                changed |= extend_var_tail(id, lhs_fields)?;
+            }
+            RowTail::Empty => {
+                return Err(TypeError::InvalidUnification(
                     Ty::Record(Box::new(lhs.clone())),
                     Ty::Record(Box::new(rhs.clone())),
-                ))
+                ));
+            }
+            RowTail::Param(_) => {
+                return Err(TypeError::InvalidUnification(
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
+                ));
             }
         }
-        _ => Err(TypeError::InvalidUnification(
-            Ty::Record(Box::new(lhs.clone())),
-            Ty::Record(Box::new(rhs.clone())),
-        )),
     }
+
+    // RHS leftovers must be absorbed by LHS tail
+    if !rhs_fields.is_empty() {
+        match lhs_tail {
+            RowTail::Var(id) => {
+                changed |= extend_var_tail(id, rhs_fields)?;
+            }
+            RowTail::Empty => {
+                return Err(TypeError::InvalidUnification(
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
+                ));
+            }
+            RowTail::Param(_) => {
+                return Err(TypeError::InvalidUnification(
+                    Ty::Record(Box::new(lhs.clone())),
+                    Ty::Record(Box::new(rhs.clone())),
+                ));
+            }
+        }
+    }
+
+    // unify tails when both are metas/params (cheap)
+    match (lhs_tail, rhs_tail) {
+        (RowTail::Var(a), RowTail::Var(b)) if subs.canon_row(a) != subs.canon_row(b) => {
+            let can_a = subs.canon_row(a);
+            let can_b = subs.canon_row(b);
+            subs.link_row(can_a, can_b);
+            changed = true;
+        }
+        (RowTail::Param(a), RowTail::Param(b)) if a == b => {}
+        (RowTail::Param(_), RowTail::Param(_)) => {
+            return Err(TypeError::InvalidUnification(
+                Ty::Record(Box::new(lhs.clone())),
+                Ty::Record(Box::new(rhs.clone())),
+            ));
+        }
+        _ => {}
+    }
+
+    Ok(changed)
 }
 
 // Unify types. Returns true if progress was made.
@@ -155,6 +240,7 @@ pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
     substitutions: &mut UnificationSubstitutions,
+    row_metas: &mut IDGenerator,
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
@@ -172,22 +258,22 @@ pub(super) fn unify(
         (Ty::Tuple(lhs), Ty::Tuple(rhs)) => {
             let mut did_change = false;
             for (lhs, rhs) in lhs.iter().zip(rhs) {
-                did_change |= unify(lhs, rhs, substitutions)?;
+                did_change |= unify(lhs, rhs, substitutions, row_metas)?;
             }
             Ok(did_change)
         }
         (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(false),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
-            let param = unify(lhs_param, rhs_param, substitutions)?;
-            let ret = unify(lhs_ret, rhs_ret, substitutions)?;
+            let param = unify(lhs_param, rhs_param, substitutions, row_metas)?;
+            let ret = unify(lhs_ret, rhs_ret, substitutions, row_metas)?;
             Ok(param || ret)
         }
         (
             Ty::TypeApplication(box lhs_rec, box lhs_arg),
             Ty::TypeApplication(box rhs_rec, box rhs_arg),
         ) => {
-            let rec = unify(lhs_rec, rhs_rec, substitutions)?;
-            let arg = unify(lhs_arg, rhs_arg, substitutions)?;
+            let rec = unify(lhs_rec, rhs_rec, substitutions, row_metas)?;
+            let arg = unify(lhs_arg, rhs_arg, substitutions, row_metas)?;
             Ok(rec || arg)
         }
         (
@@ -223,7 +309,9 @@ pub(super) fn unify(
 
             Ok(true)
         }
-        (Ty::Record(lhs_row), Ty::Record(rhs_row)) => unify_rows(lhs_row, rhs_row, substitutions),
+        (Ty::Record(lhs_row), Ty::Record(rhs_row)) => {
+            unify_rows(lhs_row, rhs_row, substitutions, row_metas)
+        }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => Err(TypeError::InvalidUnification(lhs, rhs)),
     }
@@ -309,7 +397,7 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
                     id: rep,
                     level: *substitutions
                         .meta_levels
-                        .get(&id)
+                        .get(&Meta::Ty(id))
                         .expect("did not get level"),
                 } // normalize id to the representative
             }

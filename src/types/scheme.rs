@@ -5,7 +5,7 @@ use crate::{
     types::{
         constraints::{Constraint, ConstraintCause, HasField},
         passes::inference_pass::{InferencePass, Wants},
-        row::{Row, RowMetaId, RowParamId},
+        row::{Row, RowParamId},
         ty::{Level, Ty, TypeParamId},
         type_operations::{InstantiationSubstitutions, instantiate_row, instantiate_ty},
     },
@@ -79,14 +79,16 @@ impl Scheme {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::MetaVar { id: meta, .. } = pass.new_meta_var(level) else {
+                    let Ty::MetaVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let meta: RowMetaId = pass.row_metas.next_id();
+                    let Ty::Record(box Row::Var(meta)) = pass.new_row_meta_var(level) else {
+                        unreachable!()
+                    };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.row.insert(*param, meta);
                 }
@@ -123,7 +125,7 @@ impl Scheme {
             };
 
             let arg_ty = pass.infer_type_annotation(arg, level, wants);
-            let ty @ Ty::MetaVar { id: meta_var, .. } = pass.new_meta_var(level) else {
+            let ty @ Ty::MetaVar { id: meta_var, .. } = pass.new_ty_meta_var(level) else {
                 unreachable!();
             };
 
@@ -137,7 +139,9 @@ impl Scheme {
                 unreachable!();
             };
 
-            let row_meta: RowMetaId = pass.row_metas.next_id();
+            let Ty::Record(box Row::Var(row_meta)) = pass.new_row_meta_var(level) else {
+                unreachable!()
+            };
             substitutions.row.insert(row_param, row_meta);
         }
 
