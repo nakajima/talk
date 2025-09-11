@@ -1,6 +1,5 @@
 use rustc_hash::FxHashMap;
 
-// 12-line DSU with path compression, deterministic "min-id wins".
 #[derive(Clone)]
 pub struct DSU<Id: Copy + Eq + std::hash::Hash + Ord> {
     parent: FxHashMap<Id, Id>,
