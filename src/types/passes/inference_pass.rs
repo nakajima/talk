@@ -1724,6 +1724,16 @@ pub mod tests {
     }
 
     #[test]
+    fn types_record_type_out_of_order() {
+        // shouldn't blow up
+        typecheck(
+            "
+        let x: { a: Int, b: Bool } = { b: true, a: 1 }
+        ",
+        );
+    }
+
+    #[test]
     fn types_record_member() {
         let (ast, session) = typecheck(
             r#"
@@ -1752,12 +1762,12 @@ pub mod tests {
     }
 
     #[test]
-    fn types_record_pattern() {
+    fn types_record_pattern_out_of_order() {
         let (ast, session) = typecheck(
             r#"
         let rec = { a: 123, b: true }
         match rec {
-            { a, b } -> (a, b)
+            { b, a } -> (a, b)
         }
         "#,
         );

@@ -15,7 +15,7 @@ use crate::{
         match_arm::MatchArm,
         parameter::Parameter,
         pattern::{Pattern, PatternKind, RecordFieldPatternKind},
-        record_field::RecordField,
+        record_field::{RecordField, RecordFieldTypeAnnotation},
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
@@ -816,6 +816,7 @@ impl<'a> Formatter<'a> {
 
     fn format_type_annotation(&self, ty: &TypeAnnotation) -> Doc {
         match &ty.kind {
+            TypeAnnotationKind::Record { fields } => self.format_record_type_annotation(fields),
             TypeAnnotationKind::Func { params, returns } => {
                 let param_docs: Vec<_> = params
                     .iter()
@@ -1110,6 +1111,20 @@ impl<'a> Formatter<'a> {
         )
     }
 
+    fn format_record_type_annotation(&self, fields: &[RecordFieldTypeAnnotation]) -> Doc {
+        let formatted_fields = fields
+            .iter()
+            .map(|field| self.format_record_field_type_annotation(field))
+            .collect::<Vec<_>>();
+
+        let fields = concat(line(), join(formatted_fields, concat(text(","), line())));
+
+        group(concat(
+            text("{"),
+            concat(nest(1, fields), concat(line(), text("}"))),
+        ))
+    }
+
     fn format_record_literal(&self, fields: &[RecordField], spread: &Option<Box<Expr>>) -> Doc {
         if fields.is_empty() && spread.is_none() {
             return text("{}");
@@ -1138,6 +1153,13 @@ impl<'a> Formatter<'a> {
                 ),
                 concat(line(), text("}")),
             ),
+        ))
+    }
+
+    fn format_record_field_type_annotation(&self, field: &RecordFieldTypeAnnotation) -> Doc {
+        group(concat(
+            concat(text(field.label.name_str()), text(": ")),
+            self.format_type_annotation(&field.value),
         ))
     }
 

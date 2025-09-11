@@ -17,7 +17,7 @@ use crate::node_kinds::parameter::Parameter;
 use crate::node_kinds::pattern::{
     Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 };
-use crate::node_kinds::record_field::RecordField;
+use crate::node_kinds::record_field::{RecordField, RecordFieldTypeAnnotation};
 use crate::node_kinds::stmt::{Stmt, StmtKind};
 use crate::node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind};
 use crate::node_meta::NodeMeta;
@@ -1226,9 +1226,31 @@ impl<'a> Parser<'a> {
         }
 
         // // Check for record type: {x: Int, y: Int, ..R}
-        // if self.did_match(TokenKind::LeftBrace)? {
-        //     return self.record_type_repr(is_type_parameter, tok);
-        // }
+        if self.did_match(TokenKind::LeftBrace)? {
+            let mut fields: Vec<RecordFieldTypeAnnotation> = vec![];
+
+            while !self.did_match(TokenKind::RightBrace)? {
+                let tok = self.push_source_location();
+                let label = Name::Raw(self.identifier()?);
+                self.consume(TokenKind::Colon)?;
+                let value = self.type_annotation()?;
+                let (id, span) = self.save_meta(tok)?;
+                fields.push(RecordFieldTypeAnnotation {
+                    id,
+                    label,
+                    value,
+                    span,
+                });
+                self.consume(TokenKind::Comma).ok();
+            }
+
+            let (id, span) = self.save_meta(tok)?;
+            return Ok(TypeAnnotation {
+                id,
+                span,
+                kind: TypeAnnotationKind::Record { fields },
+            });
+        }
 
         // // Check for row variable: ..R
         // if self.did_match(TokenKind::DotDot)? {

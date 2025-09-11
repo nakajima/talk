@@ -1,6 +1,9 @@
 use derive_visitor::{Drive, DriveMut};
 
-use crate::{impl_into_node, name::Name, node_id::NodeID, parsing::span::Span};
+use crate::{
+    impl_into_node, name::Name, node_id::NodeID,
+    node_kinds::record_field::RecordFieldTypeAnnotation, parsing::span::Span,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
 pub enum TypeAnnotationKind {
@@ -14,6 +17,9 @@ pub enum TypeAnnotationKind {
         generics: Vec<TypeAnnotation>,
     },
     Tuple(Vec<TypeAnnotation>),
+    Record {
+        fields: Vec<RecordFieldTypeAnnotation>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]

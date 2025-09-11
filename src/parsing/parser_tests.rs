@@ -3,7 +3,7 @@ pub mod tests {
     use std::assert_matches::assert_matches;
 
     use crate::{
-        any, any_block, any_expr,
+        any, any_block, any_expr, assert_eq_diff,
         ast::{AST, Parsed},
         label::Label,
         lexer::Lexer,
@@ -20,7 +20,7 @@ pub mod tests {
             match_arm::MatchArm,
             parameter::Parameter,
             pattern::{Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind},
-            record_field::RecordField,
+            record_field::{RecordField, RecordFieldTypeAnnotation},
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
         },
@@ -2102,6 +2102,34 @@ pub mod tests {
                 })]
             ))
         );
+    }
+
+    #[test]
+    fn parses_record_type_decl() {
+        let parsed = parse("let x: { y: Int, z: Float, }");
+        assert_eq_diff!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Let {
+                lhs: any!(Pattern, {
+                    kind: PatternKind::Bind("x".into())
+                }),
+                type_annotation: Some(any!(TypeAnnotation, {
+                    kind: TypeAnnotationKind::Record {
+                        fields: vec![
+                            any!(RecordFieldTypeAnnotation, {
+                                label: "y".into(),
+                                value: annotation!(TypeAnnotationKind::Nominal { name: "Int".into(), generics: vec![] })
+                            }),
+                            any!(RecordFieldTypeAnnotation, {
+                                label: "z".into(),
+                                value: annotation!(TypeAnnotationKind::Nominal { name: "Float".into(), generics: vec![] })
+                            }),
+                        ]
+                    }
+                })),
+                value: None
+            })
+        )
     }
 
     // #[test]

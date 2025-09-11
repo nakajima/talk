@@ -1,8 +1,23 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, name::Name, node_id::NodeID, node_kinds::expr::Expr, parsing::span::Span,
+    impl_into_node,
+    name::Name,
+    node_id::NodeID,
+    node_kinds::{expr::Expr, type_annotation::TypeAnnotation},
+    parsing::span::Span,
 };
+
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+pub struct RecordFieldTypeAnnotation {
+    #[drive(skip)]
+    pub id: NodeID,
+    #[drive(skip)]
+    pub label: Name,
+    pub value: TypeAnnotation,
+    #[drive(skip)]
+    pub span: Span,
+}
 
 // Single field in a record literal
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
