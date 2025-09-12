@@ -5,9 +5,8 @@ use generational_arena::Index;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    ast::{ASTPhase, Parsed, AST},
+    ast::{AST, ASTPhase, Parsed},
     diagnostic::Diagnostic,
-    formatter::{self},
     name::Name,
     name_resolution::{
         builtins,
@@ -70,7 +69,7 @@ impl Scope {
 pub struct NameResolved {
     pub captures: FxHashMap<NodeID, FxHashSet<Symbol>>,
     pub is_captured: FxHashSet<Symbol>,
-    pub scopes: FxHashMap<NodeID, Scope>
+    pub scopes: FxHashMap<NodeID, Scope>,
 }
 
 pub type ScopeId = Index;
@@ -100,8 +99,6 @@ impl ASTPhase for NameResolved {}
 impl NameResolver {
     pub fn resolve(mut ast: AST<Parsed>) -> AST<NameResolved> {
         LowerFuncsToLets::run(&mut ast);
-
-        println!("Pre name resolve:\n{}",formatter::format(&ast, 80));
 
         let AST {
             path,
@@ -360,7 +357,11 @@ impl NameResolver {
                 return;
             };
 
-            *name = resolved_name
+            *name = resolved_name;
+
+            if matches!(name, Name::Resolved(Symbol::Type(_), _)) {
+                expr.kind = ExprKind::Constructor(name.clone());
+            }
         });
     }
 

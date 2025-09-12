@@ -46,6 +46,9 @@ pub enum ExprKind {
 
     Variable(#[drive(skip)] Name),
 
+    // These don't get parsed, they get rewritten from Variables by the name resolver
+    Constructor(#[drive(skip)] Name),
+
     // Control flow
     If(
         Box<Expr>, /* condition */
@@ -100,6 +103,7 @@ impl ExprKind {
             ExprKind::LiteralFalse => true,
             ExprKind::LiteralString(..) => true,
             ExprKind::Variable(..) => true,
+            ExprKind::Constructor(..) => true,
         }
     }
 }

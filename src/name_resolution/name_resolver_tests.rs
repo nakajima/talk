@@ -583,6 +583,28 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_struct_constructor() {
+        let resolved = resolve(
+            "
+        struct Person {}
+        Person()
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[1].as_stmt(),
+            any_expr_stmt!(ExprKind::Call {
+                callee: any_expr!(ExprKind::Constructor(Name::Resolved(
+                    Symbol::Type(TypeId(1)),
+                    "Person".into()
+                )))
+                .into(),
+                type_args: vec![],
+                args: vec![]
+            })
+        )
+    }
+
+    #[test]
     fn resolves_enum() {
         let resolved = resolve(
             "

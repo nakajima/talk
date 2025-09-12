@@ -58,6 +58,7 @@ pub enum Ty {
     Func(Box<Ty>, Box<Ty>),
     Tuple(Vec<Ty>),
     Record(Box<Row>),
+    Struct(Name, Box<Row>),
 }
 
 #[allow(non_upper_case_globals)]
@@ -78,7 +79,7 @@ impl Ty {
             Ty::TypeApplication(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            Ty::Record(box row) => match row {
+            Ty::Struct(_, box row) | Ty::Record(box row) => match row {
                 Row::Empty => false,
                 Row::Extend { row, ty, .. } => {
                     Ty::Record(row.clone()).contains_var() || ty.contains_var()
@@ -119,6 +120,9 @@ impl std::fmt::Debug for Ty {
                 }
                 Row::Var(row_meta_id) => write!(f, "π{}", row_meta_id.0),
             },
+            Ty::Struct(name, box row) => {
+                write!(f, "struct {} {:?}", name.name_str(), row.close())
+            }
         }
     }
 }

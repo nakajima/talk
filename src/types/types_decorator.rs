@@ -63,6 +63,7 @@ fn expr_class(kind: &ExprKind) -> &'static str {
         ExprKind::Member(..) => "member",
         ExprKind::Func(..) => "func",
         ExprKind::Variable(..) => "variable",
+        ExprKind::Constructor(..) => "constructor",
         ExprKind::If(..) => "if",
         ExprKind::Match(..) => "match",
         ExprKind::RecordLiteral { .. } => "record",

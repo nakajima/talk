@@ -265,7 +265,7 @@ impl<'a> Formatter<'a> {
             } => self.format_call(callee, type_args, args),
             ExprKind::Member(receiver, property) => self.format_member(receiver, property),
             ExprKind::Func(func) => self.format_func(func),
-            ExprKind::Variable(name) => self.format_name(name),
+            ExprKind::Variable(name) | ExprKind::Constructor(name) => self.format_name(name),
             ExprKind::If(cond, then_block, else_block) => {
                 self.format_if(cond, then_block, else_block)
             }

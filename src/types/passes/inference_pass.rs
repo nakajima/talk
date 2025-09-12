@@ -30,6 +30,7 @@ use crate::{
     span::Span,
     types::{
         constraints::{Constraint, ConstraintCause, Equals, HasField},
+        fields::TypeFields,
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
         scheme::{ForAll, Scheme},
@@ -86,8 +87,7 @@ pub struct InferencePass<'a> {
     row_params: IDGenerator,
     pub(crate) row_meta_generator: IDGenerator,
     term_env: TermEnv,
-    rhs_map: FxHashMap<Binder, NodeID>,
-    annotation_map: FxHashMap<Binder, NodeID>,
+    session: TypeSession<SCCResolved>,
     meta_levels: FxHashMap<Meta, Level>,
 }
 
@@ -122,7 +122,7 @@ impl Wants {
 
 impl<'a> InferencePass<'a> {
     pub fn perform(
-        mut session: TypeSession<SCCResolved>,
+        session: TypeSession<SCCResolved>,
         ast: &'a mut AST<NameResolved>,
     ) -> TypeSession<Inferenced> {
         let groups = kosaraju_scc(&session.phase.graph);
@@ -136,12 +136,22 @@ impl<'a> InferencePass<'a> {
             type_params: Default::default(),
             row_params: Default::default(),
             row_meta_generator: Default::default(),
-            rhs_map: session.phase.rhs_map.clone(),
-            annotation_map: session.phase.annotation_map.clone(),
+            session,
             meta_levels: Default::default(),
         };
 
-        // Handle binders first
+        let type_ids: Vec<TypeId> = pass
+            .session
+            .phase
+            .type_constructors
+            .keys()
+            .copied()
+            .collect();
+        for id in type_ids {
+            pass.define_type(id);
+        }
+
+        // Handle binders
         for binders in groups {
             let globals: Vec<_> = binders
                 .into_iter()
@@ -180,8 +190,8 @@ impl<'a> InferencePass<'a> {
 
         pass.annotate_uses_after_inference();
 
-        let type_constructors = std::mem::take(&mut session.phase.type_constructors);
-        let protocols = std::mem::take(&mut session.phase.protocols);
+        let type_constructors = std::mem::take(&mut pass.session.phase.type_constructors);
+        let protocols = std::mem::take(&mut pass.session.phase.protocols);
 
         let phase = Inferenced {
             type_constructors,
@@ -189,7 +199,45 @@ impl<'a> InferencePass<'a> {
             types_by_node: pass.types_by_node,
         };
 
-        session.advance(phase)
+        pass.session.advance(phase)
+    }
+
+    #[instrument(skip(self))]
+    fn define_type(&mut self, type_id: TypeId) {
+        let type_def = self
+            .session
+            .phase
+            .type_constructors
+            .get(&type_id)
+            .expect("didn't find type for type id");
+
+        match &type_def.fields {
+            TypeFields::Struct {
+                initializers,
+                methods,
+                properties,
+            } => {
+                let row = properties
+                    .iter()
+                    .fold(Row::Empty, |mut acc, (label, property)| {
+                        acc = Row::Extend {
+                            row: Box::new(acc),
+                            label: label.clone(),
+                            ty: property.ty_repr.clone(),
+                        };
+                        acc
+                    });
+                let scheme = Scheme::new(
+                    vec![],
+                    vec![],
+                    Ty::Struct(type_def.name.clone(), Box::new(row)),
+                );
+
+                self.term_env
+                    .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
+            }
+            _ => unimplemented!(),
+        }
     }
 
     #[instrument(skip(self))]
@@ -205,8 +253,7 @@ impl<'a> InferencePass<'a> {
 
         for &binder in &group.binders {
             let symbol = Symbol::from(binder);
-            let Some(rhs_expr_id) = self.rhs_map.get(&binder).copied() else {
-                println!("Did not get rhs for {binder:?}");
+            let Some(rhs_expr_id) = self.session.phase.rhs_map.get(&binder).copied() else {
                 continue;
             };
 
@@ -220,7 +267,7 @@ impl<'a> InferencePass<'a> {
                 _ => unreachable!("no env entry found for {symbol:?} {:#?}", self.term_env),
             };
 
-            if let Some(annotation_id) = self.annotation_map.get(&binder).cloned() {
+            if let Some(annotation_id) = self.session.phase.annotation_map.get(&binder).cloned() {
                 let Some(Node::TypeAnnotation(annotation)) = self.ast.find(annotation_id) else {
                     panic!("didn't find type annotation for annotation id");
                 };
@@ -433,7 +480,6 @@ impl<'a> InferencePass<'a> {
         // collect metas in ty
         let mut metas = FxHashSet::default();
         collect_meta(&ty, &mut metas);
-        println!("{metas:?}");
 
         // keep only metas born at or above inner
         let mut foralls = vec![];
@@ -636,7 +682,7 @@ impl<'a> InferencePass<'a> {
 
     /// Ensure we have a row to talk about for `expected`.
     /// If `expected` is Ty::Record(row), return that row.
-    /// Otherwise create a fresh row var ρ and add Eq(expected, Record(ρ)).
+    /// Otherwise create a fresh row var row_var and add Eq(expected, Record(row_var)).
     #[instrument(skip(self), ret)]
     fn ensure_row(&mut self, id: NodeID, expected: &Ty, level: Level, wants: &mut Wants) -> Row {
         match expected {
@@ -739,7 +785,36 @@ impl<'a> InferencePass<'a> {
             ExprKind::RecordLiteral { fields, spread } => {
                 self.infer_record_literal(fields, spread, level, wants)
             }
+            ExprKind::Constructor(Name::Resolved(sym @ Symbol::Type(id), _)) => {
+                let entry = self
+                    .term_env
+                    .lookup(sym)
+                    .cloned()
+                    .expect("did not find type for sym in env");
+
+                let ty = match entry {
+                    EnvEntry::Mono(ty) => ty.clone(),
+                    EnvEntry::Scheme(scheme) => scheme.instantiate(self, level, wants, expr.span),
+                };
+
+                let type_def = self
+                    .session
+                    .phase
+                    .type_constructors
+                    .get(id)
+                    .expect("didn't get type def");
+
+                let TypeFields::Struct { initializers, .. } = &type_def.fields else {
+                    panic!("didn't get struct type def for constructor");
+                };
+
+                // TODO: handle multiple initializers
+                let (_, initializer) = initializers.first().expect("no initializer found");
+
+                curry(initializer.params.clone(), ty)
+            }
             ExprKind::RowVariable(..) => todo!(),
+
             _ => todo!(),
         };
 
@@ -1049,6 +1124,17 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
             }
         }
         Ty::Record(box row) => match row {
+            Row::Empty => (),
+            Row::Var(..) => {
+                out.insert(ty.clone());
+            }
+            Row::Param(..) => (),
+            Row::Extend { row, ty, .. } => {
+                collect_meta(ty, out);
+                collect_meta(&Ty::Record(row.clone()), out);
+            }
+        },
+        Ty::Struct(_, box row) => match row {
             Row::Empty => (),
             Row::Var(..) => {
                 out.insert(ty.clone());
@@ -1964,7 +2050,7 @@ pub mod tests {
     fn row_presence_constraint_is_polymorphic() {
         let (ast, session) = typecheck(
             r#"
-        func useA(r) { r.a }            // imposes HasField(ρ, "a", Int)
+        func useA(r) { r.a } // imposes HasField(row_var, "a", Int)
         (useA({ a: 1 }), useA({ a: 2, c: true }))
     "#,
         );
@@ -1974,8 +2060,8 @@ pub mod tests {
 
     #[test]
     fn row_meta_levels_prevent_leak() {
-        // Outer forces r to be an open record { a: Int | ρ } by projecting r.a.
-        // Then local let k = func(){ r } must NOT generalize ρ; match should fail on { c }.
+        // Outer forces r to be an open record { a: Int | row_var } by projecting r.a.
+        // Then local let k = func(){ r } must NOT generalize row_var; match should fail on { c }.
         let (ast, _session) = typecheck_err(
             r#"
         func outer(r) {
@@ -1989,5 +2075,63 @@ pub mod tests {
     "#,
         );
         assert_eq!(ast.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn types_row_type_as_params() {
+        let (ast, session) = typecheck(
+            "
+        func foo(x: { y: Int, z: Bool }) {
+            (x.y, x.z)
+        }
+
+        foo({ y: 123, z: true })
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Bool]));
+    }
+
+    #[test]
+    fn enforces_row_type_as_params() {
+        let (ast, _session) = typecheck_err(
+            "
+        func foo(x: { y: Int, z: Bool }) {
+            (x.y, x.z)
+        }
+
+        foo({ y: 123 })
+        ",
+        );
+
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "diagnostics: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
+    fn types_struct_constructor() {
+        let (ast, session) = typecheck(
+            "
+        struct Person {
+            let age: Int
+            let height: Float
+        }
+
+        Person(age: 123, height: 1.23)
+        ",
+        );
+
+        let Ty::Struct(Name::Resolved(..), row) = ty(1, &ast, &session) else {
+            panic!("didn't get struct");
+        };
+
+        assert_eq!(
+            row.close(),
+            [("age".into(), Ty::Int), ("height".into(), Ty::Float)].into()
+        );
     }
 }

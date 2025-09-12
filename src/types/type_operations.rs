@@ -84,7 +84,7 @@ fn occurs_in(id: TyMetaId, ty: &Ty) -> bool {
         Ty::MetaVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
-        Ty::Record(row) => occurs_in_row(id, row),
+        Ty::Struct(_, row) | Ty::Record(row) => occurs_in_row(id, row),
         Ty::TypeApplication(f, x) => occurs_in(id, f) || occurs_in(id, x),
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
@@ -354,6 +354,7 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
         ),
         Ty::Record(row) => Ty::Record(Box::new(substitute_row(*row, substitutions))),
+        Ty::Struct(name, row) => Ty::Struct(name, Box::new(substitute_row(*row, substitutions))),
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             substitute(lhs, substitutions).into(),
             substitute(rhs, substitutions).into(),
@@ -410,6 +411,7 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Record(row) => Ty::Record(Box::new(apply_row(*row, substitutions))),
+        Ty::Struct(name, row) => Ty::Struct(name, Box::new(apply_row(*row, substitutions))),
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             apply(lhs, substitutions).into(),
             apply(rhs, substitutions).into(),
@@ -471,6 +473,9 @@ pub(super) fn instantiate_ty(
                 .collect(),
         ),
         Ty::Record(row) => Ty::Record(Box::new(instantiate_row(*row, substitutions, level))),
+        Ty::Struct(name, row) => {
+            Ty::Struct(name, Box::new(instantiate_row(*row, substitutions, level)))
+        }
         Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
             instantiate_ty(lhs, substitutions, level).into(),
             instantiate_ty(rhs, substitutions, level).into(),
