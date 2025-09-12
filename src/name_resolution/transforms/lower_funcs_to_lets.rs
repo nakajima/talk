@@ -74,6 +74,7 @@ pub mod tests {
     use crate::{
         any_block, any_decl, any_expr, assert_eq_diff,
         name::Name,
+        name_resolution::transforms::lower_funcs_to_lets::LowerFuncsToLets,
         node_id::NodeID,
         node_kinds::{
             decl::DeclKind,
@@ -83,7 +84,6 @@ pub mod tests {
         },
         parser_tests::tests::parse,
         span::Span,
-        types::passes::lower_funcs_to_lets_pass::LowerFuncsToLets,
     };
 
     #[test]

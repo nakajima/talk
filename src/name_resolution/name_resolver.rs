@@ -12,6 +12,7 @@ use crate::{
         builtins,
         decl_declarer::DeclDeclarer,
         symbol::{Symbol, Symbols},
+        transforms::lower_funcs_to_lets::LowerFuncsToLets,
     },
     node::Node,
     node_id::NodeID,
@@ -25,7 +26,6 @@ use crate::{
     },
     on,
     span::Span,
-    types::passes::lower_funcs_to_lets_pass::LowerFuncsToLets,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

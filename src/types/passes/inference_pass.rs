@@ -594,8 +594,14 @@ impl<'a> InferencePass<'a> {
 
                 ty
             }
+            DeclKind::Method { func, is_static } => self.infer_method(func, *is_static),
             _ => todo!("unhandled: {decl:?}"),
         }
+    }
+
+    #[instrument(skip(self))]
+    fn infer_method(&mut self, func: &Func, is_static: bool) -> Ty {
+        Ty::Void
     }
 
     #[instrument(skip(self))]
@@ -962,9 +968,21 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        if let ExprKind::Member(receiver, label) = &callee.kind {
-            return self.infer_member_call(receiver, label, type_args, args, level, wants);
-        }
+        let args = if let ExprKind::Member(Some(box receiver), _) = &callee.kind {
+            let mut args_with_self = args.to_vec();
+            args_with_self.insert(
+                0,
+                CallArg {
+                    id: self.ast.node_ids.next_id(),
+                    label: Label::Positional(0),
+                    value: receiver.clone(),
+                    span: receiver.span,
+                },
+            );
+            args_with_self
+        } else {
+            args.to_vec()
+        };
 
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
@@ -976,7 +994,7 @@ impl<'a> InferencePass<'a> {
 
         let mut arg_tys = Vec::with_capacity(args.len());
 
-        for _ in args {
+        for _ in &args {
             arg_tys.push(self.new_ty_meta_var(level));
         }
 
@@ -1002,19 +1020,6 @@ impl<'a> InferencePass<'a> {
         }
 
         returns
-    }
-
-    #[instrument(skip(self))]
-    fn infer_member_call(
-        &mut self,
-        receiver: &Option<Box<Expr>>,
-        label: &Label,
-        type_args: &[TypeAnnotation],
-        args: &[CallArg],
-        level: Level,
-        wants: &mut Wants,
-    ) -> Ty {
-        Ty::Void
     }
 
     #[instrument(skip(self))]

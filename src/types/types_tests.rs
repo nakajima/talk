@@ -918,6 +918,45 @@ pub mod tests {
     }
 
     #[test]
+    fn enforces_non_annotated_record() {
+        let (ast, _session) = typecheck_err(
+            "
+        func foo(point) {
+            (point.x, point.y)
+        }
+
+        foo({ x: 123, z: 123 })
+        ",
+        );
+
+        println!("{:?}", ast.diagnostics);
+
+        assert_eq!(
+            ast.diagnostics.len(),
+            1,
+            "diagnostics: {:?}",
+            ast.diagnostics
+        );
+    }
+
+    #[test]
+    fn types_non_annotated_record_param() {
+        let (ast, session) = typecheck(
+            "
+        func foo(x) {
+            (x.y, x.z)
+        }
+
+        foo({ y: 123, z: 1.23 })
+        foo({ y: 123, z: 123 })
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Float]));
+        assert_eq!(ty(2, &ast, &session), Ty::Tuple(vec![Ty::Int, Ty::Int]));
+    }
+
+    #[test]
     fn enforces_row_type_as_params() {
         let (ast, _session) = typecheck_err(
             "
