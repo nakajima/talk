@@ -72,7 +72,7 @@ impl Scheme {
         level: Level,
         wants: &mut Wants,
         span: Span,
-    ) -> Ty {
+    ) -> (Ty, InstantiationSubstitutions) {
         // Map each quantified meta id to a fresh meta at this use-site level
         let mut substitutions = InstantiationSubstitutions::default();
 
@@ -86,7 +86,7 @@ impl Scheme {
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let Ty::Record(box Row::Var(meta)) = pass.new_row_meta_var(level) else {
+                    let Ty::Struct(_, box Row::Var(meta)) = pass.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -101,7 +101,10 @@ impl Scheme {
             wants.push(constraint);
         }
 
-        instantiate_ty(self.ty.clone(), &substitutions, level)
+        (
+            instantiate_ty(self.ty.clone(), &substitutions, level),
+            substitutions,
+        )
     }
 
     pub fn instantiate_with_args(
@@ -139,7 +142,7 @@ impl Scheme {
                 unreachable!();
             };
 
-            let Ty::Record(box Row::Var(row_meta)) = pass.new_row_meta_var(level) else {
+            let Ty::Struct(_, box Row::Var(row_meta)) = pass.new_row_meta_var(level) else {
                 unreachable!()
             };
             substitutions.row.insert(row_param, row_meta);

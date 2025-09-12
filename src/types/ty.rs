@@ -49,16 +49,19 @@ pub enum Primitive {
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub enum Ty {
     Hole(NodeID),
+    Primitive(Primitive),
+
     Param(TypeParamId),
     Rigid(SkolemId),
     MetaVar { id: TyMetaId, level: Level },
-    Primitive(Primitive),
+
     TypeConstructor { name: Name, kind: TypeDefKind },
     TypeApplication(Box<Ty>, Box<Ty>),
+
     Func(Box<Ty>, Box<Ty>),
+
     Tuple(Vec<Ty>),
-    Record(Box<Row>),
-    Struct(Name, Box<Row>),
+    Struct(Option<Name>, Box<Row>),
 }
 
 #[allow(non_upper_case_globals)]
@@ -79,10 +82,10 @@ impl Ty {
             Ty::TypeApplication(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            Ty::Struct(_, box row) | Ty::Record(box row) => match row {
+            Ty::Struct(name, box row) => match row {
                 Row::Empty => false,
                 Row::Extend { row, ty, .. } => {
-                    Ty::Record(row.clone()).contains_var() || ty.contains_var()
+                    Ty::Struct(name.clone(), row.clone()).contains_var() || ty.contains_var()
                 }
                 Row::Param(..) => false,
                 Row::Var(_) => true,
@@ -107,8 +110,16 @@ impl std::fmt::Debug for Ty {
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Record(box row) => match row {
-                Row::Empty => write!(f, "{{}}"),
+            Ty::Struct(name, box row) => match row {
+                Row::Empty => write!(
+                    f,
+                    "struct{}{{}}",
+                    if let Some(name) = name {
+                        format!(" {} ", name.name_str())
+                    } else {
+                        "".into()
+                    }
+                ),
                 Row::Param(id) => write!(f, "rowparam(π{})", id.0),
                 Row::Extend { .. } => {
                     let closed = row.close();
@@ -120,9 +131,6 @@ impl std::fmt::Debug for Ty {
                 }
                 Row::Var(row_meta_id) => write!(f, "π{}", row_meta_id.0),
             },
-            Ty::Struct(name, box row) => {
-                write!(f, "struct {} {:?}", name.name_str(), row.close())
-            }
         }
     }
 }
