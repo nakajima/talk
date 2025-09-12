@@ -212,11 +212,7 @@ impl<'a> InferencePass<'a> {
             .expect("didn't find type for type id");
 
         match &type_def.fields {
-            TypeFields::Struct {
-                initializers,
-                methods,
-                properties,
-            } => {
+            TypeFields::Struct { properties, .. } => {
                 let row = properties
                     .iter()
                     .fold(Row::Empty, |mut acc, (label, property)| {
