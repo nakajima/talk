@@ -990,4 +990,57 @@ pub mod tests {
 
         assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
+
+    #[test]
+    fn checks_struct_init_args() {
+        let (ast, _session) = typecheck_err(
+            "
+        struct Person {
+            let age: Int
+        }
+
+        Person(age: 1.23)
+        ",
+        );
+
+        assert_eq!(1, ast.diagnostics.len(), "{:?}", ast.diagnostics);
+    }
+
+    #[test]
+    fn types_struct_init() {
+        let (ast, session) = typecheck(
+            "
+        struct Person<T> {
+            let age: T
+
+            init(other: T) {
+                self.age = other
+            }
+        }
+
+        Person(age: 123).age
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    fn types_struct_method() {
+        let (ast, session) = typecheck(
+            "
+        struct Person {
+            let age: Int
+
+            func getAge() {
+                self.age
+            }
+        }
+
+        Person(age: 123).getAge()
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
 }

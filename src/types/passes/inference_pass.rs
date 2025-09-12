@@ -721,6 +721,10 @@ impl<'a> InferencePass<'a> {
                 Node::Stmt(stmt) => {
                     last_ty = self.infer_stmt(stmt, level, wants);
                 }
+                Node::Decl(Decl {
+                    kind: DeclKind::Method { .. } | DeclKind::Init { .. },
+                    ..
+                }) => continue,
                 Node::Decl(decl) => {
                     self.infer_decl(decl, level, wants);
                 }
@@ -958,6 +962,10 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
+        if let ExprKind::Member(receiver, label) = &callee.kind {
+            return self.infer_member_call(receiver, label, type_args, args, level, wants);
+        }
+
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
         {
@@ -994,6 +1002,19 @@ impl<'a> InferencePass<'a> {
         }
 
         returns
+    }
+
+    #[instrument(skip(self))]
+    fn infer_member_call(
+        &mut self,
+        receiver: &Option<Box<Expr>>,
+        label: &Label,
+        type_args: &[TypeAnnotation],
+        args: &[CallArg],
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        Ty::Void
     }
 
     #[instrument(skip(self))]
