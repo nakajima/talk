@@ -4,7 +4,6 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use crate::{
-    id_generator::IDGenerator,
     label::Label,
     types::{
         dsu::DSU,
@@ -12,6 +11,7 @@ use crate::{
         row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
         ty::{Level, Ty, TyMetaId, TypeParamId},
         type_error::TypeError,
+        vars::Vars,
     },
 };
 
@@ -111,7 +111,7 @@ fn unify_rows(
     lhs: &Row,
     rhs: &Row,
     subs: &mut UnificationSubstitutions,
-    row_metas: &mut IDGenerator,
+    vars: &mut Vars,
 ) -> Result<bool, TypeError> {
     let (mut lhs_fields, lhs_tail) = normalize_row(lhs.clone(), subs);
     let (mut rhs_fields, rhs_tail) = normalize_row(rhs.clone(), subs);
@@ -143,7 +143,7 @@ fn unify_rows(
     for k in lhs_fields.keys().cloned().collect::<Vec<_>>() {
         if let Some(rv) = rhs_fields.remove(&k) {
             let lv = lhs_fields.remove(&k).unwrap();
-            changed |= unify(&lv, &rv, subs, row_metas)?;
+            changed |= unify(&lv, &rv, subs, vars)?;
         }
     }
 
@@ -153,7 +153,7 @@ fn unify_rows(
             if fields.is_empty() {
                 return Ok(false);
             }
-            let fresh = row_metas.next_id();
+            let fresh = vars.row_metas.next_id();
             let mut acc = Row::Var(fresh);
             for (label, ty) in fields.into_iter().rev() {
                 acc = Row::Extend {
@@ -235,12 +235,12 @@ fn unify_rows(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(level = tracing::Level::DEBUG)]
+#[instrument(level = tracing::Level::TRACE)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
     substitutions: &mut UnificationSubstitutions,
-    row_metas: &mut IDGenerator,
+    vars: &mut Vars,
 ) -> Result<bool, TypeError> {
     let lhs = apply(lhs.clone(), substitutions);
     let rhs = apply(rhs.clone(), substitutions);
@@ -258,22 +258,22 @@ pub(super) fn unify(
         (Ty::Tuple(lhs), Ty::Tuple(rhs)) => {
             let mut did_change = false;
             for (lhs, rhs) in lhs.iter().zip(rhs) {
-                did_change |= unify(lhs, rhs, substitutions, row_metas)?;
+                did_change |= unify(lhs, rhs, substitutions, vars)?;
             }
             Ok(did_change)
         }
         (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(false),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
-            let param = unify(lhs_param, rhs_param, substitutions, row_metas)?;
-            let ret = unify(lhs_ret, rhs_ret, substitutions, row_metas)?;
+            let param = unify(lhs_param, rhs_param, substitutions, vars)?;
+            let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;
             Ok(param || ret)
         }
         (
             Ty::TypeApplication(box lhs_rec, box lhs_arg),
             Ty::TypeApplication(box rhs_rec, box rhs_arg),
         ) => {
-            let rec = unify(lhs_rec, rhs_rec, substitutions, row_metas)?;
-            let arg = unify(lhs_arg, rhs_arg, substitutions, row_metas)?;
+            let rec = unify(lhs_rec, rhs_rec, substitutions, vars)?;
+            let arg = unify(lhs_arg, rhs_arg, substitutions, vars)?;
             Ok(rec || arg)
         }
         (
@@ -310,7 +310,7 @@ pub(super) fn unify(
             Ok(true)
         }
         (Ty::Struct(_, lhs_row), Ty::Struct(_, rhs_row)) => {
-            unify_rows(lhs_row, rhs_row, substitutions, row_metas)
+            unify_rows(lhs_row, rhs_row, substitutions, vars)
         }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => Err(TypeError::InvalidUnification(lhs, rhs)),
@@ -361,7 +361,6 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
     }
 }
 
-#[instrument(level = tracing::Level::TRACE, ret)]
 pub(super) fn apply_row(row: Row, substitutions: &mut UnificationSubstitutions) -> Row {
     match row {
         Row::Empty => Row::Empty,
@@ -382,7 +381,6 @@ pub(super) fn apply_row(row: Row, substitutions: &mut UnificationSubstitutions) 
     }
 }
 
-#[instrument(level = tracing::Level::TRACE, ret)]
 pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty {
     match ty {
         Ty::Param(..) => ty,
@@ -441,7 +439,7 @@ pub(super) fn instantiate_row(
     }
 }
 
-#[instrument(ret)]
+#[instrument(level = tracing::Level::TRACE, ret)]
 pub(super) fn instantiate_ty(
     ty: Ty,
     substitutions: &InstantiationSubstitutions,

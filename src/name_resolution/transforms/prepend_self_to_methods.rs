@@ -26,23 +26,33 @@ impl PrependSelfToMethods {
     }
 
     fn enter_decl(&mut self, decl: &mut Decl) {
-        let DeclKind::Method {
+        if let DeclKind::Method {
             func,
             is_static: false,
         } = &mut decl.kind
-        else {
-            return;
-        };
+        {
+            func.params.insert(
+                0,
+                Parameter {
+                    id: self.node_ids.next_id(),
+                    name: "self".into(),
+                    type_annotation: None,
+                    span: decl.span,
+                },
+            );
+        }
 
-        func.params.insert(
-            0,
-            Parameter {
-                id: self.node_ids.next_id(),
-                name: "self".into(),
-                type_annotation: None,
-                span: decl.span,
-            },
-        );
+        if let DeclKind::Init { params, .. } = &mut decl.kind {
+            params.insert(
+                0,
+                Parameter {
+                    id: self.node_ids.next_id(),
+                    name: "self".into(),
+                    type_annotation: None,
+                    span: decl.span,
+                },
+            );
+        }
     }
 }
 
@@ -101,6 +111,41 @@ pub mod tests {
                             attributes: vec![]
                         }),
                         is_static: false
+                    })
+                    .into()
+                ])
+            })
+        )
+    }
+
+    #[test]
+    fn prepends_self_to_inits() {
+        let mut parsed = parse(
+            "
+        struct Person {
+            init() {}
+        }
+        ",
+        );
+
+        PrependSelfToMethods::run(&mut parsed);
+
+        assert_eq_diff!(
+            *parsed.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: "Person".into(),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Init {
+                        name: "init".into(),
+                        params: vec![Parameter {
+                            id: NodeID::ANY,
+                            span: Span::ANY,
+                            name: "self".into(),
+                            type_annotation: None
+                        },],
+                        body: any_block!(vec![]),
                     })
                     .into()
                 ])

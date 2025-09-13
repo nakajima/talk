@@ -9,7 +9,7 @@ use crate::{
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
-        symbol::{Symbol, SynthesizedId, TypeId},
+        symbol::{Symbol, TypeId},
     },
     node_kinds::{
         generic_decl::GenericDecl,
@@ -21,6 +21,7 @@ use crate::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
         passes::dependencies_pass::SCCResolved,
+        row::Row,
         ty::Ty,
         type_error::TypeError,
         type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
@@ -82,7 +83,7 @@ impl TypeHeaderResolvePass {
     }
 
     fn resolve_fields(&mut self, fields: &TypeFields<ASTTyRepr>) -> TypeFields<Ty> {
-        let mut fields = match fields {
+        match fields {
             TypeFields::Enum { variants, methods } => TypeFields::<Ty>::Enum {
                 variants: self.resolve_variants(variants),
                 methods: self.resolve_methods(methods),
@@ -110,39 +111,10 @@ impl TypeHeaderResolvePass {
                 associated_types: self.resolve_associated_types(associated_types),
             },
             TypeFields::Primitive => TypeFields::<Ty>::Primitive,
-        };
-
-        if let TypeFields::Struct {
-            initializers,
-            properties,
-            ..
-        } = &mut fields
-            && initializers.is_empty()
-        {
-            // If we don't have an initializer, synthesize one.
-            initializers.insert(
-                Name::Resolved(
-                    Symbol::Synthesized(SynthesizedId(self.session.synthsized_ids.next_id())),
-                    "init".into(),
-                ),
-                Initializer {
-                    params: properties
-                        .values()
-                        .filter_map(|p| {
-                            if p.is_static {
-                                None
-                            } else {
-                                Some(p.ty_repr.clone())
-                            }
-                        })
-                        .collect(),
-                },
-            );
         }
-
-        fields
     }
 
+    #[instrument(skip(self))]
     fn resolve_type_def(
         &mut self,
         type_def: &TypeDef<ASTTyRepr>,
@@ -173,7 +145,6 @@ impl TypeHeaderResolvePass {
         })
     }
 
-    #[instrument]
     fn resolve_variants(
         &mut self,
         variants: &IndexMap<Name, Variant<ASTTyRepr>>,
@@ -195,11 +166,10 @@ impl TypeHeaderResolvePass {
         resolved_variants
     }
 
-    #[instrument]
     fn resolve_methods(
         &mut self,
-        methods: &IndexMap<Name, Method<ASTTyRepr>>,
-    ) -> IndexMap<Name, Method<Ty>> {
+        methods: &IndexMap<Label, Method<ASTTyRepr>>,
+    ) -> IndexMap<Label, Method<Ty>> {
         let mut resolved_methods = IndexMap::default();
         for (name, method) in methods {
             let Some(ret) = self.resolve_ty_repr(&method.ret) else {
@@ -208,6 +178,7 @@ impl TypeHeaderResolvePass {
             resolved_methods.insert(
                 name.clone(),
                 Method {
+                    symbol: method.symbol,
                     is_static: method.is_static,
                     params: method
                         .params
@@ -222,7 +193,6 @@ impl TypeHeaderResolvePass {
         resolved_methods
     }
 
-    #[instrument]
     fn resolve_properties(
         &mut self,
         properties: &IndexMap<Label, Property<ASTTyRepr>>,
@@ -244,7 +214,6 @@ impl TypeHeaderResolvePass {
         resolved_properties
     }
 
-    #[instrument]
     fn resolve_initializers(
         &mut self,
         initializers: &IndexMap<Name, Initializer<ASTTyRepr>>,
@@ -266,7 +235,6 @@ impl TypeHeaderResolvePass {
         resolved_initializers
     }
 
-    #[instrument]
     fn resolve_associated_types(
         &mut self,
         associated_types: &IndexMap<Name, Associated>,
@@ -279,7 +247,6 @@ impl TypeHeaderResolvePass {
         resolved_associated_types
     }
 
-    #[instrument]
     fn resolve_method_requirements(
         &mut self,
         requirements: &IndexMap<Name, MethodRequirement<ASTTyRepr>>,
@@ -306,11 +273,14 @@ impl TypeHeaderResolvePass {
         resolved_method_requirements
     }
 
-    #[instrument]
     fn resolve_ty_repr(&mut self, ty_repr: &ASTTyRepr) -> Option<Ty> {
         let res = match ty_repr {
             ASTTyRepr::Annotated(type_annotation) => self.resolve_type_annotation(type_annotation),
             ASTTyRepr::Hole(id, _) => Ok(Ty::Hole(*id)),
+            ASTTyRepr::SelfType(name, _, _) => Ok(Ty::Struct(
+                Some(name.clone()),
+                Box::new(Row::Var(self.session.vars.row_metas.next_id())),
+            )),
             ASTTyRepr::Generic(GenericDecl {
                 name: Name::Resolved(Symbol::Type(decl_id), _),
                 ..
@@ -331,7 +301,6 @@ impl TypeHeaderResolvePass {
         }
     }
 
-    #[instrument]
     fn resolve_type_annotation(
         &mut self,
         type_annotation: &TypeAnnotation,
@@ -407,9 +376,7 @@ pub mod tests {
         assert_eq_diff,
         ast::AST,
         name_resolution::{
-            name_resolver::NameResolved,
-            name_resolver_tests::tests::resolve,
-            symbol::{GlobalId, SynthesizedId},
+            name_resolver::NameResolved, name_resolver_tests::tests::resolve, symbol::SynthesizedId,
         },
         types::{passes::type_header_decl_pass::TypeHeaderDeclPass, type_session::TypeDefKind},
     };
@@ -454,7 +421,9 @@ pub mod tests {
                 .unwrap()
                 .fields,
             TypeFields::Struct {
-                initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![Ty::Int] }),
+                initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
+                    Ty::Int
+                ] }),
                 methods: Default::default(),
                 properties: crate::indexmap!("age".into() => Property { is_static: false, ty_repr: Ty::Int }),
             }
@@ -480,7 +449,7 @@ pub mod tests {
                 .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![] }),
-                methods: crate::indexmap!(Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()) => Method { is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
+                methods: crate::indexmap!("fizz".into() => Method { symbol: Symbol::Type(TypeId(2)),is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
                 properties: Default::default(),
             }
         )

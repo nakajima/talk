@@ -12,7 +12,9 @@ use crate::{
         builtins,
         decl_declarer::DeclDeclarer,
         symbol::{Symbol, Symbols},
-        transforms::lower_funcs_to_lets::LowerFuncsToLets,
+        transforms::{
+            lower_funcs_to_lets::LowerFuncsToLets, prepend_self_to_methods::PrependSelfToMethods,
+        },
     },
     node::Node,
     node_id::NodeID,
@@ -99,6 +101,7 @@ impl ASTPhase for NameResolved {}
 impl NameResolver {
     pub fn resolve(mut ast: AST<Parsed>) -> AST<NameResolved> {
         LowerFuncsToLets::run(&mut ast);
+        PrependSelfToMethods::run(&mut ast);
 
         let AST {
             path,
@@ -199,10 +202,6 @@ impl NameResolver {
     }
 
     pub(super) fn lookup(&mut self, name: &Name) -> Option<Name> {
-        if name.name_str() == "self" {
-            return Some(Name::_Self);
-        }
-
         let symbol =
             self.lookup_in_scope(name, self.current_scope_id.expect("no scope to declare in"))?;
 
@@ -409,7 +408,7 @@ impl NameResolver {
             self.enter_scope(decl.id);
 
             for param in params {
-                param.name = self.declare_local(&param.name);
+                param.name = self.declare_param(&param.name);
             }
         })
     }

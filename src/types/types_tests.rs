@@ -752,6 +752,20 @@ pub mod tests {
     }
 
     #[test]
+    fn types_nested_record_pattern() {
+        let (ast, session) = typecheck(
+            r#"
+        let rec = { a: 123, b: { c: true } }
+        match rec {
+            { a, b: { c } } -> c
+        }
+        "#,
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Bool);
+    }
+
+    #[test]
     fn checks_fields_exist() {
         let (ast, _session) = typecheck_err(
             r#"
@@ -1058,6 +1072,22 @@ pub mod tests {
         }
 
         Person(age: 123).age
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    #[ignore = "need static methods first"]
+    fn types_static_struct_methods() {
+        let (ast, session) = typecheck(
+            "
+        struct Person {
+           static func getAge() { 123 }
+        }
+
+        Person.getAge()
         ",
         );
 

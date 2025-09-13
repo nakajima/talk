@@ -3,7 +3,7 @@ use crate::{
     node_kinds::type_annotation::TypeAnnotation,
     span::Span,
     types::{
-        constraints::{Constraint, ConstraintCause, HasField},
+        constraints::{Constraint, ConstraintCause, HasField, Member},
         passes::inference_pass::{InferencePass, Wants},
         row::{Row, RowParamId},
         ty::{Level, Ty, TypeParamId},
@@ -24,6 +24,11 @@ pub enum Predicate {
         label: Label,
         ty: Ty,
     },
+    Member {
+        receiver: Ty,
+        label: Label,
+        ty: Ty,
+    },
 }
 
 impl Predicate {
@@ -36,6 +41,17 @@ impl Predicate {
         match self.clone() {
             Self::HasField { row, label, ty } => Constraint::HasField(HasField {
                 row: instantiate_row(Row::Param(row), substitutions, level),
+                label,
+                ty: instantiate_ty(ty, substitutions, level),
+                cause: ConstraintCause::Internal,
+                span,
+            }),
+            Self::Member {
+                receiver,
+                label,
+                ty,
+            } => Constraint::Member(Member {
+                receiver: instantiate_ty(receiver, substitutions, level),
                 label,
                 ty: instantiate_ty(ty, substitutions, level),
                 cause: ConstraintCause::Internal,
@@ -132,7 +148,12 @@ impl Scheme {
                 unreachable!();
             };
 
-            wants.equals(ty.clone(), arg_ty, ConstraintCause::CallTypeArg(arg.id));
+            wants.equals(
+                ty.clone(),
+                arg_ty,
+                ConstraintCause::CallTypeArg(arg.id),
+                span,
+            );
 
             substitutions.ty.insert(*param, meta_var);
         }

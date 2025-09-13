@@ -6,7 +6,6 @@ use tracing::instrument;
 use crate::{
     ast::{AST, ASTPhase},
     diagnostic::{AnyDiagnostic, Diagnostic},
-    id_generator::IDGenerator,
     label::Label,
     name::Name,
     name_resolution::{
@@ -29,7 +28,7 @@ use crate::{
     },
     span::Span,
     types::{
-        constraints::{Constraint, ConstraintCause, Equals, HasField},
+        constraints::{Constraint, ConstraintCause, Equals, HasField, Member},
         fields::TypeFields,
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
@@ -40,14 +39,13 @@ use crate::{
         type_operations::{
             UnificationSubstitutions, apply, apply_row, instantiate_ty, substitute, unify,
         },
-        type_session::{TypeDef, TypeSession, TypingPhase},
+        type_session::{ASTTyRepr, TypeSession, TypingPhase},
+        type_snapshot::TypeSnapshot,
     },
 };
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Inferenced {
-    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
-    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
     pub types_by_node: FxHashMap<NodeID, Ty>,
 }
 
@@ -83,28 +81,50 @@ pub struct InferenceSolution {
 pub struct InferencePass<'a> {
     ast: &'a mut AST<NameResolved>,
     types_by_node: FxHashMap<NodeID, Ty>,
-    metavars: IDGenerator,
-    skolems: IDGenerator,
-    type_params: IDGenerator,
-    row_params: IDGenerator,
-    pub(crate) row_meta_generator: IDGenerator,
-    term_env: TermEnv,
-    session: TypeSession<SCCResolved>,
     meta_levels: FxHashMap<Meta, Level>,
+    snapshots: Vec<TypeSnapshot>,
+
+    pub(crate) term_env: TermEnv,
+    pub(crate) session: TypeSession<SCCResolved>,
 }
 
 #[derive(Debug)]
 pub struct Wants(Vec<Constraint>);
 impl Wants {
     pub fn push(&mut self, constraint: Constraint) {
+        tracing::debug!("constraining {constraint:?}");
         self.0.push(constraint)
     }
 
-    pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause) {
-        self.0.push(Constraint::Equals(Equals { lhs, rhs, cause }));
+    pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause, span: Span) {
+        tracing::debug!("constraining equals {lhs:?} = {rhs:?}");
+        self.0.push(Constraint::Equals(Equals {
+            lhs,
+            rhs,
+            cause,
+            span,
+        }));
     }
 
-    pub fn has_field(
+    pub fn member(
+        &mut self,
+        receiver: Ty,
+        label: Label,
+        ty: Ty,
+        cause: ConstraintCause,
+        span: Span,
+    ) {
+        tracing::debug!("constraining member {receiver:?}.{label:?} <> {ty:?}");
+        self.0.push(Constraint::Member(Member {
+            receiver,
+            label,
+            ty,
+            cause,
+            span,
+        }))
+    }
+
+    pub fn _has_field(
         &mut self,
         row: Row,
         label: Label,
@@ -112,6 +132,7 @@ impl Wants {
         cause: ConstraintCause,
         span: Span,
     ) {
+        tracing::debug!("constraining has_field {row:?}.{label:?} <> {ty:?}");
         self.0.push(Constraint::HasField(HasField {
             row,
             label,
@@ -133,11 +154,6 @@ impl<'a> InferencePass<'a> {
             term_env,
             ast,
             types_by_node: Default::default(),
-            metavars: Default::default(),
-            skolems: Default::default(),
-            type_params: Default::default(),
-            row_params: Default::default(),
-            row_meta_generator: Default::default(),
             session,
             meta_levels: Default::default(),
         };
@@ -150,7 +166,8 @@ impl<'a> InferencePass<'a> {
             .copied()
             .collect();
         for id in type_ids {
-            pass.define_type(id);
+            let mut wants = Wants(vec![]);
+            pass.define_type(id, Level(1), &mut wants);
         }
 
         // Handle binders
@@ -192,63 +209,131 @@ impl<'a> InferencePass<'a> {
 
         pass.annotate_uses_after_inference();
 
-        let type_constructors = std::mem::take(&mut pass.session.phase.type_constructors);
-        let protocols = std::mem::take(&mut pass.session.phase.protocols);
-
         let phase = Inferenced {
-            type_constructors,
-            protocols,
             types_by_node: pass.types_by_node,
         };
 
         pass.session.advance(phase)
     }
 
+    fn infer_ast_ty_repr(&mut self, ty_repr: &ASTTyRepr, level: Level, wants: &mut Wants) -> Ty {
+        match &ty_repr {
+            ASTTyRepr::Annotated(annotation) => {
+                self.infer_type_annotation(annotation, level, wants)
+            }
+            ASTTyRepr::SelfType(name, _, _) => {
+                // For self parameters in methods, look up the struct type from the environment
+                match name {
+                    Name::Resolved(Symbol::Type(type_id), _) => {
+                        // The struct type should be in the environment by now
+                        let entry = self.term_env.lookup(&Symbol::Type(*type_id)).cloned();
+                        match entry {
+                            Some(EnvEntry::Mono(ty)) => ty,
+                            Some(EnvEntry::Scheme(scheme)) => {
+                                // Instantiate if needed
+                                scheme
+                                    .instantiate(self, level, wants, Span { start: 0, end: 0 })
+                                    .0
+                            }
+                            None => {
+                                // Fallback - this shouldn't happen if define_type is set up correctly
+                                self.new_ty_meta_var(level)
+                            }
+                        }
+                    }
+                    _ => self.new_ty_meta_var(level), // Fallback for unresolved names
+                }
+            }
+            ASTTyRepr::Hole(..) => self.new_ty_meta_var(level),
+            ASTTyRepr::Generic(decl) => {
+                let ty = Ty::Param(self.session.vars.type_params.next_id());
+                self.term_env.promote(
+                    decl.name
+                        .symbol()
+                        .expect("didn't resolve name of generic param"),
+                    EnvEntry::Mono(ty.clone()),
+                );
+                ty
+            }
+        }
+    }
+
     #[instrument(skip(self))]
-    fn define_type(&mut self, type_id: TypeId) {
-        let type_def = self
+    fn define_type(&mut self, type_id: TypeId, level: Level, wants: &mut Wants) {
+        let mut type_def = self
             .session
             .phase
             .type_constructors
-            .get(&type_id)
+            .remove(&type_id)
             .expect("didn't find type for type id");
 
-        match &type_def.fields {
-            TypeFields::Struct { properties, .. } => {
+        match &mut type_def.fields {
+            TypeFields::Struct {
+                properties,
+                methods,
+                ..
+            } => {
+                let foralls = type_def
+                    .generics
+                    .iter()
+                    .map(|(_, g)| {
+                        let Ty::Param(id) = self.infer_ast_ty_repr(g, level, wants) else {
+                            unreachable!();
+                        };
+
+                        ForAll::Ty(id)
+                    })
+                    .collect();
+
+                // Build the struct row first
                 let row = properties
                     .iter()
                     .fold(Row::Empty, |mut acc, (label, property)| {
                         acc = Row::Extend {
                             row: Box::new(acc),
                             label: label.clone(),
-                            ty: property.ty_repr.clone(),
+                            ty: self.infer_ast_ty_repr(&property.ty_repr, level, wants),
                         };
                         acc
                     });
 
-                let foralls = type_def
-                    .generics
-                    .iter()
-                    .map(|(_, g)| {
-                        let Ty::Param(id) = g else {
-                            unreachable!();
-                        };
+                // Create the struct type
+                let struct_ty = Ty::Struct(Some(type_def.name.clone()), Box::new(row.clone()));
 
-                        ForAll::Ty(*id)
-                    })
-                    .collect();
+                // Temporarily register the struct type so methods can reference it
+                self.term_env
+                    .promote(Symbol::Type(type_id), EnvEntry::Mono(struct_ty.clone()));
 
-                let scheme = Scheme::new(
-                    foralls,
-                    vec![],
-                    Ty::Struct(Some(type_def.name.clone()), Box::new(row)),
-                );
+                for (name, method) in methods.iter_mut() {
+                    let mut params = vec![];
+                    for param in method.params.iter() {
+                        let param_ty = self.infer_ast_ty_repr(param, level, wants);
+                        params.push(param_ty)
+                    }
+
+                    // Fill in holes with meta vars
+                    let ret = self.infer_ast_ty_repr(&method.ret, level, wants);
+                    let entry = self.generalize(Level(1), curry(params, ret), &[]);
+
+                    // Register both as method and global symbol
+                    self.term_env
+                        .insert_method(type_id, name.clone(), entry.clone());
+                    self.term_env.promote(method.symbol, entry);
+                }
+
+                // Now create the final scheme and re-promote it
+                let scheme = Scheme::new(foralls, vec![], struct_ty);
 
                 self.term_env
                     .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
             }
             _ => unimplemented!(),
         }
+
+        self.session
+            .phase
+            .type_constructors
+            .insert(type_id, type_def);
     }
 
     #[instrument(skip(self))]
@@ -257,9 +342,19 @@ impl<'a> InferencePass<'a> {
         let inner_level = group.level.next();
 
         for &binder in &group.binders {
+            println!("binder: {binder:?}");
             let symbol = Symbol::from(binder);
-            let ty = self.new_ty_meta_var(inner_level);
-            self.term_env.insert_mono(symbol, ty);
+
+            if self.term_env.lookup(&symbol).is_none() {
+                println!("didn't get entry for {symbol:?}, adding a new one");
+                let ty = self.new_ty_meta_var(inner_level);
+                self.term_env.insert_mono(symbol, ty);
+            } else {
+                println!(
+                    "symbol already defined: {symbol:?}: {:?}",
+                    self.term_env.lookup(&symbol)
+                );
+            }
         }
 
         for &binder in &group.binders {
@@ -268,9 +363,8 @@ impl<'a> InferencePass<'a> {
                 continue;
             };
 
-            let rhs_expr = self.ast.find(rhs_expr_id).clone();
-
-            let got = self.infer_node(&rhs_expr.unwrap(), inner_level, &mut wants);
+            let rhs_expr = self.ast.find(rhs_expr_id).clone().unwrap();
+            let got = self.infer_node(&rhs_expr, inner_level, &mut wants);
             self.types_by_node.insert(rhs_expr_id, got.clone());
 
             let tv = match self.term_env.lookup(&symbol) {
@@ -289,10 +383,11 @@ impl<'a> InferencePass<'a> {
                     got.clone(),
                     annotation_ty,
                     ConstraintCause::Annotation(annotation_id),
+                    annotation.span,
                 );
             }
 
-            wants.equals(got, tv, ConstraintCause::Internal);
+            wants.equals(got, tv, ConstraintCause::Internal, rhs_expr.span());
         }
 
         wants
@@ -333,7 +428,7 @@ impl<'a> InferencePass<'a> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), level = tracing::Level::TRACE)]
     fn apply_to_self(&mut self, substitutions: &mut UnificationSubstitutions) {
         for (_, ty) in self.types_by_node.iter_mut() {
             if matches!(ty, Ty::Primitive(_)) {
@@ -355,13 +450,16 @@ impl<'a> InferencePass<'a> {
                 tracing::trace!("solving {want:?}");
 
                 let solution = match want {
-                    Constraint::Equals(equals) => unify(
+                    Constraint::Equals(ref equals) => unify(
                         &equals.lhs,
                         &equals.rhs,
                         &mut substitutions,
-                        &mut self.row_meta_generator,
+                        &mut self.session.vars,
                     ),
-                    Constraint::HasField(has_field) => {
+                    Constraint::Member(ref member) => {
+                        member.solve(self, &mut next_wants, &mut substitutions)
+                    }
+                    Constraint::HasField(ref has_field) => {
                         let row = apply_row(has_field.row.clone(), &mut substitutions);
                         match row {
                             Row::Empty => {
@@ -369,7 +467,7 @@ impl<'a> InferencePass<'a> {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
                                     kind: TypeError::MemberNotFound(
-                                        Ty::Struct(None, Box::new(has_field.row)),
+                                        Ty::Struct(None, Box::new(has_field.row.clone())),
                                         has_field.label.to_string(),
                                     ),
                                 }));
@@ -380,7 +478,7 @@ impl<'a> InferencePass<'a> {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
                                     kind: TypeError::MemberNotFound(
-                                        Ty::Struct(None, Box::new(has_field.row)),
+                                        Ty::Struct(None, Box::new(has_field.row.clone())),
                                         has_field.label.to_string(),
                                     ),
                                 }));
@@ -388,10 +486,10 @@ impl<'a> InferencePass<'a> {
                             }
                             Row::Var(..) => {
                                 // Keep the constraint for the next iteration with the applied row
-                                next_wants.has_field(
+                                next_wants._has_field(
                                     row,
-                                    has_field.label,
-                                    has_field.ty,
+                                    has_field.label.clone(),
+                                    has_field.ty.clone(),
                                     ConstraintCause::Internal,
                                     has_field.span,
                                 );
@@ -399,14 +497,19 @@ impl<'a> InferencePass<'a> {
                             }
                             Row::Extend { row, label, ty } => {
                                 if has_field.label == label {
-                                    next_wants.equals(has_field.ty, ty, ConstraintCause::Internal);
+                                    next_wants.equals(
+                                        has_field.ty.clone(),
+                                        ty,
+                                        ConstraintCause::Internal,
+                                        want.span(),
+                                    );
                                     tracing::trace!("found match for {label:?}");
                                     Ok(true)
                                 } else {
-                                    next_wants.has_field(
+                                    next_wants._has_field(
                                         *row,
-                                        has_field.label,
-                                        has_field.ty,
+                                        has_field.label.clone(),
+                                        has_field.ty.clone(),
                                         ConstraintCause::Internal,
                                         has_field.span,
                                     );
@@ -427,7 +530,7 @@ impl<'a> InferencePass<'a> {
                             .diagnostics
                             .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
                                 path: self.ast.path.clone(),
-                                span: Span { start: 0, end: 0 },
+                                span: want.span(),
                                 kind: e,
                             }));
                         made_progress = false;
@@ -516,7 +619,7 @@ impl<'a> InferencePass<'a> {
                         continue;
                     }
 
-                    let param_id = self.type_params.next_id();
+                    let param_id = self.session.vars.type_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.push(ForAll::Ty(param_id));
                     substitutions.ty.insert(*id, Ty::Param(param_id));
@@ -531,7 +634,7 @@ impl<'a> InferencePass<'a> {
                         continue;
                     }
 
-                    let param_id = self.row_params.next_id();
+                    let param_id = self.session.vars.row_params.next_id();
                     tracing::trace!("generalizing {m:?} to {param_id:?}");
                     foralls.push(ForAll::Row(param_id));
                     substitutions.row.insert(*id, Row::Param(param_id));
@@ -581,7 +684,12 @@ impl<'a> InferencePass<'a> {
                 let mut rhs_wants = Wants(vec![]);
                 if let Some(expr) = value {
                     let rhs_ty = self.infer_expr(expr, level.next(), &mut rhs_wants);
-                    rhs_wants.equals(ty.clone(), rhs_ty, ConstraintCause::Assignment(decl.id));
+                    rhs_wants.equals(
+                        ty.clone(),
+                        rhs_ty,
+                        ConstraintCause::Assignment(decl.id),
+                        expr.span,
+                    );
                 }
 
                 let (mut subs, unsolved) = self.solve(rhs_wants);
@@ -594,14 +702,13 @@ impl<'a> InferencePass<'a> {
 
                 ty
             }
-            DeclKind::Method { func, is_static } => self.infer_method(func, *is_static),
+            DeclKind::Method { func, .. } => {
+                // Type the method body just like a regular function
+                // This ensures the body type is constrained to match the return type
+                self.infer_func(func, level, wants)
+            }
             _ => todo!("unhandled: {decl:?}"),
         }
-    }
-
-    #[instrument(skip(self))]
-    fn infer_method(&mut self, func: &Func, is_static: bool) -> Ty {
-        Ty::Void
     }
 
     #[instrument(skip(self))]
@@ -615,7 +722,7 @@ impl<'a> InferencePass<'a> {
             PatternKind::Bind(Name::Resolved(sym, _)) => {
                 self.term_env.insert_mono(*sym, expected.clone());
             }
-            PatternKind::Bind(Name::_Self | Name::SelfType) => {
+            PatternKind::Bind(Name::SelfType) => {
                 todo!()
             }
             PatternKind::LiteralInt(_) => {
@@ -623,6 +730,7 @@ impl<'a> InferencePass<'a> {
                     expected.clone(),
                     Ty::Int,
                     ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
                 );
             }
             PatternKind::LiteralFloat(_) => {
@@ -630,6 +738,7 @@ impl<'a> InferencePass<'a> {
                     expected.clone(),
                     Ty::Float,
                     ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
                 );
             }
             PatternKind::LiteralFalse | PatternKind::LiteralTrue => {
@@ -637,6 +746,7 @@ impl<'a> InferencePass<'a> {
                     expected.clone(),
                     Ty::Bool,
                     ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
                 );
             }
             PatternKind::Tuple(patterns) => {
@@ -648,6 +758,7 @@ impl<'a> InferencePass<'a> {
                     expected.clone(),
                     Ty::Tuple(metas.clone()),
                     ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
                 );
 
                 for (pi, bi) in patterns.iter().zip(metas) {
@@ -655,7 +766,8 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row = self.ensure_row(pattern.id, expected, level, wants);
+                let expected_row =
+                    self.ensure_row(pattern.id, pattern.span, expected, level, wants);
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -669,7 +781,7 @@ impl<'a> InferencePass<'a> {
                             );
 
                             // ONE RowHas per field, all referring to the same row
-                            wants.has_field(
+                            wants._has_field(
                                 expected_row.clone(),
                                 name.name_str().into(),
                                 field_ty,
@@ -680,7 +792,7 @@ impl<'a> InferencePass<'a> {
                         RecordFieldPatternKind::Equals { name, value } => {
                             // optional: pattern field = subpattern; same RowHas then recurse on value
                             let field_ty = self.new_ty_meta_var(level);
-                            wants.has_field(
+                            wants._has_field(
                                 expected_row.clone(),
                                 name.name_str().into(),
                                 field_ty.clone(),
@@ -703,12 +815,24 @@ impl<'a> InferencePass<'a> {
     /// If `expected` is Ty::Record(row), return that row.
     /// Otherwise create a fresh row var row_var and add Eq(expected, Record(row_var)).
     #[instrument(skip(self), ret)]
-    fn ensure_row(&mut self, id: NodeID, expected: &Ty, level: Level, wants: &mut Wants) -> Row {
+    fn ensure_row(
+        &mut self,
+        id: NodeID,
+        span: Span,
+        expected: &Ty,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Row {
         match expected {
             Ty::Struct(_, box row) => row.clone(),
             _ => {
                 let rho = self.new_row_meta_var(level);
-                wants.equals(expected.clone(), rho.clone(), ConstraintCause::Pattern(id));
+                wants.equals(
+                    expected.clone(),
+                    rho.clone(),
+                    ConstraintCause::Pattern(id),
+                    span,
+                );
                 let Ty::Struct(_, row) = rho else {
                     unreachable!()
                 };
@@ -727,10 +851,6 @@ impl<'a> InferencePass<'a> {
                 Node::Stmt(stmt) => {
                     last_ty = self.infer_stmt(stmt, level, wants);
                 }
-                Node::Decl(Decl {
-                    kind: DeclKind::Method { .. } | DeclKind::Init { .. },
-                    ..
-                }) => continue,
                 Node::Decl(decl) => {
                     self.infer_decl(decl, level, wants);
                 }
@@ -795,7 +915,12 @@ impl<'a> InferencePass<'a> {
             ExprKind::Func(func) => self.infer_func(func, level, wants),
             ExprKind::If(box cond, conseq, alt) => {
                 let cond_ty = self.infer_expr(cond, level, wants);
-                wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
+                wants.equals(
+                    cond_ty,
+                    Ty::Bool,
+                    ConstraintCause::Condition(cond.id),
+                    cond.span,
+                );
 
                 let conseq_ty = self.infer_block(conseq, level, wants);
                 let alt_ty = self.infer_block(alt, level, wants);
@@ -804,6 +929,7 @@ impl<'a> InferencePass<'a> {
                     conseq_ty.clone(),
                     alt_ty,
                     ConstraintCause::Condition(alt.id),
+                    conseq.span,
                 );
                 conseq_ty
             }
@@ -828,6 +954,7 @@ impl<'a> InferencePass<'a> {
                     .phase
                     .type_constructors
                     .get(id)
+                    .cloned()
                     .expect("didn't get type def");
 
                 let TypeFields::Struct { initializers, .. } = &type_def.fields else {
@@ -837,8 +964,14 @@ impl<'a> InferencePass<'a> {
                 // TODO: handle multiple initializers
                 let (_, initializer) = initializers.first().expect("no initializer found");
 
+                let params: Vec<Ty> = initializer
+                    .params
+                    .iter()
+                    .map(|p| self.infer_ast_ty_repr(p, level, wants))
+                    .collect();
+
                 // Apply the same substitutions to params that we applied to properties
-                instantiate_ty(curry(initializer.params.clone(), ty), &substitutions, level)
+                instantiate_ty(curry(params, ty), &substitutions, level)
             }
             ExprKind::RowVariable(..) => todo!(),
 
@@ -859,52 +992,61 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        let (receiver_row, span) = if let Some(receiver) = receiver {
-            let receiver_ty = self.infer_expr(receiver, level, wants);
-            match receiver_ty {
-                Ty::Struct(_, box row) => (row, receiver.span),
-                Ty::MetaVar { .. } => {
-                    // Add a constraint saying that receiver needs to be a row
-                    let row = self.new_row_meta_var(level);
-                    wants.equals(
-                        receiver_ty.clone(),
-                        row.clone(),
-                        ConstraintCause::Member(id),
-                    );
+        // let (receiver_row, span) = if let Some(receiver) = receiver {
+        //     let receiver_ty = self.infer_expr(receiver, level, wants);
+        //     match receiver_ty {
+        //         Ty::Struct(_, box row) => (row, receiver.span),
+        //         Ty::MetaVar { .. } => {
+        //             // Add a constraint saying that receiver needs to be a row
+        //             let row = self.new_row_meta_var(level);
+        //             wants.equals(
+        //                 receiver_ty.clone(),
+        //                 row.clone(),
+        //                 ConstraintCause::Member(id),
+        //             );
 
-                    let Ty::Struct(_, row) = row else {
-                        unreachable!();
-                    };
+        //             let Ty::Struct(_, row) = row else {
+        //                 unreachable!();
+        //             };
 
-                    (*row, receiver.span)
-                }
-                ty => {
-                    self.ast
-                        .diagnostics
-                        .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
-                            path: self.ast.path.clone(),
-                            span: receiver.span,
-                            kind: TypeError::ExpectedRow(ty),
-                        }));
-                    return Ty::Void;
-                }
-            }
+        //             (*row, receiver.span)
+        //         }
+        //         ty => {
+        //             self.ast
+        //                 .diagnostics
+        //                 .push(crate::diagnostic::AnyDiagnostic::Typing(Diagnostic {
+        //                     path: self.ast.path.clone(),
+        //                     span: receiver.span,
+        //                     kind: TypeError::ExpectedRow(ty),
+        //                 }));
+        //             return Ty::Void;
+        //         }
+        //     }
+        // } else {
+        //     let Ty::Struct(_, box row) = self.new_row_meta_var(level) else {
+        //         unreachable!()
+        //     };
+
+        //     (row, Span { start: 0, end: 0 })
+        // };
+
+        let receiver_ty = if let Some(receiver) = &receiver {
+            self.infer_expr(receiver, level, wants)
         } else {
-            let Ty::Struct(_, box row) = self.new_row_meta_var(level) else {
-                unreachable!()
-            };
-
-            (row, Span { start: 0, end: 0 })
+            todo!("unqualified members not supported yet");
         };
 
         let member_ty = self.new_ty_meta_var(level);
 
-        wants.has_field(
-            receiver_row,
+        wants.member(
+            receiver_ty,
             label.clone(),
             member_ty.clone(),
             ConstraintCause::Member(id),
-            span,
+            receiver
+                .as_ref()
+                .map(|r| r.span)
+                .unwrap_or(Span { start: 0, end: 0 }),
         );
 
         member_ty
@@ -950,6 +1092,7 @@ impl<'a> InferencePass<'a> {
                     arm_ty.clone(),
                     last_arm_ty.clone(),
                     ConstraintCause::MatchArm(arm.id),
+                    arm.span,
                 );
             }
 
@@ -968,22 +1111,6 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        let args = if let ExprKind::Member(Some(box receiver), _) = &callee.kind {
-            let mut args_with_self = args.to_vec();
-            args_with_self.insert(
-                0,
-                CallArg {
-                    id: self.ast.node_ids.next_id(),
-                    label: Label::Positional(0),
-                    value: receiver.clone(),
-                    span: receiver.span,
-                },
-            );
-            args_with_self
-        } else {
-            args.to_vec()
-        };
-
         let callee_ty = if !type_args.is_empty()
             && let Some(scheme) = self.lookup_named_scheme(callee)
         {
@@ -992,19 +1119,52 @@ impl<'a> InferencePass<'a> {
             self.infer_expr(callee, level, wants)
         };
 
-        let mut arg_tys = Vec::with_capacity(args.len());
+        let mut arg_tys = Vec::with_capacity(args.len() + 1);
 
-        for _ in &args {
+        for _ in args {
             arg_tys.push(self.new_ty_meta_var(level));
         }
-
-        tracing::trace!("adding returns meta");
         let returns = self.new_ty_meta_var(level);
+        tracing::trace!("adding returns meta: {returns:?}");
 
-        if args.is_empty() {
+        for (a, aty) in args.iter().zip(arg_tys.clone()) {
+            let got = self.infer_expr(&a.value, level, wants);
+            wants.equals(got, aty, ConstraintCause::Internal, a.span);
+        }
+
+        if matches!(
+            callee,
+            Expr {
+                kind: ExprKind::Constructor(..),
+                ..
+            }
+        ) {
+            arg_tys.insert(0, returns.clone());
+        }
+
+        if let Expr {
+            kind: ExprKind::Member(receiver, _),
+            ..
+        } = &callee
+        {
+            let receiver_ty = if let Some(receiver) = receiver {
+                self.infer_expr(receiver, level, wants)
+            } else {
+                self.new_ty_meta_var(level)
+            };
+
+            arg_tys.insert(0, receiver_ty.clone());
+        }
+
+        if arg_tys.is_empty() {
             // zero-arg call: callee must be Unit -> returns
             let expected = Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
-            wants.equals(callee_ty, expected, ConstraintCause::Call(callee.id));
+            wants.equals(
+                callee_ty,
+                expected,
+                ConstraintCause::Call(callee.id),
+                callee.span,
+            );
             return returns;
         }
 
@@ -1012,12 +1172,8 @@ impl<'a> InferencePass<'a> {
             callee_ty,
             curry(arg_tys.clone(), returns.clone()),
             ConstraintCause::Call(callee.id),
+            callee.span,
         );
-
-        for (a, aty) in args.iter().zip(arg_tys) {
-            let got = self.infer_expr(&a.value, level, wants);
-            wants.equals(got, aty, ConstraintCause::Internal);
-        }
 
         returns
     }
@@ -1026,8 +1182,8 @@ impl<'a> InferencePass<'a> {
     fn infer_func(&mut self, func: &Func, level: Level, wants: &mut Wants) -> Ty {
         let mut skolem_map = FxHashMap::default();
         for generic in func.generics.iter() {
-            let skolem_id = self.skolems.next_id();
-            let param_id = self.type_params.next_id();
+            let skolem_id = self.session.vars.skolems.next_id();
+            let param_id = self.session.vars.type_params.next_id();
             skolem_map.insert(Ty::Rigid(skolem_id), Ty::Param(param_id));
             self.term_env.insert_mono(
                 generic.name.symbol().expect("did not get symbol"),
@@ -1062,7 +1218,12 @@ impl<'a> InferencePass<'a> {
 
         let body_ty = self.infer_block(&func.body, level, wants);
 
-        wants.equals(body_ty, ret_ty.clone(), ConstraintCause::Internal);
+        wants.equals(
+            body_ty,
+            ret_ty.clone(),
+            ConstraintCause::Internal,
+            func.body.span,
+        );
 
         // Build function type
         let func_ty = if param_tys.is_empty() {
@@ -1084,7 +1245,12 @@ impl<'a> InferencePass<'a> {
             StmtKind::Expr(expr) => self.infer_expr(expr, level, wants),
             StmtKind::If(cond, conseq, alt) => {
                 let cond_ty = self.infer_expr(cond, level, wants);
-                wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
+                wants.equals(
+                    cond_ty,
+                    Ty::Bool,
+                    ConstraintCause::Condition(cond.id),
+                    cond.span,
+                );
 
                 let conseq_ty = self.infer_block(conseq, level, wants);
                 if let Some(alt) = alt {
@@ -1094,6 +1260,7 @@ impl<'a> InferencePass<'a> {
                         conseq_ty.clone(),
                         alt_ty,
                         ConstraintCause::Condition(stmt.id),
+                        conseq.span,
                     );
                     conseq_ty
                 } else {
@@ -1106,13 +1273,23 @@ impl<'a> InferencePass<'a> {
             StmtKind::Assignment(lhs, rhs) => {
                 let lhs_ty = self.infer_expr(lhs, level, wants);
                 let rhs_ty = self.infer_expr(rhs, level, wants);
-                wants.equals(lhs_ty.clone(), rhs_ty, ConstraintCause::Assignment(stmt.id));
+                wants.equals(
+                    lhs_ty.clone(),
+                    rhs_ty,
+                    ConstraintCause::Assignment(stmt.id),
+                    lhs.span,
+                );
                 lhs_ty
             }
             StmtKind::Loop(cond, body) => {
                 if let Some(cond) = cond {
                     let cond_ty = self.infer_expr(cond, level, wants);
-                    wants.equals(cond_ty, Ty::Bool, ConstraintCause::Condition(cond.id));
+                    wants.equals(
+                        cond_ty,
+                        Ty::Bool,
+                        ConstraintCause::Condition(cond.id),
+                        cond.span,
+                    );
                 }
 
                 self.infer_block(body, level, wants);
@@ -1123,21 +1300,21 @@ impl<'a> InferencePass<'a> {
     }
 
     pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> Ty {
-        let id = self.metavars.next_id();
+        let id = self.session.vars.ty_metas.next_id();
         self.meta_levels.insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
         Ty::MetaVar { id, level }
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Ty {
-        let id = self.row_meta_generator.next_id();
+        let id = self.session.vars.row_metas.next_id();
         self.meta_levels.insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
         Ty::Struct(None, Box::new(Row::Var(id)))
     }
 }
 
-fn curry<I: IntoIterator<Item = Ty>>(params: I, ret: Ty) -> Ty {
+pub fn curry<I: IntoIterator<Item = Ty>>(params: I, ret: Ty) -> Ty {
     params
         .into_iter()
         .collect::<Vec<_>>()

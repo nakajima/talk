@@ -13,11 +13,11 @@ use crate::{
         fields::TypeFields,
         kind::Kind,
         passes::{
-            dependencies_pass::DependenciesPass,
+            dependencies_pass::{DependenciesPass, SCCResolved},
             inference_pass::{InferencePass, Inferenced},
             type_header_decl_pass::TypeHeaderDeclPass,
-            type_header_resolve_pass::{HeadersResolved, TypeHeaderResolvePass},
         },
+        vars::Vars,
     },
 };
 
@@ -25,7 +25,8 @@ use crate::{
 pub enum ASTTyRepr {
     Annotated(TypeAnnotation), // already resolved names
     Generic(GenericDecl),
-    Hole(NodeID, Span), // no annotation; to be inferred later
+    Hole(NodeID, Span),           // no annotation; to be inferred later
+    SelfType(Name, NodeID, Span), // For synthesized `self` param
 }
 
 impl ASTTyRepr {
@@ -34,6 +35,7 @@ impl ASTTyRepr {
             Self::Annotated(ta) => ta.span,
             Self::Generic(gd) => gd.span,
             Self::Hole(_, span) => *span,
+            Self::SelfType(_, _, span) => *span,
         }
     }
 }
@@ -56,7 +58,7 @@ pub struct Raw {
 }
 
 impl TypingPhase for Raw {
-    type Next = HeadersResolved;
+    type Next = SCCResolved;
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -71,6 +73,7 @@ pub struct TypeDef<T> {
 
 #[derive(Debug, Default)]
 pub struct TypeSession<Phase: TypingPhase = Raw> {
+    pub vars: Vars,
     pub path: String,
     pub synthsized_ids: IDGenerator,
     pub phase: Phase,
@@ -82,13 +85,13 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
     pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession<Inferenced> {
         let mut session = TypeSession::<Raw>::default();
         TypeHeaderDeclPass::drive(&mut session, ast);
-        let session = TypeHeaderResolvePass::drive(session, ast).unwrap();
         let session = DependenciesPass::drive(session, ast);
         InferencePass::perform(session, ast)
     }
 
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
         TypeSession::<Phase::Next> {
+            vars: self.vars,
             path: self.path,
             synthsized_ids: self.synthsized_ids,
             phase,

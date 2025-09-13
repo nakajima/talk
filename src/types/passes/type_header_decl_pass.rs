@@ -2,14 +2,19 @@ use crate::{
     ast::AST,
     label::Label,
     name::Name,
-    name_resolution::{name_resolver::NameResolved, symbol::Symbol},
+    name_resolution::{
+        name_resolver::NameResolved,
+        symbol::{Symbol, SynthesizedId},
+    },
     node::Node,
+    node_id::NodeID,
     node_kinds::{
         block::Block,
         decl::{Decl, DeclKind},
         func::Func,
         func_signature::FuncSignature,
     },
+    span::Span,
     types::{
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
@@ -51,7 +56,8 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 body: Block { body, .. },
                 ..
             } => {
-                let fields = self.collect_fields(TypeDefKind::Struct, body);
+                let fields =
+                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Struct, body);
                 self.session.phase.type_constructors.insert(
                     *decl_id,
                     TypeDef {
@@ -73,7 +79,8 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 body: Block { body, .. },
                 ..
             } => {
-                let fields = self.collect_fields(TypeDefKind::Protocol, body);
+                let fields =
+                    self.collect_fields(name, decl.id, decl.span, TypeDefKind::Protocol, body);
                 self.session.phase.protocols.insert(
                     *decl_id,
                     TypeDef {
@@ -95,7 +102,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 generics,
                 ..
             } => {
-                let fields = self.collect_fields(TypeDefKind::Enum, body);
+                let fields = self.collect_fields(name, decl.id, decl.span, TypeDefKind::Enum, body);
 
                 self.session.phase.type_constructors.insert(
                     *decl_id,
@@ -120,10 +127,17 @@ impl<'a> TypeHeaderDeclPass<'a> {
     // Helpers
     ///////////////////////////////////////////////////////////////////////////
 
-    fn collect_fields(&self, type_kind: TypeDefKind, body: &[Node]) -> TypeFields<ASTTyRepr> {
+    fn collect_fields(
+        &mut self,
+        type_name: &Name,
+        id: NodeID,
+        span: Span,
+        type_kind: TypeDefKind,
+        body: &[Node],
+    ) -> TypeFields<ASTTyRepr> {
         // Collect properties
         let mut properties: IndexMap<Label, Property<ASTTyRepr>> = Default::default();
-        let mut methods: IndexMap<Name, Method<ASTTyRepr>> = Default::default();
+        let mut methods: IndexMap<Label, Method<ASTTyRepr>> = Default::default();
         let mut initializers: IndexMap<Name, Initializer<ASTTyRepr>> = Default::default();
         let mut variants: IndexMap<Name, Variant<ASTTyRepr>> = Default::default();
         let mut associated_types: IndexMap<Name, Associated> = Default::default();
@@ -187,13 +201,17 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     ..
                 } => {
                     methods.insert(
-                        name.clone(),
+                        Label::Named(name.name_str()),
                         Method {
+                            symbol: name.symbol().unwrap(),
                             is_static: *is_static,
                             params: params
                                 .iter()
-                                .map(|p| {
-                                    if let Some(type_annotation) = &p.type_annotation {
+                                .enumerate()
+                                .map(|(i, p)| {
+                                    if i == 0 {
+                                        ASTTyRepr::SelfType(type_name.clone(), p.id, *span)
+                                    } else if let Some(type_annotation) = &p.type_annotation {
                                         ASTTyRepr::Annotated(type_annotation.clone())
                                     } else {
                                         ASTTyRepr::Hole(p.id, *span)
@@ -233,8 +251,11 @@ impl<'a> TypeHeaderDeclPass<'a> {
                         Initializer {
                             params: params
                                 .iter()
-                                .map(|p| {
-                                    if let Some(type_annotation) = &p.type_annotation {
+                                .enumerate()
+                                .map(|(i, p)| {
+                                    if i == 0 {
+                                        ASTTyRepr::SelfType(type_name.clone(), p.id, *span)
+                                    } else if let Some(type_annotation) = &p.type_annotation {
                                         ASTTyRepr::Annotated(type_annotation.clone())
                                     } else {
                                         ASTTyRepr::Hole(p.id, *span)
@@ -246,6 +267,31 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 }
                 _ => continue,
             };
+        }
+
+        if type_kind == TypeDefKind::Struct && initializers.is_empty() {
+            // If we don't have an initializer, synthesize one.
+            let mut params: Vec<ASTTyRepr> = properties
+                .values()
+                .filter_map(|p| {
+                    if p.is_static {
+                        None
+                    } else {
+                        Some(p.ty_repr.clone())
+                    }
+                })
+                .collect();
+
+            // At this point, we've already prepend `self` to param lists so we need to do so here as well
+            params.insert(0, ASTTyRepr::SelfType(type_name.clone(), id, span));
+
+            initializers.insert(
+                Name::Resolved(
+                    Symbol::Synthesized(SynthesizedId(self.session.synthsized_ids.next_id())),
+                    "init".into(),
+                ),
+                Initializer { params },
+            );
         }
 
         match type_kind {
@@ -268,12 +314,16 @@ impl<'a> TypeHeaderDeclPass<'a> {
 
 #[cfg(test)]
 pub mod tests {
+    use indexmap::indexmap;
+
     use crate::{
         annotation, assert_eq_diff,
+        ast::AST,
         name::Name,
         name_resolution::{
+            name_resolver::NameResolved,
             name_resolver_tests::tests::resolve,
-            symbol::{BuiltinId, Symbol, TypeId},
+            symbol::{BuiltinId, Symbol, SynthesizedId, TypeId},
         },
         node_id::NodeID,
         node_kinds::{generic_decl::GenericDecl, type_annotation::*},
@@ -286,24 +336,25 @@ pub mod tests {
         },
     };
 
-    pub fn pass(code: &'static str) -> TypeSession<Raw> {
+    pub fn type_header_decl_pass(code: &'static str) -> (AST<NameResolved>, TypeSession<Raw>) {
         let resolved = resolve(code);
         let mut session = TypeSession::<Raw>::default();
         TypeHeaderDeclPass::drive(&mut session, &resolved);
-        session
+        (resolved, session)
     }
 
     #[test]
     fn basic_struct() {
-        let session = pass(
+        let session = type_header_decl_pass(
             "
         struct Person {
             let age: Int
         }
         ",
-        );
+        )
+        .1;
 
-        assert_eq!(
+        assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
             TypeDef::<ASTTyRepr> {
                 name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
@@ -312,7 +363,12 @@ pub mod tests {
                 def: TypeDefKind::Struct,
                 generics: Default::default(),
                 fields: TypeFields::Struct {
-                    initializers: Default::default(),
+                    initializers: indexmap! {
+                        Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
+                            ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Person".into()), NodeID::ANY, Span::ANY),
+                            ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Int, "Int".into()), generics: vec!{} }))
+                        ] }
+                    },
                     methods: Default::default(),
                     properties: crate::indexmap!(
                         "age".into() => Property {
@@ -330,7 +386,7 @@ pub mod tests {
 
     #[test]
     fn generic_struct() {
-        let session = pass(
+        let session = type_header_decl_pass(
             "
         struct Wrapper<T> {
             let wrapped: T
@@ -340,7 +396,8 @@ pub mod tests {
             }
         }
         ",
-        );
+        )
+        .1;
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
@@ -362,6 +419,7 @@ pub mod tests {
                 fields: TypeFields::Struct {
                     initializers: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(5)), "init".into()) => Initializer {
                         params: vec![
+                            ASTTyRepr::SelfType(Name::Resolved(Symbol::Type(TypeId(1)), "Wrapper".into()), NodeID::ANY, Span::ANY),
                             ASTTyRepr::Hole(NodeID(4), Span::ANY)
                         ]
                     }),
@@ -380,13 +438,14 @@ pub mod tests {
 
     #[test]
     fn nested_generic_struct() {
-        let session = pass(
+        let session = type_header_decl_pass(
             "
         struct Wrapper<T, U> {
             let wrapped: T<U>
         }
         ",
-        );
+        )
+        .1;
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
@@ -419,7 +478,14 @@ pub mod tests {
                     })
                 ),
                 fields: TypeFields::Struct {
-                    initializers: Default::default(),
+                    initializers: indexmap! {
+                        Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![
+                            ASTTyRepr::SelfType(Name::Resolved(TypeId(1).into(), "Wrapper".into()), NodeID::ANY, Span::ANY),
+                            ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(Symbol::Type(TypeId(2)), "T".into()), generics: vec![
+                                annotation!(TypeAnnotationKind::Nominal { name: Name::Resolved(TypeId(3).into(), "U".into()), generics: vec![] })
+                            ] }))
+                        ] }
+                    },
                     methods: Default::default(),
                     properties: crate::indexmap!("wrapped".into() => Property {
                         is_static: false,
@@ -438,13 +504,14 @@ pub mod tests {
 
     #[test]
     fn basic_enum() {
-        let session = pass(
+        let session = type_header_decl_pass(
             "
         enum Fizz {
             case foo(Int), bar
         }
         ",
-        );
+        )
+        .1;
 
         assert_eq_diff!(
             *session.phase.type_constructors.get(&TypeId(1)).unwrap(),
@@ -474,7 +541,7 @@ pub mod tests {
 
     #[test]
     fn basic_protocol() {
-        let session = pass(
+        let session = type_header_decl_pass(
             "
         protocol Fizz {
             associated Buzz
@@ -482,7 +549,8 @@ pub mod tests {
             func foo() -> Int
         }
         ",
-        );
+        )
+        .1;
 
         assert_eq_diff!(
             *session.phase.protocols.get(&TypeId(1)).unwrap(),

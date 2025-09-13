@@ -6,6 +6,7 @@ pub mod tests {
         annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
         diagnostic::{AnyDiagnostic, Diagnostic},
+        formatter::format,
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
@@ -77,6 +78,7 @@ pub mod tests {
 
     pub fn resolve(code: &'static str) -> AST<NameResolved> {
         let res = resolve_err(code);
+        println!("{}", format(&res, 80));
         assert!(
             res.diagnostics.is_empty(),
             "diagnostics not empty: {:?}",
@@ -474,7 +476,7 @@ pub mod tests {
                 conformances: vec![],
                 body: any_block!(vec![Node::Decl(any_decl!(DeclKind::Init {
                     name: Name::Resolved(Symbol::Type(TypeId(4)), "init".into()),
-                    params: vec![],
+                    params: vec![param!(Symbol::ParamLocal(ParamLocalId(1)), "self")],
                     body: any_block!(vec![])
                 }))])
             })
@@ -540,10 +542,16 @@ pub mod tests {
                             id: NodeID::ANY,
                             name: Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()),
                             generics: vec![],
-                            params: vec![],
+                            params: vec![param!(Symbol::ParamLocal(ParamLocalId(1)), "self")],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
-                                    Some(any_expr!(ExprKind::Variable(Name::_Self)).into()),
+                                    Some(
+                                        any_expr!(ExprKind::Variable(Name::Resolved(
+                                            Symbol::ParamLocal(ParamLocalId(1)),
+                                            "self".into()
+                                        )))
+                                        .into()
+                                    ),
                                     "buzz".into()
                                 ))
                                 .into(),
@@ -561,10 +569,13 @@ pub mod tests {
                             id: NodeID::ANY,
                             name: Name::Resolved(Symbol::Global(GlobalId(2)), "buzz".into()),
                             generics: vec![],
-                            params: vec![],
+                            params: vec![param!(Symbol::ParamLocal(ParamLocalId(2)), "self")],
                             body: any_block!(vec![any_expr_stmt!(ExprKind::Call {
                                 callee: any_expr!(ExprKind::Member(
-                                    Some(any_expr!(ExprKind::Variable(Name::_Self)).into()),
+                                    Some(Box::new(any_expr!(ExprKind::Variable(Name::Resolved(
+                                        Symbol::ParamLocal(ParamLocalId(2)),
+                                        "self".into()
+                                    ))))),
                                     "fizz".into()
                                 ))
                                 .into(),

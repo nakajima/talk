@@ -110,27 +110,31 @@ impl std::fmt::Debug for Ty {
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Struct(name, box row) => match row {
-                Row::Empty => write!(
+            Ty::Struct(name, box row) => {
+                let row_debug = match row {
+                    Row::Empty => "".to_string(),
+                    Row::Param(id) => format!("rowparam(π{})", id.0),
+                    Row::Extend { .. } => {
+                        let closed = row.close();
+                        let mut parts = vec![];
+                        for (field, value) in closed {
+                            parts.push(format!("{field}: {value:?}"));
+                        }
+                        parts.join(", ")
+                    }
+                    Row::Var(row_meta_id) => format!("rowmeta(π{})", row_meta_id.0),
+                };
+
+                write!(
                     f,
-                    "struct{}{{}}",
+                    "struct{}{{{row_debug}}}",
                     if let Some(name) = name {
                         format!(" {} ", name.name_str())
                     } else {
                         "".into()
                     }
-                ),
-                Row::Param(id) => write!(f, "rowparam(π{})", id.0),
-                Row::Extend { .. } => {
-                    let closed = row.close();
-                    let mut parts = vec![];
-                    for (field, value) in closed {
-                        parts.push(format!("{field}: {value:?}"));
-                    }
-                    write!(f, "{{ {} }}", parts.join(", "))
-                }
-                Row::Var(row_meta_id) => write!(f, "π{}", row_meta_id.0),
-            },
+                )
+            }
         }
     }
 }

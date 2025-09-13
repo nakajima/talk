@@ -1,6 +1,6 @@
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct IDGenerator {
-    last: u32,
+    pub last: u32,
 }
 
 impl IDGenerator {

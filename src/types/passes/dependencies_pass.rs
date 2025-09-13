@@ -4,7 +4,6 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     ast::AST,
-    label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
@@ -18,9 +17,8 @@ use crate::{
         pattern::{Pattern, PatternKind},
     },
     types::{
-        passes::{inference_pass::Inferenced, type_header_resolve_pass::HeadersResolved},
-        ty::Ty,
-        type_session::{TypeDef, TypeSession, TypingPhase},
+        passes::inference_pass::Inferenced,
+        type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
     },
 };
 
@@ -29,8 +27,8 @@ pub struct SCCResolved {
     pub graph: DiGraphMap<Binder, ()>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
-    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
-    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub type_constructors: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
+    pub protocols: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
 }
 
 impl TypingPhase for SCCResolved {
@@ -78,7 +76,7 @@ pub struct DependenciesPass {
 
 impl DependenciesPass {
     pub fn drive(
-        mut session: TypeSession<HeadersResolved>,
+        mut session: TypeSession<Raw>,
         ast: &mut AST<NameResolved>,
     ) -> TypeSession<SCCResolved> {
         let mut pass = DependenciesPass {
@@ -167,15 +165,8 @@ impl DependenciesPass {
     }
 
     fn enter_expr(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::Member(
-                Some(box Expr {
-                    kind: ExprKind::Variable(Name::_Self),
-                    ..
-                }),
-                Label::Named(_name),
-            ) => (),
-            ExprKind::Variable(Name::Resolved(sym, _)) => match sym {
+        if let ExprKind::Variable(Name::Resolved(sym, _)) = &expr.kind {
+            match sym {
                 Symbol::Global(global_id) => {
                     let binder = Binder::Global(*global_id);
 
@@ -191,8 +182,7 @@ impl DependenciesPass {
                     }
                 }
                 _ => (),
-            },
-            _ => (),
+            }
         }
     }
 }
@@ -207,7 +197,7 @@ pub mod tests {
         types::{
             passes::{
                 dependencies_pass::{Binder, DependenciesPass, SCCResolved},
-                type_header_resolve_pass::tests::type_header_resolve_pass_err,
+                type_header_decl_pass::tests::type_header_decl_pass,
             },
             type_session::TypeSession,
         },
@@ -216,7 +206,7 @@ pub mod tests {
     pub fn resolve_dependencies(
         code: &'static str,
     ) -> (AST<NameResolved>, TypeSession<SCCResolved>) {
-        let (mut ast, session) = type_header_resolve_pass_err(code).unwrap();
+        let (mut ast, session) = type_header_decl_pass(code);
         let session = DependenciesPass::drive(session, &mut ast);
         (ast, session)
     }

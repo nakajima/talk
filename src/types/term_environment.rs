@@ -1,7 +1,8 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
-    name_resolution::symbol::Symbol,
+    label::Label,
+    name_resolution::symbol::{Symbol, TypeId},
     types::{builtins::builtin_scope, scheme::Scheme, ty::Ty},
 };
 
@@ -14,6 +15,7 @@ pub enum EnvEntry {
 #[derive(Debug, Default)]
 pub struct TermEnv {
     pub(super) symbols: FxHashMap<Symbol, EnvEntry>,
+    pub(super) methods: FxHashMap<(TypeId, Label), EnvEntry>,
 }
 
 impl TermEnv {
@@ -33,5 +35,13 @@ impl TermEnv {
 
     pub fn promote(&mut self, sym: Symbol, entry: EnvEntry) {
         self.symbols.insert(sym, entry);
+    }
+
+    pub fn insert_method(&mut self, type_id: TypeId, label: Label, entry: EnvEntry) {
+        self.methods.insert((type_id, label), entry);
+    }
+
+    pub fn lookup_method(&mut self, type_id: TypeId, label: Label) -> Option<&EnvEntry> {
+        self.methods.get(&(type_id, label))
     }
 }

@@ -4,7 +4,6 @@ use crate::name_resolution::{name_resolver::NameResolverError, symbol::Symbol};
 pub enum Name {
     Raw(String),
     Resolved(Symbol, String),
-    _Self,
     SelfType,
 }
 
@@ -13,7 +12,6 @@ impl Name {
         match self {
             Name::Raw(name_str) => name_str.into(),
             Name::Resolved(_symbol_id, name_str) => name_str.into(),
-            Name::_Self => "self".into(),
             Name::SelfType => "Self".to_string(),
         }
     }
