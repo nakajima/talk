@@ -1077,7 +1077,6 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "need static methods first"]
     fn types_static_struct_methods() {
         let (ast, session) = typecheck(
             "
