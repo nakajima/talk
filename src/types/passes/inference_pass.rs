@@ -156,6 +156,7 @@ impl<'a> InferencePass<'a> {
             types_by_node: Default::default(),
             session,
             meta_levels: Default::default(),
+            snapshots: Default::default(),
         };
 
         let type_ids: Vec<TypeId> = pass
@@ -191,7 +192,7 @@ impl<'a> InferencePass<'a> {
             pass.apply_to_self(&mut subs);
         }
 
-        let roots = std::mem::take(&mut pass.ast.roots);
+        let roots = pass.ast.roots.clone();
 
         for root in roots.iter() {
             if !matches!(root, Node::Stmt(_)) {
@@ -222,29 +223,19 @@ impl<'a> InferencePass<'a> {
                 self.infer_type_annotation(annotation, level, wants)
             }
             ASTTyRepr::SelfType(name, _, _) => {
+                let Name::Resolved(Symbol::Type(type_id), _) = name else {
+                    panic!("didn't get type id");
+                };
                 // For self parameters in methods, look up the struct type from the environment
-                match name {
-                    Name::Resolved(Symbol::Type(type_id), _) => {
-                        // The struct type should be in the environment by now
-                        let entry = self.term_env.lookup(&Symbol::Type(*type_id)).cloned();
-                        match entry {
-                            Some(EnvEntry::Mono(ty)) => ty,
-                            Some(EnvEntry::Scheme(scheme)) => {
-                                // Instantiate if needed
-                                scheme
-                                    .instantiate(self, level, wants, Span { start: 0, end: 0 })
-                                    .0
-                            }
-                            None => {
-                                // Fallback - this shouldn't happen if define_type is set up correctly
-                                self.new_ty_meta_var(level)
-                            }
-                        }
-                    }
-                    _ => self.new_ty_meta_var(level), // Fallback for unresolved names
+                // The struct type should be in the environment by now
+                let entry = self.term_env.lookup(&Symbol::Type(*type_id)).cloned();
+                match entry {
+                    Some(EnvEntry::Mono(ty)) => ty,
+                    Some(EnvEntry::Scheme(scheme)) => scheme.ty.clone(),
+                    None => unreachable!("define_type didn't work"),
                 }
             }
-            ASTTyRepr::Hole(..) => self.new_ty_meta_var(level),
+            ASTTyRepr::Hole(..) => Ty::Param(self.session.vars.type_params.next_id()),
             ASTTyRepr::Generic(decl) => {
                 let ty = Ty::Param(self.session.vars.type_params.next_id());
                 self.term_env.promote(
@@ -304,7 +295,7 @@ impl<'a> InferencePass<'a> {
                 self.term_env
                     .promote(Symbol::Type(type_id), EnvEntry::Mono(struct_ty.clone()));
 
-                for (name, method) in methods.iter_mut() {
+                for method in methods.values_mut() {
                     let mut params = vec![];
                     for param in method.params.iter() {
                         let param_ty = self.infer_ast_ty_repr(param, level, wants);
@@ -312,12 +303,11 @@ impl<'a> InferencePass<'a> {
                     }
 
                     // Fill in holes with meta vars
-                    let ret = self.infer_ast_ty_repr(&method.ret, level, wants);
-                    let entry = self.generalize(Level(1), curry(params, ret), &[]);
+                    let ret = self.infer_ast_ty_repr(&method.ret, level.next(), wants);
+                    // Don't generalize yet - let the method body inference determine the actual return type
+                    let method_ty = curry(params, ret);
+                    let entry = EnvEntry::Mono(method_ty);
 
-                    // Register both as method and global symbol
-                    self.term_env
-                        .insert_method(type_id, name.clone(), entry.clone());
                     self.term_env.promote(method.symbol, entry);
                 }
 
@@ -342,18 +332,11 @@ impl<'a> InferencePass<'a> {
         let inner_level = group.level.next();
 
         for &binder in &group.binders {
-            println!("binder: {binder:?}");
             let symbol = Symbol::from(binder);
 
             if self.term_env.lookup(&symbol).is_none() {
-                println!("didn't get entry for {symbol:?}, adding a new one");
                 let ty = self.new_ty_meta_var(inner_level);
                 self.term_env.insert_mono(symbol, ty);
-            } else {
-                println!(
-                    "symbol already defined: {symbol:?}: {:?}",
-                    self.term_env.lookup(&symbol)
-                );
             }
         }
 
@@ -367,8 +350,9 @@ impl<'a> InferencePass<'a> {
             let got = self.infer_node(&rhs_expr, inner_level, &mut wants);
             self.types_by_node.insert(rhs_expr_id, got.clone());
 
-            let tv = match self.term_env.lookup(&symbol) {
+            let tv = match self.term_env.lookup(&symbol).cloned() {
                 Some(EnvEntry::Mono(t)) => t.clone(),
+                Some(EnvEntry::Scheme(scheme)) => scheme.ty,
                 _ => unreachable!("no env entry found for {symbol:?} {:#?}", self.term_env),
             };
 
@@ -409,7 +393,9 @@ impl<'a> InferencePass<'a> {
             } => match self.term_env.lookup(sym).unwrap().clone() {
                 EnvEntry::Mono(ty) => ty.clone(),
                 EnvEntry::Scheme(scheme) => {
-                    scheme.instantiate(self, level, wants, annotation.span).0
+                    scheme
+                        .inference_instantiate(self, level, wants, annotation.span)
+                        .0
                 }
             },
             TypeAnnotationKind::Record { fields } => {
@@ -554,6 +540,18 @@ impl<'a> InferencePass<'a> {
             .map(|c| c.apply(&mut substitutions))
             .collect();
 
+        #[cfg(debug_assertions)]
+        {
+            let snapshot = TypeSnapshot {
+                generation: self.snapshots.len() + 1,
+                ast: self.ast.clone(),
+                substitutions: substitutions.clone(),
+                types_by_node: self.types_by_node.clone(),
+            };
+
+            self.snapshots.push(snapshot);
+        }
+
         (substitutions, unsolved)
     }
 
@@ -615,7 +613,7 @@ impl<'a> InferencePass<'a> {
 
                 Ty::MetaVar { level, id } => {
                     if *level <= inner {
-                        tracing::trace!("discarding {m:?} due to level ({level:?} < {inner:?})");
+                        tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
                     }
 
@@ -705,7 +703,13 @@ impl<'a> InferencePass<'a> {
             DeclKind::Method { func, .. } => {
                 // Type the method body just like a regular function
                 // This ensures the body type is constrained to match the return type
-                self.infer_func(func, level, wants)
+                let Name::Resolved(func_sym, _) = func.name else {
+                    unreachable!("didn't get method name");
+                };
+
+                let ty = self.infer_func(func, level, wants);
+                self.term_env.promote(func_sym, EnvEntry::Mono(ty.clone()));
+                ty
             }
             _ => todo!("unhandled: {decl:?}"),
         }
@@ -883,7 +887,9 @@ impl<'a> InferencePass<'a> {
             ExprKind::Variable(Name::Resolved(sym, _)) => {
                 match self.term_env.lookup(sym).cloned() {
                     Some(EnvEntry::Scheme(scheme)) => {
-                        scheme.instantiate(self, level, wants, expr.span).0
+                        scheme
+                            .inference_instantiate(self, level, wants, expr.span)
+                            .0
                     } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
                     None => {
@@ -946,7 +952,9 @@ impl<'a> InferencePass<'a> {
 
                 let (ty, substitutions) = match &entry {
                     EnvEntry::Mono(ty) => (ty.clone(), Default::default()),
-                    EnvEntry::Scheme(scheme) => scheme.instantiate(self, level, wants, expr.span),
+                    EnvEntry::Scheme(scheme) => {
+                        scheme.inference_instantiate(self, level, wants, expr.span)
+                    }
                 };
 
                 let type_def = self

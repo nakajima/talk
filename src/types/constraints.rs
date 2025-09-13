@@ -5,6 +5,7 @@ use crate::{
     node_id::NodeID,
     span::Span,
     types::{
+        fields::TypeFields,
         passes::inference_pass::{InferencePass, Wants},
         row::Row,
         scheme::Predicate,
@@ -12,6 +13,7 @@ use crate::{
         ty::{Level, Ty},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, unify},
+        type_session::TypeDef,
     },
 };
 
@@ -129,15 +131,28 @@ impl Member {
 
         if let Ty::Struct(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver {
             // If it's a nominal type, check methods first
-            if let Some(entry) = pass
-                .term_env
-                .lookup_method(*type_id, self.label.clone())
-                .cloned()
+            if let Some(TypeDef {
+                fields: TypeFields::Struct { methods, .. },
+                ..
+            }) = pass.session.phase.type_constructors.get(type_id)
+                && let Some(method) = methods.get(&self.label)
             {
-                let method_ty = match entry {
+                let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
+                    panic!("did not find type for method named {:?}", self.label);
+                };
+
+                let method_ty = match &method_entry {
                     EnvEntry::Mono(ty) => ty.clone(),
                     EnvEntry::Scheme(scheme) => {
-                        scheme.instantiate(pass, Level(1), next_wants, self.span).0
+                        scheme
+                            .solver_instantiate(
+                                pass,
+                                Level(1),
+                                next_wants,
+                                self.span,
+                                substitutions,
+                            )
+                            .0
                     }
                 };
 

@@ -6,7 +6,6 @@ pub mod tests {
         annotation, any_block, any_decl, any_expr, any_expr_stmt, any_stmt, assert_eq_diff,
         ast::AST,
         diagnostic::{AnyDiagnostic, Diagnostic},
-        formatter::format,
         name::Name,
         name_resolution::{
             name_resolver::{NameResolved, NameResolver, NameResolverError},
@@ -78,7 +77,6 @@ pub mod tests {
 
     pub fn resolve(code: &'static str) -> AST<NameResolved> {
         let res = resolve_err(code);
-        println!("{}", format(&res, 80));
         assert!(
             res.diagnostics.is_empty(),
             "diagnostics not empty: {:?}",

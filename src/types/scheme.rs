@@ -4,10 +4,12 @@ use crate::{
     span::Span,
     types::{
         constraints::{Constraint, ConstraintCause, HasField, Member},
-        passes::inference_pass::{InferencePass, Wants},
+        passes::inference_pass::{InferencePass, Meta, Wants},
         row::{Row, RowParamId},
         ty::{Level, Ty, TypeParamId},
-        type_operations::{InstantiationSubstitutions, instantiate_row, instantiate_ty},
+        type_operations::{
+            InstantiationSubstitutions, UnificationSubstitutions, instantiate_row, instantiate_ty,
+        },
     },
 };
 
@@ -82,7 +84,7 @@ impl Scheme {
         }
     }
 
-    pub fn instantiate(
+    pub fn inference_instantiate(
         &self,
         pass: &mut InferencePass,
         level: Level,
@@ -106,6 +108,57 @@ impl Scheme {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
+                    substitutions.row.insert(*param, meta);
+                }
+            };
+        }
+
+        for predicate in &self.predicates {
+            let constraint = predicate.instantiate(&substitutions, span, level);
+            tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
+            wants.push(constraint);
+        }
+
+        (
+            instantiate_ty(self.ty.clone(), &substitutions, level),
+            substitutions,
+        )
+    }
+
+    // Used while solving
+    pub fn solver_instantiate(
+        &self,
+        pass: &mut InferencePass,
+        level: Level,
+        wants: &mut Wants,
+        span: Span,
+        unification_substitutions: &mut UnificationSubstitutions,
+    ) -> (Ty, InstantiationSubstitutions) {
+        // Map each quantified meta id to a fresh meta at this use-site level
+        let mut substitutions = InstantiationSubstitutions::default();
+
+        for forall in &self.foralls {
+            match forall {
+                ForAll::Ty(param) => {
+                    let Ty::MetaVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
+                        unreachable!()
+                    };
+                    tracing::trace!("instantiating {param:?} with {meta:?}");
+
+                    unification_substitutions
+                        .meta_levels
+                        .insert(Meta::Ty(meta), level);
+                    substitutions.ty.insert(*param, meta);
+                }
+                ForAll::Row(param) => {
+                    let Ty::Struct(_, box Row::Var(meta)) = pass.new_row_meta_var(level) else {
+                        unreachable!()
+                    };
+                    tracing::trace!("instantiating {param:?} with {meta:?}");
+
+                    unification_substitutions
+                        .meta_levels
+                        .insert(Meta::Row(meta), level);
                     substitutions.row.insert(*param, meta);
                 }
             };

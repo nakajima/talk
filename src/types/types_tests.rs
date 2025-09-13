@@ -943,8 +943,6 @@ pub mod tests {
         ",
         );
 
-        println!("{:?}", ast.diagnostics);
-
         assert_eq!(
             ast.diagnostics.len(),
             1,
@@ -1111,5 +1109,26 @@ pub mod tests {
         );
 
         assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    fn types_generic_struct_method() {
+        let (ast, session) = typecheck(
+            "
+        struct Wrapper<T> {
+            let wrapped: T
+
+            func getWrapped() {
+                self.wrapped
+            }
+        }
+
+        Wrapper(wrapped: 123).getWrapped()
+        Wrapper(wrapped: 1.23).getWrapped()
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+        assert_eq!(ty(2, &ast, &session), Ty::Float);
     }
 }

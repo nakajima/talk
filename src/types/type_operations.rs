@@ -21,7 +21,7 @@ pub struct UnificationSubstitutions {
     pub ty: FxHashMap<TyMetaId, Ty>,
     ty_dsu: DSU<TyMetaId>,
     row_dsu: DSU<RowMetaId>,
-    meta_levels: FxHashMap<Meta, Level>,
+    pub meta_levels: FxHashMap<Meta, Level>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -396,7 +396,12 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
                     level: *substitutions
                         .meta_levels
                         .get(&Meta::Ty(id))
-                        .expect("did not get level"),
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "did not get level for {id:?} {:?}",
+                                substitutions.meta_levels
+                            )
+                        }),
                 } // normalize id to the representative
             }
         }

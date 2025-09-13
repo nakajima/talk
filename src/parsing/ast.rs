@@ -86,7 +86,22 @@ impl ASTNodeFinder {
         }
     }
     fn enter_node(&mut self, node: &Node) {
-        self.check(node);
+        match node {
+            Node::Attribute(attribute) => self.check(attribute),
+            Node::Decl(decl) => self.check(decl),
+            Node::Func(func) => self.check(func),
+            Node::GenericDecl(generic_decl) => self.check(generic_decl),
+            Node::Parameter(parameter) => self.check(parameter),
+            Node::Stmt(stmt) => self.check(stmt),
+            Node::Expr(expr) => self.check(expr),
+            Node::Pattern(pattern) => self.check(pattern),
+            Node::MatchArm(match_arm) => self.check(match_arm),
+            Node::Block(block) => self.check(block),
+            Node::TypeAnnotation(type_annotation) => self.check(type_annotation),
+            Node::RecordField(record_field) => self.check(record_field),
+            Node::IncompleteExpr(incomplete_expr) => self.check(incomplete_expr),
+            Node::CallArg(call_arg) => self.check(call_arg),
+        }
     }
     fn enter_attribute(&mut self, node: &Attribute) {
         self.check(node);

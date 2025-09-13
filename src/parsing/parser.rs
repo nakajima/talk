@@ -1642,9 +1642,9 @@ impl<'a> Parser<'a> {
         self.previous.clone()
     }
 
-    #[instrument(skip(self, loc))]
     fn add_expr(&mut self, expr_kind: ExprKind, loc: LocToken) -> Result<Expr, ParserError> {
         let (id, span) = self.save_meta(loc)?;
+        tracing::trace!("add expr [{id}] {expr_kind:?}");
         Ok(Expr {
             id,
             span,
