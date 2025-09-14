@@ -5,6 +5,7 @@ use crate::{
     types::{
         ty::Ty,
         type_operations::{UnificationSubstitutions, apply, apply_row},
+        type_session::TypeDefKind,
     },
 };
 
@@ -35,7 +36,7 @@ pub type ClosedRow = BTreeMap<Label, Ty>;
 // TODO: Add Level to Var once we support open rows
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Row {
-    Empty,
+    Empty(TypeDefKind),
     Extend { row: Box<Row>, label: Label, ty: Ty },
     Param(RowParamId),
     Var(RowMetaId),
@@ -49,7 +50,7 @@ impl Row {
 
 fn close(row: &Row, mut closed_row: ClosedRow) -> ClosedRow {
     match row {
-        Row::Empty => closed_row,
+        Row::Empty(..) => closed_row,
         Row::Var(_) => panic!("Cannot close var"),
         Row::Param(_) => panic!("Cannot close param"),
         Row::Extend { row, label, ty } => {
@@ -82,7 +83,7 @@ pub fn normalize_row(
                 map.insert(label, apply(ty, subs));
                 row = *rest;
             }
-            Row::Empty => break (map, RowTail::Empty),
+            Row::Empty(..) => break (map, RowTail::Empty),
             Row::Var(id) => break (map, RowTail::Var(subs.canon_row(id))),
             Row::Param(id) => break (map, RowTail::Param(id)),
         }

@@ -60,12 +60,13 @@ pub enum Ty {
         ret: Box<Ty>,
     },
 
-    // TypeConstructor { name: Name, kind: TypeDefKind },
-    // TypeApplication(Box<Ty>, Box<Ty>),
     Func(Box<Ty>, Box<Ty>),
 
     Tuple(Vec<Ty>),
+
+    // Nominal types
     Struct(Option<Name>, Box<Row>),
+    Variant(Option<Name>, Box<Row>),
 }
 
 #[allow(non_upper_case_globals)]
@@ -85,8 +86,8 @@ impl Ty {
             Ty::Constructor { param, ret, .. } => param.contains_var() || ret.contains_var(),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            Ty::Struct(name, box row) => match row {
-                Row::Empty => false,
+            Ty::Struct(name, box row) | Ty::Variant(name, box row) => match row {
+                Row::Empty(..) => false,
                 Row::Extend { row, ty, .. } => {
                     Ty::Struct(name.clone(), row.clone()).contains_var() || ty.contains_var()
                 }
@@ -112,9 +113,9 @@ impl std::fmt::Debug for Ty {
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Struct(name, box row) => {
+            Ty::Struct(name, box row) | Ty::Variant(name, box row) => {
                 let row_debug = match row {
-                    Row::Empty => "".to_string(),
+                    Row::Empty(..) => "".to_string(),
                     Row::Param(id) => format!("rowparam(π{})", id.0),
                     Row::Extend { .. } => {
                         let closed = row.close();
@@ -129,7 +130,12 @@ impl std::fmt::Debug for Ty {
 
                 write!(
                     f,
-                    "struct{}{{{row_debug}}}",
+                    "{}{}{{{row_debug}}}",
+                    if matches!(self, Ty::Struct(..)) {
+                        "struct"
+                    } else {
+                        "enum"
+                    },
                     if let Some(name) = name {
                         format!(" {} ", name.name_str())
                     } else {

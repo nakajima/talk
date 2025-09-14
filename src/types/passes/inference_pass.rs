@@ -29,7 +29,7 @@ use crate::{
     span::Span,
     types::{
         constraints::{Constraint, ConstraintCause, Equals, HasField, Member},
-        fields::TypeFields,
+        fields::{TypeFields, Variant},
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
         scheme::{ForAll, Scheme},
@@ -39,7 +39,7 @@ use crate::{
         type_operations::{
             UnificationSubstitutions, apply, apply_row, instantiate_ty, substitute, unify,
         },
-        type_session::{ASTTyRepr, TypeSession, TypingPhase},
+        type_session::{ASTTyRepr, TypeDefKind, TypeSession, TypingPhase},
         type_snapshot::TypeSnapshot,
     },
 };
@@ -277,16 +277,17 @@ impl<'a> InferencePass<'a> {
                     .collect();
 
                 // Build the struct row first
-                let row = properties
-                    .iter()
-                    .fold(Row::Empty, |mut acc, (label, property)| {
+                let row = properties.iter().fold(
+                    Row::Empty(TypeDefKind::Struct),
+                    |mut acc, (label, property)| {
                         acc = Row::Extend {
                             row: Box::new(acc),
                             label: label.clone(),
                             ty: self.infer_ast_ty_repr(&property.ty_repr, level, wants),
                         };
                         acc
-                    });
+                    },
+                );
 
                 // Create the struct type
                 let struct_ty = Ty::Struct(Some(type_def.name.clone()), Box::new(row.clone()));
@@ -317,6 +318,65 @@ impl<'a> InferencePass<'a> {
                 self.term_env
                     .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
             }
+            TypeFields::Enum {
+                variants, methods, ..
+            } => {
+                // 1) Quantify generics
+                let foralls = type_def
+                    .generics
+                    .iter()
+                    .map(|(_, g)| {
+                        let Ty::Param(id) = self.infer_ast_ty_repr(g, level, wants) else {
+                            unreachable!()
+                        };
+                        ForAll::Ty(id)
+                    })
+                    .collect::<Vec<_>>();
+
+                // 2) Build closed variant row
+                //    Use Ty::Void for nullary cases; use Ty::Tuple for multi-field payloads.
+                let mut vrow = Row::Empty(TypeDefKind::Enum); // or Row::Empty if you reuse the container
+                for (case_name, Variant { fields, .. }) in variants.iter().rev() {
+                    vrow = Row::Extend {
+                        row: Box::new(vrow),
+                        label: case_name.clone(),
+                        ty: curry(
+                            fields
+                                .iter()
+                                .map(|f| self.infer_ast_ty_repr(f, level, wants))
+                                .collect::<Vec<Ty>>(),
+                            Ty::Variant(
+                                Some(type_def.name.clone()),
+                                Box::new(Row::Empty(TypeDefKind::Enum)),
+                            ),
+                        ),
+                    };
+                }
+
+                // 3) Build the enum type
+                let enum_ty = Ty::Variant(Some(type_def.name.clone()), Box::new(vrow));
+
+                // 4) Temporarily register the type so methods can reference it (optional)
+                self.term_env
+                    .promote(Symbol::Type(type_id), EnvEntry::Mono(enum_ty.clone()));
+
+                // 5) Lower methods under the enum (if any), same as struct methods
+                for method in methods.values_mut() {
+                    let mut params = vec![];
+                    for p in method.params.iter() {
+                        params.push(self.infer_ast_ty_repr(p, level, wants));
+                    }
+                    let ret = self.infer_ast_ty_repr(&method.ret, level.next(), wants);
+                    self.term_env
+                        .promote(method.symbol, EnvEntry::Mono(curry(params, ret)));
+                }
+
+                // 6) Finally promote the type name to a polymorphic scheme over generics
+                let scheme = Scheme::new(foralls, vec![], enum_ty);
+                self.term_env
+                    .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
+            }
+
             _ => unimplemented!(),
         }
 
@@ -399,7 +459,7 @@ impl<'a> InferencePass<'a> {
                 }
             },
             TypeAnnotationKind::Record { fields } => {
-                let mut row = Row::Empty;
+                let mut row = Row::Empty(TypeDefKind::Struct);
                 for field in fields.iter().rev() {
                     row = Row::Extend {
                         row: Box::new(row),
@@ -448,12 +508,16 @@ impl<'a> InferencePass<'a> {
                     Constraint::HasField(ref has_field) => {
                         let row = apply_row(has_field.row.clone(), &mut substitutions);
                         match row {
-                            Row::Empty => {
+                            Row::Empty(kind) => {
                                 self.ast.diagnostics.push(AnyDiagnostic::Typing(Diagnostic {
                                     path: self.ast.path.clone(),
                                     span: has_field.span,
                                     kind: TypeError::MemberNotFound(
-                                        Ty::Struct(None, Box::new(has_field.row.clone())),
+                                        if kind == TypeDefKind::Struct {
+                                            Ty::Struct(None, Box::new(has_field.row.clone()))
+                                        } else {
+                                            Ty::Variant(None, Box::new(has_field.row.clone()))
+                                        },
                                         has_field.label.to_string(),
                                     ),
                                 }));
@@ -549,6 +613,7 @@ impl<'a> InferencePass<'a> {
                 types_by_node: self.types_by_node.clone(),
             };
 
+            println!("{snapshot:?}");
             self.snapshots.push(snapshot);
         }
 
@@ -965,31 +1030,32 @@ impl<'a> InferencePass<'a> {
                     .cloned()
                     .expect("didn't get type def");
 
-                let TypeFields::Struct { initializers, .. } = &type_def.fields else {
-                    panic!("didn't get struct type def for constructor");
-                };
+                match &type_def.fields {
+                    TypeFields::Struct { initializers, .. } => {
+                        // TODO: handle multiple initializers
+                        let (_, initializer) = initializers.first().expect("no initializer found");
 
-                // TODO: handle multiple initializers
-                let (_, initializer) = initializers.first().expect("no initializer found");
+                        let params: Vec<Ty> = initializer
+                            .params
+                            .iter()
+                            .map(|p| self.infer_ast_ty_repr(p, level, wants))
+                            .collect();
 
-                let params: Vec<Ty> = initializer
-                    .params
-                    .iter()
-                    .map(|p| self.infer_ast_ty_repr(p, level, wants))
-                    .collect();
+                        // Apply the same substitutions to params that we applied to properties
+                        let ty = params.into_iter().collect::<Vec<_>>().into_iter().rfold(
+                            ty,
+                            |acc, p| Ty::Constructor {
+                                type_id: *id,
+                                param: Box::new(p),
+                                ret: Box::new(acc),
+                            },
+                        );
 
-                // Apply the same substitutions to params that we applied to properties
-                let ty = params
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rfold(ty, |acc, p| Ty::Constructor {
-                        type_id: *id,
-                        param: Box::new(p),
-                        ret: Box::new(acc),
-                    });
-
-                instantiate_ty(ty, &substitutions, level)
+                        instantiate_ty(ty, &substitutions, level)
+                    }
+                    TypeFields::Enum { .. } => ty,
+                    _ => todo!(),
+                }
             }
             ExprKind::RowVariable(..) => todo!(),
 
@@ -1078,7 +1144,7 @@ impl<'a> InferencePass<'a> {
         level: Level,
         wants: &mut Wants,
     ) -> Ty {
-        let mut row = Row::Empty;
+        let mut row = Row::Empty(TypeDefKind::Struct);
         for field in fields.iter().rev() {
             row = Row::Extend {
                 row: Box::new(row),
@@ -1178,7 +1244,13 @@ impl<'a> InferencePass<'a> {
             // For member calls with no arguments, the Member constraint already handled
             // the receiver application, so callee_ty might be the return type directly
             // rather than a function type
-            if matches!(callee, Expr { kind: ExprKind::Member(..), .. }) {
+            if matches!(
+                callee,
+                Expr {
+                    kind: ExprKind::Member(..),
+                    ..
+                }
+            ) {
                 // The member constraint returns the type after receiver application
                 // For zero-arg methods, this is just the return type
                 wants.equals(
@@ -1189,7 +1261,8 @@ impl<'a> InferencePass<'a> {
                 );
             } else {
                 // For non-member zero-arg calls: callee must be Unit -> returns
-                let expected = Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
+                let expected =
+                    Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
                 wants.equals(
                     callee_ty,
                     expected,
@@ -1371,8 +1444,8 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(item, out);
             }
         }
-        Ty::Struct(_, box row) => match row {
-            Row::Empty => (),
+        Ty::Struct(_, box row) | Ty::Variant(_, box row) => match row {
+            Row::Empty(..) => (),
             Row::Var(..) => {
                 out.insert(ty.clone());
             }

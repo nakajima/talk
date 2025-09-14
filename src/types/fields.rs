@@ -17,7 +17,7 @@ pub enum TypeFields<T> {
         associated_types: IndexMap<Name, Associated>,
     },
     Enum {
-        variants: IndexMap<Name, Variant<T>>,
+        variants: IndexMap<Label, Variant<T>>,
         methods: IndexMap<Label, Method<T>>,
     },
     Primitive,
@@ -50,6 +50,8 @@ pub struct Initializer<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Variant<T> {
+    pub symbol: Symbol,
+    pub tag: Label,
     pub fields: Vec<T>,
 }
 

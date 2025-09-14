@@ -11,6 +11,7 @@ use crate::{
         row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
         ty::{Level, Ty, TyMetaId, TypeParamId},
         type_error::TypeError,
+        type_session::TypeDefKind,
         vars::Vars,
     },
 };
@@ -71,7 +72,7 @@ impl UnificationSubstitutions {
 
 fn occurs_in_row(id: TyMetaId, row: &Row) -> bool {
     match row {
-        Row::Empty => false,
+        Row::Empty(..) => false,
         Row::Var(_) => false,
         Row::Param(_) => false,
         Row::Extend { row, ty, .. } => occurs_in(id, ty) || occurs_in_row(id, row),
@@ -85,6 +86,7 @@ fn occurs_in(id: TyMetaId, ty: &Ty) -> bool {
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         Ty::Struct(_, row) => occurs_in_row(id, row),
+        Ty::Variant(_, row) => occurs_in_row(id, row),
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
         Ty::Rigid(..) => false,
@@ -95,7 +97,7 @@ fn occurs_in(id: TyMetaId, ty: &Ty) -> bool {
 
 fn row_occurs(target: RowMetaId, row: &Row, subs: &mut UnificationSubstitutions) -> bool {
     match apply_row(row.clone(), subs) {
-        Row::Empty | Row::Param(_) => false,
+        Row::Empty(..) | Row::Param(_) => false,
         Row::Var(id) => subs.canon_row(id) == subs.canon_row(target),
         Row::Extend { row, ty, .. } => {
             row_occurs(target, &row, subs)
@@ -107,6 +109,7 @@ fn row_occurs(target: RowMetaId, row: &Row, subs: &mut UnificationSubstitutions)
 // Unify rows. Returns true if progress was made.
 #[instrument(level = tracing::Level::DEBUG)]
 fn unify_rows(
+    kind: TypeDefKind,
     lhs: &Row,
     rhs: &Row,
     subs: &mut UnificationSubstitutions,
@@ -122,7 +125,7 @@ fn unify_rows(
         (&lhs_fields, &lhs_tail, &rhs_fields, &rhs_tail)
     {
         tracing::debug!("unifying closed row with row var");
-        let mut acc = Row::Empty;
+        let mut acc = Row::Empty(kind);
         for (label, ty) in closed.iter().rev() {
             acc = Row::Extend {
                 row: Box::new(acc),
@@ -282,6 +285,12 @@ pub(super) fn unify(
             let ret = unify(constructor_ret, func_ret, substitutions, vars)?;
             Ok(param || ret)
         }
+        (Ty::Variant(_, variant_ty), Ty::Func(func_param, _))
+        | (Ty::Func(func_param, _), Ty::Variant(_, variant_ty)) => {
+            // unify_rows(TypeDefKind::Enum, &variant_ty, rhs, subs, vars)
+            println!("variant is {variant_ty:?}, func_param: {func_param:?}");
+            Ok(false)
+        }
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;
@@ -321,7 +330,7 @@ pub(super) fn unify(
             Ok(true)
         }
         (Ty::Struct(_, lhs_row), Ty::Struct(_, rhs_row)) => {
-            unify_rows(lhs_row, rhs_row, substitutions, vars)
+            unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, substitutions, vars)
         }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
         _ => Err(TypeError::InvalidUnification(lhs, rhs)),
@@ -331,7 +340,7 @@ pub(super) fn unify(
 #[instrument(ret)]
 pub(super) fn substitute_row(row: Row, substitutions: &FxHashMap<Ty, Ty>) -> Row {
     match row {
-        Row::Empty => row,
+        Row::Empty(..) => row,
         Row::Var(..) => row,
         Row::Param(..) => row,
         Row::Extend { row, label, ty } => Row::Extend {
@@ -373,12 +382,13 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
         ),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(substitute_row(*row, substitutions))),
+        Ty::Variant(name, row) => Ty::Variant(name, Box::new(substitute_row(*row, substitutions))),
     }
 }
 
 pub(super) fn apply_row(row: Row, substitutions: &mut UnificationSubstitutions) -> Row {
     match row {
-        Row::Empty => Row::Empty,
+        Row::Empty(kind) => Row::Empty(kind),
         Row::Var(id) => {
             let rep = substitutions.canon_row(id);
             if let Some(bound) = substitutions.row.get(&rep).cloned() {
@@ -436,6 +446,7 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(apply_row(*row, substitutions))),
+        Ty::Variant(name, row) => Ty::Variant(name, Box::new(apply_row(*row, substitutions))),
     }
 }
 
@@ -446,7 +457,7 @@ pub(super) fn instantiate_row(
     level: Level,
 ) -> Row {
     match row {
-        Row::Empty => row,
+        Row::Empty(..) => row,
         Row::Var(..) => row,
         Row::Param(id) => {
             if let Some(row_meta) = substitutions.row.get(&id) {
@@ -463,12 +474,18 @@ pub(super) fn instantiate_row(
     }
 }
 
-#[instrument(level = tracing::Level::TRACE, ret)]
 pub(super) fn instantiate_ty(
     ty: Ty,
     substitutions: &InstantiationSubstitutions,
     level: Level,
 ) -> Ty {
+    if substitutions.row.is_empty() && substitutions.ty.is_empty() {
+        return ty;
+    }
+
+    let _s =
+        tracing::trace_span!("instantiate_ty ty={ty:?} subs={substitutions:?} level={level:?}")
+            .entered();
     match ty {
         Ty::Param(param) => {
             if let Some(meta) = substitutions.ty.get(&param) {
@@ -502,6 +519,9 @@ pub(super) fn instantiate_ty(
         ),
         Ty::Struct(name, row) => {
             Ty::Struct(name, Box::new(instantiate_row(*row, substitutions, level)))
+        }
+        Ty::Variant(name, row) => {
+            Ty::Variant(name, Box::new(instantiate_row(*row, substitutions, level)))
         }
     }
 }

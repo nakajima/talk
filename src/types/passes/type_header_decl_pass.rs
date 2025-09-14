@@ -139,7 +139,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
         let mut properties: IndexMap<Label, Property<ASTTyRepr>> = Default::default();
         let mut methods: IndexMap<Label, Method<ASTTyRepr>> = Default::default();
         let mut initializers: IndexMap<Name, Initializer<ASTTyRepr>> = Default::default();
-        let mut variants: IndexMap<Name, Variant<ASTTyRepr>> = Default::default();
+        let mut variants: IndexMap<Label, Variant<ASTTyRepr>> = Default::default();
         let mut associated_types: IndexMap<Name, Associated> = Default::default();
         let mut method_requirements: IndexMap<Name, MethodRequirement<ASTTyRepr>> =
             Default::default();
@@ -178,8 +178,10 @@ impl<'a> TypeHeaderDeclPass<'a> {
                 }
                 DeclKind::EnumVariant(variant_name, values) => {
                     variants.insert(
-                        variant_name.clone(),
+                        variant_name.name_str().into(),
                         Variant {
+                            tag: variant_name.name_str().into(),
+                            symbol: variant_name.symbol().expect("did not resolve variant name"),
                             fields: values
                                 .iter()
                                 .map(|type_annotation| {
@@ -523,7 +525,9 @@ pub mod tests {
                 generics: Default::default(),
                 fields: TypeFields::Enum {
                     variants: crate::indexmap!(
-                        Name::Resolved(Symbol::Type(TypeId(2)), "foo".into()) => Variant {
+                        "foo".into() => Variant {
+                            symbol: Symbol::Type(TypeId(2)),
+                            tag: "foo".into(),
                             fields: vec![ASTTyRepr::Annotated(annotation!(
                                 TypeAnnotationKind::Nominal {
                                     name: Name::Resolved(Symbol::Int, "Int".into()),
@@ -531,7 +535,7 @@ pub mod tests {
                                 }
                             ))]
                         },
-                        Name::Resolved(Symbol::Type(TypeId(3)), "bar".into()) =>  Variant { fields: vec![] }
+                        "bar".into() =>  Variant { symbol: Symbol::Type(TypeId(3)), tag: "bar".into(), fields: vec![] }
                     ),
                     methods: Default::default()
                 }

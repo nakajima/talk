@@ -188,6 +188,7 @@ impl Member {
                 && let Some(method) = methods.get(&self.label)
                 && method.is_static
             {
+                println!("constructor static check: {:?}", self.label);
                 let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
                     panic!("did not find type for method named {:?}", self.label);
                 };
@@ -213,12 +214,51 @@ impl Member {
 
                 return unify(&ty, &rest, substitutions, &mut pass.session.vars);
             }
+
+            // See if it's an enum constructor
+            if let Some(TypeDef {
+                fields: TypeFields::Enum { variants, .. },
+                ..
+            }) = pass.session.phase.type_constructors.get(type_id)
+                && let Some(variant) = variants.get(&self.label).cloned()
+            {
+                let variant_entry = pass
+                    .term_env
+                    .lookup(&variant.symbol)
+                    .cloned()
+                    .expect("did not get entry for variant");
+                println!(
+                    "enum constructor check: {:?}, {variant_entry:?}",
+                    self.label
+                );
+
+                let variant_ty = match &variant_entry {
+                    EnvEntry::Mono(ty) => ty.clone(),
+                    EnvEntry::Scheme(scheme) => {
+                        scheme
+                            .solver_instantiate(
+                                pass,
+                                Level(1),
+                                next_wants,
+                                self.span,
+                                substitutions,
+                            )
+                            .0
+                    }
+                };
+
+                return unify(&self.ty, &variant_ty, substitutions, &mut pass.session.vars);
+            }
         }
 
+        println!("got past those?");
+
         // If it's not a method, figure out the row and emit a has field constraint
-        let Ty::Struct(_, row) = receiver else {
+        let (Ty::Struct(_, row) | Ty::Variant(_, row)) = receiver else {
             return Err(TypeError::ExpectedRow(receiver));
         };
+
+        println!("got row: {:?} {row:?}", self.label);
 
         next_wants._has_field(
             *row,

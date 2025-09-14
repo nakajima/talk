@@ -4,15 +4,16 @@ pub mod tests {
         ast::AST,
         diagnostic::Diagnostic,
         name::Name,
-        name_resolution::name_resolver::NameResolved,
+        name_resolution::{name_resolver::NameResolved, symbol::TypeId},
         types::{
             passes::{
                 dependencies_pass::tests::resolve_dependencies,
                 inference_pass::{InferencePass, Inferenced},
             },
+            row::Row,
             ty::Ty,
             type_error::TypeError,
-            type_session::TypeSession,
+            type_session::{TypeDefKind, TypeSession},
         },
     };
 
@@ -1201,5 +1202,63 @@ pub mod tests {
 
         assert_eq!(ty(6, &ast, &session), Ty::Bool);
         assert_eq!(ty(7, &ast, &session), Ty::Bool);
+    }
+
+    #[test]
+    fn types_simple_enum_constructor() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz {
+                case foo, bar
+            }
+
+            Fizz.foo
+            Fizz.bar
+        ",
+        );
+
+        assert_eq!(
+            ty(1, &ast, &session),
+            Ty::Variant(
+                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
+                Box::new(Row::Empty(TypeDefKind::Enum))
+            )
+        );
+        assert_eq!(
+            ty(2, &ast, &session),
+            Ty::Variant(
+                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
+                Box::new(Row::Empty(TypeDefKind::Enum))
+            )
+        );
+    }
+
+    #[test]
+    fn types_enum_constructor_with_values() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz {
+                case foo(Int, Bool), bar(Float)
+            }
+
+            Fizz.foo(123, true)
+            Fizz.bar(1.23)
+        ",
+        );
+
+        assert_eq!(
+            ty(1, &ast, &session),
+            Ty::Variant(
+                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
+                Box::new(Row::Empty(TypeDefKind::Enum))
+            )
+        );
+        assert_eq!(
+            ty(2, &ast, &session),
+            Ty::Variant(
+                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
+                Box::new(Row::Empty(TypeDefKind::Enum))
+            )
+        );
     }
 }
