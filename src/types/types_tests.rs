@@ -1195,9 +1195,11 @@ pub mod tests {
         let outer = Outer(outer: middle)
 
         outer.outer.middle.inner
+        inner.inner
         ",
         );
 
         assert_eq!(ty(6, &ast, &session), Ty::Bool);
+        assert_eq!(ty(7, &ast, &session), Ty::Bool);
     }
 }
