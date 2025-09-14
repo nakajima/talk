@@ -106,7 +106,6 @@ impl Member {
                 && let Some(method) = methods.get(&self.label)
                 && method.is_static
             {
-                println!("constructor static check: {:?}", self.label);
                 let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
                     panic!("did not find type for method named {:?}", self.label);
                 };
@@ -130,14 +129,10 @@ impl Member {
             }
         }
 
-        println!("got past those?");
-
         // If it's not a method, figure out the row and emit a has field constraint
         let (Ty::Struct(_, row) | Ty::Sum(_, row)) = receiver else {
             return Err(TypeError::ExpectedRow(receiver));
         };
-
-        println!("got row: {:?} {row:?}", self.label);
 
         next_wants._has_field(
             *row,

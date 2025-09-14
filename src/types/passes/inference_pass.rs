@@ -608,7 +608,7 @@ impl<'a> InferencePass<'a> {
                 types_by_node: self.types_by_node.clone(),
             };
 
-            println!("{snapshot:?}");
+            tracing::trace!("{snapshot:?}");
             self.snapshots.push(snapshot);
         }
 
@@ -1115,8 +1115,6 @@ impl<'a> InferencePass<'a> {
             todo!("unqualified members not supported yet");
         };
 
-        println!("receiver_ty: {receiver_ty:?}");
-
         let member_ty = self.new_ty_meta_var(level);
 
         wants.member(
@@ -1199,8 +1197,6 @@ impl<'a> InferencePass<'a> {
         } else {
             self.infer_expr(callee, level, wants)
         };
-
-        println!("callee_ty: {callee_ty:?}");
 
         let mut arg_tys = Vec::with_capacity(args.len() + 1);
 

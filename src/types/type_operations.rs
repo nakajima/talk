@@ -286,12 +286,6 @@ pub(super) fn unify(
             let ret = unify(constructor_ret, func_ret, substitutions, vars)?;
             Ok(param || ret)
         }
-        (Ty::Variant(_, variant_ty), Ty::Func(func_param, _))
-        | (Ty::Func(func_param, _), Ty::Variant(_, variant_ty)) => {
-            // unify_rows(TypeDefKind::Enum, &variant_ty, rhs, subs, vars)
-            println!("variant is {variant_ty:?}, func_param: {func_param:?}");
-            Ok(false)
-        }
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;
