@@ -9,6 +9,7 @@ pub enum TypeError {
     GenericArgCount { expected: u8, actual: u8 },
     InvalidUnification(Ty, Ty),
     OccursCheck(Ty),
+    CalleeNotCallable(Ty),
     MemberNotFound(Ty, String),
 }
 
@@ -32,6 +33,7 @@ impl Display for TypeError {
             Self::MemberNotFound(ty, name) => {
                 write!(f, "{ty:?} has no member: {name}")
             }
+            Self::CalleeNotCallable(ty) => write!(f, "Callee not callable: {ty:?}"),
         }
     }
 }

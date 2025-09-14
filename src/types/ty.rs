@@ -1,12 +1,14 @@
 use itertools::Itertools;
 
-use crate::{name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::row::Row};
+use crate::{
+    label::Label, name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::row::Row,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub struct TyMetaId(u32);
-impl From<u32> for TyMetaId {
+pub struct UnificationVarId(u32);
+impl From<u32> for UnificationVarId {
     fn from(value: u32) -> Self {
-        TyMetaId(value)
+        UnificationVarId(value)
     }
 }
 
@@ -49,8 +51,8 @@ pub enum Ty {
 
     Param(TypeParamId),
     Rigid(SkolemId),
-    MetaVar {
-        id: TyMetaId,
+    UnificationVar {
+        id: UnificationVarId,
         level: Level,
     },
 
@@ -66,7 +68,8 @@ pub enum Ty {
 
     // Nominal types
     Struct(Option<Name>, Box<Row>),
-    Variant(Option<Name>, Box<Row>),
+    Sum(Option<Name>, Box<Row>), // Row for variants
+    Variant(Label, Box<Ty>),     // Attached value can be either Record or Tuple
 }
 
 #[allow(non_upper_case_globals)]
@@ -81,12 +84,21 @@ impl Ty {
             Ty::Hole(..) => false,
             Ty::Param(..) => false,
             Ty::Rigid(..) => false,
-            Ty::MetaVar { .. } => true,
+            Ty::UnificationVar { .. } => true,
             Ty::Primitive(..) => false,
             Ty::Constructor { param, ret, .. } => param.contains_var() || ret.contains_var(),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
-            Ty::Struct(name, box row) | Ty::Variant(name, box row) => match row {
+            Ty::Sum(name, box variants) => match variants {
+                Row::Empty(..) => false,
+                Row::Extend { row, ty, .. } => {
+                    Ty::Struct(name.clone(), row.clone()).contains_var() || ty.contains_var()
+                }
+                Row::Param(..) => false,
+                Row::Var(_) => true,
+            },
+            Ty::Variant(_, ty) => ty.contains_var(),
+            Ty::Struct(name, box row) => match row {
                 Row::Empty(..) => false,
                 Row::Extend { row, ty, .. } => {
                     Ty::Struct(name.clone(), row.clone()).contains_var() || ty.contains_var()
@@ -104,7 +116,7 @@ impl std::fmt::Debug for Ty {
             Ty::Hole(..) => write!(f, "Hole"),
             Ty::Param(id) => write!(f, "typeparam(α{})", id.0),
             Ty::Rigid(id) => write!(f, "rigid(α{})", id.0),
-            Ty::MetaVar { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
+            Ty::UnificationVar { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             Ty::Primitive(primitive) => write!(f, "{primitive:?}"),
             Ty::Constructor { param, ret, .. } => {
                 write!(f, "Constructor({param:?}) -> {ret:?}")
@@ -113,7 +125,10 @@ impl std::fmt::Debug for Ty {
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Struct(name, box row) | Ty::Variant(name, box row) => {
+            Ty::Variant(name, ty) => {
+                write!(f, "enum {name:?}({ty:?})")
+            }
+            Ty::Struct(name, box row) | Ty::Sum(name, box row) => {
                 let row_debug = match row {
                     Row::Empty(..) => "".to_string(),
                     Row::Param(id) => format!("rowparam(π{})", id.0),

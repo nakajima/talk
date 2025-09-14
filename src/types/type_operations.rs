@@ -9,7 +9,7 @@ use crate::{
         dsu::DSU,
         passes::inference_pass::Meta,
         row::{Row, RowMetaId, RowParamId, RowTail, normalize_row},
-        ty::{Level, Ty, TyMetaId, TypeParamId},
+        ty::{Level, Ty, TypeParamId, UnificationVarId},
         type_error::TypeError,
         type_session::TypeDefKind,
         vars::Vars,
@@ -19,8 +19,8 @@ use crate::{
 #[derive(Clone)]
 pub struct UnificationSubstitutions {
     pub row: FxHashMap<RowMetaId, Row>,
-    pub ty: FxHashMap<TyMetaId, Ty>,
-    ty_dsu: DSU<TyMetaId>,
+    pub ty: FxHashMap<UnificationVarId, Ty>,
+    ty_dsu: DSU<UnificationVarId>,
     row_dsu: DSU<RowMetaId>,
     pub meta_levels: FxHashMap<Meta, Level>,
 }
@@ -28,7 +28,7 @@ pub struct UnificationSubstitutions {
 #[derive(Clone, Debug, Default)]
 pub struct InstantiationSubstitutions {
     pub row: FxHashMap<RowParamId, RowMetaId>,
-    pub ty: FxHashMap<TypeParamId, TyMetaId>,
+    pub ty: FxHashMap<TypeParamId, UnificationVarId>,
 }
 
 impl std::fmt::Debug for UnificationSubstitutions {
@@ -53,7 +53,7 @@ impl UnificationSubstitutions {
     }
 
     #[inline]
-    pub fn canon_meta(&mut self, id: TyMetaId) -> TyMetaId {
+    pub fn canon_meta(&mut self, id: UnificationVarId) -> UnificationVarId {
         self.ty_dsu.find(id)
     }
     #[inline]
@@ -61,7 +61,7 @@ impl UnificationSubstitutions {
         self.row_dsu.find(id)
     }
     #[inline]
-    pub fn link_meta(&mut self, a: TyMetaId, b: TyMetaId) -> TyMetaId {
+    pub fn link_meta(&mut self, a: UnificationVarId, b: UnificationVarId) -> UnificationVarId {
         self.ty_dsu.union(a, b)
     }
     #[inline]
@@ -70,7 +70,7 @@ impl UnificationSubstitutions {
     }
 }
 
-fn occurs_in_row(id: TyMetaId, row: &Row) -> bool {
+fn occurs_in_row(id: UnificationVarId, row: &Row) -> bool {
     match row {
         Row::Empty(..) => false,
         Row::Var(_) => false,
@@ -80,13 +80,14 @@ fn occurs_in_row(id: TyMetaId, row: &Row) -> bool {
 }
 
 // Helper: occurs check
-fn occurs_in(id: TyMetaId, ty: &Ty) -> bool {
+fn occurs_in(id: UnificationVarId, ty: &Ty) -> bool {
     match ty {
-        Ty::MetaVar { id: mid, .. } => *mid == id,
+        Ty::UnificationVar { id: mid, .. } => *mid == id,
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         Ty::Struct(_, row) => occurs_in_row(id, row),
-        Ty::Variant(_, row) => occurs_in_row(id, row),
+        Ty::Sum(_, row) => occurs_in_row(id, row),
+        Ty::Variant(_, ty) => occurs_in(id, ty),
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
         Ty::Rigid(..) => false,
@@ -237,7 +238,7 @@ fn unify_rows(
 }
 
 // Unify types. Returns true if progress was made.
-#[instrument(level = tracing::Level::TRACE)]
+#[instrument(level = tracing::Level::DEBUG)]
 pub(super) fn unify(
     lhs: &Ty,
     rhs: &Ty,
@@ -297,11 +298,11 @@ pub(super) fn unify(
             Ok(param || ret)
         }
         (
-            Ty::MetaVar {
+            Ty::UnificationVar {
                 id: lhs_id,
                 level: _,
             },
-            Ty::MetaVar {
+            Ty::UnificationVar {
                 id: rhs_id,
                 level: _,
             },
@@ -320,7 +321,7 @@ pub(super) fn unify(
                 Ok(false)
             }
         }
-        (ty, Ty::MetaVar { id, .. }) | (Ty::MetaVar { id, .. }, ty) => {
+        (ty, Ty::UnificationVar { id, .. }) | (Ty::UnificationVar { id, .. }, ty) => {
             if occurs_in(*id, ty) {
                 return Err(TypeError::OccursCheck(ty.clone())); // or your preferred variant
             }
@@ -360,7 +361,7 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
         Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
-        Ty::MetaVar { .. } => ty,
+        Ty::UnificationVar { .. } => ty,
         Ty::Primitive(..) => ty,
         Ty::Constructor {
             type_id,
@@ -382,7 +383,8 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
         ),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(substitute_row(*row, substitutions))),
-        Ty::Variant(name, row) => Ty::Variant(name, Box::new(substitute_row(*row, substitutions))),
+        Ty::Sum(name, row) => Ty::Sum(name, Box::new(substitute_row(*row, substitutions))),
+        Ty::Variant(label, ty) => Ty::Variant(label, Box::new(substitute(*ty, substitutions))),
     }
 }
 
@@ -411,12 +413,12 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         Ty::Param(..) => ty,
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
-        Ty::MetaVar { id, .. } => {
+        Ty::UnificationVar { id, .. } => {
             let rep = substitutions.canon_meta(id);
             if let Some(bound) = substitutions.ty.get(&rep).cloned() {
                 apply(bound, substitutions) // keep collapsing
             } else {
-                Ty::MetaVar {
+                Ty::UnificationVar {
                     id: rep,
                     level: *substitutions
                         .meta_levels
@@ -446,8 +448,13 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(apply_row(*row, substitutions))),
-        Ty::Variant(name, row) => Ty::Variant(name, Box::new(apply_row(*row, substitutions))),
+        Ty::Sum(name, row) => Ty::Sum(name, Box::new(apply_row(*row, substitutions))),
+        Ty::Variant(label, ty) => Ty::Variant(label, Box::new(apply(*ty, substitutions))),
     }
+}
+
+pub fn apply_mult(tys: Vec<Ty>, substitutions: &mut UnificationSubstitutions) -> Vec<Ty> {
+    tys.into_iter().map(|ty| apply(ty, substitutions)).collect()
 }
 
 #[instrument(level = tracing::Level::TRACE, ret)]
@@ -489,14 +496,14 @@ pub(super) fn instantiate_ty(
     match ty {
         Ty::Param(param) => {
             if let Some(meta) = substitutions.ty.get(&param) {
-                Ty::MetaVar { id: *meta, level }
+                Ty::UnificationVar { id: *meta, level }
             } else {
                 ty
             }
         }
         Ty::Hole(..) => ty,
         Ty::Rigid(..) => ty,
-        Ty::MetaVar { .. } => ty,
+        Ty::UnificationVar { .. } => ty,
         Ty::Primitive(..) => ty,
         Ty::Constructor {
             type_id,
@@ -520,8 +527,9 @@ pub(super) fn instantiate_ty(
         Ty::Struct(name, row) => {
             Ty::Struct(name, Box::new(instantiate_row(*row, substitutions, level)))
         }
-        Ty::Variant(name, row) => {
-            Ty::Variant(name, Box::new(instantiate_row(*row, substitutions, level)))
+        Ty::Sum(name, row) => Ty::Sum(name, Box::new(instantiate_row(*row, substitutions, level))),
+        Ty::Variant(label, ty) => {
+            Ty::Variant(label, Box::new(instantiate_ty(*ty, substitutions, level)))
         }
     }
 }

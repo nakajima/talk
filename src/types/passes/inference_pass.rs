@@ -28,13 +28,14 @@ use crate::{
     },
     span::Span,
     types::{
-        constraints::{Constraint, ConstraintCause, Equals, HasField, Member},
-        fields::{TypeFields, Variant},
+        constraint::{Constraint, ConstraintCause, Equals, HasField},
+        constraints::{call::Call, member::Member},
+        fields::TypeFields,
         passes::dependencies_pass::{Binder, SCCResolved},
         row::{Row, RowMetaId},
         scheme::{ForAll, Scheme},
         term_environment::{EnvEntry, TermEnv},
-        ty::{Level, Ty, TyMetaId},
+        ty::{Level, Ty, UnificationVarId},
         type_error::TypeError,
         type_operations::{
             UnificationSubstitutions, apply, apply_row, instantiate_ty, substitute, unify,
@@ -55,13 +56,13 @@ impl TypingPhase for Inferenced {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Meta {
-    Ty(TyMetaId),
+    Ty(UnificationVarId),
     Row(RowMetaId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MetaTag {
-    pub id: TyMetaId,
+    pub id: UnificationVarId,
     pub level: Level,
 }
 
@@ -94,6 +95,26 @@ impl Wants {
     pub fn push(&mut self, constraint: Constraint) {
         tracing::debug!("constraining {constraint:?}");
         self.0.push(constraint)
+    }
+
+    pub fn call(
+        &mut self,
+        callee: Ty,
+        args: Vec<Ty>,
+        returns: Ty,
+        receiver: Option<Ty>,
+        cause: ConstraintCause,
+        span: Span,
+    ) {
+        tracing::debug!("constraining call {callee:?}({args:?}) = {returns:?}");
+        self.0.push(Constraint::Call(Call {
+            callee,
+            args,
+            returns,
+            receiver,
+            cause,
+            span,
+        }))
     }
 
     pub fn equals(&mut self, lhs: Ty, rhs: Ty, cause: ConstraintCause, span: Span) {
@@ -258,24 +279,24 @@ impl<'a> InferencePass<'a> {
             .remove(&type_id)
             .expect("didn't find type for type id");
 
-        match &mut type_def.fields {
+        let foralls = type_def
+            .generics
+            .iter()
+            .map(|(_, g)| {
+                let Ty::Param(id) = self.infer_ast_ty_repr(g, level, wants) else {
+                    unreachable!();
+                };
+
+                ForAll::Ty(id)
+            })
+            .collect();
+
+        let methods = match &mut type_def.fields {
             TypeFields::Struct {
                 properties,
                 methods,
                 ..
             } => {
-                let foralls = type_def
-                    .generics
-                    .iter()
-                    .map(|(_, g)| {
-                        let Ty::Param(id) = self.infer_ast_ty_repr(g, level, wants) else {
-                            unreachable!();
-                        };
-
-                        ForAll::Ty(id)
-                    })
-                    .collect();
-
                 // Build the struct row first
                 let row = properties.iter().fold(
                     Row::Empty(TypeDefKind::Struct),
@@ -289,95 +310,66 @@ impl<'a> InferencePass<'a> {
                     },
                 );
 
-                // Create the struct type
                 let struct_ty = Ty::Struct(Some(type_def.name.clone()), Box::new(row.clone()));
-
-                // Temporarily register the struct type so methods can reference it
-                self.term_env
-                    .promote(Symbol::Type(type_id), EnvEntry::Mono(struct_ty.clone()));
-
-                for method in methods.values_mut() {
-                    let mut params = vec![];
-                    for param in method.params.iter() {
-                        let param_ty = self.infer_ast_ty_repr(param, level, wants);
-                        params.push(param_ty)
-                    }
-
-                    // Fill in holes with meta vars
-                    let ret = self.infer_ast_ty_repr(&method.ret, level.next(), wants);
-                    // Don't generalize yet - let the method body inference determine the actual return type
-                    let method_ty = curry(params, ret);
-                    let entry = EnvEntry::Mono(method_ty);
-
-                    self.term_env.promote(method.symbol, entry);
-                }
-
-                // Now create the final scheme and re-promote it
                 let scheme = Scheme::new(foralls, vec![], struct_ty);
-
                 self.term_env
                     .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
+
+                methods
             }
             TypeFields::Enum {
                 variants, methods, ..
             } => {
-                // 1) Quantify generics
-                let foralls = type_def
-                    .generics
-                    .iter()
-                    .map(|(_, g)| {
-                        let Ty::Param(id) = self.infer_ast_ty_repr(g, level, wants) else {
-                            unreachable!()
+                // Build the variants row
+                let row = variants.iter().fold(
+                    Row::Empty(TypeDefKind::Enum),
+                    |mut acc, (label, variant)| {
+                        let ty = if variant.fields.is_empty() {
+                            Ty::Void
+                        } else {
+                            Ty::Tuple(
+                                variant
+                                    .fields
+                                    .iter()
+                                    .map(|f| self.infer_ast_ty_repr(f, level, wants))
+                                    .collect(),
+                            )
                         };
-                        ForAll::Ty(id)
-                    })
-                    .collect::<Vec<_>>();
 
-                // 2) Build closed variant row
-                //    Use Ty::Void for nullary cases; use Ty::Tuple for multi-field payloads.
-                let mut vrow = Row::Empty(TypeDefKind::Enum); // or Row::Empty if you reuse the container
-                for (case_name, Variant { fields, .. }) in variants.iter().rev() {
-                    vrow = Row::Extend {
-                        row: Box::new(vrow),
-                        label: case_name.clone(),
-                        ty: curry(
-                            fields
-                                .iter()
-                                .map(|f| self.infer_ast_ty_repr(f, level, wants))
-                                .collect::<Vec<Ty>>(),
-                            Ty::Variant(
-                                Some(type_def.name.clone()),
-                                Box::new(Row::Empty(TypeDefKind::Enum)),
-                            ),
-                        ),
-                    };
-                }
+                        acc = Row::Extend {
+                            row: Box::new(acc),
+                            label: label.clone(),
+                            ty: Ty::Variant(label.clone(), Box::new(ty)),
+                        };
+                        acc
+                    },
+                );
 
-                // 3) Build the enum type
-                let enum_ty = Ty::Variant(Some(type_def.name.clone()), Box::new(vrow));
-
-                // 4) Temporarily register the type so methods can reference it (optional)
-                self.term_env
-                    .promote(Symbol::Type(type_id), EnvEntry::Mono(enum_ty.clone()));
-
-                // 5) Lower methods under the enum (if any), same as struct methods
-                for method in methods.values_mut() {
-                    let mut params = vec![];
-                    for p in method.params.iter() {
-                        params.push(self.infer_ast_ty_repr(p, level, wants));
-                    }
-                    let ret = self.infer_ast_ty_repr(&method.ret, level.next(), wants);
-                    self.term_env
-                        .promote(method.symbol, EnvEntry::Mono(curry(params, ret)));
-                }
-
-                // 6) Finally promote the type name to a polymorphic scheme over generics
-                let scheme = Scheme::new(foralls, vec![], enum_ty);
+                let sum_ty = Ty::Sum(Some(type_def.name.clone()), Box::new(row.clone()));
+                let scheme = Scheme::new(foralls, vec![], sum_ty);
                 self.term_env
                     .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
+
+                methods
             }
 
             _ => unimplemented!(),
+        };
+
+        for method in methods.values_mut() {
+            let mut params = vec![];
+            for param in method.params.iter() {
+                let param_ty = self.infer_ast_ty_repr(param, level, wants);
+                params.push(param_ty)
+            }
+
+            // Fill in holes with meta vars
+            let ret = self.infer_ast_ty_repr(&method.ret, level.next(), wants);
+            // Don't generalize yet - let the method body inference determine the actual return type
+            let method_ty = curry(params, ret);
+            let entry = EnvEntry::Mono(method_ty);
+
+            self.term_env.promote(method.symbol, entry);
         }
 
         self.session
@@ -502,6 +494,9 @@ impl<'a> InferencePass<'a> {
                         &mut substitutions,
                         &mut self.session.vars,
                     ),
+                    Constraint::Call(ref call) => {
+                        call.solve(self, &mut next_wants, &mut substitutions)
+                    }
                     Constraint::Member(ref member) => {
                         member.solve(self, &mut next_wants, &mut substitutions)
                     }
@@ -516,7 +511,7 @@ impl<'a> InferencePass<'a> {
                                         if kind == TypeDefKind::Struct {
                                             Ty::Struct(None, Box::new(has_field.row.clone()))
                                         } else {
-                                            Ty::Variant(None, Box::new(has_field.row.clone()))
+                                            Ty::Sum(None, Box::new(has_field.row.clone()))
                                         },
                                         has_field.label.to_string(),
                                     ),
@@ -676,7 +671,7 @@ impl<'a> InferencePass<'a> {
                     }
                 }
 
-                Ty::MetaVar { level, id } => {
+                Ty::UnificationVar { level, id } => {
                     if *level <= inner {
                         tracing::warn!("discarding {m:?} due to level ({level:?} < {inner:?})");
                         continue;
@@ -1120,6 +1115,8 @@ impl<'a> InferencePass<'a> {
             todo!("unqualified members not supported yet");
         };
 
+        println!("receiver_ty: {receiver_ty:?}");
+
         let member_ty = self.new_ty_meta_var(level);
 
         wants.member(
@@ -1203,79 +1200,73 @@ impl<'a> InferencePass<'a> {
             self.infer_expr(callee, level, wants)
         };
 
+        println!("callee_ty: {callee_ty:?}");
+
         let mut arg_tys = Vec::with_capacity(args.len() + 1);
 
-        for _ in args {
-            arg_tys.push(self.new_ty_meta_var(level));
+        for arg in args {
+            arg_tys.push(self.infer_expr(&arg.value, level, wants));
         }
+
         let returns = self.new_ty_meta_var(level);
         tracing::trace!("adding returns meta: {returns:?}");
 
-        for (a, aty) in args.iter().zip(arg_tys.clone()) {
-            let got = self.infer_expr(&a.value, level, wants);
-            wants.equals(got, aty, ConstraintCause::Internal, a.span);
-        }
+        let receiver = if let Expr {
+            kind: ExprKind::Member(receiver, _),
+            ..
+        } = &callee
+        {
+            let receiver_ty = if let Some(receiver) = receiver {
+                self.infer_expr(receiver, level, wants)
+            } else {
+                self.new_ty_meta_var(level)
+            };
 
-        if matches!(
-            callee,
-            Expr {
-                kind: ExprKind::Constructor(..),
-                ..
-            }
-        ) {
-            arg_tys.insert(0, returns.clone());
-        }
+            Some(receiver_ty)
 
-        // if let Expr {
-        //     kind: ExprKind::Member(receiver, _),
-        //     ..
-        // } = &callee
-        // {
-        //     let receiver_ty = if let Some(receiver) = receiver {
-        //         self.infer_expr(receiver, level, wants)
+            // arg_tys.insert(0, receiver_ty.clone());
+        } else {
+            None
+        };
+
+        // if arg_tys.is_empty() {
+        //     // For member calls with no arguments, the Member constraint already handled
+        //     // the receiver application, so callee_ty might be the return type directly
+        //     // rather than a function type
+        //     if matches!(
+        //         callee,
+        //         Expr {
+        //             kind: ExprKind::Member(..),
+        //             ..
+        //         }
+        //     ) {
+        //         // The member constraint returns the type after receiver application
+        //         // For zero-arg methods, this is just the return type
+        //         wants.equals(
+        //             callee_ty,
+        //             returns.clone(),
+        //             ConstraintCause::Call(callee.id),
+        //             callee.span,
+        //         );
         //     } else {
-        //         self.new_ty_meta_var(level)
-        //     };
-
-        //     arg_tys.insert(0, receiver_ty.clone());
+        //         // For non-member zero-arg calls: callee must be Unit -> returns
+        //         let expected =
+        //             Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
+        //         wants.equals(
+        //             callee_ty,
+        //             expected,
+        //             ConstraintCause::Call(callee.id),
+        //             callee.span,
+        //         );
+        //     }
+        //     return returns;
         // }
 
-        if arg_tys.is_empty() {
-            // For member calls with no arguments, the Member constraint already handled
-            // the receiver application, so callee_ty might be the return type directly
-            // rather than a function type
-            if matches!(
-                callee,
-                Expr {
-                    kind: ExprKind::Member(..),
-                    ..
-                }
-            ) {
-                // The member constraint returns the type after receiver application
-                // For zero-arg methods, this is just the return type
-                wants.equals(
-                    callee_ty,
-                    returns.clone(),
-                    ConstraintCause::Call(callee.id),
-                    callee.span,
-                );
-            } else {
-                // For non-member zero-arg calls: callee must be Unit -> returns
-                let expected =
-                    Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
-                wants.equals(
-                    callee_ty,
-                    expected,
-                    ConstraintCause::Call(callee.id),
-                    callee.span,
-                );
-            }
-            return returns;
-        }
-
-        wants.equals(
+        wants.call(
             callee_ty,
-            curry(arg_tys.clone(), returns.clone()),
+            arg_tys,
+            returns.clone(),
+            receiver,
             ConstraintCause::Call(callee.id),
             callee.span,
         );
@@ -1408,7 +1399,7 @@ impl<'a> InferencePass<'a> {
         let id = self.session.vars.ty_metas.next_id();
         self.meta_levels.insert(Meta::Ty(id), level);
         tracing::trace!("Fresh {id:?}");
-        Ty::MetaVar { id, level }
+        Ty::UnificationVar { id, level }
     }
 
     pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Ty {
@@ -1432,7 +1423,7 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
         Ty::Param(_) => {
             out.insert(ty.clone());
         }
-        Ty::MetaVar { .. } => {
+        Ty::UnificationVar { .. } => {
             out.insert(ty.clone());
         }
         Ty::Func(dom, codom) => {
@@ -1444,7 +1435,7 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(item, out);
             }
         }
-        Ty::Struct(_, box row) | Ty::Variant(_, box row) => match row {
+        Ty::Struct(_, box row) | Ty::Sum(_, box row) => match row {
             Row::Empty(..) => (),
             Row::Var(..) => {
                 out.insert(ty.clone());
@@ -1455,6 +1446,9 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(&Ty::Struct(None, row.clone()), out);
             }
         },
+        Ty::Variant(_, box ty) => {
+            collect_meta(ty, out);
+        }
         Ty::Constructor { param, ret, .. } => {
             collect_meta(param, out);
             collect_meta(ret, out);

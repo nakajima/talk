@@ -4,16 +4,15 @@ pub mod tests {
         ast::AST,
         diagnostic::Diagnostic,
         name::Name,
-        name_resolution::{name_resolver::NameResolved, symbol::TypeId},
+        name_resolution::name_resolver::NameResolved,
         types::{
             passes::{
                 dependencies_pass::tests::resolve_dependencies,
                 inference_pass::{InferencePass, Inferenced},
             },
-            row::Row,
             ty::Ty,
             type_error::TypeError,
-            type_session::{TypeDefKind, TypeSession},
+            type_session::TypeSession,
         },
     };
 
@@ -1093,7 +1092,7 @@ pub mod tests {
     }
 
     #[test]
-    fn types_struct_method() {
+    fn type_struct_method() {
         let (ast, session) = typecheck(
             "
         struct Person {
@@ -1219,17 +1218,11 @@ pub mod tests {
 
         assert_eq!(
             ty(1, &ast, &session),
-            Ty::Variant(
-                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
-                Box::new(Row::Empty(TypeDefKind::Enum))
-            )
+            Ty::Variant("foo".into(), Box::new(Ty::Void))
         );
         assert_eq!(
             ty(2, &ast, &session),
-            Ty::Variant(
-                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
-                Box::new(Row::Empty(TypeDefKind::Enum))
-            )
+            Ty::Variant("bar".into(), Box::new(Ty::Void))
         );
     }
 
@@ -1248,17 +1241,36 @@ pub mod tests {
 
         assert_eq!(
             ty(1, &ast, &session),
-            Ty::Variant(
-                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
-                Box::new(Row::Empty(TypeDefKind::Enum))
-            )
+            Ty::Variant("foo".into(), Box::new(Ty::Tuple(vec![Ty::Int, Ty::Bool])))
         );
         assert_eq!(
             ty(2, &ast, &session),
-            Ty::Variant(
-                Some(Name::Resolved(TypeId(1).into(), "Fizz".into())),
-                Box::new(Row::Empty(TypeDefKind::Enum))
-            )
+            Ty::Variant("bar".into(), Box::new(Ty::Tuple(vec![Ty::Float])))
+        );
+    }
+
+    #[test]
+    fn types_enum_constructor_with_generic_value() {
+        let (ast, session) = typecheck(
+            "
+            enum Opt<T> {
+                case some(T), none
+            }
+
+            Opt.some(123)
+            Opt.some(1.23)
+            Opt.none
+        ",
+        );
+
+        assert_eq!(
+            ty(1, &ast, &session),
+            Ty::Variant("some".into(), Box::new(Ty::Tuple(vec![Ty::Int])))
+        );
+
+        assert_eq!(
+            ty(3, &ast, &session),
+            Ty::Variant("none".into(), Box::new(Ty::Void))
         );
     }
 }

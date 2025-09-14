@@ -1,4 +1,5 @@
 pub mod builtins;
+pub mod constraint;
 pub mod constraints;
 pub mod dsu;
 pub mod fields;

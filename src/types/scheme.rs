@@ -3,7 +3,8 @@ use crate::{
     node_kinds::type_annotation::TypeAnnotation,
     span::Span,
     types::{
-        constraints::{Constraint, ConstraintCause, HasField, Member},
+        constraint::{Constraint, ConstraintCause, HasField},
+        constraints::{call::Call, member::Member},
         passes::inference_pass::{InferencePass, Meta, Wants},
         row::{Row, RowParamId},
         ty::{Level, Ty, TypeParamId},
@@ -30,6 +31,12 @@ pub enum Predicate {
         receiver: Ty,
         label: Label,
         ty: Ty,
+    },
+    Call {
+        callee: Ty,
+        args: Vec<Ty>,
+        returns: Ty,
+        receiver: Option<Ty>,
     },
 }
 
@@ -58,6 +65,22 @@ impl Predicate {
                 ty: instantiate_ty(ty, substitutions, level),
                 cause: ConstraintCause::Internal,
                 span,
+            }),
+            Self::Call {
+                callee,
+                args,
+                returns,
+                receiver,
+            } => Constraint::Call(Call {
+                callee: instantiate_ty(callee, substitutions, level),
+                args: args
+                    .iter()
+                    .map(|f| instantiate_ty(f.clone(), substitutions, level))
+                    .collect(),
+                returns: instantiate_ty(returns, substitutions, level),
+                receiver: receiver.map(|r| instantiate_ty(r.clone(), substitutions, level)),
+                span,
+                cause: ConstraintCause::Internal,
             }),
         }
     }
@@ -97,7 +120,7 @@ impl Scheme {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::MetaVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
+                    let Ty::UnificationVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -140,9 +163,10 @@ impl Scheme {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::MetaVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
+                    let Ty::UnificationVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
                         unreachable!()
                     };
+
                     tracing::trace!("instantiating {param:?} with {meta:?}");
 
                     unification_substitutions
@@ -197,7 +221,7 @@ impl Scheme {
             };
 
             let arg_ty = pass.infer_type_annotation(arg, level, wants);
-            let ty @ Ty::MetaVar { id: meta_var, .. } = pass.new_ty_meta_var(level) else {
+            let ty @ Ty::UnificationVar { id: meta_var, .. } = pass.new_ty_meta_var(level) else {
                 unreachable!();
             };
 
