@@ -136,6 +136,7 @@ impl Member {
                 ..
             }) = pass.session.phase.type_constructors.get(type_id)
                 && let Some(method) = methods.get(&self.label)
+                && !method.is_static
             {
                 let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
                     panic!("did not find type for method named {:?}", self.label);
@@ -156,7 +157,61 @@ impl Member {
                     }
                 };
 
-                return unify(&ty, &method_ty, substitutions, &mut pass.session.vars);
+                // For instance methods, the method_ty looks like: self -> arg1 -> arg2 -> ret
+                // We need to apply the receiver to get: arg1 -> arg2 -> ret
+                // Or for zero-arg instance methods: self -> ret, we get just ret
+                let applied_method_ty = if let Ty::Func(param, rest) = method_ty {
+                    // Unify the receiver with the self parameter
+                    unify(&receiver, &param, substitutions, &mut pass.session.vars)?;
+                    // Return the rest of the function type (without self)
+                    *rest
+                } else {
+                    unreachable!()
+                };
+
+                return unify(
+                    &ty,
+                    &applied_method_ty,
+                    substitutions,
+                    &mut pass.session.vars,
+                );
+            }
+        }
+
+        // See if it's a static method
+        if let Ty::Constructor { type_id, .. } = &receiver {
+            // If it's a nominal type, check methods first
+            if let Some(TypeDef {
+                fields: TypeFields::Struct { methods, .. },
+                ..
+            }) = pass.session.phase.type_constructors.get(type_id)
+                && let Some(method) = methods.get(&self.label)
+                && method.is_static
+            {
+                let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
+                    panic!("did not find type for method named {:?}", self.label);
+                };
+
+                let method_ty = match &method_entry {
+                    EnvEntry::Mono(ty) => ty.clone(),
+                    EnvEntry::Scheme(scheme) => {
+                        scheme
+                            .solver_instantiate(
+                                pass,
+                                Level(1),
+                                next_wants,
+                                self.span,
+                                substitutions,
+                            )
+                            .0
+                    }
+                };
+
+                let Ty::Func(_head, rest) = method_ty else {
+                    unreachable!()
+                };
+
+                return unify(&ty, &rest, substitutions, &mut pass.session.vars);
             }
         }
 

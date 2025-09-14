@@ -1111,6 +1111,50 @@ pub mod tests {
     }
 
     #[test]
+    fn types_struct_method_on_arg() {
+        let (ast, session) = typecheck(
+            "
+        struct Person {
+            let age: Int
+
+            func getAge() {
+                self.age
+            }
+        }
+
+        let person = Person(age: 123)
+        getAge(person)
+
+        func getAge(aged) {
+            aged.getAge()
+        }
+        ",
+        );
+
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    fn checks_struct_method_on_arg() {
+        let (ast, _session) = typecheck_err(
+            "
+        struct Person {
+            let age: Int
+        }
+
+        let person = Person(age: 123)
+        getAge(person)
+
+        func getAge(aged) {
+            aged.getAge()
+        }
+        ",
+        );
+
+        assert_eq!(1, ast.diagnostics.len(), "{:?}", ast.diagnostics);
+    }
+
+    #[test]
     fn types_generic_struct_method() {
         let (ast, session) = typecheck(
             "

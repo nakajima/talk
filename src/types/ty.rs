@@ -1,10 +1,6 @@
 use itertools::Itertools;
 
-use crate::{
-    name::Name,
-    node_id::NodeID,
-    types::{row::Row, type_session::TypeDefKind},
-};
+use crate::{name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::row::Row};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct TyMetaId(u32);
@@ -53,11 +49,19 @@ pub enum Ty {
 
     Param(TypeParamId),
     Rigid(SkolemId),
-    MetaVar { id: TyMetaId, level: Level },
+    MetaVar {
+        id: TyMetaId,
+        level: Level,
+    },
 
-    TypeConstructor { name: Name, kind: TypeDefKind },
-    TypeApplication(Box<Ty>, Box<Ty>),
+    Constructor {
+        type_id: TypeId,
+        param: Box<Ty>,
+        ret: Box<Ty>,
+    },
 
+    // TypeConstructor { name: Name, kind: TypeDefKind },
+    // TypeApplication(Box<Ty>, Box<Ty>),
     Func(Box<Ty>, Box<Ty>),
 
     Tuple(Vec<Ty>),
@@ -78,8 +82,7 @@ impl Ty {
             Ty::Rigid(..) => false,
             Ty::MetaVar { .. } => true,
             Ty::Primitive(..) => false,
-            Ty::TypeConstructor { .. } => false,
-            Ty::TypeApplication(ty, ty1) => ty.contains_var() || ty1.contains_var(),
+            Ty::Constructor { param, ret, .. } => param.contains_var() || ret.contains_var(),
             Ty::Func(ty, ty1) => ty.contains_var() || ty1.contains_var(),
             Ty::Tuple(items) => items.iter().any(|i| i.contains_var()),
             Ty::Struct(name, box row) => match row {
@@ -102,10 +105,9 @@ impl std::fmt::Debug for Ty {
             Ty::Rigid(id) => write!(f, "rigid(α{})", id.0),
             Ty::MetaVar { id, level } => write!(f, "meta(α{}, {})", id.0, level.0),
             Ty::Primitive(primitive) => write!(f, "{primitive:?}"),
-            Ty::TypeConstructor { name, kind: _ } => {
-                write!(f, "K({:?})", name.name_str())
+            Ty::Constructor { param, ret, .. } => {
+                write!(f, "Constructor({param:?}) -> {ret:?}")
             }
-            Ty::TypeApplication(ty, ty1) => write!(f, "{ty:?} → {ty1:?}"),
             Ty::Func(param, ret) => write!(f, "func({param:?}) -> {ret:?}"),
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))

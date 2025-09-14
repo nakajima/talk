@@ -979,7 +979,17 @@ impl<'a> InferencePass<'a> {
                     .collect();
 
                 // Apply the same substitutions to params that we applied to properties
-                instantiate_ty(curry(params, ty), &substitutions, level)
+                let ty = params
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rfold(ty, |acc, p| Ty::Constructor {
+                        type_id: *id,
+                        param: Box::new(p),
+                        ret: Box::new(acc),
+                    });
+
+                instantiate_ty(ty, &substitutions, level)
             }
             ExprKind::RowVariable(..) => todo!(),
 
@@ -1150,29 +1160,43 @@ impl<'a> InferencePass<'a> {
             arg_tys.insert(0, returns.clone());
         }
 
-        if let Expr {
-            kind: ExprKind::Member(receiver, _),
-            ..
-        } = &callee
-        {
-            let receiver_ty = if let Some(receiver) = receiver {
-                self.infer_expr(receiver, level, wants)
-            } else {
-                self.new_ty_meta_var(level)
-            };
+        // if let Expr {
+        //     kind: ExprKind::Member(receiver, _),
+        //     ..
+        // } = &callee
+        // {
+        //     let receiver_ty = if let Some(receiver) = receiver {
+        //         self.infer_expr(receiver, level, wants)
+        //     } else {
+        //         self.new_ty_meta_var(level)
+        //     };
 
-            arg_tys.insert(0, receiver_ty.clone());
-        }
+        //     arg_tys.insert(0, receiver_ty.clone());
+        // }
 
         if arg_tys.is_empty() {
-            // zero-arg call: callee must be Unit -> returns
-            let expected = Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
-            wants.equals(
-                callee_ty,
-                expected,
-                ConstraintCause::Call(callee.id),
-                callee.span,
-            );
+            // For member calls with no arguments, the Member constraint already handled
+            // the receiver application, so callee_ty might be the return type directly
+            // rather than a function type
+            if matches!(callee, Expr { kind: ExprKind::Member(..), .. }) {
+                // The member constraint returns the type after receiver application
+                // For zero-arg methods, this is just the return type
+                wants.equals(
+                    callee_ty,
+                    returns.clone(),
+                    ConstraintCause::Call(callee.id),
+                    callee.span,
+                );
+            } else {
+                // For non-member zero-arg calls: callee must be Unit -> returns
+                let expected = Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
+                wants.equals(
+                    callee_ty,
+                    expected,
+                    ConstraintCause::Call(callee.id),
+                    callee.span,
+                );
+            }
             return returns;
         }
 
@@ -1342,10 +1366,6 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
             collect_meta(dom, out);
             collect_meta(codom, out);
         }
-        Ty::TypeApplication(fun, arg) => {
-            collect_meta(fun, out);
-            collect_meta(arg, out);
-        }
         Ty::Tuple(items) => {
             for item in items {
                 collect_meta(item, out);
@@ -1362,7 +1382,11 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(&Ty::Struct(None, row.clone()), out);
             }
         },
-        Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) | Ty::TypeConstructor { .. } => {}
+        Ty::Constructor { param, ret, .. } => {
+            collect_meta(param, out);
+            collect_meta(ret, out);
+        }
+        Ty::Primitive(_) | Ty::Rigid(_) | Ty::Hole(_) => {}
     }
 }
 

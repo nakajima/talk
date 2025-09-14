@@ -516,6 +516,38 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_static_struct_methods() {
+        let resolved = resolve(
+            "struct Person {
+                static func fizz() {}
+            }",
+        );
+        assert_eq_diff!(
+            *resolved.roots[0].as_decl(),
+            any_decl!(DeclKind::Struct {
+                name: Name::Resolved(TypeId(1).into(), "Person".into()),
+                generics: vec![],
+                conformances: vec![],
+                body: any_block!(vec![
+                    any_decl!(DeclKind::Method {
+                        func: Box::new(Func {
+                            id: NodeID::ANY,
+                            name: Name::Resolved(Symbol::Global(GlobalId(1)), "fizz".into()),
+                            generics: vec![],
+                            params: vec![],
+                            body: any_block!(vec![]),
+                            ret: None,
+                            attributes: vec![]
+                        }),
+                        is_static: true
+                    })
+                    .into(),
+                ])
+            })
+        )
+    }
+
+    #[test]
     fn resolves_struct_methods() {
         let resolved = resolve(
             "struct Person {

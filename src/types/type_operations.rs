@@ -85,12 +85,11 @@ fn occurs_in(id: TyMetaId, ty: &Ty) -> bool {
         Ty::Func(a, b) => occurs_in(id, a) || occurs_in(id, b),
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         Ty::Struct(_, row) => occurs_in_row(id, row),
-        Ty::TypeApplication(f, x) => occurs_in(id, f) || occurs_in(id, x),
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
         Ty::Rigid(..) => false,
         Ty::Primitive(..) => false,
-        Ty::TypeConstructor { .. } => false,
+        Ty::Constructor { param, ret, .. } => occurs_in(id, param) || occurs_in(id, ret),
     }
 }
 
@@ -263,18 +262,30 @@ pub(super) fn unify(
             Ok(did_change)
         }
         (Ty::Rigid(lhs), Ty::Rigid(rhs)) if lhs == rhs => Ok(false),
+        (
+            Ty::Constructor {
+                param: constructor_param,
+                ret: constructor_ret,
+                ..
+            },
+            Ty::Func(func_param, func_ret),
+        )
+        | (
+            Ty::Func(func_param, func_ret),
+            Ty::Constructor {
+                param: constructor_param,
+                ret: constructor_ret,
+                ..
+            },
+        ) => {
+            let param = unify(constructor_param, func_param, substitutions, vars)?;
+            let ret = unify(constructor_ret, func_ret, substitutions, vars)?;
+            Ok(param || ret)
+        }
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;
             Ok(param || ret)
-        }
-        (
-            Ty::TypeApplication(box lhs_rec, box lhs_arg),
-            Ty::TypeApplication(box rhs_rec, box rhs_arg),
-        ) => {
-            let rec = unify(lhs_rec, rhs_rec, substitutions, vars)?;
-            let arg = unify(lhs_arg, rhs_arg, substitutions, vars)?;
-            Ok(rec || arg)
         }
         (
             Ty::MetaVar {
@@ -342,7 +353,15 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
         Ty::Rigid(..) => ty,
         Ty::MetaVar { .. } => ty,
         Ty::Primitive(..) => ty,
-        Ty::TypeConstructor { .. } => todo!(),
+        Ty::Constructor {
+            type_id,
+            param,
+            ret,
+        } => Ty::Constructor {
+            type_id,
+            param: Box::new(substitute(*param, substitutions)),
+            ret: Box::new(substitute(*ret, substitutions)),
+        },
         Ty::Func(params, ret) => Ty::Func(
             Box::new(substitute(*params, substitutions)),
             Box::new(substitute(*ret, substitutions)),
@@ -354,10 +373,6 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
                 .collect(),
         ),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(substitute_row(*row, substitutions))),
-        Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
-            substitute(lhs, substitutions).into(),
-            substitute(rhs, substitutions).into(),
-        ),
     }
 }
 
@@ -405,18 +420,22 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
                 } // normalize id to the representative
             }
         }
+        Ty::Constructor {
+            type_id,
+            param,
+            ret,
+        } => Ty::Constructor {
+            type_id,
+            param: Box::new(apply(*param, substitutions)),
+            ret: Box::new(apply(*ret, substitutions)),
+        },
         Ty::Primitive(..) => ty,
-        Ty::TypeConstructor { .. } => todo!(),
         Ty::Func(params, ret) => Ty::Func(
             Box::new(apply(*params, substitutions)),
             Box::new(apply(*ret, substitutions)),
         ),
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(apply_row(*row, substitutions))),
-        Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
-            apply(lhs, substitutions).into(),
-            apply(rhs, substitutions).into(),
-        ),
     }
 }
 
@@ -462,7 +481,15 @@ pub(super) fn instantiate_ty(
         Ty::Rigid(..) => ty,
         Ty::MetaVar { .. } => ty,
         Ty::Primitive(..) => ty,
-        Ty::TypeConstructor { .. } => todo!(),
+        Ty::Constructor {
+            type_id,
+            param,
+            ret,
+        } => Ty::Constructor {
+            type_id,
+            param: Box::new(instantiate_ty(*param, substitutions, level)),
+            ret: Box::new(instantiate_ty(*ret, substitutions, level)),
+        },
         Ty::Func(params, ret) => Ty::Func(
             Box::new(instantiate_ty(*params, substitutions, level)),
             Box::new(instantiate_ty(*ret, substitutions, level)),
@@ -476,9 +503,5 @@ pub(super) fn instantiate_ty(
         Ty::Struct(name, row) => {
             Ty::Struct(name, Box::new(instantiate_row(*row, substitutions, level)))
         }
-        Ty::TypeApplication(box lhs, box rhs) => Ty::TypeApplication(
-            instantiate_ty(lhs, substitutions, level).into(),
-            instantiate_ty(rhs, substitutions, level).into(),
-        ),
     }
 }
