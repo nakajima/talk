@@ -324,43 +324,4 @@ pub mod tests {
         );
         assert!(es.is_empty(), "{es:?}");
     }
-
-    // If your resolver resolves method member calls to a DeclId in the body walk,
-    // you can enable this. If not yet, skip this test for now.
-    #[test]
-    #[ignore = "wip"]
-    fn graph_records_method_to_method_edge() {
-        let es = graph_edges(
-            r#"
-        struct S {
-            func a(){ self.b() }
-            func b(){ 0 }
-        }
-    "#,
-        );
-        // Expect a -> b (IDs consistent with your existing numbering)
-        assert_eq!(
-            es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2)))]),
-            "{es:?}"
-        );
-    }
-
-    // If you register init bodies as nodes and resolve their calls, enable this too.
-    #[test]
-    #[ignore = "wip"]
-    fn graph_records_init_to_function_edge() {
-        let es = graph_edges(
-            r#"
-        func h(){ 0 }
-        struct S { init(){ h() } }
-    "#,
-        );
-        // init -> h (adjust IDs if needed)
-        assert_eq!(
-            es,
-            FxHashSet::from_iter([(Binder::Global(GlobalId(1)), Binder::Global(GlobalId(2)))]),
-            "{es:?}"
-        );
-    }
 }

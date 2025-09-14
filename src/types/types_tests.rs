@@ -1174,4 +1174,30 @@ pub mod tests {
         assert_eq!(ty(1, &ast, &session), Ty::Int);
         assert_eq!(ty(2, &ast, &session), Ty::Float);
     }
+
+    #[test]
+    fn types_nested_generic_struct_method() {
+        let (ast, session) = typecheck(
+            "
+
+        struct Inner<T> {
+            let inner: T
+        }
+        struct Middle<T> {
+            let middle: T
+        }
+        struct Outer<T> {
+            let outer: T
+        }
+
+        let inner = Inner(inner: true)
+        let middle = Middle(middle: inner)
+        let outer = Outer(outer: middle)
+
+        outer.outer.middle.inner
+        ",
+        );
+
+        assert_eq!(ty(6, &ast, &session), Ty::Bool);
+    }
 }
