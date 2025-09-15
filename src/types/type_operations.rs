@@ -286,6 +286,14 @@ pub(super) fn unify(
             let ret = unify(constructor_ret, func_ret, substitutions, vars)?;
             Ok(param || ret)
         }
+        (Ty::Sum(lhs_name, lhs_row), Ty::Sum(rhs_name, rhs_row)) => {
+            if lhs_name != rhs_name {
+                return Err(TypeError::InvalidUnification(lhs, rhs));
+            }
+
+            unify_rows(TypeDefKind::Enum, lhs_row, rhs_row, substitutions, vars)
+        }
+        (Ty::Variant(_, lhs), Ty::Variant(_, rhs)) => unify(lhs, rhs, substitutions, vars),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;

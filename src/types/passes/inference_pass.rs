@@ -869,8 +869,102 @@ impl<'a> InferencePass<'a> {
                     }
                 }
             }
+            PatternKind::Variant {
+                enum_name,
+                variant_name,
+                fields,
+            } => {
+                let receiver = if let Some(enum_name) = enum_name {
+                    let entry = self
+                        .term_env
+                        .lookup(&enum_name.symbol().unwrap())
+                        .cloned()
+                        .expect("didn't get enum for name");
+                    match entry {
+                        EnvEntry::Mono(ty) => ty.clone(),
+                        EnvEntry::Scheme(scheme) => {
+                            scheme
+                                .inference_instantiate(self, level, wants, pattern.span)
+                                .0
+                        }
+                    }
+                } else {
+                    let receiver_ty = self.new_ty_meta_var(level);
+                    wants.equals(
+                        expected.clone(),
+                        receiver_ty.clone(),
+                        ConstraintCause::Member(pattern.id),
+                        pattern.span,
+                    );
+                    receiver_ty
+                };
+
+                let ty = self.new_ty_meta_var(level);
+                wants.member(
+                    receiver.clone(),
+                    variant_name.into(),
+                    ty.clone(),
+                    ConstraintCause::Member(pattern.id),
+                    pattern.span,
+                );
+
+                if !fields.is_empty() {
+                    // The variant type should be Ty::Variant(_, Box<Ty::Tuple(field_types)>)
+                    // We need to constrain ty to be that variant and check the field patterns
+                    wants.equals(
+                        expected.clone(),
+                        receiver.clone(),
+                        ConstraintCause::Pattern(pattern.id),
+                        pattern.span,
+                    );
+
+                    // Create meta vars for the field types
+                    let field_metas: Vec<Ty> = (0..fields.len())
+                        .map(|_| self.new_ty_meta_var(level))
+                        .collect();
+
+                    // Constrain the variant type to match
+                    let variant_ty = Ty::Variant(
+                        variant_name.into(),
+                        Box::new(if field_metas.len() == 1 {
+                            field_metas[0].clone()
+                        } else {
+                            Ty::Tuple(field_metas.clone())
+                        }),
+                    );
+
+                    wants.member(
+                        receiver.clone(),
+                        variant_name.into(),
+                        variant_ty,
+                        ConstraintCause::Pattern(pattern.id),
+                        pattern.span,
+                    );
+
+                    // Recursively check each field pattern
+                    for (field_pattern, field_ty) in fields.iter().zip(field_metas) {
+                        self.check_pattern(field_pattern, &field_ty, level, wants);
+                    }
+                } else {
+                    // For variants without fields, just constrain the types
+                    wants.equals(
+                        expected.clone(),
+                        receiver.clone(),
+                        ConstraintCause::Pattern(pattern.id),
+                        pattern.span,
+                    );
+
+                    let variant_ty = Ty::Variant(variant_name.into(), Box::new(Ty::Void));
+                    wants.member(
+                        receiver,
+                        variant_name.into(),
+                        variant_ty,
+                        ConstraintCause::Pattern(pattern.id),
+                        pattern.span,
+                    );
+                }
+            }
             PatternKind::Wildcard => todo!(),
-            PatternKind::Variant { .. } => todo!(),
             PatternKind::Struct { .. } => todo!(),
         }
     }

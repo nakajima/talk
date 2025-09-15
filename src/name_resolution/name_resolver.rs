@@ -23,6 +23,7 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         match_arm::MatchArm,
+        pattern::{Pattern, PatternKind},
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
@@ -83,7 +84,8 @@ pub type ScopeId = Index;
     MatchArm(enter, exit),
     Decl(enter, exit),
     Expr(enter),
-    TypeAnnotation(enter)
+    TypeAnnotation(enter),
+    Pattern(enter)
 )]
 pub struct NameResolver {
     path: String,
@@ -299,6 +301,26 @@ impl NameResolver {
         scope.values.insert(name.name_str(), sym);
 
         Name::Resolved(sym, name.name_str())
+    }
+
+    fn enter_pattern(&mut self, pattern: &mut Pattern) {
+        if let PatternKind::Variant {
+            enum_name,
+            variant_name,
+            fields,
+        } = &mut pattern.kind
+            && let Some(enum_name) = enum_name
+        {
+            let Some(resolved) = self.lookup(enum_name) else {
+                self.diagnostic(
+                    pattern.span,
+                    NameResolverError::UndefinedName(enum_name.name_str()),
+                );
+                return;
+            };
+
+            *enum_name = resolved;
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////

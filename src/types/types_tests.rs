@@ -139,6 +139,24 @@ pub mod tests {
     }
 
     #[test]
+    #[ignore = "waiting on binary ops"]
+    fn infers_simple_recursion() {
+        let (ast, session) = typecheck(
+            "
+        func rec(x, y, z) {
+            if x == y { x } else { rec(y-z, y, z) }
+        }
+
+        rec(0, 2, 1)
+        rec(0.0, 2.0, 1.0)
+        ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+        assert_eq!(ty(2, &ast, &session), Ty::Float);
+    }
+
+    #[test]
     fn explicit_generic_function_instantiates() {
         let (ast, session) = typecheck(
             r#"
@@ -604,12 +622,12 @@ pub mod tests {
     }
 
     #[test]
-    #[ignore = "TypeAnnotationKind::Func not implemented"]
+    #[ignore = "need to figure out syntax for generic func annotations"]
     fn func_type_annotation_on_let_is_honored() {
         // Once Func annotations work, this should typecheck and instantiate.
         let (ast, session) = typecheck(
             r#"
-        let id: func<T>(T) -> T = func(x) { x }
+        let id: (T) -> T = func(x) { x }
         (id(123), id(true))
     "#,
         );
@@ -1272,5 +1290,41 @@ pub mod tests {
             ty(3, &ast, &session),
             Ty::Variant("none".into(), Box::new(Ty::Void))
         );
+    }
+
+    #[test]
+    fn types_simple_enum_match() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz {
+                case foo, bar
+            }
+
+            match Fizz.foo {
+                Fizz.foo -> 1,
+                Fizz.bar -> 2
+            }
+            ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    fn types_enum_match_with_values() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz {
+                case foo(Int), bar(Int)
+            }
+
+            match Fizz.foo(123) {
+                Fizz.foo(x) -> x,
+                Fizz.bar(x) -> x
+            }
+            ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
 }

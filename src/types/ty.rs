@@ -126,7 +126,7 @@ impl std::fmt::Debug for Ty {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
             Ty::Variant(name, ty) => {
-                write!(f, "enum {name:?}({ty:?})")
+                write!(f, ".{name}({ty:?})")
             }
             Ty::Struct(name, box row) | Ty::Sum(name, box row) => {
                 let row_debug = match row {
