@@ -116,7 +116,6 @@ impl Member {
         // // See if it's an enum constructor
         if let Ty::Sum(Some(Name::Resolved(Symbol::Type(..), _)), box row) = &receiver {
             // Read the instantiated payload for this label from the receiver row
-            println!("receiver is {receiver:?}");
             let row = apply_row(row.clone(), substitutions);
             let closed = row.close();
             let Some(variant_ty) = closed.get(&self.label) else {

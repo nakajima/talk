@@ -1019,11 +1019,9 @@ impl<'a> InferencePass<'a> {
             ExprKind::Variable(Name::Resolved(sym, _)) => {
                 match self.term_env.lookup(sym).cloned() {
                     Some(EnvEntry::Scheme(scheme)) => {
-                        let instantiated = scheme
+                        scheme
                             .inference_instantiate(self, level, wants, expr.span)
-                            .0;
-                        println!("instantiated var: {instantiated:?}");
-                        instantiated
+                            .0
                     } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
                     None => {

@@ -46,7 +46,6 @@ impl Call {
         match &callee {
             Ty::Constructor { param, ret, .. } => {
                 args.insert(0, returns.clone());
-                println!("constructor param: {param:?}, ret: {ret:?}");
                 unify(
                     &Ty::Func(Box::new(*param.clone()), Box::new(*ret.clone())),
                     &curry(args, returns),
