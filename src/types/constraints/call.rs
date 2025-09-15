@@ -53,18 +53,18 @@ impl Call {
                     &mut pass.session.vars,
                 )
             }
-            Ty::Variant(_, ty) => {
-                println!("oh hi it's call {args:?}, ty: {ty:?}");
-                let args_ty = if args.len() == 1 {
-                    args[0].clone()
-                } else {
-                    Ty::Tuple(args.to_vec())
-                };
+            // Ty::Variant(_, ty) => {
+            //     println!("oh hi it's call {args:?}, ty: {ty:?}");
+            //     let args_ty = if args.len() == 1 {
+            //         args[0].clone()
+            //     } else {
+            //         Ty::Tuple(args.to_vec())
+            //     };
 
-                let args_ok = unify(ty, &args_ty, substitutions, &mut pass.session.vars)?;
-                let returns_ok = unify(&returns, &callee, substitutions, &mut pass.session.vars)?;
-                Ok(args_ok || returns_ok)
-            }
+            //     let args_ok = unify(ty, &args_ty, substitutions, &mut pass.session.vars)?;
+            //     let returns_ok = unify(&returns, &callee, substitutions, &mut pass.session.vars)?;
+            //     Ok(args_ok || returns_ok)
+            // }
             Ty::Func(..) => {
                 // if let Some(receiver) = &self.receiver {
                 //     tracing::trace!("prepending receiver to method: {receiver:?}");

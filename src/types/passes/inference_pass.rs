@@ -897,21 +897,15 @@ impl<'a> InferencePass<'a> {
                     self.new_ty_meta_var(level)
                 };
 
-                let ty = self.new_ty_meta_var(level);
-                wants.member(
+                wants.equals(
+                    expected.clone(),
                     receiver.clone(),
-                    variant_name.into(),
-                    ty.clone(),
-                    ConstraintCause::Member(pattern.id),
+                    ConstraintCause::Pattern(pattern.id),
                     pattern.span,
                 );
 
-                println!("fields fields: {fields:?}");
-
                 if fields.is_empty() {
                     // For variants without fields, just constrain the types
-                    println!("expected: {expected:?}, receiver: {receiver:?}");
-
                     let variant_ty = Ty::Variant(variant_name.into(), Box::new(Ty::Void));
                     wants.member(
                         receiver,

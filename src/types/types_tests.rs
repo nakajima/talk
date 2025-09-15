@@ -1311,16 +1311,15 @@ pub mod tests {
     }
 
     #[test]
-    fn types_enum_match_with_values() {
+    fn types_nested_enum_match() {
         let (ast, session) = typecheck(
             "
-            enum Fizz {
-                case foo(Int), bar(Int)
+            enum Fizz<T> {
+                case foo(T)
             }
 
-            match Fizz.foo(123) {
-                Fizz.foo(x) -> x,
-                Fizz.bar(x) -> x
+            match Fizz.foo(Fizz.foo(Int)) {
+                Fizz.foo(Fizz.foo(x)) -> x,
             }
             ",
         );

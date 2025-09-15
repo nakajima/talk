@@ -121,26 +121,60 @@ impl Member {
             if let Some(TypeDef {
                 fields: TypeFields::Enum { variants, .. },
                 ..
-            }) = pass.session.phase.type_constructors.get(type_id)
+            }) = pass.session.phase.type_constructors.get(type_id).cloned()
                 && let Some(variant) = variants.get(&self.label)
             {
-                let variant_entry = pass
-                    .term_env
-                    .lookup(&variant.symbol)
-                    .cloned()
-                    .expect("didn't get variant ty from term env");
+                // let variant_entry = pass
+                //     .term_env
+                //     .lookup(&variant.symbol)
+                //     .cloned()
+                //     .expect("didn't get variant ty from term env");
 
-                let variant_ty = variant_entry.solver_instantiate(
-                    pass,
-                    Level(1),
-                    substitutions,
-                    next_wants,
-                    self.span,
-                );
+                // let variant_ty = variant_entry.solver_instantiate(
+                //     pass,
+                //     Level(1),
+                //     substitutions,
+                //     next_wants,
+                //     self.span,
+                // );
 
-                println!("variant_ty: {variant_ty:?}. ty: {ty:?}");
+                // println!("variant_ty: {variant_ty:?}. ty: {ty:?}");
 
-                return unify(&ty, &variant_ty, substitutions, &mut pass.session.vars);
+                // return unify(&ty, &variant_ty, substitutions, &mut pass.session.vars);
+                // payload type at this use site (respect generics)
+                let payload = if variant.fields.is_empty() {
+                    Ty::Void
+                } else if variant.fields.len() == 1 {
+                    pass.infer_ast_ty_repr(&variant.fields[0], Level(1), next_wants)
+                } else {
+                    Ty::Tuple(
+                        variant
+                            .fields
+                            .iter()
+                            .map(|f| pass.infer_ast_ty_repr(f, Level(1), next_wants))
+                            .collect(),
+                    )
+                };
+
+                // PATTERN: ty is a Variant => compare payloads only
+                if let Ty::Variant(_, box wanted_payload) = &ty {
+                    return unify(
+                        wanted_payload,
+                        &payload,
+                        substitutions,
+                        &mut pass.session.vars,
+                    );
+                }
+
+                // TERM: return constructor/value, never Ty::Variant
+                let want = if matches!(payload, Ty::Void) {
+                    receiver.clone() // zero-arg: value of enum
+                } else {
+                    // use Func (or your Constructor; either is fine)
+                    Ty::Func(Box::new(payload), Box::new(receiver.clone()))
+                };
+
+                return unify(&ty, &want, substitutions, &mut pass.session.vars);
             }
         }
 
