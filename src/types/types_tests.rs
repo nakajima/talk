@@ -1375,4 +1375,26 @@ pub mod tests {
 
         assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
+
+    #[test]
+    fn types_enum_instance_methods() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz<T> {
+                case foo(T), bar(T)
+
+                func unwrap() {
+                    match self {
+                        Fizz.foo(t) -> t,
+                        Fizz.bar(t) -> t
+                    }
+                }
+            }
+
+            Fizz.foo(123).unwrap()
+            ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
 }

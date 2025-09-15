@@ -39,10 +39,12 @@ impl Member {
             return Ok(false);
         }
 
-        if let Ty::Struct(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver {
+        if let Ty::Struct(Some(Name::Resolved(Symbol::Type(type_id), _)), _)
+        | Ty::Sum(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver
+        {
             // If it's a nominal type, check methods first
             if let Some(TypeDef {
-                fields: TypeFields::Struct { methods, .. },
+                fields: TypeFields::Struct { methods, .. } | TypeFields::Enum { methods, .. },
                 ..
             }) = pass.session.phase.type_constructors.get(type_id)
                 && let Some(method) = methods.get(&self.label)
@@ -114,17 +116,11 @@ impl Member {
         }
 
         // // See if it's an enum constructor
-        if let Ty::Sum(Some(Name::Resolved(Symbol::Type(..), _)), box row) = &receiver {
-            // Read the instantiated payload for this label from the receiver row
-            let row = apply_row(row.clone(), substitutions);
-            let closed = row.close();
-            let Some(variant_ty) = closed.get(&self.label) else {
-                return Err(TypeError::MemberNotFound(
-                    receiver.clone(),
-                    self.label.to_string(),
-                ));
-            };
-
+        if let Ty::Sum(Some(Name::Resolved(Symbol::Type(..), _)), box row) = &receiver
+            && let Some(variant_ty) = apply_row(row.clone(), substitutions)
+                .close()
+                .get(&self.label)
+        {
             let constructor_ty = match variant_ty {
                 Ty::Tuple(vals) => curry(vals.clone(), receiver),
                 Ty::Primitive(Primitive::Void) => receiver.clone(),
@@ -132,13 +128,7 @@ impl Member {
             };
 
             next_wants.equals(self.ty.clone(), constructor_ty, self.cause, self.span);
-            // next_wants._has_field(
-            //     row,
-            //     self.label.clone(),
-            //     constructor_ty.clone(),
-            //     self.cause,
-            //     self.span,
-            // );
+
             return Ok(true);
         }
 
