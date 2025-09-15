@@ -4,15 +4,19 @@ pub mod tests {
         ast::AST,
         diagnostic::Diagnostic,
         name::Name,
-        name_resolution::name_resolver::NameResolved,
+        name_resolution::{
+            name_resolver::NameResolved,
+            symbol::{Symbol, TypeId},
+        },
         types::{
             passes::{
                 dependencies_pass::tests::resolve_dependencies,
                 inference_pass::{InferencePass, Inferenced},
             },
-            ty::Ty,
+            row::Row,
+            ty::{Level, Ty},
             type_error::TypeError,
-            type_session::TypeSession,
+            type_session::{TypeDefKind, TypeSession},
         },
     };
 
@@ -1236,11 +1240,34 @@ pub mod tests {
 
         assert_eq!(
             ty(1, &ast, &session),
-            Ty::Variant("foo".into(), Box::new(Ty::Void))
+            Ty::Sum(
+                Some(Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into())),
+                Box::new(Row::Extend {
+                    row: Box::new(Row::Extend {
+                        row: Box::new(Row::Empty(TypeDefKind::Enum)),
+                        label: "foo".into(),
+                        ty: Ty::Void
+                    }),
+                    label: "bar".into(),
+                    ty: Ty::Void
+                })
+            )
         );
+
         assert_eq!(
             ty(2, &ast, &session),
-            Ty::Variant("bar".into(), Box::new(Ty::Void))
+            Ty::Sum(
+                Some(Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into())),
+                Box::new(Row::Extend {
+                    row: Box::new(Row::Extend {
+                        row: Box::new(Row::Empty(TypeDefKind::Enum)),
+                        label: "foo".into(),
+                        ty: Ty::Void
+                    }),
+                    label: "bar".into(),
+                    ty: Ty::Void
+                })
+            )
         );
     }
 
@@ -1257,14 +1284,21 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ty(1, &ast, &session),
-            Ty::Variant("foo".into(), Box::new(Ty::Tuple(vec![Ty::Int, Ty::Bool])))
+        let expected = Ty::Sum(
+            Some(Name::Resolved(Symbol::Type(TypeId(1)), "Fizz".into())),
+            Box::new(Row::Extend {
+                row: Box::new(Row::Extend {
+                    row: Box::new(Row::Empty(TypeDefKind::Enum)),
+                    label: "foo".into(),
+                    ty: Ty::Tuple(vec![Ty::Int, Ty::Bool]),
+                }),
+                label: "bar".into(),
+                ty: Ty::Float,
+            }),
         );
-        assert_eq!(
-            ty(2, &ast, &session),
-            Ty::Variant("bar".into(), Box::new(Ty::Float))
-        );
+
+        assert_eq!(ty(1, &ast, &session), expected);
+        assert_eq!(ty(2, &ast, &session), expected);
     }
 
     #[test]
@@ -1281,14 +1315,29 @@ pub mod tests {
         ",
         );
 
-        assert_eq!(
-            ty(1, &ast, &session),
-            Ty::Variant("some".into(), Box::new(Ty::Int))
-        );
+        fn sum_ty(ty: Ty) -> Ty {
+            Ty::Sum(
+                Some(Name::Resolved(Symbol::Type(TypeId(1)), "Opt".into())),
+                Box::new(Row::Extend {
+                    row: Box::new(Row::Extend {
+                        row: Box::new(Row::Empty(TypeDefKind::Enum)),
+                        label: "some".into(),
+                        ty,
+                    }),
+                    label: "none".into(),
+                    ty: Ty::Void,
+                }),
+            )
+        }
 
+        assert_eq!(ty(1, &ast, &session), sum_ty(Ty::Int));
+        assert_eq!(ty(2, &ast, &session), sum_ty(Ty::Float));
         assert_eq!(
             ty(3, &ast, &session),
-            Ty::Variant("none".into(), Box::new(Ty::Void))
+            sum_ty(Ty::UnificationVar {
+                id: 9.into(),
+                level: Level(1)
+            })
         );
     }
 

@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct UnificationSubstitutions {
     pub row: FxHashMap<RowMetaId, Row>,
     pub ty: FxHashMap<UnificationVarId, Ty>,
@@ -87,7 +87,6 @@ fn occurs_in(id: UnificationVarId, ty: &Ty) -> bool {
         Ty::Tuple(items) => items.iter().any(|t| occurs_in(id, t)),
         Ty::Struct(_, row) => occurs_in_row(id, row),
         Ty::Sum(_, row) => occurs_in_row(id, row),
-        Ty::Variant(_, ty) => occurs_in(id, ty),
         Ty::Hole(..) => false,
         Ty::Param(..) => false,
         Ty::Rigid(..) => false,
@@ -293,7 +292,6 @@ pub(super) fn unify(
 
             unify_rows(TypeDefKind::Enum, lhs_row, rhs_row, substitutions, vars)
         }
-        (Ty::Variant(_, lhs), Ty::Variant(_, rhs)) => unify(lhs, rhs, substitutions, vars),
         (Ty::Func(lhs_param, lhs_ret), Ty::Func(rhs_param, rhs_ret)) => {
             let param = unify(lhs_param, rhs_param, substitutions, vars)?;
             let ret = unify(lhs_ret, rhs_ret, substitutions, vars)?;
@@ -336,7 +334,10 @@ pub(super) fn unify(
             unify_rows(TypeDefKind::Struct, lhs_row, rhs_row, substitutions, vars)
         }
         (_, Ty::Rigid(_)) | (Ty::Rigid(_), _) => Err(TypeError::InvalidUnification(lhs, rhs)),
-        _ => Err(TypeError::InvalidUnification(lhs, rhs)),
+        _ => {
+            tracing::error!("attempted to unify {lhs:?} <> {rhs:?}");
+            Err(TypeError::InvalidUnification(lhs, rhs))
+        }
     }
 }
 
@@ -386,7 +387,6 @@ pub(super) fn substitute(ty: Ty, substitutions: &FxHashMap<Ty, Ty>) -> Ty {
         ),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(substitute_row(*row, substitutions))),
         Ty::Sum(name, row) => Ty::Sum(name, Box::new(substitute_row(*row, substitutions))),
-        Ty::Variant(label, ty) => Ty::Variant(label, Box::new(substitute(*ty, substitutions))),
     }
 }
 
@@ -451,7 +451,6 @@ pub(super) fn apply(ty: Ty, substitutions: &mut UnificationSubstitutions) -> Ty 
         Ty::Tuple(items) => Ty::Tuple(items.into_iter().map(|t| apply(t, substitutions)).collect()),
         Ty::Struct(name, row) => Ty::Struct(name, Box::new(apply_row(*row, substitutions))),
         Ty::Sum(name, row) => Ty::Sum(name, Box::new(apply_row(*row, substitutions))),
-        Ty::Variant(label, ty) => Ty::Variant(label, Box::new(apply(*ty, substitutions))),
     }
 }
 
@@ -530,8 +529,5 @@ pub(super) fn instantiate_ty(
             Ty::Struct(name, Box::new(instantiate_row(*row, substitutions, level)))
         }
         Ty::Sum(name, row) => Ty::Sum(name, Box::new(instantiate_row(*row, substitutions, level))),
-        Ty::Variant(label, ty) => {
-            Ty::Variant(label, Box::new(instantiate_ty(*ty, substitutions, level)))
-        }
     }
 }

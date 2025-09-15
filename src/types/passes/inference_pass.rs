@@ -89,7 +89,7 @@ pub struct InferencePass<'a> {
     pub(crate) session: TypeSession<SCCResolved>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Wants(Vec<Constraint>);
 impl Wants {
     pub fn push(&mut self, constraint: Constraint) {
@@ -325,41 +325,38 @@ impl<'a> InferencePass<'a> {
             TypeFields::Enum {
                 variants, methods, ..
             } => {
-                // Build the variants row
-                let row = variants.iter().fold(
-                    Row::Empty(TypeDefKind::Enum),
-                    |mut acc, (label, variant)| {
-                        let ty = if variant.fields.is_empty() {
-                            Ty::Void
-                        } else if variant.fields.len() == 1 {
-                            self.infer_ast_ty_repr(&variant.fields[0], level, wants)
-                        } else {
-                            Ty::Tuple(
-                                variant
-                                    .fields
-                                    .iter()
-                                    .map(|f| self.infer_ast_ty_repr(f, level, wants))
-                                    .collect(),
-                            )
-                        };
-
-                        let variant_ty = Ty::Variant(label.clone(), Box::new(ty));
-                        let generalized = self.generalize(level, variant_ty.clone(), &[]);
-                        self.term_env.promote(variant.symbol, generalized);
-
-                        acc = Row::Extend {
-                            row: Box::new(acc),
-                            label: label.clone(),
-                            ty: variant_ty,
-                        };
-                        acc
-                    },
-                );
+                // CLOSED row: label -> payload(Params). No row meta, no HasField predicates.
+                let row =
+                    variants
+                        .iter()
+                        .fold(Row::Empty(TypeDefKind::Enum), |acc, (label, variant)| {
+                            let payload = if variant.fields.is_empty() {
+                                Ty::Void
+                            } else if variant.fields.len() == 1 {
+                                self.infer_ast_ty_repr(&variant.fields[0], level, wants)
+                            } else {
+                                Ty::Tuple(
+                                    variant
+                                        .fields
+                                        .iter()
+                                        .map(|f| self.infer_ast_ty_repr(f, level, wants))
+                                        .collect(),
+                                )
+                            };
+                            Row::Extend {
+                                row: Box::new(acc),
+                                label: label.clone(),
+                                ty: payload,
+                            }
+                        });
 
                 let sum_ty = Ty::Sum(Some(type_def.name.clone()), Box::new(row.clone()));
-                let scheme = Scheme::new(foralls, vec![], sum_ty);
-                self.term_env
-                    .promote(Symbol::Type(type_id), EnvEntry::Scheme(scheme));
+
+                // Export the nominal enum type scheme: ∀… . Opt<…>
+                self.term_env.promote(
+                    Symbol::Type(type_id),
+                    EnvEntry::Scheme(Scheme::new(foralls.clone(), vec![], sum_ty.clone())),
+                );
 
                 methods
             }
@@ -841,8 +838,14 @@ impl<'a> InferencePass<'a> {
                 }
             }
             PatternKind::Record { fields } => {
-                let expected_row =
-                    self.ensure_row(pattern.id, pattern.span, expected, level, wants);
+                let expected_row = self.ensure_row(
+                    pattern.id,
+                    pattern.span,
+                    expected,
+                    level,
+                    wants,
+                    TypeDefKind::Struct,
+                );
                 for field in fields {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => {
@@ -904,46 +907,29 @@ impl<'a> InferencePass<'a> {
                     pattern.span,
                 );
 
-                if fields.is_empty() {
-                    // For variants without fields, just constrain the types
-                    let variant_ty = Ty::Variant(variant_name.into(), Box::new(Ty::Void));
-                    wants.member(
-                        receiver,
-                        variant_name.into(),
-                        variant_ty,
-                        ConstraintCause::Pattern(pattern.id),
-                        pattern.span,
-                    );
+                let field_metas: Vec<Ty> =
+                    fields.iter().map(|_| self.new_ty_meta_var(level)).collect();
+                let payload = if fields.is_empty() {
+                    expected.clone()
+                } else if fields.len() == 1 {
+                    Ty::Func(field_metas[0].clone().into(), expected.clone().into())
                 } else {
-                    // Create meta vars for the field types
-                    let field_metas: Vec<Ty> = (0..fields.len())
-                        .map(|_| self.new_ty_meta_var(level))
-                        .collect();
+                    curry(field_metas.clone(), expected.clone())
+                };
 
-                    // Constrain the variant type to match
-                    let variant_ty = Ty::Variant(
-                        variant_name.into(),
-                        Box::new(if field_metas.len() == 1 {
-                            field_metas[0].clone()
-                        } else {
-                            Ty::Tuple(field_metas.clone())
-                        }),
-                    );
+                wants.member(
+                    expected.clone(),
+                    variant_name.into(),
+                    payload,
+                    ConstraintCause::Pattern(pattern.id),
+                    pattern.span,
+                );
 
-                    println!("variant values ty: {variant_ty:?}");
+                // wants._has_field(*row.clone(), variant_name.into(), payload);
 
-                    wants.member(
-                        receiver.clone(),
-                        variant_name.into(),
-                        variant_ty,
-                        ConstraintCause::Pattern(pattern.id),
-                        pattern.span,
-                    );
-
-                    // Recursively check each field pattern
-                    for (field_pattern, field_ty) in fields.iter().zip(field_metas) {
-                        self.check_pattern(field_pattern, &field_ty, level, wants);
-                    }
+                // Recursively check each field pattern
+                for (field_pattern, field_ty) in fields.iter().zip(field_metas) {
+                    self.check_pattern(field_pattern, &field_ty, level, wants);
                 }
             }
             PatternKind::Wildcard => todo!(),
@@ -962,20 +948,30 @@ impl<'a> InferencePass<'a> {
         expected: &Ty,
         level: Level,
         wants: &mut Wants,
+        kind: TypeDefKind,
     ) -> Row {
         match expected {
             Ty::Struct(_, box row) => row.clone(),
+            Ty::Sum(_, box row) => row.clone(),
             _ => {
-                let rho = self.new_row_meta_var(level);
+                let row = Box::new(self.new_row_meta_var(level));
+                let rho = if kind == TypeDefKind::Struct {
+                    Ty::Struct(None, row)
+                } else {
+                    Ty::Sum(None, row)
+                };
+
                 wants.equals(
                     expected.clone(),
                     rho.clone(),
                     ConstraintCause::Pattern(id),
                     span,
                 );
-                let Ty::Struct(_, row) = rho else {
+
+                let (Ty::Struct(_, row) | Ty::Sum(_, row)) = rho else {
                     unreachable!()
                 };
+
                 *row
             }
         }
@@ -1023,9 +1019,11 @@ impl<'a> InferencePass<'a> {
             ExprKind::Variable(Name::Resolved(sym, _)) => {
                 match self.term_env.lookup(sym).cloned() {
                     Some(EnvEntry::Scheme(scheme)) => {
-                        scheme
+                        let instantiated = scheme
                             .inference_instantiate(self, level, wants, expr.span)
-                            .0
+                            .0;
+                        println!("instantiated var: {instantiated:?}");
+                        instantiated
                     } // or pass through
                     Some(EnvEntry::Mono(t)) => t.clone(),
                     None => {
@@ -1301,39 +1299,6 @@ impl<'a> InferencePass<'a> {
             None
         };
 
-        // if arg_tys.is_empty() {
-        //     // For member calls with no arguments, the Member constraint already handled
-        //     // the receiver application, so callee_ty might be the return type directly
-        //     // rather than a function type
-        //     if matches!(
-        //         callee,
-        //         Expr {
-        //             kind: ExprKind::Member(..),
-        //             ..
-        //         }
-        //     ) {
-        //         // The member constraint returns the type after receiver application
-        //         // For zero-arg methods, this is just the return type
-        //         wants.equals(
-        //             callee_ty,
-        //             returns.clone(),
-        //             ConstraintCause::Call(callee.id),
-        //             callee.span,
-        //         );
-        //     } else {
-        //         // For non-member zero-arg calls: callee must be Unit -> returns
-        //         let expected =
-        //             Ty::Func(Box::new(Ty::Void /* or Unit */), Box::new(returns.clone()));
-        //         wants.equals(
-        //             callee_ty,
-        //             expected,
-        //             ConstraintCause::Call(callee.id),
-        //             callee.span,
-        //         );
-        //     }
-        //     return returns;
-        // }
-
         wants.call(
             callee_ty,
             arg_tys,
@@ -1474,11 +1439,11 @@ impl<'a> InferencePass<'a> {
         Ty::UnificationVar { id, level }
     }
 
-    pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Ty {
+    pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Row {
         let id = self.session.vars.row_metas.next_id();
         self.meta_levels.insert(Meta::Row(id), level);
         tracing::trace!("Fresh {id:?}");
-        Ty::Struct(None, Box::new(Row::Var(id)))
+        Row::Var(id)
     }
 }
 
@@ -1518,9 +1483,6 @@ pub fn collect_meta(ty: &Ty, out: &mut FxHashSet<Ty>) {
                 collect_meta(&Ty::Struct(None, row.clone()), out);
             }
         },
-        Ty::Variant(_, box ty) => {
-            collect_meta(ty, out);
-        }
         Ty::Constructor { param, ret, .. } => {
             collect_meta(param, out);
             collect_meta(ret, out);

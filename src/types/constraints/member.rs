@@ -6,10 +6,10 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintCause},
         fields::TypeFields,
-        passes::inference_pass::{InferencePass, Wants},
-        ty::{Level, Ty},
+        passes::inference_pass::{InferencePass, Wants, curry},
+        ty::{Level, Primitive, Ty},
         type_error::TypeError,
-        type_operations::{UnificationSubstitutions, apply, unify},
+        type_operations::{UnificationSubstitutions, apply, apply_row, unify},
         type_session::TypeDef,
     },
 };
@@ -38,8 +38,6 @@ impl Member {
             next_wants.push(Constraint::Member(self.clone()));
             return Ok(false);
         }
-
-        println!("receiver: {receiver:?}");
 
         if let Ty::Struct(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver {
             // If it's a nominal type, check methods first
@@ -115,67 +113,34 @@ impl Member {
             return unify(&ty, &method_ty, substitutions, &mut pass.session.vars);
         }
 
-        // See if it's an enum constructor
-        if let Ty::Sum(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver {
-            // If it's a nominal type, check methods first
-            if let Some(TypeDef {
-                fields: TypeFields::Enum { variants, .. },
-                ..
-            }) = pass.session.phase.type_constructors.get(type_id).cloned()
-                && let Some(variant) = variants.get(&self.label)
-            {
-                // let variant_entry = pass
-                //     .term_env
-                //     .lookup(&variant.symbol)
-                //     .cloned()
-                //     .expect("didn't get variant ty from term env");
+        // // See if it's an enum constructor
+        if let Ty::Sum(Some(Name::Resolved(Symbol::Type(..), _)), box row) = &receiver {
+            // Read the instantiated payload for this label from the receiver row
+            println!("receiver is {receiver:?}");
+            let row = apply_row(row.clone(), substitutions);
+            let closed = row.close();
+            let Some(variant_ty) = closed.get(&self.label) else {
+                return Err(TypeError::MemberNotFound(
+                    receiver.clone(),
+                    self.label.to_string(),
+                ));
+            };
 
-                // let variant_ty = variant_entry.solver_instantiate(
-                //     pass,
-                //     Level(1),
-                //     substitutions,
-                //     next_wants,
-                //     self.span,
-                // );
+            let constructor_ty = match variant_ty {
+                Ty::Tuple(vals) => curry(vals.clone(), receiver),
+                Ty::Primitive(Primitive::Void) => receiver.clone(),
+                ty => Ty::Func(Box::new(ty.clone()), receiver.into()),
+            };
 
-                // println!("variant_ty: {variant_ty:?}. ty: {ty:?}");
-
-                // return unify(&ty, &variant_ty, substitutions, &mut pass.session.vars);
-                // payload type at this use site (respect generics)
-                let payload = if variant.fields.is_empty() {
-                    Ty::Void
-                } else if variant.fields.len() == 1 {
-                    pass.infer_ast_ty_repr(&variant.fields[0], Level(1), next_wants)
-                } else {
-                    Ty::Tuple(
-                        variant
-                            .fields
-                            .iter()
-                            .map(|f| pass.infer_ast_ty_repr(f, Level(1), next_wants))
-                            .collect(),
-                    )
-                };
-
-                // PATTERN: ty is a Variant => compare payloads only
-                if let Ty::Variant(_, box wanted_payload) = &ty {
-                    return unify(
-                        wanted_payload,
-                        &payload,
-                        substitutions,
-                        &mut pass.session.vars,
-                    );
-                }
-
-                // TERM: return constructor/value, never Ty::Variant
-                let want = if matches!(payload, Ty::Void) {
-                    receiver.clone() // zero-arg: value of enum
-                } else {
-                    // use Func (or your Constructor; either is fine)
-                    Ty::Func(Box::new(payload), Box::new(receiver.clone()))
-                };
-
-                return unify(&ty, &want, substitutions, &mut pass.session.vars);
-            }
+            next_wants.equals(self.ty.clone(), constructor_ty, self.cause, self.span);
+            // next_wants._has_field(
+            //     row,
+            //     self.label.clone(),
+            //     constructor_ty.clone(),
+            //     self.cause,
+            //     self.span,
+            // );
+            return Ok(true);
         }
 
         // If it's not a method, figure out the row and emit a has field constraint

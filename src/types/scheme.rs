@@ -88,7 +88,7 @@ impl Predicate {
 
 #[derive(Debug, Clone)]
 pub struct Scheme {
-    foralls: Vec<ForAll>,
+    pub(super) foralls: Vec<ForAll>,
     predicates: Vec<Predicate>,
     pub(super) ty: Ty,
 }
@@ -127,7 +127,7 @@ impl Scheme {
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let Ty::Struct(_, box Row::Var(meta)) = pass.new_row_meta_var(level) else {
+                    let Row::Var(meta) = pass.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -175,7 +175,7 @@ impl Scheme {
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let Ty::Struct(_, box Row::Var(meta)) = pass.new_row_meta_var(level) else {
+                    let Row::Var(meta) = pass.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -193,6 +193,8 @@ impl Scheme {
             tracing::trace!("predicate instantiated: {predicate:?} -> {constraint:?}");
             wants.push(constraint);
         }
+
+        tracing::trace!("solver_instantiate ret subs: {substitutions:?}");
 
         (
             instantiate_ty(self.ty.clone(), &substitutions, level),
@@ -240,7 +242,7 @@ impl Scheme {
                 unreachable!();
             };
 
-            let Ty::Struct(_, box Row::Var(row_meta)) = pass.new_row_meta_var(level) else {
+            let Row::Var(row_meta) = pass.new_row_meta_var(level) else {
                 unreachable!()
             };
             substitutions.row.insert(row_param, row_meta);

@@ -1,8 +1,6 @@
 use itertools::Itertools;
 
-use crate::{
-    label::Label, name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::row::Row,
-};
+use crate::{name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::row::Row};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct UnificationVarId(u32);
@@ -69,7 +67,7 @@ pub enum Ty {
     // Nominal types
     Struct(Option<Name>, Box<Row>),
     Sum(Option<Name>, Box<Row>), // Row for variants
-    Variant(Label, Box<Ty>),     // Attached value can be either Record or Tuple
+                                 // Variant(Label, Box<Ty>),     // Attached value can be either Record or Tuple
 }
 
 #[allow(non_upper_case_globals)]
@@ -97,7 +95,6 @@ impl Ty {
                 Row::Param(..) => false,
                 Row::Var(_) => true,
             },
-            Ty::Variant(_, ty) => ty.contains_var(),
             Ty::Struct(name, box row) => match row {
                 Row::Empty(..) => false,
                 Row::Extend { row, ty, .. } => {
@@ -125,9 +122,6 @@ impl std::fmt::Debug for Ty {
             Ty::Tuple(items) => {
                 write!(f, "({})", items.iter().map(|i| format!("{i:?}")).join(", "))
             }
-            Ty::Variant(name, ty) => {
-                write!(f, ".{name}({ty:?})")
-            }
             Ty::Struct(name, box row) | Ty::Sum(name, box row) => {
                 let row_debug = match row {
                     Row::Empty(..) => "".to_string(),
@@ -152,7 +146,7 @@ impl std::fmt::Debug for Ty {
                         "enum"
                     },
                     if let Some(name) = name {
-                        format!(" {} ", name.name_str())
+                        format!(" {:?} ", name)
                     } else {
                         "".into()
                     }
