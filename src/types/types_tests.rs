@@ -1397,4 +1397,44 @@ pub mod tests {
 
         assert_eq!(ty(1, &ast, &session), Ty::Int);
     }
+
+    #[test]
+    fn types_unqualified_variant() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz {
+                case foo(Int), bar(Int)
+            }
+
+            match Fizz.foo(123) {
+                .foo(x) -> x,
+                .bar(y) -> y
+            }
+            ",
+        );
+
+        assert_eq!(ty(1, &ast, &session), Ty::Int);
+    }
+
+    #[test]
+    fn types_unqualified_variant_as_param() {
+        let (ast, session) = typecheck(
+            "
+            enum Fizz {
+                case foo(Int), bar(Int)
+            }
+
+            func buzz(fizz: Fizz) {
+                match fizz {
+                    .foo(x) -> x,
+                    .bar(y) -> y
+                }
+            }
+
+            buzz(fizz: .foo(123))
+            ",
+        );
+
+        assert_eq!(ty(2, &ast, &session), Ty::Int);
+    }
 }

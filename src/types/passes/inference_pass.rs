@@ -1184,7 +1184,7 @@ impl<'a> InferencePass<'a> {
         let receiver_ty = if let Some(receiver) = &receiver {
             self.infer_expr(receiver, level, wants)
         } else {
-            todo!("unqualified members not supported yet");
+            self.new_ty_meta_var(level)
         };
 
         let member_ty = self.new_ty_meta_var(level);
