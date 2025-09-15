@@ -238,7 +238,12 @@ impl<'a> InferencePass<'a> {
         pass.session.advance(phase)
     }
 
-    fn infer_ast_ty_repr(&mut self, ty_repr: &ASTTyRepr, level: Level, wants: &mut Wants) -> Ty {
+    pub(crate) fn infer_ast_ty_repr(
+        &mut self,
+        ty_repr: &ASTTyRepr,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
         match &ty_repr {
             ASTTyRepr::Annotated(annotation) => {
                 self.infer_type_annotation(annotation, level, wants)
@@ -326,6 +331,8 @@ impl<'a> InferencePass<'a> {
                     |mut acc, (label, variant)| {
                         let ty = if variant.fields.is_empty() {
                             Ty::Void
+                        } else if variant.fields.len() == 1 {
+                            self.infer_ast_ty_repr(&variant.fields[0], level, wants)
                         } else {
                             Ty::Tuple(
                                 variant
@@ -336,10 +343,14 @@ impl<'a> InferencePass<'a> {
                             )
                         };
 
+                        let variant_ty = Ty::Variant(label.clone(), Box::new(ty));
+                        let generalized = self.generalize(level, variant_ty.clone(), &[]);
+                        self.term_env.promote(variant.symbol, generalized);
+
                         acc = Row::Extend {
                             row: Box::new(acc),
                             label: label.clone(),
-                            ty: Ty::Variant(label.clone(), Box::new(ty)),
+                            ty: variant_ty,
                         };
                         acc
                     },
@@ -880,23 +891,10 @@ impl<'a> InferencePass<'a> {
                         .lookup(&enum_name.symbol().unwrap())
                         .cloned()
                         .expect("didn't get enum for name");
-                    match entry {
-                        EnvEntry::Mono(ty) => ty.clone(),
-                        EnvEntry::Scheme(scheme) => {
-                            scheme
-                                .inference_instantiate(self, level, wants, pattern.span)
-                                .0
-                        }
-                    }
+
+                    entry.inference_instantiate(self, level, wants, pattern.span)
                 } else {
-                    let receiver_ty = self.new_ty_meta_var(level);
-                    wants.equals(
-                        expected.clone(),
-                        receiver_ty.clone(),
-                        ConstraintCause::Member(pattern.id),
-                        pattern.span,
-                    );
-                    receiver_ty
+                    self.new_ty_meta_var(level)
                 };
 
                 let ty = self.new_ty_meta_var(level);
@@ -908,16 +906,21 @@ impl<'a> InferencePass<'a> {
                     pattern.span,
                 );
 
-                if !fields.is_empty() {
-                    // The variant type should be Ty::Variant(_, Box<Ty::Tuple(field_types)>)
-                    // We need to constrain ty to be that variant and check the field patterns
-                    wants.equals(
-                        expected.clone(),
-                        receiver.clone(),
+                println!("fields fields: {fields:?}");
+
+                if fields.is_empty() {
+                    // For variants without fields, just constrain the types
+                    println!("expected: {expected:?}, receiver: {receiver:?}");
+
+                    let variant_ty = Ty::Variant(variant_name.into(), Box::new(Ty::Void));
+                    wants.member(
+                        receiver,
+                        variant_name.into(),
+                        variant_ty,
                         ConstraintCause::Pattern(pattern.id),
                         pattern.span,
                     );
-
+                } else {
                     // Create meta vars for the field types
                     let field_metas: Vec<Ty> = (0..fields.len())
                         .map(|_| self.new_ty_meta_var(level))
@@ -933,6 +936,8 @@ impl<'a> InferencePass<'a> {
                         }),
                     );
 
+                    println!("variant values ty: {variant_ty:?}");
+
                     wants.member(
                         receiver.clone(),
                         variant_name.into(),
@@ -945,23 +950,6 @@ impl<'a> InferencePass<'a> {
                     for (field_pattern, field_ty) in fields.iter().zip(field_metas) {
                         self.check_pattern(field_pattern, &field_ty, level, wants);
                     }
-                } else {
-                    // For variants without fields, just constrain the types
-                    wants.equals(
-                        expected.clone(),
-                        receiver.clone(),
-                        ConstraintCause::Pattern(pattern.id),
-                        pattern.span,
-                    );
-
-                    let variant_ty = Ty::Variant(variant_name.into(), Box::new(Ty::Void));
-                    wants.member(
-                        receiver,
-                        variant_name.into(),
-                        variant_ty,
-                        ConstraintCause::Pattern(pattern.id),
-                        pattern.span,
-                    );
                 }
             }
             PatternKind::Wildcard => todo!(),

@@ -1263,7 +1263,7 @@ pub mod tests {
         );
         assert_eq!(
             ty(2, &ast, &session),
-            Ty::Variant("bar".into(), Box::new(Ty::Tuple(vec![Ty::Float])))
+            Ty::Variant("bar".into(), Box::new(Ty::Float))
         );
     }
 
@@ -1283,7 +1283,7 @@ pub mod tests {
 
         assert_eq!(
             ty(1, &ast, &session),
-            Ty::Variant("some".into(), Box::new(Ty::Tuple(vec![Ty::Int])))
+            Ty::Variant("some".into(), Box::new(Ty::Int))
         );
 
         assert_eq!(

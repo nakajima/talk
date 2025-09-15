@@ -7,7 +7,6 @@ use crate::{
         constraint::{Constraint, ConstraintCause},
         fields::TypeFields,
         passes::inference_pass::{InferencePass, Wants},
-        term_environment::EnvEntry,
         ty::{Level, Ty},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, unify},
@@ -40,6 +39,8 @@ impl Member {
             return Ok(false);
         }
 
+        println!("receiver: {receiver:?}");
+
         if let Ty::Struct(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver {
             // If it's a nominal type, check methods first
             if let Some(TypeDef {
@@ -53,20 +54,13 @@ impl Member {
                     panic!("did not find type for method named {:?}", self.label);
                 };
 
-                let method_ty = match &method_entry {
-                    EnvEntry::Mono(ty) => ty.clone(),
-                    EnvEntry::Scheme(scheme) => {
-                        scheme
-                            .solver_instantiate(
-                                pass,
-                                Level(1),
-                                next_wants,
-                                self.span,
-                                substitutions,
-                            )
-                            .0
-                    }
-                };
+                let method_ty = method_entry.solver_instantiate(
+                    pass,
+                    Level(1),
+                    substitutions,
+                    next_wants,
+                    self.span,
+                );
 
                 // For instance methods, the method_ty looks like: self -> arg1 -> arg2 -> ret
                 // We need to apply the receiver to get: arg1 -> arg2 -> ret
@@ -96,36 +90,57 @@ impl Member {
             }
         }
 
-        // See if it's a static method
-        if let Ty::Constructor { type_id, .. } = &receiver {
-            // If it's a nominal type, check methods first
-            if let Some(TypeDef {
-                fields: TypeFields::Struct { methods, .. } | TypeFields::Enum { methods, .. },
+        // See if it's a static method or enum variant constructor
+        if let Ty::Constructor { type_id, .. } = &receiver
+            && let Some(TypeDef {
+                fields: TypeFields::Struct { methods, .. },
                 ..
             }) = pass.session.phase.type_constructors.get(type_id)
-                && let Some(method) = methods.get(&self.label)
-                && method.is_static
+            && let Some(method) = methods.get(&self.label)
+            && method.is_static
+        {
+            // If it's a nominal type, check methods first
+            let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
+                panic!("did not find type for method named {:?}", self.label);
+            };
+
+            let method_ty = method_entry.solver_instantiate(
+                pass,
+                Level(1),
+                substitutions,
+                next_wants,
+                self.span,
+            );
+
+            return unify(&ty, &method_ty, substitutions, &mut pass.session.vars);
+        }
+
+        // See if it's an enum constructor
+        if let Ty::Sum(Some(Name::Resolved(Symbol::Type(type_id), _)), _) = &receiver {
+            // If it's a nominal type, check methods first
+            if let Some(TypeDef {
+                fields: TypeFields::Enum { variants, .. },
+                ..
+            }) = pass.session.phase.type_constructors.get(type_id)
+                && let Some(variant) = variants.get(&self.label)
             {
-                let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
-                    panic!("did not find type for method named {:?}", self.label);
-                };
+                let variant_entry = pass
+                    .term_env
+                    .lookup(&variant.symbol)
+                    .cloned()
+                    .expect("didn't get variant ty from term env");
 
-                let method_ty = match &method_entry {
-                    EnvEntry::Mono(ty) => ty.clone(),
-                    EnvEntry::Scheme(scheme) => {
-                        scheme
-                            .solver_instantiate(
-                                pass,
-                                Level(1),
-                                next_wants,
-                                self.span,
-                                substitutions,
-                            )
-                            .0
-                    }
-                };
+                let variant_ty = variant_entry.solver_instantiate(
+                    pass,
+                    Level(1),
+                    substitutions,
+                    next_wants,
+                    self.span,
+                );
 
-                return unify(&ty, &method_ty, substitutions, &mut pass.session.vars);
+                println!("variant_ty: {variant_ty:?}. ty: {ty:?}");
+
+                return unify(&ty, &variant_ty, substitutions, &mut pass.session.vars);
             }
         }
 

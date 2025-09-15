@@ -304,11 +304,7 @@ impl NameResolver {
     }
 
     fn enter_pattern(&mut self, pattern: &mut Pattern) {
-        if let PatternKind::Variant {
-            enum_name,
-            variant_name,
-            fields,
-        } = &mut pattern.kind
+        if let PatternKind::Variant { enum_name, .. } = &mut pattern.kind
             && let Some(enum_name) = enum_name
         {
             let Some(resolved) = self.lookup(enum_name) else {
