@@ -1,6 +1,8 @@
 use indexmap::IndexMap;
 
-use crate::{label::Label, name::Name, name_resolution::symbol::Symbol};
+use crate::{
+    label::Label, name::Name, name_resolution::symbol::Symbol, node_id::NodeID, span::Span,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TypeFields<T> {
@@ -12,7 +14,7 @@ pub enum TypeFields<T> {
     Protocol {
         initializers: IndexMap<Name, Initializer<T>>,
         methods: IndexMap<Label, Method<T>>,
-        method_requirements: IndexMap<Name, MethodRequirement<T>>,
+        method_requirements: IndexMap<Label, MethodRequirement<T>>,
         properties: IndexMap<Label, Property<T>>,
         associated_types: IndexMap<Name, Associated>,
     },
@@ -29,8 +31,10 @@ pub struct Property<T> {
     pub ty_repr: T,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub struct Method<T> {
+    pub id: NodeID,
+    pub span: Span,
     pub symbol: Symbol,
     pub is_static: bool,
     pub params: Vec<T>,
@@ -39,6 +43,7 @@ pub struct Method<T> {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct MethodRequirement<T> {
+    pub id: NodeID,
     pub params: Vec<T>,
     pub ret: T,
 }

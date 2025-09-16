@@ -646,6 +646,25 @@ pub mod tests {
     }
 
     #[test]
+    fn resolves_struct_extension() {
+        let resolved = resolve(
+            "
+        struct Person {}
+        extend Person {}
+        ",
+        );
+        assert_eq!(
+            *resolved.roots[1].as_decl(),
+            any_decl!(DeclKind::Extend {
+                name: Name::Resolved(Symbol::Type(TypeId(1)), "Person".into()),
+                conformances: vec![],
+                generics: vec![],
+                body: any_block!(vec![])
+            }),
+        )
+    }
+
+    #[test]
     fn resolves_enum() {
         let resolved = resolve(
             "

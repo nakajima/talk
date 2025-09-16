@@ -210,7 +210,7 @@ impl NameResolver {
         Some(Name::Resolved(symbol, name.name_str()))
     }
 
-    fn diagnostic(&mut self, span: Span, err: NameResolverError) {
+    pub(super) fn diagnostic(&mut self, span: Span, err: NameResolverError) {
         self.diagnostics.push(Diagnostic::<NameResolverError> {
             kind: err,
             path: self.path.clone(),
@@ -416,7 +416,10 @@ impl NameResolver {
     fn enter_decl(&mut self, decl: &mut Decl) {
         on!(
             decl.kind,
-            DeclKind::Enum { .. } | DeclKind::Struct { .. } | DeclKind::Protocol { .. },
+            DeclKind::Enum { .. }
+                | DeclKind::Struct { .. }
+                | DeclKind::Protocol { .. }
+                | DeclKind::Extend { .. },
             {
                 self.enter_scope(decl.id);
             }
@@ -434,7 +437,10 @@ impl NameResolver {
     fn exit_decl(&mut self, decl: &mut Decl) {
         on!(
             decl.kind,
-            DeclKind::Enum { .. } | DeclKind::Struct { .. } | DeclKind::Protocol { .. },
+            DeclKind::Enum { .. }
+                | DeclKind::Struct { .. }
+                | DeclKind::Protocol { .. }
+                | DeclKind::Extend { .. },
             {
                 self.exit_scope();
             }

@@ -4,27 +4,24 @@ use tracing::{instrument, trace_span};
 
 use crate::{
     ast::AST,
-    diagnostic::{AnyDiagnostic, Diagnostic},
     label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
         symbol::{Symbol, TypeId},
     },
-    node_kinds::{
-        generic_decl::GenericDecl,
-        type_annotation::{TypeAnnotation, TypeAnnotationKind},
-    },
+    node_kinds::type_annotation::{TypeAnnotation, TypeAnnotationKind},
     types::{
-        builtins::resolve_builtin_type,
         fields::{
             Associated, Initializer, Method, MethodRequirement, Property, TypeFields, Variant,
         },
         passes::dependencies_pass::SCCResolved,
         row::Row,
-        ty::Ty,
+        term_environment::EnvEntry,
+        ty::{Level, Ty},
         type_error::TypeError,
-        type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
+        type_session::{ASTTyRepr, Raw, TypeDef, TypeDefKind, TypeSession, TypingPhase},
+        wants::Wants,
     },
 };
 
@@ -39,63 +36,68 @@ impl TypingPhase for HeadersResolved {
 }
 
 #[derive(Debug)]
-pub struct TypeHeaderResolvePass {
+pub struct TypeHeaderResolvePass<'a> {
     session: TypeSession<Raw>,
     type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
     protocols: FxHashMap<TypeId, TypeDef<Ty>>,
     generics_stack: Vec<IndexMap<Name, Ty>>,
-    diagnostics: Vec<Diagnostic<TypeError>>,
+    ast: &'a mut AST<NameResolved>,
 }
 
-impl TypeHeaderResolvePass {
+impl<'a> TypeHeaderResolvePass<'a> {
     pub fn drive(
-        session: TypeSession<Raw>,
         ast: &mut AST<NameResolved>,
-    ) -> Result<TypeSession<HeadersResolved>, TypeError> {
+        session: TypeSession<Raw>,
+    ) -> TypeSession<HeadersResolved> {
         let resolver = TypeHeaderResolvePass {
             session,
             type_constructors: Default::default(),
             protocols: Default::default(),
             generics_stack: Default::default(),
-            diagnostics: Default::default(),
+            ast,
         };
 
-        resolver.solve(ast)
+        resolver.solve()
     }
 
-    fn solve(
-        mut self,
-        ast: &mut AST<NameResolved>,
-    ) -> Result<TypeSession<HeadersResolved>, TypeError> {
+    fn solve(mut self) -> TypeSession<HeadersResolved> {
+        let level = Level(1);
+        let mut wants = Wants::default();
+
         for (decl_id, type_def) in self.session.phase.type_constructors.clone() {
-            if let Ok(resolved) = self.resolve_type_def(&type_def) {
-                self.type_constructors.insert(decl_id, resolved);
+            if let Ok(resolved) = self.resolve_type_def(&type_def, level, &mut wants) {
+                self.type_constructors.insert(decl_id, resolved.clone());
+                self.session
+                    .term_env
+                    .promote(Symbol::Type(decl_id), resolved.to_env_entry())
             }
         }
 
-        ast.diagnostics
-            .extend(self.diagnostics.into_iter().map(AnyDiagnostic::Typing));
-
-        Ok(self.session.advance(HeadersResolved {
+        self.session.advance(HeadersResolved {
             type_constructors: self.type_constructors,
             protocols: self.protocols,
-        }))
+        })
     }
 
-    fn resolve_fields(&mut self, fields: &TypeFields<ASTTyRepr>) -> TypeFields<Ty> {
+    fn resolve_fields(
+        &mut self,
+        fields: &TypeFields<ASTTyRepr>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> TypeFields<Ty> {
         match fields {
             TypeFields::Enum { variants, methods } => TypeFields::<Ty>::Enum {
-                variants: self.resolve_variants(variants),
-                methods: self.resolve_methods(methods),
+                variants: self.resolve_variants(variants, level, wants),
+                methods: self.resolve_methods(methods, level, wants),
             },
             TypeFields::Struct {
                 initializers,
                 methods,
                 properties,
             } => TypeFields::<Ty>::Struct {
-                initializers: self.resolve_initializers(initializers),
-                methods: self.resolve_methods(methods),
-                properties: self.resolve_properties(properties),
+                initializers: self.resolve_initializers(initializers, level, wants),
+                methods: self.resolve_methods(methods, level, wants),
+                properties: self.resolve_properties(properties, level, wants),
             },
             TypeFields::Protocol {
                 initializers,
@@ -104,10 +106,14 @@ impl TypeHeaderResolvePass {
                 properties,
                 associated_types,
             } => TypeFields::<Ty>::Protocol {
-                initializers: self.resolve_initializers(initializers),
-                methods: self.resolve_methods(methods),
-                properties: self.resolve_properties(properties),
-                method_requirements: self.resolve_method_requirements(method_requirements),
+                initializers: self.resolve_initializers(initializers, level, wants),
+                methods: self.resolve_methods(methods, level, wants),
+                properties: self.resolve_properties(properties, level, wants),
+                method_requirements: self.resolve_method_requirements(
+                    method_requirements,
+                    level,
+                    wants,
+                ),
                 associated_types: self.resolve_associated_types(associated_types),
             },
             TypeFields::Primitive => TypeFields::<Ty>::Primitive,
@@ -118,20 +124,21 @@ impl TypeHeaderResolvePass {
     fn resolve_type_def(
         &mut self,
         type_def: &TypeDef<ASTTyRepr>,
+        level: Level,
+        wants: &mut Wants,
     ) -> Result<TypeDef<Ty>, TypeError> {
         let _s = trace_span!("resolve", type_def = format!("{type_def:?}")).entered();
 
         let mut generics = IndexMap::default();
 
         for (name, generic) in type_def.generics.iter() {
-            if let Some(ty_repr) = self.resolve_ty_repr(generic) {
-                generics.insert(name.clone(), ty_repr);
-            }
+            let ty_repr = self.infer_ast_ty_repr(generic, level, wants);
+            generics.insert(name.clone(), ty_repr);
         }
 
         self.generics_stack.push(generics);
 
-        let fields = self.resolve_fields(&type_def.fields);
+        let fields = self.resolve_fields(&type_def.fields, level, wants);
 
         generics = self.generics_stack.pop().unwrap();
 
@@ -147,8 +154,10 @@ impl TypeHeaderResolvePass {
 
     fn resolve_variants(
         &mut self,
-        variants: &IndexMap<Name, Variant<ASTTyRepr>>,
-    ) -> IndexMap<Name, Variant<Ty>> {
+        variants: &IndexMap<Label, Variant<ASTTyRepr>>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> IndexMap<Label, Variant<Ty>> {
         let mut resolved_variants = IndexMap::default();
         for (name, variant) in variants {
             resolved_variants.insert(
@@ -157,8 +166,10 @@ impl TypeHeaderResolvePass {
                     fields: variant
                         .fields
                         .iter()
-                        .filter_map(|f| self.resolve_ty_repr(f))
+                        .map(|f| self.infer_ast_ty_repr(f, level, wants))
                         .collect(),
+                    symbol: variant.symbol,
+                    tag: variant.tag.clone(),
                 },
             );
         }
@@ -169,21 +180,23 @@ impl TypeHeaderResolvePass {
     fn resolve_methods(
         &mut self,
         methods: &IndexMap<Label, Method<ASTTyRepr>>,
+        level: Level,
+        wants: &mut Wants,
     ) -> IndexMap<Label, Method<Ty>> {
         let mut resolved_methods = IndexMap::default();
         for (name, method) in methods {
-            let Some(ret) = self.resolve_ty_repr(&method.ret) else {
-                continue;
-            };
+            let ret = self.infer_ast_ty_repr(&method.ret, Level(1), wants);
             resolved_methods.insert(
                 name.clone(),
                 Method {
+                    id: method.id,
+                    span: method.span,
                     symbol: method.symbol,
                     is_static: method.is_static,
                     params: method
                         .params
                         .iter()
-                        .filter_map(|f| self.resolve_ty_repr(f))
+                        .map(|f| self.infer_ast_ty_repr(f, level, wants))
                         .collect(),
                     ret,
                 },
@@ -196,12 +209,12 @@ impl TypeHeaderResolvePass {
     fn resolve_properties(
         &mut self,
         properties: &IndexMap<Label, Property<ASTTyRepr>>,
+        level: Level,
+        wants: &mut Wants,
     ) -> IndexMap<Label, Property<Ty>> {
         let mut resolved_properties = IndexMap::default();
         for (name, prop) in properties {
-            let Some(ty_repr) = self.resolve_ty_repr(&prop.ty_repr) else {
-                continue;
-            };
+            let ty_repr = self.infer_ast_ty_repr(&prop.ty_repr, level, wants);
             resolved_properties.insert(
                 name.clone(),
                 Property {
@@ -217,6 +230,8 @@ impl TypeHeaderResolvePass {
     fn resolve_initializers(
         &mut self,
         initializers: &IndexMap<Name, Initializer<ASTTyRepr>>,
+        level: Level,
+        wants: &mut Wants,
     ) -> IndexMap<Name, Initializer<Ty>> {
         let mut resolved_initializers = IndexMap::default();
         for (name, initializer) in initializers {
@@ -226,7 +241,7 @@ impl TypeHeaderResolvePass {
                     params: initializer
                         .params
                         .iter()
-                        .filter_map(|f| self.resolve_ty_repr(f))
+                        .map(|f| self.infer_ast_ty_repr(f, level, wants))
                         .collect(),
                 },
             );
@@ -249,13 +264,13 @@ impl TypeHeaderResolvePass {
 
     fn resolve_method_requirements(
         &mut self,
-        requirements: &IndexMap<Name, MethodRequirement<ASTTyRepr>>,
-    ) -> IndexMap<Name, MethodRequirement<Ty>> {
+        requirements: &IndexMap<Label, MethodRequirement<ASTTyRepr>>,
+        level: Level,
+        wants: &mut Wants,
+    ) -> IndexMap<Label, MethodRequirement<Ty>> {
         let mut resolved_method_requirements = IndexMap::default();
         for (name, method_requirement) in requirements {
-            let Some(ret) = self.resolve_ty_repr(&method_requirement.ret) else {
-                continue;
-            };
+            let ret = self.infer_ast_ty_repr(&method_requirement.ret, level, wants);
 
             resolved_method_requirements.insert(
                 name.clone(),
@@ -263,9 +278,10 @@ impl TypeHeaderResolvePass {
                     params: method_requirement
                         .params
                         .iter()
-                        .filter_map(|f| self.resolve_ty_repr(f))
+                        .map(|f| self.infer_ast_ty_repr(f, level, wants))
                         .collect(),
                     ret,
+                    id: method_requirement.id,
                 },
             );
         }
@@ -273,101 +289,102 @@ impl TypeHeaderResolvePass {
         resolved_method_requirements
     }
 
-    fn resolve_ty_repr(&mut self, ty_repr: &ASTTyRepr) -> Option<Ty> {
-        let res = match ty_repr {
-            ASTTyRepr::Annotated(type_annotation) => self.resolve_type_annotation(type_annotation),
-            ASTTyRepr::Hole(id, _) => Ok(Ty::Hole(*id)),
-            ASTTyRepr::SelfType(name, _, _) => Ok(Ty::Struct(
-                Some(name.clone()),
-                Box::new(Row::Var(self.session.vars.row_metas.next_id())),
-            )),
-            ASTTyRepr::Generic(GenericDecl {
-                name: Name::Resolved(Symbol::Type(decl_id), _),
-                ..
-            }) => Ok(Ty::Param(decl_id.0.into())),
-            _ => panic!("unresolved ty repr: {ty_repr:?}"),
-        };
-
-        match res {
-            Ok(res) => Some(res),
-            Err(e) => {
-                self.diagnostics.push(Diagnostic {
-                    path: self.session.path.clone(),
-                    span: ty_repr.span(),
-                    kind: e,
-                });
-                None
-            }
-        }
-    }
-
-    fn resolve_type_annotation(
+    #[instrument(skip(self))]
+    pub(crate) fn infer_type_annotation(
         &mut self,
-        type_annotation: &TypeAnnotation,
-    ) -> Result<Ty, TypeError> {
-        match &type_annotation.kind {
+        annotation: &TypeAnnotation,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        match &annotation.kind {
+            TypeAnnotationKind::Func { .. } => todo!(),
+            TypeAnnotationKind::Tuple(..) => todo!(),
             TypeAnnotationKind::Nominal {
-                name: name @ Name::Resolved(id, _),
-                generics: generic_args,
-            } => {
-                if matches!(id, Symbol::BuiltinType(..)) {
-                    if !generic_args.is_empty() {
-                        return Err(TypeError::GenericArgCount {
-                            expected: 0,
-                            actual: generic_args.len() as u8,
-                        });
-                    }
-                    return Ok(resolve_builtin_type(id));
+                name: Name::Resolved(sym, _),
+                ..
+            } => match self.session.term_env.lookup(sym).unwrap().clone() {
+                EnvEntry::Mono(ty) => ty.clone(),
+                EnvEntry::Scheme(scheme) => {
+                    scheme
+                        .inference_instantiate(&mut self.session, level, wants, annotation.span)
+                        .0
+                }
+            },
+            TypeAnnotationKind::Record { fields } => {
+                let mut row = Row::Empty(TypeDefKind::Struct);
+                for field in fields.iter().rev() {
+                    row = Row::Extend {
+                        row: Box::new(row),
+                        label: field.label.name_str().into(),
+                        ty: self.infer_type_annotation(&field.value, level, wants),
+                    };
                 }
 
-                match id {
-                    Symbol::Type(id) => {
-                        if let Some(type_def) = self.session.phase.type_constructors.get(id) {
-                            if type_def.generics.len() != generic_args.len() {
-                                return Err(TypeError::GenericArgCount {
-                                    expected: type_def.generics.len() as u8,
-                                    actual: generic_args.len() as u8,
-                                });
-                            }
-
-                            let ty = generic_args.iter().fold(
-                                Ty::TypeConstructor {
-                                    name: name.clone(),
-                                    kind: type_def.def,
-                                },
-                                |acc, arg| match self.resolve_type_annotation(arg) {
-                                    Ok(arg) => Ty::TypeApplication(Box::new(acc), Box::new(arg)),
-                                    Err(e) => {
-                                        self.diagnostics.push(Diagnostic {
-                                            path: self.session.path.clone(),
-                                            span: arg.span,
-                                            kind: e,
-                                        });
-                                        acc
-                                    }
-                                },
-                            );
-
-                            return Ok(ty);
-                        };
-
-                        if let Some(generics) = self.generics_stack.last()
-                            && let Some(generic) = generics.get(name).cloned()
-                        {
-                            return Ok(generic);
-                        }
-
-                        Err(TypeError::TypeConstructorNotFound(*id))
-                    }
-                    _ => todo!(),
-                }
+                Ty::Struct(None, Box::new(row))
             }
-            TypeAnnotationKind::Tuple(_annotations) => {
-                todo!()
-            }
-            _ => todo!(),
+            _ => unreachable!(),
         }
     }
+
+    pub(crate) fn infer_ast_ty_repr(
+        &mut self,
+        ty_repr: &ASTTyRepr,
+        level: Level,
+        wants: &mut Wants,
+    ) -> Ty {
+        match &ty_repr {
+            ASTTyRepr::Annotated(annotation) => {
+                self.infer_type_annotation(annotation, level, wants)
+            }
+            ASTTyRepr::SelfType(name, _, _) => {
+                let Name::Resolved(Symbol::Type(type_id), _) = name else {
+                    panic!("didn't get type id");
+                };
+                // For self parameters in methods, look up the struct type from the environment
+                // The struct type should be in the environment by now
+                let entry = self
+                    .session
+                    .term_env
+                    .lookup(&Symbol::Type(*type_id))
+                    .cloned();
+
+                let type_con = self
+                    .session
+                    .phase
+                    .type_constructors
+                    .get(type_id)
+                    .expect("didn't get type");
+                match entry {
+                    Some(EnvEntry::Mono(ty)) => ty,
+                    Some(EnvEntry::Scheme(scheme)) => scheme.ty.clone(),
+                    None => unreachable!("define_type didn't work"),
+                }
+            }
+            ASTTyRepr::Hole(..) => Ty::Param(self.session.vars.type_params.next_id()),
+            ASTTyRepr::Generic(decl) => {
+                let ty = Ty::Param(self.session.vars.type_params.next_id());
+                self.session.term_env.promote(
+                    decl.name
+                        .symbol()
+                        .expect("didn't resolve name of generic param"),
+                    EnvEntry::Mono(ty.clone()),
+                );
+                ty
+            }
+        }
+    }
+}
+
+fn build_row(kind: TypeDefKind, tys: Vec<(Label, Ty)>) -> Row {
+    tys.into_iter()
+        .fold(Row::Empty(kind), |mut acc, (label, ty)| {
+            acc = Row::Extend {
+                row: Box::new(acc),
+                label: label.clone(),
+                ty,
+            };
+            acc
+        })
 }
 
 #[cfg(test)]
@@ -375,22 +392,27 @@ pub mod tests {
     use crate::{
         assert_eq_diff,
         ast::AST,
+        make_row,
         name_resolution::{
             name_resolver::NameResolved, name_resolver_tests::tests::resolve, symbol::SynthesizedId,
         },
+        node_id::NodeID,
+        span::Span,
         types::{passes::type_header_decl_pass::TypeHeaderDeclPass, type_session::TypeDefKind},
     };
 
     use super::*;
 
-    pub fn type_header_resolve_pass(code: &'static str) -> TypeSession<HeadersResolved> {
+    pub fn type_header_resolve_pass(
+        code: &'static str,
+    ) -> (AST<NameResolved>, TypeSession<HeadersResolved>) {
         let (ast, session) = type_header_resolve_pass_err(code).unwrap();
         assert!(
             ast.diagnostics.is_empty(),
             "diagnostics not empty: {:?}",
             ast.diagnostics
         );
-        session
+        (ast, session)
     }
 
     pub fn type_header_resolve_pass_err(
@@ -399,13 +421,13 @@ pub mod tests {
         let mut resolved = resolve(code);
         let mut session = TypeSession::default();
         TypeHeaderDeclPass::drive(&mut session, &resolved);
-        let res = TypeHeaderResolvePass::drive(session, &mut resolved)?;
+        let res = TypeHeaderResolvePass::drive(&mut resolved, session);
         Ok((resolved, res))
     }
 
     #[test]
     fn synthesizes_init() {
-        let session = type_header_resolve_pass(
+        let (_, session) = type_header_resolve_pass(
             "
         struct Person {
             let age: Int
@@ -432,7 +454,7 @@ pub mod tests {
 
     #[test]
     fn resolves_method() {
-        let session = type_header_resolve_pass(
+        let (_, session) = type_header_resolve_pass(
             "
         struct Person {
             func fizz(a: Int) -> Int { a }
@@ -449,7 +471,14 @@ pub mod tests {
                 .fields,
             TypeFields::Struct {
                 initializers: crate::indexmap!(Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer { params: vec![] }),
-                methods: crate::indexmap!("fizz".into() => Method { symbol: Symbol::Type(TypeId(2)),is_static: false, params: vec![Ty::Int], ret: Ty::Int }),
+                methods: crate::indexmap!("fizz".into() => Method {
+                    id: NodeID::ANY,
+                    span: Span::ANY,
+                    symbol: Symbol::Type(TypeId(2)),
+                    is_static: false,
+                    params: vec![Ty::Int],
+                    ret: Ty::Int
+                }),
                 properties: Default::default(),
             }
         )
@@ -457,7 +486,7 @@ pub mod tests {
 
     #[test]
     fn resolves_out_of_order() {
-        let session = type_header_resolve_pass(
+        let (_, session) = type_header_resolve_pass(
             "
         struct A {
             let b: B
@@ -469,15 +498,15 @@ pub mod tests {
         ",
         );
 
-        let a = Ty::TypeConstructor {
-            kind: TypeDefKind::Struct,
-            name: Name::Resolved(Symbol::Type(TypeId(1)), "A".into()),
-        };
+        let a = Ty::Struct(
+            Some(Name::Resolved(Symbol::Type(TypeId(1)), "A".into())),
+            Box::new(Row::Empty(TypeDefKind::Struct)),
+        );
 
-        let b = Ty::TypeConstructor {
-            kind: TypeDefKind::Struct,
-            name: Name::Resolved(Symbol::Type(TypeId(2)), "B".into()),
-        };
+        let b = Ty::Struct(
+            Some(Name::Resolved(Symbol::Type(TypeId(2)), "B".into())),
+            Box::new(Row::Empty(TypeDefKind::Struct)),
+        );
 
         assert_eq!(
             session
@@ -520,7 +549,7 @@ pub mod tests {
 
     #[test]
     fn resolves_type_params() {
-        let session = type_header_resolve_pass(
+        let (_, session) = type_header_resolve_pass(
             "
         struct Fizz<T> {
             let t: T
@@ -547,25 +576,33 @@ pub mod tests {
 
     #[test]
     fn lowers_type_application() {
-        let session = type_header_resolve_pass(
+        let (_, session) = type_header_resolve_pass(
             "
-            struct A<T, U> {} 
+            struct A<T, U> {
+                let t: T
+                let u: U
+            } 
             struct B {
                 let a: A<Int, Float>
             }
             ",
         );
 
-        let type_application = Ty::TypeApplication(
-            Box::new(Ty::TypeApplication(
-                Box::new(Ty::TypeConstructor {
-                    name: Name::Resolved(Symbol::Type(TypeId(1)), "A".into()),
-                    kind: TypeDefKind::Struct,
-                }),
-                Box::new(Ty::Int),
-            )),
-            Box::new(Ty::Float),
+        let a = Ty::Struct(
+            Some(Name::Resolved(Symbol::Type(TypeId(1)), "A".into())),
+            Box::new(make_row!(Enum, "t" => Ty::Int, "u" => Ty::Float)),
         );
+
+        // let type_application = Ty::TypeApplication(
+        //     Box::new(Ty::TypeApplication(
+        //         Box::new(Ty::TypeConstructor {
+        //             name: ,
+        //             kind: TypeDefKind::Struct,
+        //         }),
+        //         Box::new(Ty::Int),
+        //     )),
+        //     Box::new(Ty::Float),
+        // );
 
         assert_eq_diff!(
             session
@@ -578,7 +615,7 @@ pub mod tests {
                 initializers: crate::indexmap!(
                     Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer {
                         params: vec![
-                            type_application.clone()
+                            a.clone()
                         ]
                 }
                 ),
@@ -586,7 +623,7 @@ pub mod tests {
                 properties: crate::indexmap!(
                     "a".into() => Property {
                         is_static: false,
-                        ty_repr: type_application.clone()
+                        ty_repr: a.clone()
                     }
                 )
             }
@@ -595,28 +632,23 @@ pub mod tests {
 
     #[test]
     fn lowers_nested_type_application() {
-        let session = type_header_resolve_pass(
+        let (_, session) = type_header_resolve_pass(
             "
-            struct A<T> {} 
-            struct B<T> {} 
+            struct A<T> {
+                t: T
+            }
+            struct B<T> {
+                a: A<T>
+            }
             struct C {
                 let b: B<A<Int>>
             }
             ",
         );
 
-        let type_application = Ty::TypeApplication(
-            Box::new(Ty::TypeConstructor {
-                name: Name::Resolved(Symbol::Type(TypeId(3)), "B".into()),
-                kind: TypeDefKind::Struct,
-            }),
-            Box::new(Ty::TypeApplication(
-                Box::new(Ty::TypeConstructor {
-                    name: Name::Resolved(Symbol::Type(TypeId(1)), "A".into()),
-                    kind: TypeDefKind::Struct,
-                }),
-                Box::new(Ty::Int),
-            )),
+        let a = Ty::Struct(
+            Some(Name::Resolved(Symbol::Type(TypeId(1)), "A".into())),
+            Box::new(make_row!(Struct, "t" => Ty::Int)),
         );
 
         assert_eq_diff!(
@@ -630,7 +662,7 @@ pub mod tests {
                 initializers: crate::indexmap!(
                     Name::Resolved(Symbol::Synthesized(SynthesizedId(1)), "init".into()) => Initializer {
                         params: vec![
-                            type_application.clone()
+                            a.clone()
                         ]
                 }
                 ),
@@ -638,7 +670,7 @@ pub mod tests {
                 properties: crate::indexmap!(
                     "b".into() => Property {
                         is_static: false,
-                        ty_repr: type_application.clone()
+                        ty_repr: a.clone()
                     }
                 )
             }

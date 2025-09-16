@@ -6,11 +6,14 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintCause},
         fields::TypeFields,
-        passes::inference_pass::{InferencePass, curry},
+        passes::{
+            dependencies_pass::SCCResolved,
+            inference_pass::{InferencePass, curry},
+        },
         ty::{Level, Primitive, Ty},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, unify},
-        type_session::TypeDef,
+        type_session::{TypeDef, TypeSession, TypingPhase},
         wants::Wants,
     },
 };
@@ -27,7 +30,7 @@ pub struct Member {
 impl Member {
     pub fn solve(
         &self,
-        pass: &mut InferencePass,
+        session: &mut TypeSession<SCCResolved>,
         next_wants: &mut Wants,
         substitutions: &mut UnificationSubstitutions,
     ) -> Result<bool, TypeError> {
@@ -47,16 +50,16 @@ impl Member {
             if let Some(TypeDef {
                 fields: TypeFields::Struct { methods, .. } | TypeFields::Enum { methods, .. },
                 ..
-            }) = pass.session.phase.type_constructors.get(type_id)
+            }) = session.phase.type_constructors.get(type_id)
                 && let Some(method) = methods.get(&self.label)
                 && !method.is_static
             {
-                let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
+                let Some(method_entry) = session.term_env.lookup(&method.symbol).cloned() else {
                     panic!("did not find type for method named {:?}", self.label);
                 };
 
                 let method_ty = method_entry.solver_instantiate(
-                    pass,
+                    session,
                     Level(1),
                     substitutions,
                     next_wants,
@@ -68,7 +71,7 @@ impl Member {
                 // Or for zero-arg instance methods: self -> ret, we need to return func() -> ret
                 let applied_method_ty = if let Ty::Func(param, rest) = method_ty {
                     // Unify the receiver with the self parameter
-                    unify(&receiver, &param, substitutions, &mut pass.session.vars)?;
+                    unify(&receiver, &param, substitutions, &mut session.vars)?;
                     // Return the rest of the function type (without self)
                     // If rest is not a function, it means this was a zero-arg method (only had self)
                     // In that case, we need to wrap it in a zero-arg function
@@ -82,12 +85,7 @@ impl Member {
                     unreachable!()
                 };
 
-                return unify(
-                    &ty,
-                    &applied_method_ty,
-                    substitutions,
-                    &mut pass.session.vars,
-                );
+                return unify(&ty, &applied_method_ty, substitutions, &mut session.vars);
             }
         }
 
@@ -96,24 +94,24 @@ impl Member {
             && let Some(TypeDef {
                 fields: TypeFields::Struct { methods, .. },
                 ..
-            }) = pass.session.phase.type_constructors.get(type_id)
+            }) = session.phase.type_constructors.get(type_id)
             && let Some(method) = methods.get(&self.label)
             && method.is_static
         {
             // If it's a nominal type, check methods first
-            let Some(method_entry) = pass.term_env.lookup(&method.symbol).cloned() else {
+            let Some(method_entry) = session.term_env.lookup(&method.symbol).cloned() else {
                 panic!("did not find type for method named {:?}", self.label);
             };
 
             let method_ty = method_entry.solver_instantiate(
-                pass,
+                session,
                 Level(1),
                 substitutions,
                 next_wants,
                 self.span,
             );
 
-            return unify(&ty, &method_ty, substitutions, &mut pass.session.vars);
+            return unify(&ty, &method_ty, substitutions, &mut session.vars);
         }
 
         // // See if it's an enum constructor

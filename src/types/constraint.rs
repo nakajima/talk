@@ -22,6 +22,7 @@ pub enum ConstraintCause {
     Pattern(NodeID),
     MatchArm(NodeID),
     CallTypeArg(NodeID),
+    Conformance { node: NodeID, requirement: NodeID },
     Internal,
 }
 

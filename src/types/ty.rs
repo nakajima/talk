@@ -1,6 +1,11 @@
 use itertools::Itertools;
 
-use crate::{name::Name, name_resolution::symbol::TypeId, node_id::NodeID, types::row::Row};
+use crate::{
+    name::Name,
+    name_resolution::symbol::TypeId,
+    node_id::NodeID,
+    types::{row::Row, scheme::ForAll},
+};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct UnificationVarId(u32);
@@ -76,6 +81,42 @@ impl Ty {
     pub const Float: Ty = Ty::Primitive(Primitive::Float);
     pub const Bool: Ty = Ty::Primitive(Primitive::Bool);
     pub const Void: Ty = Ty::Primitive(Primitive::Void);
+
+    pub fn collect_foralls(&self) -> Vec<ForAll> {
+        let mut result = vec![];
+        match self {
+            Ty::Hole(..) => (),
+            Ty::Param(id) => result.push(ForAll::Ty(*id)),
+            Ty::Rigid(..) => (),
+            Ty::UnificationVar { .. } => (),
+            Ty::Primitive(..) => (),
+            Ty::Constructor { param, ret, .. } => {
+                result.extend(param.collect_foralls());
+                result.extend(ret.collect_foralls());
+            }
+            Ty::Func(ty, ty1) => {
+                result.extend(ty.collect_foralls());
+                result.extend(ty1.collect_foralls());
+            }
+            Ty::Tuple(items) => {
+                for item in items {
+                    result.extend(item.collect_foralls());
+                }
+            }
+            Ty::Struct(_, box row) | Ty::Sum(_, box row) => match row {
+                Row::Empty(..) => (),
+                Row::Extend { row, ty, .. } => {
+                    result.extend(Ty::Struct(None, row.clone()).collect_foralls());
+                    result.extend(ty.collect_foralls());
+                }
+                Row::Param(id) => {
+                    result.push(ForAll::Row(*id));
+                }
+                Row::Var(_) => (),
+            },
+        }
+        result
+    }
 
     pub fn contains_var(&self) -> bool {
         match self {

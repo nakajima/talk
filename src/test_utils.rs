@@ -10,6 +10,24 @@ macro_rules! fxhashmap {
 }
 
 #[macro_export]
+macro_rules! make_row {
+     // entrypoint with a kind and fields
+    ($kind:ident, $($label:expr => $ty:expr),* $(,)?) => {{
+        let mut row = $crate::types::row::Row::Empty(
+            $crate::types::type_session::TypeDefKind::$kind,
+        );
+        $(
+            row = $crate::types::row::Row::Extend {
+                row: Box::new(row),
+                label: ($label).into(),
+                ty: $ty,
+            };
+        )*
+        row
+    }};
+}
+
+#[macro_export]
 macro_rules! indexmap {
     ($($k:expr => $v:expr),* $(,)?) => {{
         let mut m = indexmap::IndexMap::new();

@@ -10,13 +10,19 @@ use crate::{
     node_kinds::{generic_decl::GenericDecl, type_annotation::TypeAnnotation},
     span::Span,
     types::{
+        builtins::builtin_scope,
         fields::TypeFields,
         kind::Kind,
         passes::{
-            dependencies_pass::{DependenciesPass, SCCResolved},
-            inference_pass::{InferencePass, Inferenced},
+            dependencies_pass::DependenciesPass,
+            inference_pass::{InferencePass, Inferenced, Meta},
             type_header_decl_pass::TypeHeaderDeclPass,
+            type_header_resolve_pass::{HeadersResolved, TypeHeaderResolvePass},
         },
+        row::Row,
+        scheme::Scheme,
+        term_environment::{EnvEntry, TermEnv},
+        ty::{Level, Ty},
         vars::Vars,
     },
 };
@@ -58,7 +64,7 @@ pub struct Raw {
 }
 
 impl TypingPhase for Raw {
-    type Next = SCCResolved;
+    type Next = HeadersResolved;
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -71,12 +77,65 @@ pub struct TypeDef<T> {
     pub fields: TypeFields<T>,
 }
 
-#[derive(Debug, Default)]
+impl TypeDef<Ty> {
+    pub fn to_env_entry(&self) -> EnvEntry {
+        match &self.fields {
+            TypeFields::Struct { properties, .. } => {
+                let mut foralls = vec![];
+                let row = properties.iter().fold(
+                    Row::Empty(TypeDefKind::Struct),
+                    |mut acc, (label, property)| {
+                        foralls.extend(property.ty_repr.collect_foralls());
+                        acc = Row::Extend {
+                            row: Box::new(acc),
+                            label: label.clone(),
+                            ty: property.ty_repr.clone(),
+                        };
+                        acc
+                    },
+                );
+
+                EnvEntry::Scheme(Scheme::new(
+                    foralls,
+                    vec![],
+                    Ty::Struct(Some(self.name.clone()), Box::new(row)),
+                ))
+            }
+            _ => todo!(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct TypeSession<Phase: TypingPhase = Raw> {
     pub vars: Vars,
-    pub path: String,
     pub synthsized_ids: IDGenerator,
     pub phase: Phase,
+    pub term_env: TermEnv,
+    pub meta_levels: FxHashMap<Meta, Level>,
+}
+
+impl Default for TypeSession<Raw> {
+    fn default() -> Self {
+        let mut term_env = TermEnv {
+            symbols: FxHashMap::default(),
+        };
+
+        for (sym, entry) in builtin_scope() {
+            term_env.promote(sym, entry);
+        }
+
+        TypeSession {
+            vars: Default::default(),
+            synthsized_ids: Default::default(),
+            phase: Raw {
+                type_constructors: Default::default(),
+                protocols: Default::default(),
+            },
+            meta_levels: Default::default(),
+            term_env,
+        }
+    }
 }
 
 pub struct Typed {}
@@ -85,6 +144,7 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
     pub fn drive(ast: &mut AST<NameResolved>) -> TypeSession<Inferenced> {
         let mut session = TypeSession::<Raw>::default();
         TypeHeaderDeclPass::drive(&mut session, ast);
+        let session = TypeHeaderResolvePass::drive(ast, session);
         let session = DependenciesPass::drive(session, ast);
         InferencePass::perform(session, ast)
     }
@@ -92,9 +152,24 @@ impl<Phase: TypingPhase> TypeSession<Phase> {
     pub fn advance(self, phase: Phase::Next) -> TypeSession<Phase::Next> {
         TypeSession::<Phase::Next> {
             vars: self.vars,
-            path: self.path,
             synthsized_ids: self.synthsized_ids,
             phase,
+            term_env: self.term_env,
+            meta_levels: self.meta_levels,
         }
+    }
+
+    pub(crate) fn new_ty_meta_var(&mut self, level: Level) -> Ty {
+        let id = self.vars.ty_metas.next_id();
+        self.meta_levels.insert(Meta::Ty(id), level);
+        tracing::trace!("Fresh {id:?}");
+        Ty::UnificationVar { id, level }
+    }
+
+    pub(crate) fn new_row_meta_var(&mut self, level: Level) -> Row {
+        let id = self.vars.row_metas.next_id();
+        self.meta_levels.insert(Meta::Row(id), level);
+        tracing::trace!("Fresh {id:?}");
+        Row::Var(id)
     }
 }

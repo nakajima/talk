@@ -87,7 +87,7 @@ pub mod tests {
     #[macro_export]
     macro_rules! annotation {
         ($expr:expr) => {
-            TypeAnnotation {
+            $crate::parsing::node_kinds::type_annotation::TypeAnnotation {
                 id: NodeID::ANY,
                 span: $crate::parsing::span::Span::ANY,
                 kind: $expr,

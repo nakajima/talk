@@ -1,9 +1,11 @@
 use derive_visitor::{Drive, Visitor};
+use indexmap::IndexMap;
 use petgraph::prelude::DiGraphMap;
 use rustc_hash::FxHashMap;
 
 use crate::{
     ast::AST,
+    label::Label,
     name::Name,
     name_resolution::{
         name_resolver::NameResolved,
@@ -15,20 +17,32 @@ use crate::{
         expr::{Expr, ExprKind},
         func::Func,
         pattern::{Pattern, PatternKind},
+        type_annotation::TypeAnnotationKind,
     },
+    span::Span,
     types::{
-        passes::inference_pass::Inferenced,
-        type_session::{ASTTyRepr, Raw, TypeDef, TypeSession, TypingPhase},
+        passes::{inference_pass::Inferenced, type_header_resolve_pass::HeadersResolved},
+        ty::Ty,
+        type_session::{ASTTyRepr, TypeDef, TypeSession, TypingPhase},
     },
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conformance {
+    pub conforming_id: TypeId,
+    pub protocol_id: TypeId,
+    pub methods: IndexMap<Label, Symbol>,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone)]
 pub struct SCCResolved {
     pub graph: DiGraphMap<Binder, ()>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
-    pub type_constructors: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
-    pub protocols: FxHashMap<TypeId, TypeDef<ASTTyRepr>>,
+    pub type_constructors: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub protocols: FxHashMap<TypeId, TypeDef<Ty>>,
+    pub conformances: FxHashMap<TypeId, FxHashMap<TypeId, Conformance>>,
 }
 
 impl TypingPhase for SCCResolved {
@@ -71,12 +85,13 @@ pub struct DependenciesPass {
     pub graph: DiGraphMap<Binder, ()>,
     pub rhs_map: FxHashMap<Binder, NodeID>,
     pub annotation_map: FxHashMap<Binder, NodeID>,
+    conformances: FxHashMap<TypeId, FxHashMap<TypeId, Conformance>>,
     binder_stack: Vec<(NodeID, Binder)>,
 }
 
 impl DependenciesPass {
     pub fn drive(
-        mut session: TypeSession<Raw>,
+        mut session: TypeSession<HeadersResolved>,
         ast: &mut AST<NameResolved>,
     ) -> TypeSession<SCCResolved> {
         let mut pass = DependenciesPass {
@@ -84,6 +99,7 @@ impl DependenciesPass {
             rhs_map: Default::default(),
             annotation_map: Default::default(),
             binder_stack: Default::default(),
+            conformances: Default::default(),
         };
 
         for root in ast.roots.iter() {
@@ -99,6 +115,7 @@ impl DependenciesPass {
             rhs_map: pass.rhs_map,
             type_constructors,
             protocols,
+            conformances: pass.conformances,
         };
 
         session.advance(phase)
@@ -128,8 +145,44 @@ impl DependenciesPass {
                     },
                 ..
             } => (sym, None, BoundRHS::Func(func.id)),
+            DeclKind::Struct {
+                name: Name::Resolved(Symbol::Type(type_id), _),
+                conformances,
+                ..
+            }
+            | DeclKind::Extend {
+                name: Name::Resolved(Symbol::Type(type_id), _),
+                conformances,
+                ..
+            } => {
+                for conformance in conformances {
+                    let TypeAnnotationKind::Nominal {
+                        name: Name::Resolved(Symbol::Type(protocol_id), _),
+                        ..
+                    } = &conformance.kind
+                    else {
+                        panic!("can't conform to {conformance:?}");
+                    };
 
-            _ => return,
+                    self.conformances
+                        .entry(*protocol_id)
+                        .or_default()
+                        .entry(*type_id)
+                        .or_insert(Conformance {
+                            conforming_id: *type_id,
+                            protocol_id: *protocol_id,
+                            methods: Default::default(),
+                            span: conformance.span,
+                        });
+                }
+
+                return;
+            }
+
+            nope => {
+                println!("nope: {nope:?}");
+                return;
+            }
         };
 
         match sym {
@@ -193,11 +246,15 @@ pub mod tests {
 
     use crate::{
         ast::AST,
-        name_resolution::{name_resolver::NameResolved, symbol::GlobalId},
+        name_resolution::{
+            name_resolver::NameResolved,
+            symbol::{GlobalId, TypeId},
+        },
+        span::Span,
         types::{
             passes::{
-                dependencies_pass::{Binder, DependenciesPass, SCCResolved},
-                type_header_decl_pass::tests::type_header_decl_pass,
+                dependencies_pass::{Binder, Conformance, DependenciesPass, SCCResolved},
+                type_header_resolve_pass::tests::type_header_resolve_pass,
             },
             type_session::TypeSession,
         },
@@ -206,7 +263,7 @@ pub mod tests {
     pub fn resolve_dependencies(
         code: &'static str,
     ) -> (AST<NameResolved>, TypeSession<SCCResolved>) {
-        let (mut ast, session) = type_header_decl_pass(code);
+        let (mut ast, session) = type_header_resolve_pass(code);
         let session = DependenciesPass::drive(session, &mut ast);
         (ast, session)
     }
@@ -323,5 +380,33 @@ pub mod tests {
     "#,
         );
         assert!(es.is_empty(), "{es:?}");
+    }
+
+    #[test]
+    fn maps_conformances() {
+        // Field access is a projection, not a term ref; no edges.
+        let (_ast, session) = resolve_dependencies(
+            "
+            protocol Count {}
+            struct Person {}
+            extend Person: Count {}
+            ",
+        );
+
+        assert_eq!(
+            *session
+                .phase
+                .conformances
+                .get(&TypeId(1))
+                .unwrap()
+                .get(&TypeId(2))
+                .unwrap(),
+            Conformance {
+                conforming_id: TypeId(2),
+                protocol_id: TypeId(1),
+                methods: Default::default(),
+                span: Span::ANY,
+            }
+        )
     }
 }

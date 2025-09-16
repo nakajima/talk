@@ -1437,4 +1437,34 @@ pub mod tests {
 
         assert_eq!(ty(2, &ast, &session), Ty::Int);
     }
+
+    #[test]
+    fn types_simple_protocol() {
+        let (ast, session) = typecheck(
+            "
+            protocol Countable {
+                func getCount() -> Int
+            }
+
+            struct Person {
+                let count: Int
+            }
+
+            extend Person: Countable {
+                func getCount() {
+                    self.count
+                }
+            }
+
+            func getCount<T: Countable>(countable: T) {
+                countable.getCount()
+            }
+
+            let person = Person(count: 1)
+            getCount(person)
+            ",
+        );
+
+        assert_eq!(ty(4, &ast, &session), Ty::Int)
+    }
 }

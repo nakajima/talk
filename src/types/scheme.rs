@@ -11,17 +11,18 @@ use crate::{
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, instantiate_row, instantiate_ty,
         },
+        type_session::{TypeSession, TypingPhase},
         wants::Wants,
     },
 };
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ForAll {
     Ty(TypeParamId),
     Row(RowParamId),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Predicate {
     HasField {
         row: RowParamId,
@@ -87,7 +88,7 @@ impl Predicate {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub(super) foralls: Vec<ForAll>,
     predicates: Vec<Predicate>,
@@ -108,9 +109,9 @@ impl Scheme {
         }
     }
 
-    pub fn inference_instantiate(
+    pub fn inference_instantiate<P: TypingPhase>(
         &self,
-        pass: &mut InferencePass,
+        session: &mut TypeSession<P>,
         level: Level,
         wants: &mut Wants,
         span: Span,
@@ -121,14 +122,14 @@ impl Scheme {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::UnificationVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
+                    let Ty::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let Row::Var(meta) = pass.new_row_meta_var(level) else {
+                    let Row::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -150,9 +151,9 @@ impl Scheme {
     }
 
     // Used while solving
-    pub fn solver_instantiate(
+    pub fn solver_instantiate<P: TypingPhase>(
         &self,
-        pass: &mut InferencePass,
+        session: &mut TypeSession<P>,
         level: Level,
         wants: &mut Wants,
         span: Span,
@@ -164,7 +165,7 @@ impl Scheme {
         for forall in &self.foralls {
             match forall {
                 ForAll::Ty(param) => {
-                    let Ty::UnificationVar { id: meta, .. } = pass.new_ty_meta_var(level) else {
+                    let Ty::UnificationVar { id: meta, .. } = session.new_ty_meta_var(level) else {
                         unreachable!()
                     };
 
@@ -176,7 +177,7 @@ impl Scheme {
                     substitutions.ty.insert(*param, meta);
                 }
                 ForAll::Row(param) => {
-                    let Row::Var(meta) = pass.new_row_meta_var(level) else {
+                    let Row::Var(meta) = session.new_row_meta_var(level) else {
                         unreachable!()
                     };
                     tracing::trace!("instantiating {param:?} with {meta:?}");
@@ -203,10 +204,10 @@ impl Scheme {
         )
     }
 
-    pub fn instantiate_with_args(
+    pub fn instantiate_with_args<P: TypingPhase>(
         &self,
         args: &[TypeAnnotation],
-        pass: &mut InferencePass,
+        session: &mut TypeSession<P>,
         level: Level,
         wants: &mut Wants,
         span: Span,
@@ -218,32 +219,32 @@ impl Scheme {
             .iter()
             .partition(|fa| matches!(fa, ForAll::Ty(_)));
 
-        for (param, arg) in ty_foralls.iter().zip(args) {
-            let ForAll::Ty(param) = param else {
-                unreachable!()
-            };
+        // for (param, arg) in ty_foralls.iter().zip(args) {
+        //     let ForAll::Ty(param) = param else {
+        //         unreachable!()
+        //     };
 
-            let arg_ty = pass.infer_type_annotation(arg, level, wants);
-            let ty @ Ty::UnificationVar { id: meta_var, .. } = pass.new_ty_meta_var(level) else {
-                unreachable!();
-            };
+        //     let arg_ty = pass.infer_type_annotation(arg, level, wants);
+        //     let ty @ Ty::UnificationVar { id: meta_var, .. } = pass.new_ty_meta_var(level) else {
+        //         unreachable!();
+        //     };
 
-            wants.equals(
-                ty.clone(),
-                arg_ty,
-                ConstraintCause::CallTypeArg(arg.id),
-                span,
-            );
+        //     wants.equals(
+        //         ty.clone(),
+        //         arg_ty,
+        //         ConstraintCause::CallTypeArg(arg.id),
+        //         span,
+        //     );
 
-            substitutions.ty.insert(*param, meta_var);
-        }
+        //     substitutions.ty.insert(*param, meta_var);
+        // }
 
         for row_forall in row_foralls {
             let ForAll::Row(row_param) = row_forall else {
                 unreachable!();
             };
 
-            let Row::Var(row_meta) = pass.new_row_meta_var(level) else {
+            let Row::Var(row_meta) = session.new_row_meta_var(level) else {
                 unreachable!()
             };
             substitutions.row.insert(row_param, row_meta);

@@ -141,7 +141,7 @@ impl<'a> TypeHeaderDeclPass<'a> {
         let mut initializers: IndexMap<Name, Initializer<ASTTyRepr>> = Default::default();
         let mut variants: IndexMap<Label, Variant<ASTTyRepr>> = Default::default();
         let mut associated_types: IndexMap<Name, Associated> = Default::default();
-        let mut method_requirements: IndexMap<Name, MethodRequirement<ASTTyRepr>> =
+        let mut method_requirements: IndexMap<Label, MethodRequirement<ASTTyRepr>> =
             Default::default();
 
         for node in body {
@@ -205,6 +205,8 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     methods.insert(
                         Label::Named(name.name_str()),
                         Method {
+                            id,
+                            span: *span,
                             symbol: name.symbol().unwrap(),
                             is_static: *is_static,
                             params: params
@@ -231,8 +233,9 @@ impl<'a> TypeHeaderDeclPass<'a> {
                     name, params, ret, ..
                 }) => {
                     method_requirements.insert(
-                        name.clone(),
+                        name.name_str().into(),
                         MethodRequirement {
+                            id,
                             params: params
                                 .iter()
                                 .map(|p| {
@@ -568,7 +571,8 @@ pub mod tests {
                     initializers: Default::default(),
                     methods: Default::default(),
                     properties: Default::default(),
-                    method_requirements: crate::indexmap!(Name::Resolved(Symbol::Type(TypeId(3)), "foo".into()) => MethodRequirement {
+                    method_requirements: crate::indexmap!("foo".into() => MethodRequirement {
+                        id: NodeID::ANY,
                         params: vec![],
                         ret: ASTTyRepr::Annotated(annotation!(TypeAnnotationKind::Nominal {
                             name: Name::Resolved(Symbol::Int, "Int".into()),

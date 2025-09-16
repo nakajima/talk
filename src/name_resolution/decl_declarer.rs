@@ -4,7 +4,7 @@ use tracing::instrument;
 use crate::{
     name::Name,
     name_resolution::{
-        name_resolver::{NameResolver, Scope},
+        name_resolver::{NameResolver, NameResolverError, Scope},
         symbol::Symbol,
     },
     node_id::NodeID,
@@ -210,6 +210,22 @@ impl<'a> DeclDeclarer<'a> {
             }
         );
 
+        on!(&mut decl.kind, DeclKind::Extend { name, generics, .. }, {
+            let Some(type_name) = self.resolver.lookup(name) else {
+                self.resolver
+                    .diagnostic(decl.span, NameResolverError::UndefinedName(name.name_str()));
+                return;
+            };
+
+            *name = type_name;
+
+            self.start_scope(decl.id);
+
+            for generic in generics {
+                generic.name = self.resolver.declare_type(&generic.name);
+            }
+        });
+
         on!(&mut decl.kind, DeclKind::EnumVariant(name, ..), {
             *name = self.resolver.declare_type(name);
         });
@@ -240,7 +256,10 @@ impl<'a> DeclDeclarer<'a> {
     fn exit_decl(&mut self, decl: &mut Decl) {
         on!(
             &mut decl.kind,
-            DeclKind::Struct { .. } | DeclKind::Protocol { .. } | DeclKind::Enum { .. },
+            DeclKind::Struct { .. }
+                | DeclKind::Protocol { .. }
+                | DeclKind::Enum { .. }
+                | DeclKind::Extend { .. },
             {
                 self.end_scope();
             }
