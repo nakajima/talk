@@ -138,20 +138,20 @@ impl FormatterDecorator for DebugHTMLFormatter {
     fn wrap_decl(&self, decl: &Decl, doc: Doc) -> Doc {
         concat(
             concat(
-                text(format!("<span class=\"decl\" id=\"node-{}\">", decl.id)),
+                annotate(format!("<span class=\"decl\" id=\"node-{}\">", decl.id)),
                 doc,
             ),
-            text("</span>"),
+            annotate("</span>"),
         )
     }
 
     fn wrap_stmt(&self, stmt: &Stmt, doc: Doc) -> Doc {
         concat(
             concat(
-                text(format!("<span class=\"stmt\" id=\"node-{}\">", stmt.id)),
+                annotate(format!("<span class=\"stmt\" id=\"node-{}\">", stmt.id)),
                 doc,
             ),
-            text("</span>"),
+            annotate("</span>"),
         )
     }
 }
