@@ -5,12 +5,13 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintCause, HasField},
         constraints::{call::Call, member::Member},
-        passes::inference_pass::{InferencePass, Meta, Wants},
+        passes::inference_pass::{InferencePass, Meta},
         row::{Row, RowParamId},
         ty::{Level, Ty, TypeParamId},
         type_operations::{
             InstantiationSubstitutions, UnificationSubstitutions, instantiate_row, instantiate_ty,
         },
+        wants::Wants,
     },
 };
 

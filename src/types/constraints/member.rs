@@ -6,11 +6,12 @@ use crate::{
     types::{
         constraint::{Constraint, ConstraintCause},
         fields::TypeFields,
-        passes::inference_pass::{InferencePass, Wants, curry},
+        passes::inference_pass::{InferencePass, curry},
         ty::{Level, Primitive, Ty},
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_row, unify},
         type_session::TypeDef,
+        wants::Wants,
     },
 };
 

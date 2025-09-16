@@ -5,10 +5,11 @@ use crate::{
     span::Span,
     types::{
         builtins::builtin_scope,
-        passes::inference_pass::{InferencePass, Wants},
+        passes::inference_pass::InferencePass,
         scheme::Scheme,
         ty::{Level, Ty},
         type_operations::UnificationSubstitutions,
+        wants::Wants,
     },
 };
 

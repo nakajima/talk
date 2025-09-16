@@ -2,10 +2,11 @@ use crate::{
     span::Span,
     types::{
         constraint::{Constraint, ConstraintCause},
-        passes::inference_pass::{InferencePass, Wants, curry},
+        passes::inference_pass::{InferencePass, curry},
         ty::Ty,
         type_error::TypeError,
         type_operations::{UnificationSubstitutions, apply, apply_mult, unify},
+        wants::Wants,
     },
 };
 
